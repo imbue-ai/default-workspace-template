@@ -8,7 +8,7 @@
 #
 # AUTH_SANDBOX_HOST_ID is owner-exec's audience (container:<that id>); AUTH_SANDBOX_REGION and
 # AUTH_SANDBOX_WORKSPACE_HOST_ID are read later by the sign-in command from the same environment.
-# Installed at /opt/auth-sandbox/boot.sh by system/scripts/build_auth_sandbox_image.py; its source is
+# Installed at /opt/auth-sandbox/boot.sh by auth_sandbox.modal_image_build; its source is
 # system/libs/auth_sandbox/sandbox/boot.sh.
 set -euo pipefail
 

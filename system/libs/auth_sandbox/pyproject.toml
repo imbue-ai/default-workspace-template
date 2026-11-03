@@ -34,3 +34,8 @@ dev = [
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]
+
+[tool.ty.src]
+# The image build's Modal driver runs only from a developer's machine with `--with modal`; the
+# workspace never installs modal, so ty cannot resolve it here. Its steps (image_build) are checked.
+exclude = ["src/auth_sandbox/modal_image_build.py"]

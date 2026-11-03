@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build the web latchkey auth sandbox's Modal image and print its id.
 
 The image is the product ``system/Dockerfile`` with a workspace's first boot and the Screen's stack baked in,
@@ -12,9 +11,10 @@ Nothing user-specific goes into the image. The connector creates each auth sandb
 (``MINDS_AUTH_SANDBOX_IMAGE_ID`` on the tier) and writes the user's material in afterwards.
 
 Run it from the repo root with Modal credentials for the target workspace (an activated minds env, or a
-``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` pair) and the ``modal`` package available to the venv::
+``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` pair); ``modal`` is not a workspace dependency, so it comes in for the
+one run::
 
-    uv run --with modal python system/scripts/build_auth_sandbox_image.py [--environment-name NAME]
+    uv run --no-sync --with modal python -m auth_sandbox.modal_image_build [--environment-name NAME]
 
 The Dockerfile must carry no BuildKit secret mount, which is the case whenever ``pyproject.toml`` pins mngr
 from the public mirror (``python system/scripts/set_mngr_pin.py --check`` says ``public``).
@@ -28,19 +28,20 @@ import shlex
 import sys
 from pathlib import Path
 
+import click
 import modal
+from modal.stream_type import StreamType
+from pydantic import ConfigDict, Field
+
 from auth_sandbox.image_build import (
     BuildSandboxInterface,
     ImageBuildSettings,
     pinned_latchkey_version,
     run_build,
 )
-from modal.stream_type import StreamType
-from pydantic import ConfigDict, Field
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_DOCKERFILE = _REPO_ROOT / "system" / "Dockerfile"
-_SETUP_SYSTEM = _REPO_ROOT / "system" / "scripts" / "setup_system.sh"
+_DOCKERFILE = Path("system") / "Dockerfile"
+_SETUP_SYSTEM = Path("system") / "scripts" / "setup_system.sh"
 _DEFAULT_APP_NAME = "auth-sandbox-image-build"
 # The build sandbox's own bound: the Screen unit's downloads dominate, and a build that takes longer than
 # this is one that is already failing.
@@ -62,14 +63,12 @@ class ModalBuildSandbox(BuildSandboxInterface):
     def run(self, command: str, timeout_seconds: int) -> int:
         # stderr is merged into stdout so one pipe is drained in order and nothing deadlocks on a full
         # buffer; the command line is echoed above its output for the build log.
-        sys.stdout.write(f"\n=== {command} ===\n")
-        sys.stdout.flush()
+        click.echo(f"\n=== {command} ===")
         process = self.sandbox.exec(
             "bash", "-lc", command, timeout=timeout_seconds, stderr=StreamType.STDOUT
         )
         for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
+            click.echo(line, nl=False)
         return process.wait()
 
     def snapshot(self, timeout_seconds: int) -> str:
@@ -102,12 +101,21 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    repo_root = Path.cwd()
+    if not (repo_root / _DOCKERFILE).is_file():
+        click.echo(
+            f"Run this from the template's repo root: no {_DOCKERFILE} under {repo_root}",
+            err=True,
+        )
+        return 2
     settings = ImageBuildSettings(
-        latchkey_version=pinned_latchkey_version(_SETUP_SYSTEM.read_text())
+        latchkey_version=pinned_latchkey_version(
+            (repo_root / _SETUP_SYSTEM).read_text()
+        )
     )
     with modal.enable_output():
         image = modal.Image.from_dockerfile(
-            str(_DOCKERFILE), context_dir=str(_REPO_ROOT)
+            str(repo_root / _DOCKERFILE), context_dir=str(repo_root)
         )
         app = modal.App.lookup(
             args.app_name,
@@ -127,9 +135,9 @@ def main() -> int:
             sandbox.terminate()
     if args.image_id_output is not None:
         args.image_id_output.write_text(image_id)
-    sys.stdout.write(f"\nAuth sandbox image: {image_id}\n")
-    sys.stdout.write(
-        f"Set MINDS_AUTH_SANDBOX_IMAGE_ID={shlex.quote(image_id)} on the tier to use it.\n"
+    click.echo(f"\nAuth sandbox image: {image_id}")
+    click.echo(
+        f"Set MINDS_AUTH_SANDBOX_IMAGE_ID={shlex.quote(image_id)} on the tier to use it."
     )
     return 0
 

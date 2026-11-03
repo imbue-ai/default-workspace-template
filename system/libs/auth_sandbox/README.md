@@ -86,11 +86,11 @@ The Screen reads it on every `GET /api/connect-info` (`SCREEN_CONNECT_INFO_PATH`
 
 ## The image
 
-`system/scripts/build_auth_sandbox_image.py` builds the product `system/Dockerfile` into a Modal image, creates a sandbox from it, runs the steps of `image_build.py` (the first-boot seed and the Screen unit as the CI image does them, the pinned latchkey checked, the template `config.json` rendered and verified with `latchkey ensure-browser --source existing-config`, the boot script, the supervisord config and the commands installed), snapshots the filesystem and prints the image id.
-Run it from the repo root with Modal credentials for the target workspace: `uv run --with modal python system/scripts/build_auth_sandbox_image.py`.
+`auth_sandbox.modal_image_build` builds the product `system/Dockerfile` into a Modal image, creates a sandbox from it, runs the steps of `image_build.py` (the first-boot seed and the Screen unit as the CI image does them, the pinned latchkey checked, the template `config.json` rendered and verified with `latchkey ensure-browser --source existing-config`, the boot script, the supervisord config and the commands installed), snapshots the filesystem and prints the image id.
+Run it from the repo root with Modal credentials for the target workspace: `uv run --no-sync --with modal python -m auth_sandbox.modal_image_build` (`modal` is not a workspace dependency, so it comes in for the one run).
 The steps are plain data over a small sandbox interface, and the tests run them over a fake.
 
 ## Tests
 
-`uv run pytest system/libs/auth_sandbox` runs the unit tests over fakes (`mock_latchkey_test.py`).
+`uv run --no-sync pytest system/libs/auth_sandbox` runs the unit tests over fakes (`mock_latchkey_test.py`).
 `test_transfer_with_latchkey.py`, at the library's root with the ratchets, runs the import and export commands against the real `latchkey` on `PATH` (the version `setup_system.sh` pins) with fabricated stores and browser states, and skips when there is none.

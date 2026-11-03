@@ -1,7 +1,7 @@
 """The sandbox image's build steps (spec 5.1), as commands run inside a build sandbox made from the product image.
 
-The steps are data over a small interface so they can be checked without Modal: ``system/scripts/
-build_auth_sandbox_image.py`` runs them in a real Modal sandbox and snapshots it; the tests run them over a fake.
+The steps are data over a small interface so they can be checked without Modal: ``auth_sandbox.
+modal_image_build`` runs them in a real Modal sandbox and snapshots it; the tests run them over a fake.
 Nothing user-specific is installed: no key, no token, no certificate, no authorized key.
 """
 
