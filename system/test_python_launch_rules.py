@@ -1486,6 +1486,23 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
+def _command_word(words: list[object]) -> str | None:
+    """The program an argv runs: its first word, or the command ``uv run`` runs past its options."""
+    if not words or not isinstance(words[0], str):
+        return None
+    if words[:2] != ["uv", "run"]:
+        return words[0]
+    index = 2
+    while (
+        index < len(words)
+        and isinstance(words[index], str)
+        and str(words[index]).startswith("-")
+    ):
+        index += 2 if words[index] in _OPTIONS_WITH_VALUES else 1
+    command = words[index] if index < len(words) else None
+    return command if isinstance(command, str) else None
+
+
 def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return _names_own_script(node.value, programs.scripts, is_path_part=False)
@@ -1504,8 +1521,11 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
         return _names_own_script(
             node.args[0].value, programs.scripts, is_path_part=True
         )
-    if isinstance(node, (ast.List, ast.Tuple)):
-        words = [
+    # A list or tuple holding another is a record (a route table's row), not a command line.
+    if isinstance(node, (ast.List, ast.Tuple)) and not any(
+        isinstance(element, (ast.List, ast.Tuple)) for element in node.elts
+    ):
+        words: list[object] = [
             element.value if isinstance(element, ast.Constant) else None
             for element in node.elts
         ]
@@ -1514,22 +1534,35 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
             and isinstance(after, str)
             and after.split(".")[0] in programs.packages
             for word, after in zip(words, words[1:])
-        ) or any(word in programs.commands for word in words if isinstance(word, str))
+        ) or _command_word(words) in programs.commands
     return False
 
 
-# Methods that write a file: a path they are called on names the file being written (a
-# scaffolder writing a new skill's run.py), not a program to run.
-_FILE_WRITING_METHODS = frozenset({"write_text", "write_bytes"})
+# Methods that only write, read or check a file: a path they are called on names that
+# file (a scaffolder writing a new skill's run.py, a probe for the repo root), not a
+# program to run.
+_FILE_ONLY_METHODS = frozenset(
+    {
+        "write_text",
+        "write_bytes",
+        "read_text",
+        "read_bytes",
+        "open",
+        "exists",
+        "is_file",
+        "is_dir",
+        "stat",
+    }
+)
 
 
 def _program_launch_lines(tree: ast.AST, programs: _OwnPrograms) -> list[int]:
-    written = {
+    file_only = {
         id(part)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _FILE_WRITING_METHODS
+        and node.func.attr in _FILE_ONLY_METHODS
         for part in ast.walk(node.func.value)
     }
     return sorted(
@@ -1537,7 +1570,7 @@ def _program_launch_lines(tree: ast.AST, programs: _OwnPrograms) -> list[int]:
             node.lineno
             for node in ast.walk(tree)
             if isinstance(node, ast.expr)
-            and id(node) not in written
+            and id(node) not in file_only
             and _names_own_program(node, programs)
         }
     )
@@ -1552,12 +1585,14 @@ def _is_test_support(relative: str) -> bool:
 def _launch_sites_in(
     repo_root: Path, relative: str, programs: _OwnPrograms
 ) -> list[_Site]:
+    """A file naming its own path (a usage hint it prints) is not calling other workspace code."""
     source = (repo_root / relative).read_text()
     tree = ast.parse(source)
+    others = programs._replace(scripts=programs.scripts - {relative})
     return _sites(
         relative,
         source.splitlines(),
-        _program_launch_lines(tree, programs),
+        _program_launch_lines(tree, others),
         _statement_spans(tree),
         _OWN_PROCESS_MARKER,
     )
@@ -1663,7 +1698,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
     package.mkdir()
     (package / "__init__.py").write_text("")
     main_guard = 'if __name__ == "__main__":\n    pass\n'
-    (package / "tool.py").write_text(main_guard)
+    (package / "tool.py").write_text('USAGE_PATH = "pkg/tool.py"\n' + main_guard)
     (package / "helpers.py").write_text("")
     (package / "caller.py").write_text(
         "\n".join(
@@ -1683,6 +1718,11 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'subprocess.run(["mngr", "list"])',
                 '(ROOT / "tool.py").write_text("")',
                 'Path("pkg/tool.py").write_bytes(b"")',
+                'subprocess.run(["tool-cmd", "--today"])',
+                'subprocess.run(["supervisorctl", "status", "tool-cmd"])',
+                'ROUTES = [("tool-cmd", handler, ("GET",))]',
+                'IS_ROOT = (ROOT / "pkg" / "tool.py").exists()',
+                'SOURCE = Path("pkg/tool.py").read_text()',
             ]
         )
     )
@@ -1701,6 +1741,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:6",
         "pkg/caller.py:7",
         "pkg/caller.py:8",
+        "pkg/caller.py:16",
     ]
 
 
