@@ -360,7 +360,8 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: 
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
   const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
   textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
-  const targetScrollTopPx = isOverflowing && isTypingAtEnd ? textarea.scrollHeight : scrollTopPx;
+  const targetScrollTopPx =
+    isOverflowing && isTypingAtEnd ? textarea.scrollHeight - textarea.clientHeight : scrollTopPx;
   // Writing scrollTop is a programmatic scroll, which would interrupt the reader scrolling the draft mid-gesture.
   if (textarea.scrollTop !== targetScrollTopPx) textarea.scrollTop = targetScrollTopPx;
   row.style.height = "";

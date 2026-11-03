@@ -830,6 +830,9 @@ describe("MessageInput draft scroll position", () => {
     composer.type();
 
     expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    const writeCountAtBottom = textarea.scrollTopWriteCount;
+    composer.type();
+    expect(textarea.scrollTopWriteCount).toBe(writeCountAtBottom);
   });
 
   it("keeps an overflowing draft's position while typing in its middle", () => {
