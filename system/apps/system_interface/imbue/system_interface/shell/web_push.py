@@ -231,9 +231,11 @@ def device_view(device: RegisteredDevice) -> DeviceView:
 
 @pure
 def push_payload(notification: PushNotificationRequest) -> str:
-    """The JSON the service worker reads off a push event (``sw.js``)."""
+    """The JSON the service worker reads off a push event (``sw.js``), in plain UTF-8: an escaped non-ASCII character
+    takes six bytes of the push services' 4 KB message limit."""
     return json.dumps(
-        {"title": notification.title, "body": notification.body, "path": notification.path, "tag": notification.tag}
+        {"title": notification.title, "body": notification.body, "path": notification.path, "tag": notification.tag},
+        ensure_ascii=False,
     )
 
 

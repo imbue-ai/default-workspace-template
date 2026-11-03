@@ -1,3 +1,4 @@
+import json
 import threading
 from datetime import datetime
 from datetime import timedelta
@@ -19,6 +20,7 @@ from imbue.system_interface.shell.web_push import PushProviderAnswer
 from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import device_id_of
+from imbue.system_interface.shell.web_push import push_payload
 from imbue.system_interface.shell.web_push import push_provider_name
 from imbue.system_interface.shell.web_push import with_device_registered
 from imbue.system_interface.testing import RecordingPushTransport
@@ -127,6 +129,17 @@ def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
     assert [delivery.device_id for delivery in outcome.deliveries] == [
         device_id_of(f"https://push.example.org/{index}") for index in range(3)
     ]
+
+
+def test_a_non_ascii_message_travels_as_utf8_within_the_push_services_limit() -> None:
+    body = "Отчёт готов, можно смотреть. " * 34
+
+    payload = push_payload(PushNotificationRequest(title="Отчёт готов", body=body[:1000]))
+
+    assert "Отчёт готов" in payload
+    assert json.loads(payload)["body"] == body[:1000]
+    # 4096 bytes of message, less the aes128gcm header, padding delimiter and tag (RFC 8291).
+    assert len(payload.encode("utf-8")) <= 3993
 
 
 def test_a_notification_title_is_required_and_bounded() -> None:
