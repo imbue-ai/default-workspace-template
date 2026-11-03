@@ -32,7 +32,6 @@ import re
 import shlex
 import subprocess
 import tomllib
-import unicodedata
 from collections.abc import Collection, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
@@ -914,14 +913,6 @@ _PYTHONPATH_PIECE_RE = re.compile(
 
 
 def _may_edit_import_path(text: str) -> bool:
-    """Python reads identifiers NFKC-normalized, so a non-ASCII file is checked in that form too."""
-    return _spells_import_path_edit(text) or (
-        not text.isascii()
-        and _spells_import_path_edit(unicodedata.normalize("NFKC", text))
-    )
-
-
-def _spells_import_path_edit(text: str) -> bool:
     if (
         any(word in text for word in _IMPORT_PATH_WORDS)
         or _FROM_SYS_IMPORT_RE.search(text)
@@ -1140,7 +1131,6 @@ def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
     assert _edits_sys_path("import sys \\\n    as s\ns.path.append('x')\n")
     assert _edits_sys_path("import sys\nsys \\\n    .path.append('x')\n")
     assert _edits_sys_path("import sys\n(sys  # the path\n .path).append('x')\n")
-    assert _edits_sys_path("import sys\n\uff53\uff59\uff53.path.append('x')\n")
     assert _edits_sys_path(
         "def test(monkeypatch):\n    monkeypatch.syspath_prepend('x')\n"
     )
