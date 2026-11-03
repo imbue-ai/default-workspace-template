@@ -40,7 +40,7 @@ import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
-import { renderHandoffRow } from "./handoff-node";
+import { renderFramedHandoffNode } from "./handoff-node";
 import { renderAgentTurn } from "./machine-bubbles";
 import type { ResentTurns } from "../models/ResentSends";
 
@@ -295,7 +295,7 @@ function buildRows(
           key,
           estimate: ESTIMATED_USER_HEIGHT_PX,
           anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
-          render: () => renderHandoffRow(node, chatId, toolResults, { key, expansionKey: key }),
+          render: () => renderFramedHandoffNode(node, chatId, toolResults, { key, expansionKey: key }),
         });
       }
     }

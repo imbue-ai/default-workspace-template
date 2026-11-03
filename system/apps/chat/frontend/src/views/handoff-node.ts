@@ -185,14 +185,14 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): 
   if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like the parts beside it in a stretch's bubble: a keyed list refuses an unkeyed member.
-  return renderHandoffRow(node, chatId, new Map(), {
+  return renderFramedHandoffNode(node, chatId, new Map(), {
     key: "handoff-tail",
     expansionKey: node.key,
     extraClass: "handoff-tail-node",
   });
 }
 
-export interface HandoffRowFrame {
+interface HandoffFrame {
   readonly key: string;
   readonly expansionKey: string;
   readonly extraClass?: string;
@@ -200,11 +200,11 @@ export interface HandoffRowFrame {
 
 /** A handoff node standing outside a progress block: the same timeline node a progress block draws, in its own
  *  thread-less frame. */
-export function renderHandoffRow(
+export function renderFramedHandoffNode(
   node: HandoffNode,
   chatId: string,
   toolResults: Map<string, ToolResultEvent>,
-  frame: HandoffRowFrame,
+  frame: HandoffFrame,
 ): m.Vnode {
   return m(
     "div",
