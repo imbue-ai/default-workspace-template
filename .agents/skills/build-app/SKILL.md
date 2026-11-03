@@ -606,8 +606,8 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 
 `--open` is Step 4 folded in; for an app already on the user's screen, use
 `--refresh` instead and drop `--screenshot`. While the mock frame is still up
-(above), drop both and end the call with `mock_frame.py up ... --refresh` instead.
-Leave `--restart` out right after
+(above), drop `--open` / `--refresh` and end the call with `mock_frame.py up ...
+--refresh` instead. Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
 route needs exercising, append one `curl` to the same tool call. Test files
 and the test gate belong to Step 5's background pass, not to the chat turn.
