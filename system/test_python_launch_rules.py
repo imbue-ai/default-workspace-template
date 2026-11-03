@@ -1035,7 +1035,7 @@ and run a shell script's python through that venv. You may restructure the code 
 even when it is not the code you came to change (.agents/shared/references/running-python.md).
 An edit that has to stay takes `# import-path: <reason> -- <why>` in the comment lines
 directly above it, with <reason> one of: {reasons}, and a <why> naming what runs this
-code and what would break if it ran from a venv. Name every marker you add in your report.
+code and what would break otherwise. Name every marker you add in your report.
 Never edit this test to let a site through.
 """
 
