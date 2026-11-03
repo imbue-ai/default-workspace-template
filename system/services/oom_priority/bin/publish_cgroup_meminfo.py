@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-# import-path: no-venv -- supervisord runs it always-on to publish the headroom earlyoom sheds by, so memory protection keeps working when the venv is missing or broken
+# import-path: no-venv -- supervisord runs it to publish the headroom earlyoom sheds by, so memory protection keeps working when the venv is missing or broken
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import cgroup_meminfo
