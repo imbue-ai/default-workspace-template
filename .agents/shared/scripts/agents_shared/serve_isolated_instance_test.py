@@ -46,6 +46,8 @@ class _RecordingRunner(mod.Runner):
     # Pids reported as still-alive by ``process_group_alive`` (default: none, so a
     # just-killed process reads as gone immediately -- the common refresh path).
     alive_pids: set[int] = field(default_factory=set)
+    # What ``process_start_time`` reports per pid (default: '', unknown, as on macOS).
+    start_times: dict[int, str] = field(default_factory=dict)
 
     def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
         self.killed_pgroups.append(pid)
@@ -59,6 +61,9 @@ class _RecordingRunner(mod.Runner):
 
     def process_group_alive(self, pid: int) -> bool:
         return pid in self.alive_pids
+
+    def process_start_time(self, pid: int) -> str:
+        return self.start_times.get(pid, "")
 
 
 @dataclass
@@ -1456,6 +1461,26 @@ def test_reframing_reboots_the_wrapper_on_its_port_without_deregistering_it(
     assert registry.removed == []
     state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
     assert state["pids"] == [spawner.detached_pids[1]]
+
+
+def test_a_frame_never_signals_a_pid_a_restart_handed_to_another_process(
+    tmp_path: Path,
+) -> None:
+    """After a reboot the recorded wrapper pid can lead an unrelated process group; the
+    re-frame and ``down`` signal only the wrapper whose start time they recorded."""
+    spawner = _FakeSpawner()
+    first_pid = spawner.detached_pid
+    second_pid = first_pid + 1
+    runner = _RecordingRunner(start_times={first_pid: "100"})
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    runner.start_times = {first_pid: "7", second_pid: "8"}
+
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+
+    assert not runner.killed_pgroup(first_pid)
+    assert runner.killed_pgroup(second_pid)
 
 
 def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry(

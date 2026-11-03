@@ -343,6 +343,20 @@ class Runner:
             # The group exists but is not ours to signal -- still "alive".
             return True
 
+    def process_start_time(self, pid: int) -> str:
+        """When ``pid`` started, in clock ticks since boot (``/proc/<pid>/stat`` field 22),
+        or '' where ``/proc`` does not have it (macOS, or a process already gone)."""
+        try:
+            # The command name is arbitrary bytes; the numeric fields after it are ASCII.
+            stat_line = Path(f"/proc/{pid}/stat").read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            return ""
+        # Fields after the parenthesized command name, which may hold spaces; field 22 is the 20th.
+        fields = stat_line.rpartition(")")[2].split()
+        return fields[19] if len(fields) > 19 else ""
+
 
 class Registry:
     """Indirection over the workspace's app registry, so tests can record what is registered."""
@@ -876,6 +890,29 @@ def _teardown(
     return survivors
 
 
+def _pids_still_ours(state: dict, runner: Runner) -> list[int]:
+    """The pids ``state`` records, less any no longer the process it started.
+
+    A state that records ``pid_starts`` (a frame's, which outlives restarts) can name a
+    pid a reboot or a restore into a new container has handed to an unrelated process
+    group; signalling that group would kill it. So a pid whose recorded start time is
+    known and no longer matches is dropped; a pid with none recorded is kept.
+    """
+    pids = state.get("pids") or []
+    starts = state.get("pid_starts") or []
+    ours: list[int] = []
+    for index, pid in enumerate(pids):
+        recorded = starts[index] if index < len(starts) else ""
+        if recorded and runner.process_start_time(pid) != recorded:
+            sys.stderr.write(
+                f"note: pid {pid} is no longer the process this instance started (it "
+                "exited, or the workspace restarted); leaving it alone.\n"
+            )
+            continue
+        ours.append(pid)
+    return ours
+
+
 def _unwind_failed_boot(
     verb: str,
     exc: Exception,
@@ -1328,7 +1365,7 @@ def frame(
             repo_root,
             runner,
             registry,
-            pids=previous.get("pids") or [],
+            pids=_pids_still_ours(previous, runner),
             services=[],
             sleeper=sleeper,
         )
@@ -1395,6 +1432,7 @@ def frame(
             "name": name,
             "wrapper_port": wrapper_port,
             "pids": pids,
+            "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "wrapper_log": str(wrapper_log_path),
             FRAME_STATE_KEY: record._asdict(),
@@ -1452,7 +1490,7 @@ def down(
     except (json.JSONDecodeError, OSError) as exc:
         sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
         return 1
-    pids = state.get("pids") or []
+    pids = _pids_still_ours(state, runner)
     services = state.get("services") or []
     survivors = _teardown(
         repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
