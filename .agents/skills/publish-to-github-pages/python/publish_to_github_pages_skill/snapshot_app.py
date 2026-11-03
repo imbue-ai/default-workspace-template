@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy a running app's pages, their assets, and chosen data into a static site folder.
 
-    python3 snapshot_app.py --app <name> --site <SITE> \\
+    uv run --no-sync snapshot_app.py --app <name> --site <SITE> \\
         [--page / --page /about ...] [--data /api/items=data/items.json ...] \\
         [--base-url http://localhost:<port>] [--fresh]
 

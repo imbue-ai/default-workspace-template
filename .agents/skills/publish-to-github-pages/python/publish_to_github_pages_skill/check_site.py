@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Prepare, lint, and browser-check a static site folder before (and after) it is published.
 
-    python3 check_site.py prepare --site <SITE> --title <text> --description <text> [--spa]
-    python3 check_site.py lint --site <SITE>
-    uv run python check_site.py browse --site <SITE> --repo <repo> \\
+    uv run --no-sync check_site.py prepare --site <SITE> --title <text> --description <text> [--spa]
+    uv run --no-sync check_site.py lint --site <SITE>
+    uv run --no-sync check_site.py browse --site <SITE> --repo <repo> \\
         [--page / --page /about/ ...] [--screenshot-dir <dir>]
-    uv run python check_site.py browse --live-url https://<owner>.github.io/<repo>/ \\
+    uv run --no-sync check_site.py browse --live-url https://<owner>.github.io/<repo>/ \\
         [--page ...] [--screenshot-dir <dir>]
 
 `prepare` adds what GitHub Pages needs: an empty `.nojekyll` (so the files are
@@ -47,7 +47,11 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlsplit
+
+if TYPE_CHECKING:
+    from playwright.sync_api import ConsoleMessage, Error, Page, Request, Response
 
 # This file is .agents/skills/publish-to-github-pages/python/<package>/check_site.py; the
 # scanners are the publish-template skill's.
@@ -252,6 +256,41 @@ def _serve(site: Path, repo: str) -> tuple[http.server.ThreadingHTTPServer, str]
     return server, f"http://127.0.0.1:{port}/{repo}/"
 
 
+def _watch(page: Page, url: str, base_host: str, problems: list[str]) -> None:
+    """Record everything on `page` that would break or leak once the site is public."""
+
+    def on_request(request: Request) -> None:
+        parts = urlsplit(request.url)
+        if (parts.hostname or "") in ("localhost", "127.0.0.1", "0.0.0.0") and (
+            parts.netloc != base_host
+        ):
+            problems.append(f"{url}: request to a local address: {request.url}")
+
+    def on_request_failed(request: Request) -> None:
+        problems.append(f"{url}: request failed: {request.url} ({request.failure})")
+
+    def on_response(response: Response) -> None:
+        # GitHub Pages project sites have no /favicon.ico; the browser's own probe 404s.
+        if response.status >= 400 and not response.url.endswith("/favicon.ico"):
+            problems.append(f"{url}: HTTP {response.status}: {response.url}")
+
+    def on_console(message: ConsoleMessage) -> None:
+        # "Failed to load resource" repeats a failed response, already caught above.
+        if message.type == "error" and not message.text.startswith(
+            "Failed to load resource"
+        ):
+            problems.append(f"{url}: console error: {message.text}")
+
+    def on_page_error(error: Error) -> None:
+        problems.append(f"{url}: uncaught error: {error}")
+
+    page.on("request", on_request)
+    page.on("requestfailed", on_request_failed)
+    page.on("response", on_response)
+    page.on("console", on_console)
+    page.on("pageerror", on_page_error)
+
+
 def browse(
     base_url: str,
     pages: list[str],
@@ -262,55 +301,18 @@ def browse(
 
     base_host = urlsplit(base_url).netloc
     problems: list[str] = []
-    launch_args: dict[str, object] = {"args": ["--no-sandbox"]}
     executable = browser_path or (
         str(FORTRESS_PATH) if os.access(FORTRESS_PATH, os.X_OK) else None
     )
-    if executable:
-        launch_args["executable_path"] = executable
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(**launch_args)
+        browser = playwright.chromium.launch(
+            executable_path=executable, args=["--no-sandbox"]
+        )
         try:
             for index, page_path in enumerate(pages):
                 url = urljoin(base_url, page_path.lstrip("/"))
                 page = browser.new_page(viewport={"width": 1280, "height": 800})
-
-                def on_request(request, url=url) -> None:  # type: ignore[no-untyped-def]
-                    host = urlsplit(request.url).hostname or ""
-                    netloc = urlsplit(request.url).netloc
-                    if (
-                        host in ("localhost", "127.0.0.1", "0.0.0.0")
-                        and netloc != base_host
-                    ):
-                        problems.append(
-                            f"{url}: request to a local address: {request.url}"
-                        )
-
-                page.on("request", on_request)
-                page.on(
-                    "requestfailed",
-                    lambda r, url=url: problems.append(
-                        f"{url}: request failed: {r.url} ({r.failure})"
-                    ),
-                )
-                page.on(
-                    "response",
-                    lambda r, url=url: r.status >= 400
-                    and not r.url.endswith("/favicon.ico")
-                    and problems.append(f"{url}: HTTP {r.status}: {r.url}"),
-                )
-                # "Failed to load resource" repeats a failed response, already caught above, and is also
-                # the browser's own /favicon.ico probe, which 404s on every GitHub Pages project site.
-                page.on(
-                    "console",
-                    lambda m, url=url: m.type == "error"
-                    and not m.text.startswith("Failed to load resource")
-                    and problems.append(f"{url}: console error: {m.text}"),
-                )
-                page.on(
-                    "pageerror",
-                    lambda e, url=url: problems.append(f"{url}: uncaught error: {e}"),
-                )
+                _watch(page, url, base_host, problems)
                 response = page.goto(url, wait_until="networkidle", timeout=60000)
                 if response is None or response.status >= 400:
                     problems.append(

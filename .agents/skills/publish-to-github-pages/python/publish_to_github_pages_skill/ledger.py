@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """The record of every app published to GitHub Pages from this workspace.
 
-    python3 ledger.py get --app <name>
-    python3 ledger.py list
-    python3 ledger.py record --app <name> --owner <username> --repo <repo> --url <site url> \\
+    uv run --no-sync ledger.py get --app <name>
+    uv run --no-sync ledger.py list
+    uv run --no-sync ledger.py record --app <name> --owner <username> --repo <repo> --url <site url> \\
         --published-commit <sha> [--data "<what data the site carries>"]
-    python3 ledger.py remove --app <name>
+    uv run --no-sync ledger.py remove --app <name>
 
 Kept at `data/.skills/publish-to-github-pages/sites.json`, one entry per app.
 `get` prints the app's entry as JSON and exits 1 when it has none (a first

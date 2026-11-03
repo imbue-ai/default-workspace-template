@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Create a site's GitHub repo, push the site, and turn GitHub Pages on, all through latchkey.
 
-    python3 github_pages.py whoami
-    python3 github_pages.py create-repo --name <repo> --description <text> --owner <username>
-    python3 github_pages.py push --site <SITE> --repo <owner>/<repo> --message <text>
-    python3 github_pages.py enable --repo <owner>/<repo>
-    python3 github_pages.py wait --repo <owner>/<repo> [--timeout-seconds 600]
-    python3 github_pages.py disable --repo <owner>/<repo>
-    python3 github_pages.py delete-repo --repo <owner>/<repo> --yes-delete-forever
+    uv run --no-sync github_pages.py whoami
+    uv run --no-sync github_pages.py create-repo --name <repo> --description <text> --owner <username>
+    uv run --no-sync github_pages.py push --site <SITE> --repo <owner>/<repo> --message <text>
+    uv run --no-sync github_pages.py enable --repo <owner>/<repo>
+    uv run --no-sync github_pages.py wait --repo <owner>/<repo> [--timeout-seconds 600]
+    uv run --no-sync github_pages.py disable --repo <owner>/<repo>
+    uv run --no-sync github_pages.py delete-repo --repo <owner>/<repo> --yes-delete-forever
 
 `whoami` prints the connected account's username. `create-repo` makes a PUBLIC
 repo (GitHub Pages on a private repo needs a paid plan) with issues, wiki and
@@ -42,10 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Run as a file (`python3 .../github_pages.py`), the package's parent is not on sys.path
-# unless the skill's project is installed in the venv; adding it covers both.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from publish_to_github_pages_skill.check_site import lint as lint_site  # noqa: E402
+from publish_to_github_pages_skill.check_site import lint as lint_site
 
 _API = "https://api.github.com"
 _REPO_NAME = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")

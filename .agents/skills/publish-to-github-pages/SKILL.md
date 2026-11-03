@@ -53,7 +53,7 @@ that does everything in the visitor's browser.
   every command from the repo root. Each tool's docstring has its full usage.
 
 Every command runs in a fresh shell, so set the values it uses at its start
-(`P=...; SITE=...; python3 "$P/..."`).
+(`P=...; SITE=...; uv run --no-sync "$P/..."`).
 
 `snapshot_app.py` copies an app into `SITE`, `check_site.py` prepares, lints and
 browser-checks it, `github_pages.py` does everything on GitHub, and `ledger.py`
@@ -77,13 +77,13 @@ keeps the record.
 In the user's progress view these are a few plain steps ("Check whether your app
 can be published", "Make a web-ready copy", "Publish it"), not this list.
 
-Start every run with `python3 $P/ledger.py get --app <app>`. If it prints an
+Start every run with `uv run --no-sync $P/ledger.py get --app <app>`. If it prints an
 entry, this is a **republish**: skip the account guide, reuse `owner`/`repo`,
 rebuild `SITE` from the current app, and push to the same repo (steps 3-5, 7-9).
 
 ## 0. A GitHub account
 
-First run `python3 $P/github_pages.py whoami`. If it prints a username, GitHub is
+First run `uv run --no-sync $P/github_pages.py whoami`. If it prints a username, GitHub is
 already connected: that is `owner`, and the rest of this step is skipped.
 Otherwise ask:
 
@@ -171,7 +171,7 @@ Build into `SITE`. Never edit anything the live app runs from.
    is stopped):
 
    ```bash
-   python3 $P/snapshot_app.py --app <app> --site $SITE --fresh \
+   uv run --no-sync $P/snapshot_app.py --app <app> --site $SITE --fresh \
        --page / [--page /other-page ...] [--data /api/<route>=data/<name>.json ...]
    ```
 
@@ -187,14 +187,14 @@ Build into `SITE`. Never edit anything the live app runs from.
 4. **Add the GitHub Pages files**:
 
    ```bash
-   python3 $P/check_site.py prepare --site $SITE --title "<title>" --description "<one line>" [--spa]
+   uv run --no-sync $P/check_site.py prepare --site $SITE --title "<title>" --description "<one line>" [--spa]
    ```
 
    `--spa` for an app with several views on one page, so deep links load it.
 5. **Lint** until clean:
 
    ```bash
-   python3 $P/check_site.py lint --site $SITE
+   uv run --no-sync $P/check_site.py lint --site $SITE
    ```
 
    Fix each finding. Only a finding the user explicitly confirmed may ship (an
@@ -204,7 +204,7 @@ Build into `SITE`. Never edit anything the live app runs from.
 ## 4. Check the copy locally
 
 ```bash
-uv run python $P/check_site.py browse --site $SITE --repo <repo> \
+uv run --no-sync $P/check_site.py browse --site $SITE --repo <repo> \
     --page / [--page other-page/ ...] --screenshot-dir /tmp/<app>-site
 ```
 
@@ -247,7 +247,7 @@ user's approval card):
   `github-write-all` covers repo creation), and turn on Pages.
 
 Wait for both approval messages. Then read the connected account's username
-with `python3 $P/github_pages.py whoami`. If the user named a username and it
+with `uv run --no-sync $P/github_pages.py whoami`. If the user named a username and it
 differs from this one, the address at the publish gate was wrong: tell them which account
 is connected, and ask whether to publish there (and re-confirm the address) or
 connect the other account. The same
@@ -259,7 +259,7 @@ a missing grant.
 On a first publish, create the **public** repo:
 
 ```bash
-python3 $P/github_pages.py create-repo --name <repo> --description "<one line>" --owner <owner>
+uv run --no-sync $P/github_pages.py create-repo --name <repo> --description "<one line>" --owner <owner>
 ```
 
 Exit 3: the name is taken -- ask the user for another
@@ -269,7 +269,7 @@ the connected account is not `<owner>` -- go back to step 6's mismatch handling.
 Then publish the files (first publish and republish alike):
 
 ```bash
-python3 $P/github_pages.py push --site $SITE --repo <owner>/<repo> --message "Publish <title>"
+uv run --no-sync $P/github_pages.py push --site $SITE --repo <owner>/<repo> --message "Publish <title>"
 ```
 
 If it refuses, fix what it names; never work around it (no force-push, no
@@ -278,9 +278,9 @@ pushing from another folder).
 ## 8. Turn on Pages and check the live site
 
 ```bash
-python3 $P/github_pages.py enable --repo <owner>/<repo>
-python3 $P/github_pages.py wait --repo <owner>/<repo>
-uv run python $P/check_site.py browse --live-url https://<owner>.github.io/<repo>/ \
+uv run --no-sync $P/github_pages.py enable --repo <owner>/<repo>
+uv run --no-sync $P/github_pages.py wait --repo <owner>/<repo>
+uv run --no-sync $P/check_site.py browse --live-url https://<owner>.github.io/<repo>/ \
     --page / [--page ...] --screenshot-dir /tmp/<app>-live
 ```
 
@@ -291,7 +291,7 @@ can take a few more minutes to answer at its address after the build is done: if
 ## 9. Record it and tell the user
 
 ```bash
-python3 $P/ledger.py record --app <app> --owner <owner> --repo <repo> \
+uv run --no-sync $P/ledger.py record --app <app> --owner <owner> --repo <repo> \
     --url https://<owner>.github.io/<repo>/ --published-commit <commit from push> \
     --data "<the snapshots, in a few words, or none>"
 ```
