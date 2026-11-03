@@ -14,7 +14,8 @@ schedule. It is the user's view of the routines library
 - **`/<id>`**, a routine: the definition in plain words, Run now, On/Off,
   Change schedule (a number and a unit, a time, weekdays, a day of the month,
   previewed as the sentence it will read as), Fix it (opens a chat briefed on
-  the failure, through `system/scripts/message_chat.py --create`), Remove, and
+  the failure, through the chat app's create route, using the workspace's chat
+  client `message_chat`), Remove, and
   the run history, each run a row that opens its page.
 - **`/<id>/runs/<run id>`**, a run: the finished event's fields, the links it
   left, and the end of its log, as is.

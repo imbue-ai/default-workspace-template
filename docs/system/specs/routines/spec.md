@@ -348,7 +348,7 @@ One document serves every page; the page routes on its path and reports it throu
 - **`/<id>/runs/<run_id>/log`, the whole log.** The run's entire log under the same navigation header, where the run page shows only the end of a long one.
 - The phone layout stacks the row's cells; the controls wrap into as many rows as the width takes.
 
-Fix it builds a brief from the routine, its last runs, and the last finished run's log, and opens a chat on it through `message_chat.py --create` with `auto_open=true`, as the reference template did; the brief links the routine's page.
+Fix it builds a brief from the routine, its last runs, and the last finished run's log, and opens a chat on it through the chat app's create route (`message_chat.create_through_chat_app`, the call behind `message_chat.py --create`) with `auto_open=true`, as the reference template did; the brief links the routine's page.
 
 ### 10.3 API
 
