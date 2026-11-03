@@ -717,7 +717,8 @@ describe("MessageInput draft scroll position", () => {
   /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
    *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The draft ends with
    *  `draftSuffix`, and the caret sits at `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing
-   *  it to "auto" resets its scrollTop, as some browsers do. */
+   *  it to "auto" resets its scrollTop, as some browsers do. `scrollTopWriteCount` counts the writes to its
+   *  scrollTop. */
   function makeOverflowingDraftTextarea({
     caretPosition,
     draftSuffix = "",
@@ -731,6 +732,7 @@ describe("MessageInput draft scroll position", () => {
       value,
       selectionStart: caret,
       selectionEnd: caret,
+      scrollTopWriteCount: 0,
       style: {
         overflowY: "",
         get height(): string {
@@ -756,6 +758,7 @@ describe("MessageInput draft scroll position", () => {
         return Math.min(storedScrollTopPx, this.scrollHeight - this.clientHeight);
       },
       set scrollTop(valuePx: number) {
+        this.scrollTopWriteCount += 1;
         storedScrollTopPx = Math.max(0, Math.min(valuePx, this.scrollHeight - this.clientHeight));
       },
     };
@@ -785,10 +788,12 @@ describe("MessageInput draft scroll position", () => {
     const composer = mountComposer(textarea);
     expect(textarea.clientHeight).toBe(MAX_TEXTAREA_HEIGHT_PX);
     textarea.scrollTop = 40;
+    const writeCountBeforeRedraw = textarea.scrollTopWriteCount;
 
     composer.redraw();
 
     expect(textarea.scrollTop).toBe(40);
+    expect(textarea.scrollTopWriteCount).toBe(writeCountBeforeRedraw);
   });
 
   it("keeps an overflowing draft's scroll position across a redraw where collapsing it to measure loses it", () => {
