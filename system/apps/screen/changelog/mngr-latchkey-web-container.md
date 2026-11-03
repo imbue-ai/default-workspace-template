@@ -3,3 +3,5 @@
 - `screen-service --host` (or `SCREEN_LISTEN_HOST`) binds an address other than `127.0.0.1`; the service refuses one that is not loopback unless gate mode is on.
 
 - `GET /api/connect-info` also reads the connect-info document in the file `SCREEN_CONNECT_INFO_PATH` names, on every request, when that variable is set; an absent or unreadable file is a broker that did not answer.
+
+- The Screen requires Werkzeug 3.1 or later, whose `set_cookie` takes the `partitioned` flag the gate sets.

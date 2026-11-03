@@ -27,7 +27,7 @@ dependencies = [
     "simple-websocket>=1.0",
     # The reverse proxy's upstream WebSocket to neko and the service's own event subscription.
     "websockets>=13",
-    "werkzeug>=3.0",
+    "werkzeug>=3.1",
     # The ``screen open`` verb opens the Screen's window through the shell's op route.
     "workspace-layout",
 ]
