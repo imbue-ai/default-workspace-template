@@ -21,6 +21,13 @@ _SENT = GrokSendResult(verdict=GrokSendVerdict.SENT, reason="", failure_kind="")
 _BUSY = GrokSendResult(verdict=GrokSendVerdict.BUSY, reason="grok is running a turn", failure_kind="agent_busy")
 _BLOCKED = GrokSendResult(verdict=GrokSendVerdict.BLOCKED, reason="paywall", failure_kind="input_blocked")
 _FAILED = GrokSendResult(verdict=GrokSendVerdict.FAILED, reason="pane gone", failure_kind="agent_unreachable")
+_UNCONFIRMED = GrokSendResult(
+    verdict=GrokSendVerdict.UNCONFIRMED,
+    reason="Message submission was not confirmed",
+    failure_kind="submission_unconfirmed",
+)
+# When a flush began, in epoch seconds.
+_BEGAN_AT = 1792500000.0
 
 
 def _tracker(tmp_path: Path, token: str = "session-1") -> GrokQueueTracker:
@@ -123,7 +130,7 @@ def test_a_slash_command_is_claimed_alone_in_send_order(
         if not claimed:
             break
         claimed_blocks.append(block)
-        tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT)
+        tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=_BEGAN_AT)
 
     assert claimed_blocks == blocks
     assert tracker.snapshot() == []
@@ -135,7 +142,7 @@ def test_a_delivered_flush_drops_its_entries_and_keeps_one_sent_meanwhile(tmp_pa
     _block, claimed, generation = tracker.begin_flush()
     tracker.enqueue("arrived mid-flush", "t1", is_turn_open=True)
 
-    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT)
+    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=_BEGAN_AT)
 
     assert _contents(tracker) == ["arrived mid-flush"]
 
@@ -146,7 +153,7 @@ def test_a_partial_delivery_keeps_the_entries_grok_did_not_commit(tmp_path: Path
     tracker.enqueue("two", "t1", is_turn_open=True)
     _block, claimed, generation = tracker.begin_flush()
 
-    tracker.finish_flush(claimed, generation, delivered=claimed[:1], result=_SENT)
+    tracker.finish_flush(claimed, generation, delivered=claimed[:1], result=_SENT, began_at=_BEGAN_AT)
 
     assert _contents(tracker) == ["two"]
     assert _sending_flags(tracker) == [False]
@@ -158,12 +165,39 @@ def test_an_entry_stops_being_sent_after_its_attempts_but_stays_visible(tmp_path
     assert tracker.has_deliverable_entries() is True
     for _ in range(MAX_DELIVERY_ATTEMPTS):
         _block, claimed, generation = tracker.begin_flush()
-        tracker.finish_flush(claimed, generation, delivered=(), result=_SENT)
+        tracker.finish_flush(claimed, generation, delivered=(), result=_SENT, began_at=_BEGAN_AT)
 
     assert tracker.is_exhausted(queued_id) is True
     assert tracker.has_deliverable_entries() is False
     assert tracker.begin_flush()[1] == ()
     assert _contents(tracker) == ["never committed"]
+
+
+def test_a_delivered_flush_answers_when_the_first_unwitnessed_send_of_its_entries_began(tmp_path: Path) -> None:
+    """A send mngr could not confirm and grok logged no turn for may have landed, so a later delivery is a second copy."""
+    tracker = _tracker(tmp_path)
+    tracker.enqueue("maybe twice", "t0", is_turn_open=True)
+    for began_at in (100.0, 105.0):
+        _block, claimed, generation = tracker.begin_flush()
+        assert tracker.finish_flush(claimed, generation, delivered=(), result=_UNCONFIRMED, began_at=began_at) is None
+    tracker.enqueue("only once", "t1", is_turn_open=True)
+    block, claimed, generation = tracker.begin_flush()
+
+    assert block == "maybe twice\nonly once"
+    assert tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=110.0) == 100.0
+    assert tracker.snapshot() == []
+
+
+def test_a_send_that_typed_nothing_or_landed_nothing_makes_no_later_delivery_a_second_copy(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    tracker.enqueue("once", "t0", is_turn_open=True)
+    _block, claimed, generation = tracker.begin_flush()
+    tracker.refuse_flush(claimed, generation, _BUSY)
+    _block, claimed, generation = tracker.begin_flush()
+    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED, began_at=100.0)
+    _block, claimed, generation = tracker.begin_flush()
+
+    assert tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=110.0) is None
 
 
 @pytest.mark.parametrize("result", [_BUSY, _BLOCKED], ids=["busy", "blocked"])
@@ -200,7 +234,7 @@ def test_stop_takes_only_unclaimed_entries_and_the_spared_flush_still_settles(tm
     tracker.enqueue("not yet sent", "t1", is_turn_open=True)
 
     block, taken = tracker.take_unclaimed()
-    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT)
+    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=_BEGAN_AT)
 
     assert (block, len(taken)) == ("not yet sent", 1)
     assert tracker.snapshot() == []
@@ -227,7 +261,7 @@ def test_the_restart_takes_everything_and_voids_the_claim(tmp_path: Path) -> Non
 
     block, taken = tracker.take_all()
     tracker.enqueue("sent after the stop", "t2", is_turn_open=True)
-    tracker.finish_flush(claimed, generation, delivered=(), result=_SENT)
+    tracker.finish_flush(claimed, generation, delivered=(), result=_SENT, began_at=_BEGAN_AT)
 
     assert (block, len(taken)) == ("in flight\nqueued", 2)
     assert _contents(tracker) == ["sent after the stop"]
@@ -296,7 +330,7 @@ def test_a_refusal_of_the_command_ahead_leaves_a_claimed_flush_alone(tmp_path: P
     tracker.refuse_pending(_BLOCKED)
 
     assert _sending_flags(tracker) == [True]
-    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT)
+    tracker.finish_flush(claimed, generation, delivered=claimed, result=_SENT, began_at=_BEGAN_AT)
     assert tracker.snapshot() == []
 
 
@@ -306,7 +340,7 @@ def test_a_waiting_send_gets_the_verdict_once_its_flush_settles(tmp_path: Path) 
     waiter, results = _wait_in_thread(tracker, queued_id)
     _block, claimed, generation = tracker.begin_flush()
 
-    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED)
+    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED, began_at=_BEGAN_AT)
     waiter.join(timeout=5.0)
 
     assert results == [_FAILED]
@@ -346,7 +380,7 @@ def test_a_first_send_that_settles_after_its_wait_gave_up_is_not_kept(tmp_path: 
     assert tracker.wait_for_send_result(queued_id, 0.0) is None
     _block, claimed, generation = tracker.begin_flush()
 
-    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED)
+    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED, began_at=_BEGAN_AT)
 
     assert tracker.wait_for_send_result(queued_id, 0.0) is None
 
@@ -383,7 +417,7 @@ def test_a_chat_app_restart_keeps_the_attempts_an_entry_spent(tmp_path: Path) ->
     queued_id = tracker.enqueue("never committed", "t0", is_turn_open=True)
     for _ in range(MAX_DELIVERY_ATTEMPTS):
         _block, claimed, generation = tracker.begin_flush()
-        tracker.finish_flush(claimed, generation, delivered=(), result=_SENT)
+        tracker.finish_flush(claimed, generation, delivered=(), result=_SENT, began_at=_BEGAN_AT)
 
     restarted = _tracker(tmp_path, token="session-1")
 

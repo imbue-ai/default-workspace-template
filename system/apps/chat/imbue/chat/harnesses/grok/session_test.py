@@ -26,6 +26,8 @@ from imbue.mngr_grok.api import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_grok.api import read_grok_pid
 
 _SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
+# When a scripted flush began, in epoch seconds.
+_BEGAN_AT = 1792500000.0
 
 
 def _unused_interrupter(agent_info: AgentInfo) -> InterruptToComposer:
@@ -38,12 +40,17 @@ def _session(
     agent_state_dir.mkdir(parents=True, exist_ok=True)
     if is_grok_running:
         write_live_grok_pid(agent_state_dir)
+
+    def send_to_harness(text: str, is_resent_when_unsure: bool) -> SendOutcome:
+        typed.append(text)
+        return SendOutcome.OK
+
     session = GrokHarnessSession.build(
         SessionDeps(
             harness=HarnessType.GROK,
             state_dir=agent_state_dir,
             model_state_path=agent_state_dir / "model_state.json",
-            send_to_harness=lambda text: (typed.append(text), True)[1],
+            send_to_harness=send_to_harness,
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: is_starting_up,
             is_tracked=lambda: True,
@@ -73,7 +80,7 @@ def _attach_scripted_worker(tracker: GrokQueueTracker, result: GrokSendResult) -
             tracker.refuse_flush(claimed, generation, result)
         else:
             delivered = claimed if result.verdict is GrokSendVerdict.SENT else ()
-            tracker.finish_flush(claimed, generation, delivered=delivered, result=result)
+            tracker.finish_flush(claimed, generation, delivered=delivered, result=result, began_at=_BEGAN_AT)
 
     tracker.attach(publish=lambda _snapshot: None, wake=lambda: threading.Thread(target=settle).start())
     return claimed_blocks
@@ -135,6 +142,7 @@ def test_the_tap_is_not_offered_once_every_held_message_spent_its_attempts(tmp_p
             generation,
             delivered=(),
             result=GrokSendResult(verdict=GrokSendVerdict.UNCONFIRMED, reason="", failure_kind=""),
+            began_at=_BEGAN_AT,
         )
 
     assert session.is_tap_available(has_queued=True) is False
@@ -238,7 +246,7 @@ def test_ensure_live_hands_the_worker_this_sessions_send_and_close_takes_it_back
     session.ensure_live()
     session_send = tracker.get_session_send()
     assert session_send is not None
-    assert session_send("typed by the worker") is True
+    assert session_send("typed by the worker", False) is SendOutcome.OK
     assert typed == ["typed by the worker"]
 
     session.close()

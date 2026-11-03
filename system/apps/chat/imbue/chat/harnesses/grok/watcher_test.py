@@ -27,6 +27,8 @@ from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
+from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_grok.api import GrokRootSession
 from imbue.mngr_grok.api import GrokRootTurn
@@ -470,6 +472,8 @@ class _ScriptedGrok:
     def __init__(self, agent_state_dir: Path) -> None:
         self.agent_state_dir = agent_state_dir
         self.sent: list[str] = []
+        # Whether each send let mngr send the text again when it could not confirm it.
+        self.is_resent_when_unsure_by_send: list[bool] = []
         self.refusal: SendFailedError | None = None
         self.is_committing = True
         # mngr types the text but finds no evidence that grok took it.
@@ -480,7 +484,8 @@ class _ScriptedGrok:
         self._prompt_index = 1
         self._clock_ms = 1792500000000
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, is_resent_when_unsure: bool) -> SendOutcome:
+        self.is_resent_when_unsure_by_send.append(is_resent_when_unsure)
         if self.refusal is not None:
             raise self.refusal
         self.sent.append(text)
@@ -491,7 +496,7 @@ class _ScriptedGrok:
             self.on_send()
         if self.is_unconfirmed:
             raise SendFailedError("Message submission was not confirmed", "submission_unconfirmed")
-        return True
+        return SendOutcome.OK
 
     def commit(self, prompt: str) -> None:
         """grok logs a user turn holding ``prompt``, and answers it."""
@@ -512,7 +517,7 @@ def _flushing_watcher(
     watcher, broadcast, _reported = _build_watcher(agent_state_dir)
     watcher._prime()
     grok = _ScriptedGrok(agent_state_dir)
-    watcher.set_flush_hooks(_fail_if_called, lambda: is_alive)
+    watcher.set_flush_hooks(_fail_if_called, lambda: is_alive, _ignore_resent)
     watcher._queue.bind_session_send(grok.send)
     watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
     watcher.delivery_witness_seconds = 0.3
@@ -521,6 +526,10 @@ def _flushing_watcher(
 
 def _fail_if_called(_text: str) -> bool:
     raise AssertionError("the bound session send carries mngr's refusal kind, so the flush hook is not used")
+
+
+def _ignore_resent(_text: str, _sent_after: float) -> None:
+    pass
 
 
 def _held(watcher: GrokSessionWatcher) -> list[tuple[str, bool]]:
@@ -589,7 +598,7 @@ def test_a_send_mngr_refuses_as_busy_keeps_the_message_held_without_spending_an_
 
 def test_a_session_send_that_reports_the_text_untaken_keeps_the_message_held(tmp_path: Path) -> None:
     watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
-    watcher._queue.bind_session_send(lambda _text: False)
+    watcher._queue.bind_session_send(lambda _text, _is_resent_when_unsure: SendOutcome.FAILED)
     watcher._queue.enqueue("held", "t0", is_turn_open=False)
 
     watcher._attempt_flush()
@@ -750,6 +759,63 @@ def test_a_send_mngr_could_not_confirm_and_grok_logged_no_turn_for_spends_an_att
     assert "typed at the pane" in [event.get("content") for event in broadcast]
 
 
+def test_the_worker_never_lets_mngr_send_a_block_again_itself(tmp_path: Path) -> None:
+    """A second send by mngr of a paste it could not confirm could type into the turn the first one opened."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("unconfirmed", "t0", is_turn_open=True)
+    grok.is_committing = False
+    grok.is_unconfirmed = True
+
+    watcher._attempt_flush()
+    grok.is_committing = True
+    grok.is_unconfirmed = False
+    watcher._attempt_flush()
+
+    assert grok.sent == ["unconfirmed", "unconfirmed"]
+    assert grok.is_resent_when_unsure_by_send == [False, False]
+
+
+def test_a_block_that_lands_on_a_later_pass_after_an_unwitnessed_send_is_noted_as_sent_again(tmp_path: Path) -> None:
+    """The first copy may have landed after the witness window, so the chat shows the second one as sent again."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    resent: list[tuple[str, float]] = []
+    watcher.set_flush_hooks(_fail_if_called, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
+    watcher._queue.enqueue("maybe twice", "t0", is_turn_open=True)
+    grok.is_committing = False
+    grok.is_unconfirmed = True
+
+    first_pass_began_at = time.time()
+    watcher._attempt_flush()
+    first_pass_ended_at = time.time()
+    assert (grok.sent, resent) == (["maybe twice"], [])
+    grok.is_committing = True
+    grok.is_unconfirmed = False
+    watcher._attempt_flush()
+
+    assert grok.sent == ["maybe twice", "maybe twice"]
+    assert watcher.get_queued_messages() == []
+    ((text, sent_after),) = resent
+    assert text == "maybe twice"
+    assert first_pass_began_at - TRANSCRIPT_CLOCK_SLACK_SECONDS <= sent_after
+    assert sent_after <= first_pass_ended_at - TRANSCRIPT_CLOCK_SLACK_SECONDS
+
+
+def test_a_block_delivered_after_mngr_refused_it_as_busy_is_not_noted_as_sent_again(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    resent: list[tuple[str, float]] = []
+    watcher.set_flush_hooks(_fail_if_called, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
+    watcher._queue.enqueue("once", "t0", is_turn_open=True)
+    grok.refusal = SendFailedError("grok is running a turn", "agent_busy")
+
+    watcher._attempt_flush()
+    grok.refusal = None
+    watcher._attempt_flush()
+
+    assert grok.sent == ["once"]
+    assert watcher.get_queued_messages() == []
+    assert resent == []
+
+
 def test_a_foreign_turn_does_not_resolve_the_held_block(tmp_path: Path) -> None:
     """A turn someone typed at the pane during the send is not the block: only its text identifies it."""
     watcher, grok, _broadcast = _flushing_watcher(tmp_path)
@@ -905,11 +971,11 @@ def test_a_slash_command_is_sent_alone_once_and_never_typed_again(tmp_path: Path
     watcher._queue.enqueue("/new", "t1", is_turn_open=True)
     watcher._queue.enqueue("after", "t2", is_turn_open=True)
 
-    def run_locally(text: str) -> bool:
+    def run_locally(text: str, is_resent_when_unsure: bool) -> SendOutcome:
         if text.startswith("/"):
             grok.sent.append(text)
-            return True
-        return grok.send(text)
+            return SendOutcome.OK
+        return grok.send(text, is_resent_when_unsure)
 
     watcher._queue.bind_session_send(run_locally)
     for _ in range(5):
@@ -944,7 +1010,7 @@ def test_without_a_bound_session_send_an_untaken_hook_send_grok_ran_is_not_typed
         write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
         return False
 
-    watcher.set_flush_hooks(unconfirmed_hook, lambda: True)
+    watcher.set_flush_hooks(unconfirmed_hook, lambda: True, _ignore_resent)
     watcher._queue.enqueue("held", "t0", is_turn_open=True)
 
     watcher._attempt_flush()
@@ -982,7 +1048,7 @@ def test_the_running_worker_sends_a_held_message_when_the_turn_ends_without_wait
     grok.on_send = lambda: sent_at.append(time.monotonic())
     publish_count = [0]
     watcher.set_queue_snapshot_callback(lambda _snapshot: publish_count.__setitem__(0, publish_count[0] + 1))
-    watcher.set_flush_hooks(_fail_if_called, lambda: True)
+    watcher.set_flush_hooks(_fail_if_called, lambda: True, _ignore_resent)
     watcher._queue.bind_session_send(grok.send)
     watcher.delivery_witness_seconds = 0.3
     watcher.start()

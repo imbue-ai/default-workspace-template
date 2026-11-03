@@ -21,6 +21,7 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.chat.harnesses.queued_set import QueuedSet
+from imbue.chat.harnesses.session import SendOutcome
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -40,9 +41,9 @@ MODEL_COMMAND_VERB: Final[str] = "/model"
 CONTROL_COMMAND_VERBS: Final[frozenset[str]] = frozenset({MODEL_COMMAND_VERB, "/effort"})
 
 PublishCallback = Callable[[list[dict[str, Any]]], None]
-# mngr's send through the agent's session: True when grok took the text, False when mngr says it did not, or
-# SendFailedError with mngr's kind.
-SessionSendCallback = Callable[[str], bool]
+# mngr's send through the agent's session (``SessionDeps.send_to_harness``), told whether mngr may send the text again
+# when it cannot confirm it: a delivered outcome when grok took the text, or SendFailedError with mngr's kind.
+SessionSendCallback = Callable[[str, bool], SendOutcome]
 
 
 class GrokSendVerdict(UpperCaseStrEnum):
@@ -141,6 +142,9 @@ class GrokQueueTracker:
     # Accepted with no turn in the way, so the worker is about to send them; shown as Sending.
     _pending_send: set[str]
     _attempts: dict[str, int]
+    # When the first send mngr could not confirm and grok logged no turn for began, per held entry, in epoch seconds:
+    # that copy may have landed unseen.
+    _unwitnessed_send_began_at: dict[str, float]
     # The settled first send of each entry that was Sending, until its POST reads it.
     _first_send_result_by_id: dict[str, GrokSendResult]
     # The entries enqueued as Sending whose POST is still to read their first send.
@@ -165,6 +169,7 @@ class GrokQueueTracker:
         self._flush_pause_count = 0
         self._pending_send = set()
         self._attempts = {}
+        self._unwitnessed_send_began_at = {}
         self._first_send_result_by_id = {}
         self._result_waiter_ids = set()
         self._control_command_by_verb = {}
@@ -291,6 +296,7 @@ class GrokQueueTracker:
             self._tap_claimed_ids.discard(queued_id)
             self._pending_send.discard(queued_id)
             self._attempts.pop(queued_id, None)
+            self._unwitnessed_send_began_at.pop(queued_id, None)
 
     def _clear_entries_locked(self) -> None:
         self._queued.clear()
@@ -298,6 +304,7 @@ class GrokQueueTracker:
         self._tap_claimed_ids.clear()
         self._pending_send.clear()
         self._attempts.clear()
+        self._unwitnessed_send_began_at.clear()
         self._generation += 1
 
     # session identity
@@ -413,26 +420,36 @@ class GrokQueueTracker:
         *,
         delivered: tuple[str, ...],
         result: GrokSendResult,
-    ) -> None:
-        """Settle a flush mngr typed: ``delivered`` leave, the rest wait on as Queued with one more attempt spent.
+        began_at: float,
+    ) -> float | None:
+        """Settle a flush mngr typed, which began at epoch ``began_at``: ``delivered`` leave, the rest wait on as Queued
+        with one more attempt spent.
 
+        Returns when the earliest unwitnessed send of a delivered entry began, whose copy may have landed too, or None.
         A stale ``generation`` (a restart or a relaunch took the entries) settles nothing.
         """
         with self._lock:
             self._record_first_send_result_locked(claimed, result)
+            earlier_send_began_ats: list[float] = []
             if generation == self._generation:
                 delivered_ids = set(delivered)
                 for queued_id in claimed:
                     self._sending_ids.discard(queued_id)
                     self._pending_send.discard(queued_id)
                     if queued_id in delivered_ids:
+                        earlier_send_began_at = self._unwitnessed_send_began_at.pop(queued_id, None)
+                        if earlier_send_began_at is not None:
+                            earlier_send_began_ats.append(earlier_send_began_at)
                         self._queued.resolve(queued_id)
                         self._attempts.pop(queued_id, None)
                     else:
                         self._attempts[queued_id] = self._attempts.get(queued_id, 0) + 1
+                        if result.verdict is GrokSendVerdict.UNCONFIRMED:
+                            self._unwitnessed_send_began_at.setdefault(queued_id, began_at)
             else:
                 logger.info("grok: dropping a stale flush settle for {} message(s)", len(claimed))
             self._settled_locked()
+            return min(earlier_send_began_ats, default=None)
 
     def refuse_pending(self, result: GrokSendResult) -> None:
         """Settle the unclaimed Sending entries with the refusal of the command sent ahead of them: each waits on as

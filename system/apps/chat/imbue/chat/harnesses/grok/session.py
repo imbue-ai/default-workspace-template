@@ -33,6 +33,7 @@ class GrokHarnessSession(FileHarnessSession):
         self._deps = deps
         self._sending = SendingRegistry.build()
         self._sending_lock = threading.Lock()
+        self._handed_back_tokens = set()
         self.send_result_wait_seconds = SEND_RESULT_WAIT_SECONDS
         return self
 
@@ -43,8 +44,8 @@ class GrokHarnessSession(FileHarnessSession):
     def close(self) -> None:
         self._queue().unbind_session_send(self._deps.send_to_harness)
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
-        """Hold the message for the flush worker, the only typist.
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
+        """Hold the message for the flush worker, the only typist, which decides itself whether to type it again.
 
         NOT_READY while grok is not running or still starting, so the route starts it and retries. The queue
         first adopts the running grok's session, so a message sent just after a relaunch is not dropped with the

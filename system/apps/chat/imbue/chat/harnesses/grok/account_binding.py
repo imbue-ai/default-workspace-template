@@ -49,16 +49,16 @@ class GrokAccountBinding(AccountBinding):
     """
 
     def account_env(self, account_dir: Path) -> dict[str, str]:
-        return {
-            **build_pinned_grok_environment(),
-            _GROK_HOME_ENV_VAR: str(account_dir),
-            GROK_AUTH_PATH_ENV_VAR: str(_auth_path(account_dir)),
-        }
+        return {_GROK_HOME_ENV_VAR: str(account_dir), GROK_AUTH_PATH_ENV_VAR: str(_auth_path(account_dir))}
+
+    def cli_env(self, account_dir: Path) -> dict[str, str]:
+        """The account's scope on mngr's privacy and isolation pins, which an agent's launch sets for it."""
+        return {**build_pinned_grok_environment(), **self.account_env(account_dir)}
 
     def account_process_env(self, account_dir: Path) -> dict[str, str]:
-        """The server's environment without the variables grok would read in place of the account's, scoped to it."""
+        """The server's environment without the variables grok would read in place of the account's, under cli_env."""
         server_environment = {name: value for name, value in os.environ.items() if not is_grok_ambient_variable(name)}
-        return {**server_environment, **self.account_env(account_dir)}
+        return {**server_environment, **self.cli_env(account_dir)}
 
     def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
         return (_auth_path(account_dir),)

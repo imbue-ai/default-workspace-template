@@ -17,6 +17,7 @@ from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import remove_root_turn
 from imbue.chat.harnesses.grok.testing import write_root_turn
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
+from imbue.chat.harnesses.session import SendOutcome
 from imbue.mngr.errors import AgentNotFoundError
 
 _SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
@@ -275,6 +276,7 @@ def test_a_tap_with_only_messages_that_spent_their_attempts_presses_nothing(tmp_
             generation,
             delivered=(),
             result=GrokSendResult(verdict=GrokSendVerdict.UNCONFIRMED, reason="", failure_kind=""),
+            began_at=0.0,
         )
 
     assert _tap(agent_info, watcher, grok.cancelling_press) == ("nothing_queued", None)
@@ -385,8 +387,13 @@ def test_the_flush_worker_cannot_send_what_the_stop_returns_into_the_grok_its_ca
     grok.begin_turn()
     _hold(watcher, "held for the stop")
     sent: list[str] = []
-    watcher.set_flush_hooks(lambda _text: True, lambda: True)
-    watcher._queue.bind_session_send(lambda text: (sent.append(text), True)[1])
+
+    def session_send(text: str, is_resent_when_unsure: bool) -> SendOutcome:
+        sent.append(text)
+        return SendOutcome.OK
+
+    watcher.set_flush_hooks(lambda _text: True, lambda: True, lambda _text, _sent_after: None)
+    watcher._queue.bind_session_send(session_send)
 
     def press_waking_the_worker() -> bool:
         is_pressed = grok.cancelling_press()

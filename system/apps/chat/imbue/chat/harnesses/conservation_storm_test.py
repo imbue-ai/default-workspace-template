@@ -1554,6 +1554,8 @@ class _GrokWorld:
         self.local_commands_run: list[str] = []
         self.delivered_text_by_drafted_turn: dict[str, str] = {}
         self.is_last_paste_after_draft = False
+        # How many times mngr pasted each line of what it sent.
+        self.paste_count_by_line: Counter[str] = Counter()
         # The prompt of every top-level turn grok started, and the turn running when grok was last restarted.
         self.prompt_text_by_id: dict[str, str] = {}
         self.prompt_id_at_last_restart: str | None = None
@@ -1852,10 +1854,14 @@ class _GrokWorld:
             return "the composer holds text"
         return None
 
-    def mngr_send(self, text: str) -> bool:
+    def mngr_send(self, text: str, is_resent_when_unsure: bool) -> SendOutcome:
         """mngr's send under the REFUSE busy-send policy: the check, then the paste, all under the message lock."""
         assert self.is_running, (
             f"the flush worker sent {text!r} to a grok that is not running\n{self.ledger.replay_note()}"
+        )
+        assert not is_resent_when_unsure, (
+            f"mngr was let send {text!r} again itself, into the turn its first copy may have opened"
+            f"\n{self.ledger.replay_note()}"
         )
         with agent_message_lock(self.dir):
             with self._acting():
@@ -1865,13 +1871,14 @@ class _GrokWorld:
                 assert self.paste_gate.wait(timeout=_GROK_THREAD_JOIN_SECONDS), "the staged paste was never released"
             with self._acting():
                 self._paste(text)
+                self.paste_count_by_line.update(text.split("\n"))
                 is_after_draft = self.is_last_paste_after_draft
             if self.is_confirm_held_for_press:
                 assert self.press_waits_for_lock.wait(timeout=_GROK_THREAD_JOIN_SECONDS), "stop never pressed"
         if is_after_draft:
             # Measured live: mngr's evidence looks for the message's own prompt, which the draft ahead of it hides.
             raise SendFailedError("Message submission was not confirmed", SendFailureKind.SUBMISSION_UNCONFIRMED.value)
-        return True
+        return SendOutcome.OK
 
     def restart_process(self) -> tuple[bool, str]:
         """``mngr start --restart --no-resume``: grok dies with its turn and its own queue, and relaunches."""
@@ -2192,7 +2199,7 @@ class _GrokChat:
         self._stuck_reported: set[str] = set()
         self.tracker = get_grok_tracker(world.dir)
         self.watcher = GrokSessionWatcher.build(self.agent_info, self._on_broadcast)
-        self.watcher.set_flush_hooks(_grok_flush_hook_must_not_send, world.is_alive)
+        self.watcher.set_flush_hooks(_grok_flush_hook_must_not_send, world.is_alive, self._on_noted_resent)
         self.watcher.delivery_witness_seconds = delivery_witness_seconds
         self.tracker.attach(publish=self._on_published, wake=self._on_tracker_wake)
         world.on_turn_files_changed = self.watcher._on_root_turns_changed
@@ -2245,6 +2252,11 @@ class _GrokChat:
         assert not self.violations, "\n".join(
             ("lifecycle rule violations:", *self.violations, self.ledger.replay_note())
         )
+
+    def _on_noted_resent(self, block: str, _sent_after: float) -> None:
+        """The chat's "Sent again" line: only a block holding a message mngr pasted before may carry one."""
+        if not any(self.world.paste_count_by_line[line] > 1 for line in _block_texts(block)):
+            self.record_violation(f"noted {block!r} as sent again, though mngr pasted none of it before")
 
     def _on_tracker_wake(self) -> None:
         """The tracker waking the flush worker, as the watcher's start binds it, with an armed wake turn starting first."""

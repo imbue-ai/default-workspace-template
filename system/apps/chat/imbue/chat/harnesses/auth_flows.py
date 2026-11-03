@@ -1152,6 +1152,7 @@ def _drop_pasted_credential(harness: HarnessType, account_path: Path, grok_auth_
             | HarnessType.ANTIGRAVITY
             | HarnessType.OPENCODE
             | HarnessType.SEED
+            | HarnessType.ROOM
         ):
             # No lane of theirs pairs a terminal sign-in with a pasted credential.
             pass

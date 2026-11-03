@@ -47,10 +47,12 @@ from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.path_watch import PathWatcher
 from imbue.chat.harnesses.session_watcher import FinishedTasksCallback
+from imbue.chat.harnesses.session_watcher import FlushResentCallback
 from imbue.chat.harnesses.session_watcher import FlushSendCallback
 from imbue.chat.harnesses.session_watcher import IsAliveCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.transcript_store import EventSource
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
@@ -347,6 +349,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
     _queue_snapshot_callback: QueueSnapshotCallback | None
     _flush_send: FlushSendCallback | None
     _flush_is_alive: IsAliveCallback | None
+    _flush_note_resent: FlushResentCallback | None
     _flush_wake: threading.Event
     _flush_stopping: threading.Event
     _flush_thread: threading.Thread | None
@@ -371,6 +374,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         watcher._queue_snapshot_callback = None
         watcher._flush_send = None
         watcher._flush_is_alive = None
+        watcher._flush_note_resent = None
         watcher._flush_wake = threading.Event()
         watcher._flush_stopping = threading.Event()
         watcher._flush_thread = None
@@ -389,6 +393,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             (get_root_turns_dir(self._agent_state_dir),),
             self._on_root_turns_changed,
             min_cycle_interval_seconds=_ROOT_TURNS_WAKE_INTERVAL_SECONDS,
+            watch_observer=self._watch_observer,
         )
         self._root_turns_watcher.start()
         self._flush_thread = threading.Thread(
@@ -489,9 +494,12 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
 
-    def set_flush_hooks(self, send: FlushSendCallback, is_alive: IsAliveCallback) -> None:
+    def set_flush_hooks(
+        self, send: FlushSendCallback, is_alive: IsAliveCallback, note_resent: FlushResentCallback
+    ) -> None:
         self._flush_send = send
         self._flush_is_alive = is_alive
+        self._flush_note_resent = note_resent
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         return self._queue.snapshot()
@@ -595,6 +603,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
                 self._queue.release_claim(claimed, generation)
         with self._lock:
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
+        began_at = time.time()
         result = _UNSENT_RESULT
         delivered: tuple[str, ...] = ()
         try:
@@ -604,7 +613,11 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             if result.verdict in REFUSED_VERDICTS:
                 self._queue.refuse_flush(claimed, generation, result)
             else:
-                self._queue.finish_flush(claimed, generation, delivered=delivered, result=result)
+                earlier_send_began_at = self._queue.finish_flush(
+                    claimed, generation, delivered=delivered, result=result, began_at=began_at
+                )
+                if earlier_send_began_at is not None and self._flush_note_resent is not None:
+                    self._flush_note_resent(block, earlier_send_began_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
                 if not delivered:
                     logger.info("grok: {} did not show a turn holding the sent block", self._agent_id)
             self._emit_held_events()
@@ -646,14 +659,15 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             is_taken = self._flush_send is not None and self._flush_send(text)
             return _SENT_RESULT if is_taken else _UNTAKEN_RESULT
         try:
-            is_taken = session_send(text)
+            # mngr never sends the text again itself: whether to type it again is the worker's, from grok's log.
+            outcome = session_send(text, False)
         except SendFailedError as error:
             verdict = _VERDICT_BY_FAILURE_KIND.get(error.kind, GrokSendVerdict.FAILED)
             return GrokSendResult(verdict=verdict, reason=error.detail, failure_kind=error.kind)
         except MngrError as error:
             logger.opt(exception=error).warning("grok: mngr could not send to {}", self._agent_id)
             return GrokSendResult(verdict=GrokSendVerdict.FAILED, reason=str(error), failure_kind="")
-        return _SENT_RESULT if is_taken else _UNTAKEN_RESULT
+        return _SENT_RESULT if outcome.is_delivered else _UNTAKEN_RESULT
 
     def _await_turn_holding(self, witness_start: int, block: str) -> bool:
         """Whether a user turn grok logged since the send holds the block, looking until the witness window ends."""
