@@ -86,10 +86,9 @@ they are relatively safe and obvious.
 
 After posting, wait for an automated system message saying whether the user
 approved or denied the request. If the permission still does not appear on your
-first call after an approval message, retry it a few times with a short sleep (a
-second or two) between tries; the change can take a moment to propagate. Do not
-ask the user to tell you when they respond; mention that you will continue once
-they do if you need to wait.
+first call after an approval message, sleep for a few seconds and retry; the
+change can take a moment to propagate. Do not ask the user to tell you when they
+respond; mention that you will continue once they do if you need to wait.
 
 Do not forget to use the `-H "X-Latchkey-Device: *"` option to send the request
 to all of the user’s available devices. If none are available (usually

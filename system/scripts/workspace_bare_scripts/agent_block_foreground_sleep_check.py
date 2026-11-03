@@ -43,22 +43,10 @@ _DURATION = re.compile(r"^(\d*\.?\d+|(?i:inf(?:inity)?))([smhd]?)$")
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
 _REFUSAL = (
-    "Do not wait with a foreground `sleep` of 5 seconds or more. A timed sleep is a guess at how "
-    "long something takes, and it holds your turn for the whole guess: messages to you wait until "
-    "it ends, and so do you when the thing you are waiting on finishes early. Wait on the event "
-    "instead:\n"
-    "- Waiting on a command (tests, a build, a script): run that command in the background and "
-    "end your turn; its finishing wakes you. Use `python3 "
-    'system/scripts/workspace_bare_scripts/run_in_background.py --description "<what>" -- '
-    "<command>`, or your harness's own background option if it wakes you when the command "
-    "finishes. Do not poll its output.\n"
-    "- Waiting on some other state (a service coming back after a restart, a file appearing): "
-    "check the state itself with short sleeps, e.g. `until curl -sf <url>; do sleep 1; done`.\n"
-    "- A wait that really is about time (the user asked you to check back in N minutes, a service "
-    "said to retry after N seconds, pacing calls to a rate-limited API): put the sleep inside the "
-    "command you run in the background, and end your turn.\n"
-    "If you meant to background several commands, join them with `&&` on one line before the final "
-    "`&`, or run them through `run_in_background.py`.\n"
+    "Do not wait with a foreground `sleep` of 5 seconds or more. To wait on a command, run it with "
+    '`python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "<what>" -- '
+    "<command>` (or your harness's background option) and end your turn; it wakes you when done. "
+    "To wait on a state, poll it with short sleeps: `until curl -sf <url>; do sleep 1; done`.\n"
 )
 
 
