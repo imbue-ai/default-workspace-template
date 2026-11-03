@@ -138,16 +138,9 @@ def _first_known(*candidates: str | None) -> str | None:
 
 
 @pure
-def _email_domain(email: str) -> str:
-    return email.rpartition("@")[2].lower()
-
-
-@pure
 def _is_admitted_by_domain(presence: ParticipantPresence, grants: Grants | None) -> bool:
     """Whether a person's last heartbeat carried an address a current workspace-level domain grant admits."""
-    if grants is None or not presence.email or "@" not in presence.email:
-        return False
-    return _email_domain(presence.email) in grants.workspace.email_domains
+    return grants is not None and bool(presence.email) and grants.workspace.allows_email_domain(presence.email)
 
 
 @pure

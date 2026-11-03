@@ -1,0 +1,1 @@
+`GrantList.allows_email_domain` answers whether an address's domain is one the scope's `email_domains` grants, on its own (an exact `emails` entry is not a domain match); `allows_email` is unchanged and now reads it. The shell's roster lists the people a workspace-level domain grant admitted by it, so the roster and the gateway decide domain admission by one rule.
