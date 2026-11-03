@@ -40,11 +40,11 @@ def test_parse_values_file_reads_values_and_the_optional_example() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "not json",
-        "[]",
-        json.dumps({"values": ["a"]}),
-        json.dumps({"values": {"a": 1}}),
-        json.dumps({"values": {}, "set_credentials_example": 3}),
+        "not json t0k",
+        '["t0k"]',
+        json.dumps({"values": ["t0k"]}),
+        json.dumps({"values": {"token": "t0k", "a": 1}}),
+        json.dumps({"values": {"token": "t0k"}, "set_credentials_example": 3}),
     ],
 )
 def test_parse_values_file_refuses_other_shapes_without_quoting_values(
