@@ -588,7 +588,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
     localStorage.setItem(messageTextKey(currentChatId), messageText);
     mentionDraft = null;
-    refitComposer();
+    refitComposer(true);
     focusMessageTextarea();
     m.redraw();
   }
