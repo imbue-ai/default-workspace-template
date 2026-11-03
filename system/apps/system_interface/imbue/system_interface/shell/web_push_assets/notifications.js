@@ -238,11 +238,16 @@ async function sendTest() {
   try {
     const outcome = await requestJson("POST", `api/web-push/devices/${encodeURIComponent(thisDeviceId)}/test`);
     showAnswer(outcome);
+    const isForgotten = outcome.deliveries.some((delivery) => delivery.is_forgotten);
+    // The workspace forgot this device, so the list and the buttons change with it.
+    if (isForgotten) await render();
     showStatus(
       outcome.accepted_count > 0
         ? "Sent. The notification should appear in a few seconds; if it does not, check this device's " +
             "notification settings and Focus or Do Not Disturb."
-        : "The push service did not take the notification. The details are below.",
+        : isForgotten
+          ? "The push service says this device's subscription has expired. Turn notifications on again."
+          : "The push service did not take the notification. The details are below.",
       outcome.accepted_count > 0 ? "good" : "bad",
     );
   } catch (error) {
