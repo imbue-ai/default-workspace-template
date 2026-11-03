@@ -51,7 +51,8 @@
 /** Which side / channel a message renders on. */
 export enum Rail {
   /** The "user" channel (`.message-user` / `.message-system-collapsed`): a person's bubble, or a system chip,
-   *  which sits on the agent bubble's text edge inside a stretch of the agent's output. */
+   *  which sits on the agent bubble's text edge inside a stretch of the agent's output (a bash-mode command and
+   *  its output, the person's own, stand on their side instead). */
   User = "user",
   /** The agent's channel, inside its bubble -- used when a user_message's content
    *  is relocated into an assistant-side block (e.g. a skill body folded into its

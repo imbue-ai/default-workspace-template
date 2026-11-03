@@ -220,8 +220,9 @@ function renderResentNote(eventId: string): m.Vnode {
 }
 
 /**
- * Render a `user_message`: a person's turn as a top-level row, a system chip or notice as a
- * part of the stretch of the agent's output it lands in, or `null` when it draws nothing
+ * Render a `user_message`: a person's turn or a bash-mode command and its output as a top-level
+ * row, a system chip or notice as a part of the stretch of the agent's output it lands in, or
+ * `null` when it draws nothing
  * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
  * whose chips the transcript walk places in the agent's chip rows). A `SystemChip` gets
  * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice gets
