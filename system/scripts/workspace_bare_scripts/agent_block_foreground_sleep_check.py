@@ -58,7 +58,6 @@ def is_blocked(command: str) -> bool:
     if parsed is None:
         return False
     list_sleeps = False
-    awaiting_command = False
     for segment in parsed.segments:
         words = command_words(segment)
         if words and os.path.basename(words[0]) == "sleep":
@@ -68,15 +67,13 @@ def is_blocked(command: str) -> bool:
             list_sleeps = list_sleeps or _seconds(args) >= _MIN_BLOCKED_SECONDS
         if segment.terminator is None:
             return list_sleeps
-        if awaiting_command and not segment.words and not segment.terminator.strip(";"):
-            # A newline after `&&`, `||` or `|` (past trailing blanks or a comment, say) leaves a
-            # bare `;` with no command before it, and bash carries the list on across it. The
-            # same bare `;` after a `)` (`(sleep 30) ; cmd &`) ends the list.
+        if not segment.words and not segment.terminator.strip(";"):
+            # Only a newline leaves a bare `;` with no command before it (after trailing blanks or
+            # a comment that follows `&&`, say), and bash carries the list on across it.
             continue
         # `|`, `&&`, `||` and a parenthesis carry the list on; `;` (a newline included) ends it
         # in the foreground, a lone `&` in the background.
         list_ends = _list_operators(segment.terminator)
-        awaiting_command = not list_ends
         if "&" in list_ends:
             list_sleeps = False
         elif ";" in list_ends:
