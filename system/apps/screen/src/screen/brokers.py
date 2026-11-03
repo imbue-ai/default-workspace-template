@@ -1,8 +1,10 @@
-"""The two connectivity brokers the service asks (docs/system/specs/screen/spec.md section 5.2): the desktop,
-reached through the latchkey gateway's ``minds-api-proxy`` as the chat app's notification client reaches it, and the
-share gateway's loopback route."""
+"""The connectivity brokers the service asks (docs/system/specs/screen/spec.md section 5.2): the desktop, reached
+through the latchkey gateway's ``minds-api-proxy`` as the chat app's notification client reaches it, the share
+gateway's loopback route, and, in an auth sandbox, the connect-info file the connector writes."""
 
+import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from typing import Final
 
@@ -31,6 +33,9 @@ _HEADER_PERMISSIONS_OVERRIDE: Final[str] = "X-Latchkey-Gateway-Permissions-Overr
 
 # The share gateway's loopback port (system/services/share_gateway/README.md) and its route to the Screen service.
 SHARE_GATEWAY_CONNECT_INFO_URL: Final[str] = "http://127.0.0.1:8791/connect-info"
+
+# Names a file holding a connect-info document (an auth sandbox's, which the connector writes).
+ENV_CONNECT_INFO_PATH: Final[str] = "SCREEN_CONNECT_INFO_PATH"
 
 # A request is bounded as the aggregator bounds the answer: two seconds for candidates, longer for relay servers.
 BROKER_TIMEOUT_SECONDS: Final[float] = 2.0
@@ -168,14 +173,43 @@ class ShareGatewayBroker(ConnectivityBrokerInterface):
         return parse_ice_servers_answer(self._fetch(ICE_SERVERS_TIMEOUT_SECONDS))
 
 
+class ConnectInfoFileBroker(ConnectivityBrokerInterface):
+    """A connect-info document (``{"candidates", "ice_servers", "expires_at"}``) in a file another party writes,
+    read on every request, so a file written after the service started counts; an absent or unreadable file reads as
+    the broker being absent."""
+
+    name: str = Field(default="connect-info file", frozen=True, description="What the broker is called in logs")
+    path: Path = Field(frozen=True, description="The file holding the document")
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            document = json.loads(self.path.read_text())
+        except OSError as e:
+            raise ConnectivityBrokerError(f"the {self.name} {self.path} could not be read: {e}") from e
+        except ValueError as e:
+            raise ConnectivityBrokerError(f"the {self.name} {self.path} holds no JSON") from e
+        if not isinstance(document, dict):
+            raise ConnectivityBrokerError(f"the {self.name} {self.path} holds no connect-info document")
+        return document
+
+    def fetch_candidates(self) -> tuple[MediaCandidate, ...]:
+        return parse_candidates(self._read().get("candidates"))
+
+    def fetch_ice_servers(self) -> IceServersAnswer:
+        return parse_ice_servers_answer(self._read())
+
+
 def brokers_from_environ(environ: Mapping[str, str]) -> tuple[ConnectivityBrokerInterface, ...]:
-    """The brokers this workspace can have: the desktop when the environment names a gateway, the share gateway
-    always (it answers only while the workspace is shared)."""
+    """The brokers this workspace can have: the desktop when the environment names a gateway, the connect-info file
+    when the environment names one, and the share gateway always (it answers only while the workspace is shared)."""
     brokers: list[ConnectivityBrokerInterface] = []
     desktop = DesktopBroker.from_environ(environ)
     if desktop is None:
         logger.info("No latchkey gateway or agent id in the environment; connect-info will not ask the desktop")
     else:
         brokers.append(desktop)
+    connect_info_path = environ.get(ENV_CONNECT_INFO_PATH, "")
+    if connect_info_path:
+        brokers.append(ConnectInfoFileBroker(path=Path(connect_info_path)))
     brokers.append(ShareGatewayBroker())
     return tuple(brokers)

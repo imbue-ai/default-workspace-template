@@ -1,13 +1,17 @@
 """The request-side checks the routes share (docs/system/specs/screen/spec.md sections 6.3 and 10.1): who the
-request is (the identity header, a header-less request being the owner), which session it speaks for, and whether
-the lease lets that session act."""
+request is (the identity header, a header-less request being the owner; in gate mode always the owner), which session
+it speaks for, and whether the lease lets that session act."""
 
 from typing import Final
 
+from flask import current_app
 from flask import request
 
+from screen.data_types import RequestIdentity
+from screen.identity import ANONYMOUS_OWNER
 from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
+from screen.owner_gate import is_owner_gate_installed
 from screen.primitives import NekoSessionId
 from screen.service import ScreenService
 
@@ -18,8 +22,16 @@ CONTROLLER_REFUSAL: Final[str] = "only the session in control of the Screen may 
 _FORM_MIMETYPES: Final[frozenset[str]] = frozenset({"multipart/form-data", "application/x-www-form-urlencoded"})
 
 
+def request_identity() -> RequestIdentity:
+    """Who the request is. In gate mode the gate has already admitted only the owner, and the identity header is the
+    client's own to set (no proxy stamps it), so it is ignored."""
+    if is_owner_gate_installed(current_app):
+        return ANONYMOUS_OWNER
+    return parse_identity_header(request.headers.get(IDENTITY_HEADER))
+
+
 def is_owner_request() -> bool:
-    return parse_identity_header(request.headers.get(IDENTITY_HEADER)).owner
+    return request_identity().owner
 
 
 def session_id_from_request() -> NekoSessionId | None:

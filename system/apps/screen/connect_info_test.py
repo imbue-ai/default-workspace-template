@@ -1,5 +1,5 @@
-"""``connect-info`` over fake brokers (both, one, none, slow, refusing) and the two real brokers over a loopback
-stand-in for the latchkey proxy and the share gateway."""
+"""``connect-info`` over fake brokers (both, one, none, slow, refusing), the two real HTTP brokers over a loopback
+stand-in for the latchkey proxy and the share gateway, and the connect-info file an auth sandbox's connector writes."""
 
 import json
 import threading
@@ -7,6 +7,7 @@ import time
 from collections.abc import Generator
 from collections.abc import Mapping
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
@@ -15,8 +16,10 @@ from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
 from mock_broker_test import FakeBroker
+from screen.brokers import ConnectInfoFileBroker
 from screen.brokers import DesktopBroker
 from screen.brokers import ShareGatewayBroker
+from screen.brokers import brokers_from_environ
 from screen.brokers import parse_candidates
 from screen.brokers import parse_ice_servers_answer
 from screen.connect_info import ConnectInfoAggregator
@@ -263,3 +266,37 @@ def test_the_route_answers_empty_lists_with_both_brokers_silent_and_forbids_cach
     assert answer.status_code == 200
     assert answer.get_json() == {"ice_servers": [], "candidates": [], "expires_at": None}
     assert answer.headers["Cache-Control"] == "no-store"
+
+
+def test_the_connect_info_file_is_read_on_every_request_and_absent_until_written(tmp_path: Path) -> None:
+    path = tmp_path / "auth-sandbox-connect-info.json"
+    broker = ConnectInfoFileBroker(path=path)
+    with pytest.raises(ConnectivityBrokerError):
+        broker.fetch_candidates()
+    path.write_text(
+        json.dumps(
+            {
+                "candidates": [{"host": "r7.modal.host", "port": 40517, "protocol": "tcp", "guest_port": 59000}],
+                "ice_servers": [],
+                "expires_at": None,
+            }
+        )
+    )
+    assert broker.fetch_candidates() == (
+        MediaCandidate(host="r7.modal.host", port=40517, protocol=TransportProtocol.TCP, guest_port=59000),
+    )
+    assert broker.fetch_ice_servers() == IceServersAnswer(ice_servers=(), expires_at=None)
+    for unreadable in ("not json", "[]", '{"candidates": "nope"}'):
+        path.write_text(unreadable)
+        with pytest.raises(ConnectivityBrokerError):
+            broker.fetch_candidates()
+
+
+def test_the_connect_info_file_is_asked_only_when_the_environment_names_it(tmp_path: Path) -> None:
+    assert [broker.name for broker in brokers_from_environ({})] == ["share gateway"]
+    path = tmp_path / "connect-info.json"
+    brokers = brokers_from_environ({"SCREEN_CONNECT_INFO_PATH": str(path)})
+    assert [broker.name for broker in brokers] == ["connect-info file", "share gateway"]
+    file_broker = brokers[0]
+    assert isinstance(file_broker, ConnectInfoFileBroker)
+    assert file_broker.path == path

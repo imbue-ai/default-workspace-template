@@ -1,0 +1,242 @@
+"""Gate mode (an auth sandbox's Screen, reached over Modal's TLS): loopback is the owner, every other request needs
+the owner session the owner token opens, on every route, the WebSockets and the neko proxy included."""
+
+import hashlib
+import json
+from typing import Final
+from uuid import uuid4
+
+import pytest
+from click.testing import CliRunner
+from flask import Flask
+from flask.testing import FlaskClient
+from pydantic import SecretBytes
+from werkzeug.datastructures import MultiDict
+from werkzeug.test import TestResponse
+
+from screen.errors import ScreenConfigurationError
+from screen.main import main
+from screen.owner_gate import OWNER_SESSION_COOKIE_NAME
+from screen.owner_gate import OwnerGate
+from screen.owner_gate import PARTITIONED_OWNER_SESSION_COOKIE_NAME
+from screen.owner_gate import has_owner_session
+from screen.owner_gate import location_without_owner_token
+from screen.owner_gate import merge_frame_ancestors
+from screen.owner_gate import owner_gate_from_environ
+from screen.owner_gate import owner_session_cookie_value
+from screen.service import ScreenService
+from testing import start_service_stack
+
+# What a Modal tunnel's traffic arrives from inside the sandbox: not loopback, and with no forwarding headers.
+_TUNNEL: Final[dict[str, str]] = {"REMOTE_ADDR": "172.20.0.1"}
+_VISITOR: Final[dict[str, str]] = {
+    "X-Imbue-Identity": json.dumps({"owner": False, "user_id": "u2", "email": "mia@example.com"})
+}
+_WEBSOCKET_UPGRADE: Final[dict[str, str]] = {
+    "Upgrade": "websocket",
+    "Connection": "Upgrade",
+    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+    "Sec-WebSocket-Version": "13",
+}
+_DIGEST: Final[str] = hashlib.sha256(b"a-token").hexdigest()
+
+
+def _owner_cookie(owner_gate: OwnerGate, name: str = OWNER_SESSION_COOKIE_NAME) -> dict[str, str]:
+    return {"Cookie": f"{name}={owner_session_cookie_value(owner_gate)}"}
+
+
+def _set_cookies_by_name(response: TestResponse) -> dict[str, str]:
+    return {header.split("=", 1)[0]: header for header in response.headers.getlist("Set-Cookie")}
+
+
+def test_gate_mode_is_off_without_a_digest_and_refuses_a_malformed_setting() -> None:
+    assert owner_gate_from_environ({}) is None
+    gate = owner_gate_from_environ(
+        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": " https://c.test "}
+    )
+    assert gate is not None
+    assert gate.owner_token_sha256 == _DIGEST
+    assert gate.frame_ancestors == "https://c.test"
+    # Each start keys its sessions afresh.
+    again = owner_gate_from_environ({"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": "https://c.test"})
+    assert again is not None
+    assert owner_session_cookie_value(again) != owner_session_cookie_value(gate)
+    for bad_environ in (
+        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST.upper(), "SCREEN_FRAME_ANCESTORS": "https://c.test"},
+        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST[:-1], "SCREEN_FRAME_ANCESTORS": "https://c.test"},
+        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST},
+        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": "https://c.test; script-src *"},
+    ):
+        with pytest.raises(ScreenConfigurationError):
+            owner_gate_from_environ(bad_environ)
+
+
+def test_the_service_refuses_to_serve_beyond_loopback_without_the_gate() -> None:
+    result = CliRunner().invoke(
+        main, [], env={"SCREEN_LISTEN_HOST": "0.0.0.0", "SCREEN_OWNER_TOKEN_SHA256": None}, catch_exceptions=True
+    )
+    assert isinstance(result.exception, ScreenConfigurationError)
+    assert "serving on 0.0.0.0 needs the owner gate" in str(result.exception)
+
+
+def test_a_loopback_request_is_the_owner_without_a_session(gated_client: FlaskClient) -> None:
+    assert gated_client.get("/health").status_code == 200
+    assert gated_client.post("/api/start").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/"),
+        ("GET", "/health"),
+        ("GET", "/api/state"),
+        ("GET", "/api/connect-info"),
+        ("GET", "/api/schema"),
+        ("POST", "/api/session"),
+        ("POST", "/api/start"),
+        ("GET", "/neko/api/room/screen/cast.jpg"),
+        ("POST", "/neko/api/login"),
+        ("GET", "/no/such/route"),
+    ],
+)
+def test_a_tunnelled_request_without_a_session_is_refused(gated_client: FlaskClient, method: str, path: str) -> None:
+    answer = gated_client.open(path, method=method, environ_base=_TUNNEL)
+    assert answer.status_code == 401
+    assert answer.get_json() == {"detail": "an owner session is required"}
+    assert "Location" not in answer.headers
+
+
+@pytest.mark.parametrize("path", ["/api/ws", "/neko/api/ws", "/neko/api/ws?token=a-neko-token"])
+def test_a_tunnelled_websocket_upgrade_without_a_session_is_refused(gated_client: FlaskClient, path: str) -> None:
+    answer = gated_client.get(path, headers=_WEBSOCKET_UPGRADE, environ_base=_TUNNEL)
+    assert answer.status_code == 401
+    assert "Sec-WebSocket-Accept" not in answer.headers
+
+
+def test_the_owner_token_sets_both_session_cookies_and_redirects_without_itself(
+    gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
+) -> None:
+    answer = gated_client.get(f"/?owner_token={owner_token}&view=compact", environ_base=_TUNNEL)
+
+    assert answer.status_code == 302
+    assert answer.headers["Location"] == "/?view=compact"
+    assert answer.headers["Cache-Control"] == "no-store"
+    set_cookies = _set_cookies_by_name(answer)
+    assert set(set_cookies) == {OWNER_SESSION_COOKIE_NAME, PARTITIONED_OWNER_SESSION_COOKIE_NAME}
+    for header in set_cookies.values():
+        assert f"={owner_session_cookie_value(owner_gate)};" in header
+        assert "Secure" in header
+        assert "HttpOnly" in header
+        assert "Path=/" in header
+        assert "Domain=" not in header
+    assert "SameSite=Lax" in set_cookies[OWNER_SESSION_COOKIE_NAME]
+    assert "Partitioned" not in set_cookies[OWNER_SESSION_COOKIE_NAME]
+    assert "SameSite=None" in set_cookies[PARTITIONED_OWNER_SESSION_COOKIE_NAME]
+    assert "Partitioned" in set_cookies[PARTITIONED_OWNER_SESSION_COOKIE_NAME]
+
+    # The token stays good for the sandbox's life: an iframe reload presents it again.
+    again = gated_client.get(f"/api/state?owner_token={owner_token}", environ_base=_TUNNEL)
+    assert again.status_code == 302
+    assert again.headers["Location"] == "/api/state"
+
+
+def test_a_wrong_owner_token_opens_no_session(gated_client: FlaskClient, owner_token: str) -> None:
+    for query in ("owner_token=not-the-token", f"owner_token={owner_token}&owner_token=not-the-token"):
+        answer = gated_client.get(f"/?{query}", environ_base=_TUNNEL)
+        assert answer.status_code == 401
+        assert answer.get_json() == {"detail": "the owner token is not this Screen's"}
+        assert answer.headers.getlist("Set-Cookie") == []
+
+
+def test_the_owner_token_is_traded_only_on_a_get(gated_client: FlaskClient, owner_token: str) -> None:
+    answer = gated_client.post(f"/api/start?owner_token={owner_token}", environ_base=_TUNNEL)
+    assert answer.status_code == 401
+    assert answer.headers.getlist("Set-Cookie") == []
+
+
+def test_the_redirect_never_names_another_host(gated_client: FlaskClient, owner_token: str) -> None:
+    # A request line of ``GET //evil.example/x`` arrives as this path.
+    answer = gated_client.get(
+        f"/?owner_token={owner_token}", environ_base=_TUNNEL, environ_overrides={"PATH_INFO": "//evil.example/x"}
+    )
+    assert answer.status_code == 302
+    assert answer.headers["Location"] == "/evil.example/x"
+
+
+@pytest.mark.parametrize("cookie_name", [OWNER_SESSION_COOKIE_NAME, PARTITIONED_OWNER_SESSION_COOKIE_NAME])
+def test_either_session_cookie_admits_a_tunnelled_request(
+    gated_client: FlaskClient, owner_gate: OwnerGate, cookie_name: str
+) -> None:
+    headers = _owner_cookie(owner_gate, cookie_name)
+    assert gated_client.get("/health", headers=headers, environ_base=_TUNNEL).status_code == 200
+    # Past the gate the neko proxy answers for itself: neko is not running here.
+    neko = gated_client.get("/neko/api/room/screen/cast.jpg", headers=headers, environ_base=_TUNNEL)
+    assert neko.status_code == 502
+
+
+def test_a_foreign_cookie_value_ahead_of_the_session_does_not_mask_it(
+    gated_client: FlaskClient, owner_gate: OwnerGate
+) -> None:
+    real = owner_session_cookie_value(owner_gate)
+    shadowed = {"Cookie": f"{OWNER_SESSION_COOKIE_NAME}=set-by-another-modal-page; {OWNER_SESSION_COOKIE_NAME}={real}"}
+    assert gated_client.get("/health", headers=shadowed, environ_base=_TUNNEL).status_code == 200
+    forged_only = {"Cookie": f"{OWNER_SESSION_COOKIE_NAME}=set-by-another-modal-page"}
+    assert gated_client.get("/health", headers=forged_only, environ_base=_TUNNEL).status_code == 401
+    # Only the two session names count, whatever another cookie carries.
+    elsewhere = MultiDict([(PARTITIONED_OWNER_SESSION_COOKIE_NAME, "x"), ("other", real)])
+    assert not has_owner_session(owner_gate, elsewhere)
+
+
+def test_a_session_from_another_start_is_refused(gated_client: FlaskClient, owner_gate: OwnerGate) -> None:
+    other_start = owner_gate.model_copy(update={"session_secret": SecretBytes(uuid4().bytes)})
+    headers = _owner_cookie(other_start)
+    assert gated_client.get("/health", headers=headers, environ_base=_TUNNEL).status_code == 401
+
+
+def test_in_gate_mode_the_identity_header_is_ignored_and_the_session_is_the_owner(
+    gated_client: FlaskClient, owner_gate: OwnerGate, service: ScreenService
+) -> None:
+    headers = {**_owner_cookie(owner_gate), **_VISITOR}
+    # A visitor is refused every owner route outside gate mode; here the gated request is the owner.
+    assert gated_client.get("/api/windows", headers=headers, environ_base=_TUNNEL).status_code != 403
+    start_service_stack(service)
+    session = gated_client.post("/api/session", headers=headers, environ_base=_TUNNEL)
+    assert session.status_code == 200, session.get_json()
+    assert session.get_json()["is_owner"] is True
+    assert session.get_json()["name"] == "Owner"
+
+
+def test_every_gated_response_carries_the_frame_ancestors_policy(
+    gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
+) -> None:
+    expected = "frame-ancestors https://chrome.example.test"
+    assert gated_client.get("/health").headers["Content-Security-Policy"] == expected
+    assert gated_client.get("/health", environ_base=_TUNNEL).headers["Content-Security-Policy"] == expected
+    redirect = gated_client.get(f"/?owner_token={owner_token}", environ_base=_TUNNEL)
+    assert redirect.headers["Content-Security-Policy"] == expected
+
+
+def test_outside_gate_mode_no_response_carries_a_policy_and_no_session_is_needed(app: Flask) -> None:
+    client = app.test_client()
+    answer = client.get("/health", environ_base=_TUNNEL)
+    assert answer.status_code == 200
+    assert "Content-Security-Policy" not in answer.headers
+
+
+def test_merge_frame_ancestors_replaces_or_appends_the_directive() -> None:
+    assert merge_frame_ancestors(None, "https://c.test") == "frame-ancestors https://c.test"
+    assert merge_frame_ancestors("  ", "https://c.test") == "frame-ancestors https://c.test"
+    assert (
+        merge_frame_ancestors("default-src 'self'; img-src data:", "https://c.test")
+        == "default-src 'self'; img-src data:; frame-ancestors https://c.test"
+    )
+    assert (
+        merge_frame_ancestors("Frame-Ancestors *; default-src 'self';", "https://c.test")
+        == "default-src 'self'; frame-ancestors https://c.test"
+    )
+
+
+def test_location_without_owner_token_keeps_the_rest_of_the_query() -> None:
+    assert location_without_owner_token("/", (("owner_token", "t"),)) == "/"
+    assert location_without_owner_token("/a b", (("x", "1"), ("owner_token", "t"), ("x", "2"))) == "/a%20b?x=1&x=2"
+    assert location_without_owner_token("///evil.example", ()) == "/evil.example"

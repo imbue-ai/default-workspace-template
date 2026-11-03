@@ -196,7 +196,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
     )
     service.attach_stack(stack)
     service.start()
-    client = build_app(service, base / "static", NekoProxy()).test_client()
+    client = build_app(service, base / "static", NekoProxy(), None).test_client()
     return _LiveService(service=service, client=client, supervisor=supervisor, proxy_server=proxy_server)
 
 
@@ -457,7 +457,7 @@ def test_the_browser_command_opens_a_page_in_the_fleets_chromium(
     assert (home / HELPERS_RC_RELATIVE_PATH).read_text().strip().endswith("WebBrowser=imbue-screen-browser")
     assert "X-XFCE-Category=WebBrowser" in (home / HELPER_DESKTOP_RELATIVE_PATH).read_text()
     # The command speaks HTTP, so the service gets a real listener for this test.
-    server = make_server("127.0.0.1", 0, build_app(service, tmp_path / "static", NekoProxy()))
+    server = make_server("127.0.0.1", 0, build_app(service, tmp_path / "static", NekoProxy(), None))
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     try:

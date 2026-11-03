@@ -67,8 +67,9 @@ from screen.errors import ScreenNotRunningError
 from screen.errors import WindowToolError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
-from screen.identity import IDENTITY_HEADER
-from screen.identity import parse_identity_header
+from screen.owner_gate import OwnerGate
+from screen.owner_gate import install_owner_gate
+from screen.owner_gate import is_loopback_address
 from screen.primitives import APP_DESCRIPTION
 from screen.primitives import APP_DISPLAY_NAME
 from screen.primitives import AgentId
@@ -82,6 +83,7 @@ from screen.route_guards import VISITOR_REFUSAL
 from screen.route_guards import describe_controller_refusal
 from screen.route_guards import describe_visitor_refusal
 from screen.route_guards import is_owner_request
+from screen.route_guards import request_identity
 from screen.route_guards import session_id_from_request
 from screen.service import DEFAULT_SCREENSHOT_QUALITY
 from screen.service import ScreenService
@@ -202,16 +204,18 @@ def _cap_request_body(max_bytes: int) -> None:
     request.max_content_length = max_bytes
 
 
-def _is_loopback_request() -> bool:
-    return request.remote_addr in ("127.0.0.1", "::1")
-
-
-def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) -> Flask:
+def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy, owner_gate: OwnerGate | None) -> Flask:
+    """The service's routes; with ``owner_gate`` (gate mode), every route, the WebSockets and the neko proxy
+    included, admits only loopback and the owner session."""
     app = Flask(__name__, static_folder=None)
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
     sock = Sock(app)
 
-    # the owner gate
+    # gate mode's owner gate, ahead of every other hook
+    if owner_gate is not None:
+        install_owner_gate(app, owner_gate)
+
+    # the visitor gate
 
     @app.before_request
     def refuse_visitors_on_owner_routes() -> ResponseReturnValue | None:
@@ -325,9 +329,8 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     def create_session() -> ResponseReturnValue:
         """Log the requester in to neko as a session named from ``X-Imbue-Identity`` (a header-less request is the
         owner); answers the session id, its token and name, and whether it is the owner's."""
-        identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
         try:
-            session = service.create_session(identity)
+            session = service.create_session(request_identity())
         except ScreenNotRunningError as e:
             service.ensure_started()
             return _error(str(e), HTTP_SERVICE_UNAVAILABLE)
@@ -599,7 +602,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     def stopped() -> ResponseReturnValue:
         """The watcher's notification that a member of the stack exited (loopback only): the service records the stop
         with its reason."""
-        if not _is_loopback_request():
+        if not is_loopback_address(request.remote_addr):
             return _error("loopback only", HTTP_FORBIDDEN)
         body = parse_request_body(StoppedNotification)
         member = body.member.strip() or "a member"

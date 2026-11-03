@@ -19,7 +19,7 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 ## The service
 
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
-owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
+owner), except in gate mode (below), where every admitted request is the owner. A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`,
 `/api/ws`, `/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
 `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
@@ -104,6 +104,36 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   (`api_models.py` names what every route takes and answers; the manifest's `api_schema_path`;
   `system/libs/app_schema`), for an agent that reaches the Screen from inside the workspace or
   over a share. A refusal on any route is `{"detail": ...}`.
+
+The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
+another address, which it refuses to do outside gate mode.
+
+### Gate mode
+
+An auth sandbox (`system/libs/auth_sandbox/README.md`) serves the Screen on every interface,
+reached over Modal's TLS with no share gateway in front of it, so nothing vouches for the
+requester. Its boot script sets `SCREEN_OWNER_TOKEN_SHA256` (the lower-case hex SHA-256 of an
+owner token the connector minted and gave the hosted chrome) and `SCREEN_FRAME_ANCESTORS` (the
+chrome's origin), which turns gate mode on (`owner_gate.py`); with the first unset the service
+behaves as above, and with the first set the second is required.
+
+- A request from loopback (`127.0.0.1`, `::1`) is the owner, as everywhere: the boot script's
+  `/health` and `/api/start`, the watcher, the commands.
+- A GET carrying `?owner_token=<token>` whose SHA-256 matches sets the owner session and answers
+  302 to the same path and query without `owner_token`; a token that does not match answers 401.
+  The token stays good for the sandbox's life, so an iframe reload may present it again.
+- Every other request, HTTP and WebSocket alike (`/api/ws`, `/neko/...`, any path), needs the
+  owner session, else 401 `{"detail": "an owner session is required"}`, with no redirect.
+- The session is two cookies with the same value, `screen_owner_session` (`Secure; HttpOnly;
+  SameSite=Lax; Path=/`) and `screen_owner_session_partitioned` (`Secure; HttpOnly;
+  SameSite=None; Partitioned; Path=/`), with no `Domain`, for the browser reasons the share
+  gateway's `session_cookie.py` gives. The value is an HMAC-SHA256 under a secret generated at
+  start and held in memory only, so a restart ends every session. Every value the request
+  carries under either name is tried: `modal.host` is not on the Public Suffix List, so any
+  Modal customer's page can set same-named cookies for the parent domain.
+- `X-Imbue-Identity` is ignored: no proxy stamps it, so it is the client's own to set.
+- Every response carries `Content-Security-Policy: frame-ancestors <SCREEN_FRAME_ANCESTORS>`,
+  replacing any `frame-ancestors` directive a response already had.
 
 ## The browser
 
@@ -345,7 +375,7 @@ workspace's visitors reach it through the relay's `screen-media` tcp proxy or th
 Neko itself is told nothing about any of this: its candidates carry the container's own
 address, and the viewer rewrites them.
 
-`GET /api/connect-info` asks two brokers in parallel, each bounded (two seconds for candidates,
+`GET /api/connect-info` asks its brokers in parallel, each bounded (two seconds for candidates,
 eight for relay servers: they are asked for only once the direct path has failed, and the
 desktop's first answer mints a credential through the connector and Cloudflare, which has taken
 longer than two seconds), and answers the union:
@@ -359,12 +389,17 @@ longer than two seconds), and answers the union:
   (`system/services/share_gateway/README.md`), which answers only while the workspace is
   shared: the box's own published endpoints, one tcp candidate per relay at the share's
   media port, and the relay credential the gateway holds.
+- When `SCREEN_CONNECT_INFO_PATH` names a file (an auth sandbox's
+  `/run/auth-sandbox-connect-info.json`, which the connector writes with the sandbox's raw TCP
+  tunnel to port 59000), that file, read on every request: a connect-info document
+  `{"candidates", "ice_servers", "expires_at"}`. A file that is absent or unreadable is the
+  broker being absent.
 
 Candidates are filtered to guest port 59000, de-duplicated, and spelled with a lower-case
 `protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector lower-case, and
 the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
 viewer unchanged, and `expires_at` the earliest expiry. A broker that is slow, unreachable
-or refusing is simply absent; with both absent the answer is empty lists, which the viewer
+or refusing is simply absent; with all of them absent the answer is empty lists, which the viewer
 reads as "use the server's own candidate". The answer is never written to disk and the
 route forbids caching: a relay credential is a bearer token.
 
