@@ -9339,11 +9339,8 @@ def test_a_chat_refusing_turns_for_sign_in_notifies_the_app_once_per_run_naming_
                 chat_id, [{"type": "assistant_message", "content": "Done", "is_auth_error": False}]
             )
             manager.report_sign_in_failures(chat_id, refused)
-            wait_for(
-                lambda: len([r for r in gateway.received if r.path.endswith("/notifications")]) >= 2,
-                timeout=15.0,
-                error_message="the sign-in notifications never arrived",
-            )
+            # The client posts one call at a time in order, so once a later call settles every report has posted.
+            manager._imbue_studio_notifications.mark_chat_read(chat_id).result(timeout=15.0)
         finally:
             manager._imbue_studio_notifications.shutdown()
 
