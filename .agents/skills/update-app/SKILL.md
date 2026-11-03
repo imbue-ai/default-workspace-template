@@ -74,9 +74,9 @@ and ship it on its own rather than bundling it with unrelated changes.
   and feel, a new user-facing capability. Confirm the shape before building it
   (below).
 - **In between:** a unit with some of each, for example a new control on an
-  existing page. Decide by how much it changes what the user sees: confirm the
-  shape first if that change is substantial, and go straight to the live
-  change loop if it is minor.
+  existing page. Decide by how much it changes what the user sees: go straight
+  to the live change loop if that change is minor, and confirm the shape first
+  if it is substantial or you can't tell.
 
 ### Confirming the shape
 
