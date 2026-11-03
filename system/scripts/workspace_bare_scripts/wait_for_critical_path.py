@@ -135,13 +135,15 @@ def wait_for_apps(
         time.sleep(poll_interval_seconds)
 
 
-def _deadline_message(registry: Path, waiting_for: list[str]) -> str:
+def _deadline_message(
+    registry: Path, waiting_for: list[str], deadline_seconds: float
+) -> str:
     """The stderr line for a start the deadline let through: what was still down, and why when the registry is unreadable."""
     problem = _registry_problem(registry)
     reason = f" ({problem})" if problem is not None else ""
     return (
         f"wait_for_critical_path: {', '.join(waiting_for)} not serving after "
-        f"{_DEADLINE_SECONDS:.0f}s{reason}; starting anyway"
+        f"{deadline_seconds:.0f}s{reason}; starting anyway"
     )
 
 
@@ -155,5 +157,8 @@ def main() -> None:
         registry, CRITICAL_PATH_APPS, _DEADLINE_SECONDS, _POLL_INTERVAL_SECONDS
     )
     if waiting_for:
-        print(_deadline_message(registry, waiting_for), file=sys.stderr)
+        print(
+            _deadline_message(registry, waiting_for, _DEADLINE_SECONDS),
+            file=sys.stderr,
+        )
     os.execvp(command[0], command)

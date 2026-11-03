@@ -125,14 +125,14 @@ def test_the_deadline_line_names_the_apps_down_and_an_unreadable_registry(
     healthy = tmp_path / "apps.toml"
     _write_registry(healthy, {"system_interface": listening_url})
     assert (
-        wait_for_critical_path._deadline_message(healthy, ["chat"])
-        == "wait_for_critical_path: chat not serving after 30s; starting anyway"
+        wait_for_critical_path._deadline_message(healthy, ["chat"], 12.0)
+        == "wait_for_critical_path: chat not serving after 12s; starting anyway"
     )
 
     unparseable = tmp_path / "unparseable.toml"
     unparseable.write_text("[[apps]\nname = ")
     message = wait_for_critical_path._deadline_message(
-        unparseable, ["system_interface", "chat"]
+        unparseable, ["system_interface", "chat"], 30.0
     )
     assert message.startswith(
         "wait_for_critical_path: system_interface, chat not serving after 30s ("
