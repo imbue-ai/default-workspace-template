@@ -151,8 +151,8 @@ def render_action(payload: dict[str, Any], browser_name: str, kind: str) -> tupl
         return f"another agent is using browser {browser_name} right now. Re-run `ls` later to check.", EXIT_BUSY, True
     if status == "starting":
         return (
-            f"browser {browser_name} is still starting up (the Screen or Chromium is launching) -- try again in a few "
-            "seconds.",
+            f"browser {browser_name} is still starting up (the Screen or Chromium is launching) -- retry with a "
+            "short sleep (a second or two) between tries.",
             EXIT_BUSY,
             False,
         )
@@ -204,7 +204,10 @@ def _print_attach(browser_name: str) -> None:
             f"   then:      playwright-cli -s={browser_name} <command>   (run `playwright-cli --help` for the commands)"
         )
     else:
-        _out(f"   (still starting up -- run `ls` in a few seconds, then attach to browser {browser_name})")
+        _out(
+            f"   (still starting up -- re-run `ls` with a short sleep (a second or two) between tries, then attach to "
+            f"browser {browser_name})"
+        )
 
 
 @click.group()

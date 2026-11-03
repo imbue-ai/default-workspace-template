@@ -1,0 +1,1 @@
+When the Screen or a fleet browser is still starting, `screen control acquire` and the browser-fleet commands now tell the agent to retry with a short sleep (a second or two) between tries, rather than to try again "in a few seconds", which an agent would write as a `sleep 5` that the new foreground-sleep guard refuses.

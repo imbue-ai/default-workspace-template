@@ -197,6 +197,12 @@ handed to `run_in_background.py`), or one in a call claude runs with `run_in_bac
 that really is about time belongs inside a background command. `AGENTS.md` carries the same rule
 as prose.
 
+The checker reads segments, not the shell's grouping, so it is a seatbelt with known gaps: a `;`
+inside a backgrounded group (`{ sleep 30; } &`) and a heredoc body holding a sleep are blocked, and
+a sleep behind a wrapper (`timeout`, `nohup`, `exec`, `env`), one with a non-literal duration, or
+one cleared by an inner `&` (`sleep 30 && (cmd &)`) gets through. The checker's docstring lists them
+all.
+
 ## The rule that keeps this honest
 
 **The logic lives once.** A harness that can execute the scripts runs the scripts. A harness

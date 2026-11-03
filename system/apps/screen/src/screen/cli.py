@@ -185,7 +185,7 @@ def render_acquire_answer(body: dict[str, Any], me: str | None) -> tuple[str, in
             EXIT_BUSY,
         )
     if status == "starting":
-        return "the Screen is starting up -- try again in a few seconds.", EXIT_BUSY
+        return "the Screen is starting up -- retry with a short sleep (a second or two) between tries.", EXIT_BUSY
     if status == "timed_out":
         return "the Screen stayed busy; gave up.", EXIT_TIMEOUT
     return str(body.get("detail") or f"acquire failed ({status})"), EXIT_ERROR

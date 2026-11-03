@@ -11,10 +11,20 @@ waits on finished early. A sleep is judged wherever it runs as a command of its 
 after a `cd`, alone, or in a loop or `if` body -- and is allowed when it is shorter than 5 seconds,
 so a condition poll such as `until curl -sf URL; do sleep 1; done` passes. A sleep in a list the
 command sends to the background with `&` (`(sleep 900 | mcpc login URL > f &)`) holds no turn and
-is allowed; a `;` or newline inside a backgrounded group, loop or list still reads as the end of
-a foreground list, so `{ sleep 30; } &` and `sleep 30 &&<newline>cmd &` are blocked. A sleep that is only an argument (the command handed to
-`run_in_background.py`, a `bash -c` script) is not a command of this one and is never judged.
-Neither is a sleep whose duration is not a literal number.
+is allowed. A sleep that is only an argument (the command handed to `run_in_background.py`, a
+`bash -c` script) is not a command of this one and is never judged.
+
+The checker reads the parser's flat list of segments, not the shell's grouping, so it is a seatbelt
+with known gaps rather than a complete model:
+
+- Blocked although backgrounded: a `;` or newline inside a backgrounded group, loop or list reads as
+  the end of a foreground list (`{ sleep 30; } &`, `sleep 30 &&<newline>cmd &`), and so does a
+  heredoc body that holds a sleep (the parser reads it as commands).
+- Allowed although in the foreground: a sleep behind a wrapper (`timeout N`, `nohup`, `exec`,
+  `env`), one whose duration is not a literal number (`sleep $DELAY`, `sleep "30"`, `sleep 1e3`),
+  one in a process substitution, one cleared by an inner `&` (`sleep 30 && (cmd &)`,
+  `sleep 30 & wait`), a run of sleeps each under 5 seconds, and a long condition poll of short
+  sleeps.
 
 Runs under a bare `python3` with no virtualenv, like the sibling checkers, so its entry script puts
 the parser lib's source directory on `sys.path`.
@@ -47,6 +57,8 @@ _REFUSAL = (
     "- A wait that really is about time (the user asked you to check back in N minutes, a service "
     "said to retry after N seconds, pacing calls to a rate-limited API): put the sleep inside the "
     "command you run in the background, and end your turn.\n"
+    "If you meant to background several commands, join them with `&&` before the final `&`, or run "
+    "them through `run_in_background.py`.\n"
 )
 
 
