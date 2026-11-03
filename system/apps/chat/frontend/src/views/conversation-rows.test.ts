@@ -384,6 +384,16 @@ describe("one bubble for each stretch of the agent's output", () => {
     expect(list.querySelector("[data-machine-bubble] .message-notice")).not.toBeNull();
   });
 
+  // Claude records a lone "\n\n" text block as its own line before the tool call's line lands.
+  it("draws no bubble for a whitespace-only line the agent wrote before its tool call landed", () => {
+    const before = [userMsg("t1", "install it"), assistantText("t2", "\n\n")];
+    expect(layout(buildConversationRows("agent-1", before, false))).toEqual(["u-t1"]);
+    expect(layout(buildConversationRows("agent-1", [...before, toolMsg("t3", "c1", "Install")], false))).toEqual([
+      "u-t1",
+      ["a-c1"],
+    ]);
+  });
+
   it("puts the agent's output past the rows in the last bubble only while that stretch is open", () => {
     const tail = (): m.Children[] => [m("div.live-tail", { key: "live" }, "still writing")];
     const open = buildConversationRows(

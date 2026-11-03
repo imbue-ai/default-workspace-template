@@ -783,7 +783,8 @@ export function buildSections(
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
-      if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
+      // Whitespace-only text draws nothing, so it counts as no text.
+      if (parsed.render !== null && (parsed.render.text.trim() || parsed.render.tool_calls.length > 0)) {
         if (hasPermissionRequest(parsed.render, toolResults)) {
           // A permission or secret request breaks out of any open step: it must
           // always be directly visible, never collapsed inside a step node. The step
