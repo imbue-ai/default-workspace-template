@@ -20,7 +20,7 @@ from imbue.system_interface.shell.web_push import PUSH_TTL_SECONDS
 from imbue.system_interface.shell.web_push import PushSubscriptionKeys
 from imbue.system_interface.shell.web_push import PywebpushTransport
 from imbue.system_interface.shell.web_push import VAPID_SUBJECT
-from imbue.system_interface.shell.web_push import WebPushService
+from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
@@ -56,14 +56,14 @@ def _device_subscription(endpoint: str, device_key: ec.EllipticCurvePrivateKey, 
 
 
 def test_a_message_reaches_the_push_service_encrypted_to_the_device_and_signed_by_the_shell(tmp_path: Path) -> None:
-    service = WebPushService(directory=tmp_path / "web_push", transport=PywebpushTransport())
+    service = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
     device_key = ec.generate_private_key(ec.SECP256R1())
     auth_secret = os.urandom(16)
     received: list[dict[str, Any]] = []
     payload = json.dumps({"title": "Report ready", "body": "Tap to open", "path": "/", "tag": None})
 
-    with serve_app(_push_service(received, 201)) as push_service:
-        subscription = _device_subscription(f"{push_service.http_url}/push/abc", device_key, auth_secret)
+    with serve_app(_push_service(received, 201)) as push_provider:
+        subscription = _device_subscription(f"{push_provider.http_url}/push/abc", device_key, auth_secret)
         answer = service.transport.post(subscription, payload, service.signing_key())
 
     assert answer.status_code == 201
@@ -79,18 +79,18 @@ def test_a_message_reaches_the_push_service_encrypted_to_the_device_and_signed_b
     token_part, key_part = authorization.removeprefix("vapid ").split(",")
     assert key_part == f"k={service.public_key()}"
     claims = json.loads(_base64url_decoded(token_part.removeprefix("t=").split(".")[1]))
-    assert claims["aud"] == push_service.http_url
+    assert claims["aud"] == push_provider.http_url
     assert claims["sub"] == VAPID_SUBJECT
 
 
 def test_a_refusal_and_no_answer_at_all_come_back_as_answers_not_errors(tmp_path: Path) -> None:
-    service = WebPushService(directory=tmp_path / "web_push", transport=PywebpushTransport())
+    service = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
     device_key = ec.generate_private_key(ec.SECP256R1())
     received: list[dict[str, Any]] = []
 
-    with serve_app(_push_service(received, 410)) as push_service:
+    with serve_app(_push_service(received, 410)) as push_provider:
         gone = service.transport.post(
-            _device_subscription(f"{push_service.http_url}/push/gone", device_key, os.urandom(16)),
+            _device_subscription(f"{push_provider.http_url}/push/gone", device_key, os.urandom(16)),
             "{}",
             service.signing_key(),
         )

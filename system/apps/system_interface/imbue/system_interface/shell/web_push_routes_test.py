@@ -82,7 +82,7 @@ def test_the_owner_registers_a_device_lists_it_and_forgets_it(client: FlaskClien
     device_id = _register(client)
 
     listing = client.get("/api/web-push/devices", headers=identity_headers(_SHARED_OWNER)).get_json()
-    assert [(device["device_id"], device["label"], device["push_service"]) for device in listing["devices"]] == [
+    assert [(device["device_id"], device["label"], device["push_provider"]) for device in listing["devices"]] == [
         (device_id, "iPhone, Safari (Home Screen app)", "Google")
     ]
     # The listing never hands out the subscription itself.

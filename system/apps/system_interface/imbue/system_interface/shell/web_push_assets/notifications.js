@@ -101,7 +101,7 @@ function renderDevices(devices) {
     const description = document.createElement("span");
     description.textContent = device.device_id === thisDeviceId ? `${device.label} (this device)` : device.label;
     const detail = document.createElement("small");
-    detail.textContent = `${device.push_service}, since ${new Date(device.registered_at).toLocaleString()}`;
+    detail.textContent = `${device.push_provider}, since ${new Date(device.registered_at).toLocaleString()}`;
     description.append(detail);
     const remove = document.createElement("button");
     remove.type = "button";

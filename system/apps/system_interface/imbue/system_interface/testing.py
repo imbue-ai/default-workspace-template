@@ -52,7 +52,7 @@ from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
-from imbue.system_interface.shell.web_push import PushServiceAnswer
+from imbue.system_interface.shell.web_push import PushProviderAnswer
 from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -192,10 +192,10 @@ class RecordingPushTransport(PushTransportInterface):
         default_factory=dict, description="The status a post to an endpoint answers; None for no answer at all"
     )
 
-    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushServiceAnswer:
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
         self.posted.append(PostedPush(endpoint=subscription.endpoint, payload=payload))
         status_code = self.status_code_by_endpoint.get(subscription.endpoint, 201)
-        return PushServiceAnswer(status_code=status_code, detail="" if status_code is not None else "unreachable")
+        return PushProviderAnswer(status_code=status_code, detail="" if status_code is not None else "unreachable")
 
 
 def _fresh_shell_state_directory() -> Path:

@@ -29,13 +29,13 @@ from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import DevicesListing
 from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import WebPushPublicKey
-from imbue.system_interface.shell.web_push import WebPushService
 from imbue.system_interface.shell.web_push import device_view
 
 NOTIFICATIONS_PAGE_ROUTE: Final[str] = "/notifications"
 NOTIFICATIONS_SCRIPT_ROUTE: Final[str] = "/notifications.js"
-SERVICE_WORKER_ROUTE: Final[str] = "/sw.js"
+WORKER_SCRIPT_ROUTE: Final[str] = "/sw.js"
 WEB_PUSH_KEY_ROUTE: Final[str] = "/api/web-push/key"
 WEB_PUSH_DEVICES_ROUTE: Final[str] = "/api/web-push/devices"
 WEB_PUSH_SEND_ROUTE: Final[str] = "/api/web-push/send"
@@ -54,7 +54,7 @@ TEST_NOTIFICATION: Final[PushNotificationRequest] = PushNotificationRequest(
 )
 
 
-def _web_push() -> WebPushService:
+def _web_push() -> WebPushNotifier:
     return get_state().shell.web_push
 
 
@@ -75,7 +75,7 @@ def notifications_script() -> Response:
     return _asset_response("notifications.js", "text/javascript")
 
 
-def service_worker() -> Response:
+def worker_script() -> Response:
     """The service worker that shows a pushed notification and opens the workspace when it is tapped."""
     return _asset_response("sw.js", "text/javascript")
 
@@ -162,7 +162,7 @@ def register_web_push_routes(application: Flask) -> None:
     """Wire the Web Push routes onto the Flask application."""
     application.add_url_rule(NOTIFICATIONS_PAGE_ROUTE, view_func=notifications_page, methods=["GET"])
     application.add_url_rule(NOTIFICATIONS_SCRIPT_ROUTE, view_func=notifications_script, methods=["GET"])
-    application.add_url_rule(SERVICE_WORKER_ROUTE, view_func=service_worker, methods=["GET"])
+    application.add_url_rule(WORKER_SCRIPT_ROUTE, view_func=worker_script, methods=["GET"])
     application.add_url_rule(WEB_PUSH_KEY_ROUTE, view_func=get_public_key, methods=["GET"])
     application.add_url_rule(WEB_PUSH_DEVICES_ROUTE, view_func=list_devices, methods=["GET"])
     application.add_url_rule(WEB_PUSH_DEVICES_ROUTE, view_func=register_device, methods=["POST"])

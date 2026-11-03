@@ -61,7 +61,7 @@ _ACCEPTED_STATUS_CODES: Final[frozenset[int]] = frozenset({200, 201, 202})
 _ANSWER_EXCERPT_LENGTH: Final[int] = 500
 _DEVICE_ID_LENGTH: Final[int] = 16
 
-_PUSH_SERVICE_NAME_BY_DOMAIN: Final[dict[str, str]] = {
+_PUSH_PROVIDER_NAME_BY_DOMAIN: Final[dict[str, str]] = {
     "mozilla.com": "Mozilla",
     "googleapis.com": "Google",
     "push.apple.com": "Apple",
@@ -130,7 +130,7 @@ class DeviceView(FrozenModel):
 
     device_id: str = Field(description="The device's id: a digest of its push endpoint")
     label: str = Field(description="What to call the device")
-    push_service: str = Field(description="Whose push service carries the device's messages")
+    push_provider: str = Field(description="Whose push service carries the device's messages")
     registered_at: datetime = Field(description="When the device last turned notifications on")
 
 
@@ -171,7 +171,7 @@ class PushNotificationRequest(FrozenModel):
         return value
 
 
-class PushServiceAnswer(FrozenModel):
+class PushProviderAnswer(FrozenModel):
     """What one post to a push service came back with."""
 
     status_code: int | None = Field(description="The HTTP status, or None when there was no answer")
@@ -183,7 +183,7 @@ class DeviceDelivery(FrozenModel):
 
     device_id: str = Field(description="The device's id")
     label: str = Field(description="What to call the device")
-    push_service: str = Field(description="Whose push service was posted to")
+    push_provider: str = Field(description="Whose push service was posted to")
     status_code: int | None = Field(description="The push service's HTTP status, or None when it did not answer")
     detail: str = Field(description="The start of the push service's answer, or why there was none")
     is_accepted: bool = Field(
@@ -208,10 +208,10 @@ def device_id_of(endpoint: str) -> str:
 
 
 @pure
-def push_service_name(endpoint: str) -> str:
+def push_provider_name(endpoint: str) -> str:
     """Whose push service an endpoint is, for a reader: a known vendor's name, else the endpoint's host."""
     host = urlsplit(endpoint).hostname or ""
-    for domain, name in _PUSH_SERVICE_NAME_BY_DOMAIN.items():
+    for domain, name in _PUSH_PROVIDER_NAME_BY_DOMAIN.items():
         if host == domain or host.endswith(f".{domain}"):
             return name
     return host
@@ -222,7 +222,7 @@ def device_view(device: RegisteredDevice) -> DeviceView:
     return DeviceView(
         device_id=device.device_id,
         label=device.label,
-        push_service=push_service_name(device.subscription.endpoint),
+        push_provider=push_provider_name(device.subscription.endpoint),
         registered_at=device.registered_at,
     )
 
@@ -255,7 +255,7 @@ class PushTransportInterface(MutableModel, ABC):
     """Posts one encrypted, signed message to one device's push service."""
 
     @abstractmethod
-    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushServiceAnswer:
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
         """Encrypt ``payload`` to the subscription's keys, sign the request with ``signing_key``, and post it; never
         raises for a push service that refuses or cannot be reached (the answer says so)."""
 
@@ -263,7 +263,7 @@ class PushTransportInterface(MutableModel, ABC):
 class PywebpushTransport(PushTransportInterface):
     """The real transport: ``pywebpush``'s encryption and VAPID signing, posted over HTTPS."""
 
-    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushServiceAnswer:
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
         try:
             response = webpush(
                 subscription_info=subscription.model_dump(mode="json"),
@@ -277,18 +277,18 @@ class PywebpushTransport(PushTransportInterface):
             )
         except WebPushException as e:
             if e.response is None:
-                return PushServiceAnswer(status_code=None, detail=str(e))
+                return PushProviderAnswer(status_code=None, detail=str(e))
             response = e.response
         except (requests.RequestException, ValueError) as e:
             # No answer at all, or keys the browser handed over that do not decode.
-            return PushServiceAnswer(status_code=None, detail=f"{type(e).__name__}: {e}")
+            return PushProviderAnswer(status_code=None, detail=f"{type(e).__name__}: {e}")
         # webpush answers a string only when asked for a curl command, which this never does.
         if isinstance(response, str):
             raise UnexpectedPushAnswerError("webpush answered a curl command instead of posting")
-        return PushServiceAnswer(status_code=response.status_code, detail=response.text[:_ANSWER_EXCERPT_LENGTH])
+        return PushProviderAnswer(status_code=response.status_code, detail=response.text[:_ANSWER_EXCERPT_LENGTH])
 
 
-class WebPushService(MutableModel):
+class WebPushNotifier(MutableModel):
     """The shell's signing key and its registered devices, and the sends to them."""
 
     directory: Path = Field(frozen=True, description="Where the key and the devices file live")
@@ -367,7 +367,7 @@ class WebPushService(MutableModel):
             delivery = DeviceDelivery(
                 device_id=device.device_id,
                 label=device.label,
-                push_service=push_service_name(device.subscription.endpoint),
+                push_provider=push_provider_name(device.subscription.endpoint),
                 status_code=answer.status_code,
                 detail=answer.detail,
                 is_accepted=answer.status_code in _ACCEPTED_STATUS_CODES,
@@ -377,7 +377,7 @@ class WebPushService(MutableModel):
                 logger.warning(
                     "Web Push to {} ({}) was not accepted: {} {}",
                     delivery.label,
-                    delivery.push_service,
+                    delivery.push_provider,
                     delivery.status_code,
                     delivery.detail,
                 )

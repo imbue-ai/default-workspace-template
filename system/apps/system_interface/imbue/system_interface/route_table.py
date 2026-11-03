@@ -112,10 +112,10 @@ from imbue.system_interface.shell.web_push import PushSendOutcome
 from imbue.system_interface.shell.web_push import WebPushPublicKey
 from imbue.system_interface.shell.web_push_routes import NOTIFICATIONS_PAGE_ROUTE
 from imbue.system_interface.shell.web_push_routes import NOTIFICATIONS_SCRIPT_ROUTE
-from imbue.system_interface.shell.web_push_routes import SERVICE_WORKER_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_DEVICES_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_KEY_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SEND_ROUTE
+from imbue.system_interface.shell.web_push_routes import WORKER_SCRIPT_ROUTE
 
 PRESENCE_PATH: Final[str] = "/api/presence"
 PRESENCE_HEARTBEAT_PATH: Final[str] = "/api/presence/heartbeat"
@@ -264,7 +264,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     # Notifications on a phone (Web Push)
     ("GET", NOTIFICATIONS_PAGE_ROUTE): SchemalessRoute(reason="the page that turns notifications on for a device"),
     ("GET", NOTIFICATIONS_SCRIPT_ROUTE): SchemalessRoute(reason="the notifications page's script"),
-    ("GET", SERVICE_WORKER_ROUTE): SchemalessRoute(reason="the service worker that shows pushed notifications"),
+    ("GET", WORKER_SCRIPT_ROUTE): SchemalessRoute(reason="the service worker that shows pushed notifications"),
     ("GET", WEB_PUSH_KEY_ROUTE): RouteModels(response_model=WebPushPublicKey),
     ("GET", WEB_PUSH_DEVICES_ROUTE): RouteModels(response_model=DevicesListing),
     ("POST", WEB_PUSH_DEVICES_ROUTE): RouteModels(

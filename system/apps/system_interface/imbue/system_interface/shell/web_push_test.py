@@ -10,9 +10,9 @@ from imbue.system_interface.shell.web_push import DEVICES_FILENAME
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import MAX_REGISTERED_DEVICES
 from imbue.system_interface.shell.web_push import PushNotificationRequest
-from imbue.system_interface.shell.web_push import WebPushService
+from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import device_id_of
-from imbue.system_interface.shell.web_push import push_service_name
+from imbue.system_interface.shell.web_push import push_provider_name
 from imbue.system_interface.shell.web_push import with_device_registered
 from imbue.system_interface.testing import RecordingPushTransport
 
@@ -36,7 +36,7 @@ def _registration(endpoint: str, label: str = "Android, Firefox") -> DeviceRegis
     ],
 )
 def test_push_service_name_names_the_vendor_or_else_the_host(endpoint: str, expected: str) -> None:
-    assert push_service_name(endpoint) == expected
+    assert push_provider_name(endpoint) == expected
 
 
 def test_a_device_registered_past_the_cap_forgets_the_one_registered_longest_ago() -> None:
@@ -66,11 +66,11 @@ def test_registering_a_device_again_moves_it_last_with_its_new_label_and_time() 
 
 
 def test_devices_and_the_key_survive_a_new_service_over_the_same_directory(tmp_path: Path) -> None:
-    first = WebPushService(directory=tmp_path, transport=RecordingPushTransport())
+    first = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
     first.register(_registration("https://push.example.org/a"), _NOW)
     public_key = first.public_key()
 
-    second = WebPushService(directory=tmp_path, transport=RecordingPushTransport())
+    second = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
 
     assert [device.device_id for device in second.list_devices()] == [device_id_of("https://push.example.org/a")]
     assert second.public_key() == public_key
@@ -79,14 +79,14 @@ def test_devices_and_the_key_survive_a_new_service_over_the_same_directory(tmp_p
 def test_an_unreadable_devices_file_reads_as_no_devices(tmp_path: Path) -> None:
     (tmp_path / DEVICES_FILENAME).write_text("not json")
 
-    service = WebPushService(directory=tmp_path, transport=RecordingPushTransport())
+    service = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
 
     assert service.list_devices() == ()
 
 
 def test_a_device_whose_push_service_did_not_answer_is_kept(tmp_path: Path) -> None:
     transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": None})
-    service = WebPushService(directory=tmp_path, transport=transport)
+    service = WebPushNotifier(directory=tmp_path, transport=transport)
     service.register(_registration("https://push.example.org/a"), _NOW)
 
     outcome = service.send(PushNotificationRequest(title="Done"), None)
