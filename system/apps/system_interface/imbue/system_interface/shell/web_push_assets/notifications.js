@@ -8,6 +8,7 @@ const sendTestButton = document.getElementById("send-test");
 const turnOffButton = document.getElementById("turn-off");
 const devicesList = document.getElementById("devices");
 const noDevicesNote = document.getElementById("no-devices");
+const noDevicesText = noDevicesNote.textContent;
 const lastAnswer = document.getElementById("last-answer");
 const lastAnswerBody = document.getElementById("last-answer-body");
 
@@ -95,6 +96,7 @@ function deviceLabel() {
 
 function renderDevices(devices) {
   devicesList.replaceChildren();
+  noDevicesNote.textContent = noDevicesText;
   noDevicesNote.hidden = devices.length > 0;
   for (const device of devices) {
     const item = document.createElement("li");
