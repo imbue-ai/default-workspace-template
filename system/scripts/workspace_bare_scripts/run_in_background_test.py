@@ -435,10 +435,32 @@ def test_the_runner_only_ever_lowers_its_own_band(
     assert int(oom_score_adj.read_text()) == expected
 
 
-@pytest.mark.skipif(
+_NEEDS_OOM_SCORE_ADJ = pytest.mark.skipif(
     not run_in_background.OWN_OOM_SCORE_ADJ_PATH.exists(),
     reason="needs Linux's /proc/<pid>/oom_score_adj",
 )
+
+
+def _start_runner_from_the_agent_subprocess_band(
+    cwd: Path, description: str, *command: str, options: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
+    """Run the script as an agent's Bash tool call does, from the most-expendable band."""
+    runner = shlex.join(_runner_argv(description, *command, options=options))
+    return subprocess.run(
+        [
+            "sh",
+            "-c",
+            f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec {runner}",
+        ],
+        cwd=cwd,
+        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@_NEEDS_OOM_SCORE_ADJ
 @pytest.mark.usefixtures("fake_mngr")
 def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_band(
     fake_chat_app: Any, tmp_path: Path
@@ -455,19 +477,9 @@ def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_b
         "print('command', open('/proc/self/oom_score_adj').read().strip())\n"
         "print('runner', open(parent).read().strip())\n"
     )
-    caller_argv = [
-        "sh",
-        "-c",
-        f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec {shlex.join(_runner_argv('Check the bands', *command))}",
-    ]
 
-    started = subprocess.run(
-        caller_argv,
-        cwd=tmp_path,
-        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner_from_the_agent_subprocess_band(
+        tmp_path, "Check the bands", *command
     )
 
     assert started.returncode == 0, started.stderr
@@ -476,10 +488,7 @@ def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_b
     assert f"runner {run_in_background.RUNNER_OOM_SCORE_ADJ}" in body["message"]
 
 
-@pytest.mark.skipif(
-    not run_in_background.OWN_OOM_SCORE_ADJ_PATH.exists(),
-    reason="needs Linux's /proc/<pid>/oom_score_adj",
-)
+@_NEEDS_OOM_SCORE_ADJ
 @pytest.mark.usefixtures("fake_mngr")
 def test_a_waiter_runs_in_the_runners_band_not_the_callers(
     fake_chat_app: Any, tmp_path: Path
@@ -489,22 +498,9 @@ def test_a_waiter_runs_in_the_runners_band_not_the_callers(
     command = _python_command(
         "print('command', open('/proc/self/oom_score_adj').read().strip())"
     )
-    caller_argv = [
-        "sh",
-        "-c",
-        f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec "
-        + shlex.join(
-            _runner_argv("Wait for the worker", *command, options=("--waiter",))
-        ),
-    ]
 
-    started = subprocess.run(
-        caller_argv,
-        cwd=tmp_path,
-        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner_from_the_agent_subprocess_band(
+        tmp_path, "Wait for the worker", *command, options=("--waiter",)
     )
 
     assert started.returncode == 0, started.stderr
