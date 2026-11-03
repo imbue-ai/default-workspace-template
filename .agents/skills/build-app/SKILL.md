@@ -629,6 +629,10 @@ already does this; run it by hand only when verification was done another way:
 uv run --no-sync workspace-layout open <name> --beside
 ```
 
+While the mock frame is still up, the window the user has is the frame's, not the
+app's: surface it with `mock_frame.py up ... --open`, and reload it with
+`mock_frame.py up ... --refresh`, never `open` or `refresh` the app itself.
+
 `--beside` lays it beside the chat that asked for it instead of on top of the
 conversation, taking half the backdrop at the chat's own height. The chat is
 nudged sideways only if there is no room beside it, and then by the least that
