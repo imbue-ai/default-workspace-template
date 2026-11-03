@@ -64,6 +64,26 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
     assert "/nonexistent/latchkey" in result.output
 
 
+def test_a_sandbox_directory_that_cannot_be_written_is_missing_material_not_a_refusal(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "latchkey_key").write_text("key\n")
+    # A file where the sandbox's latchkey directory goes: no retry in the sandbox makes it writable.
+    (tmp_path / "latchkey").write_text("not a directory")
+    result = CliRunner().invoke(
+        sign_in_command,
+        [
+            "slack",
+            "--runtime-dir",
+            str(tmp_path),
+            "--latchkey-binary",
+            "/nonexistent/latchkey",
+        ],
+    )
+    assert result.exit_code == EXIT_MISSING_MATERIAL
+    assert str(tmp_path / "latchkey") in result.output
+
+
 def test_a_credential_latchkey_did_not_store_is_a_refusal_with_its_reason(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

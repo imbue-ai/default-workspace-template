@@ -104,12 +104,14 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
 
     A material that is missing or malformed exits 3: a key file, the incoming state, the values file, and the
     ``latchkey`` the desktop's wrapper cannot run (``Latchkey.initialize`` raises ``LatchkeyError`` for a binary
-    that is absent or too old and for a config it cannot write; a refusal of its own it answers as a result, not
-    an exception). A ``latchkey`` child that refused (a re-encrypt of a service it has no store for) exits 1.
+    that is absent or too old and for a config it cannot parse; a refusal of its own it answers as a result, not
+    an exception). So does a file or directory of the sandbox's that cannot be read or written (an ``OSError``,
+    the config's included), which no retry in the sandbox cures either. A ``latchkey`` child that refused (a
+    re-encrypt of a service it has no store for) exits 1.
     """
     try:
         yield
-    except (MissingMaterialError, ValuesFileError, LatchkeyError) as e:
+    except (MissingMaterialError, ValuesFileError, LatchkeyError, OSError) as e:
         click.echo(str(e), err=True)
         sys.exit(EXIT_MISSING_MATERIAL)
     except LatchkeyCommandError as e:
