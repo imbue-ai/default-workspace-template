@@ -129,7 +129,7 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 
 | Thing | Where | Notes |
 |---|---|---|
-| Screen service | `127.0.0.1:8090`, registered as the app's URL | HTTP and WebSocket, the viewer's only origin |
+| Screen service | `127.0.0.1:8090`, registered as the app's URL | HTTP and WebSocket, the viewer's only origin; `--host` or `SCREEN_LISTEN_HOST` binds another address, which only gate mode allows (section 6.5) |
 | neko HTTP and WebSocket | `127.0.0.1:8091` | reached only through the service's `/neko/` proxy |
 | neko UDP mux and TCP mux | `0.0.0.0:59000/udp` and `0.0.0.0:59000/tcp` inside the container | the workspace's two published ports, declared by every create template as `publish__extend = ["59000/udp", "59000/tcp"]` (the `modal` template declares `["59000/tcp"]` alone: Modal tunnels carry TCP only, and mngr refuses a UDP declaration before the sandbox exists) |
 | CDP proxy | `127.0.0.1:8083` | unchanged from the browser app |
@@ -137,9 +137,9 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 ### 5.2 `GET /api/connect-info`
 
 The viewer's one question: `{"ice_servers": [...], "candidates": [{"host", "port", "protocol"}], "expires_at"}`.
-The service asks, with a two-second bound each and in parallel, the desktop (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/<id>/media-endpoints` and `.../ice-servers`, the integration spec section 4, reached as the chat app's notification client reaches the desktop) and the share gateway's loopback route (`GET http://127.0.0.1:8791/connect-info`, section 15), and answers the union, with candidates filtered to guest port 59000 and de-duplicated.
+The service asks, with a two-second bound each and in parallel, the desktop (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/<id>/media-endpoints` and `.../ice-servers`, the integration spec section 4, reached as the chat app's notification client reaches the desktop) the share gateway's loopback route (`GET http://127.0.0.1:8791/connect-info`, section 15), and, when `SCREEN_CONNECT_INFO_PATH` names one, a connect-info file read on every request (an auth sandbox's, which its connector writes with the sandbox's TCP tunnel to port 59000), and answers the union, with candidates filtered to guest port 59000 and de-duplicated.
 `?relay=1` is the only time the service asks for ICE servers; without it `ice_servers` is empty (the TURN spec's direct-first rule).
-Both brokers may be absent; the answer is then an empty candidate list, which the viewer treats as "try the server's own candidate as given".
+All brokers may be absent; the answer is then an empty candidate list, which the viewer treats as "try the server's own candidate as given".
 The answer is held in memory only.
 
 ### 5.3 Signaling and candidate rewriting
@@ -181,6 +181,15 @@ Humans never see them: the viewer calls `POST /api/session` on the service, whic
 The viewer logs its session out (`POST /neko/api/logout`) on `pagehide`, and neko drops a `multiuser` session on logout, so sessions do not accumulate across page loads; the service also deletes any session that has been disconnected for ten minutes.
 The service's own admin session and REST calls use `session.api_token`, generated the same way.
 A request with no identity header is the owner: the gateway and the forwarder both stamp one, so a header-less request can only have come over loopback, from an agent or a test.
+Gate mode (section 6.5) replaces this rule.
+
+### 6.5 Gate mode
+
+An auth sandbox serves the Screen on every interface over Modal's TLS, with no gateway in front of it to vouch for the requester.
+Its boot script sets `SCREEN_OWNER_TOKEN_SHA256` (the hash of an owner token its connector minted) and `SCREEN_FRAME_ANCESTORS` (the hosted chrome's origin), which turns gate mode on.
+In gate mode `X-Imbue-Identity` is ignored and every admitted request is the owner: a loopback request is admitted as is, a GET carrying the matching `?owner_token=` sets an owner session cookie and redirects to the same URL without it, and every other request, WebSocket included, needs that session or is refused with 401.
+Every response carries `frame-ancestors` naming the chrome's origin.
+The README's "Gate mode" gives the cookies and their checks.
 
 ### 6.4 Agents
 
@@ -276,7 +285,7 @@ The manifest's `priority = "screen"`; `system/test_app_manifests.py` and the ban
 
 ### 10.1 Routes
 
-All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
+All on `127.0.0.1:8090`, identity from `X-Imbue-Identity` (in gate mode, section 6.5, on the listen host, every admitted request the owner):
 
 | Route | Purpose |
 |---|---|
