@@ -44,15 +44,19 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     (async () => {
       const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // Navigated before it is focused: a tap lets the worker focus or open a window once, so a focus spent on a page
+      // that then cannot be navigated would leave the new window below refused.
       for (const page of pages) {
         if (!("navigate" in page)) continue;
+        let navigated;
         try {
-          await page.focus();
-          await page.navigate(url);
-          return;
+          navigated = await page.navigate(url);
         } catch {
           // A page this worker does not control cannot be navigated; a new window below is the fallback.
+          continue;
         }
+        await (navigated || page).focus();
+        return;
       }
       await self.clients.openWindow(url);
     })(),
