@@ -6,9 +6,10 @@ sample of real data that is not yet wired to its source, with some of it not wor
 note saying what is not real yet. ``up`` frames the app's live program as the
 ``<name>-mock`` app (nothing else is booted: the frame shows the app the agent is
 editing), and re-registers the app itself from its manifest as internal and never
-stopped for want of a window. Internal keeps the bare app out of the launcher and off
-the desktop; and since only the frame has a window, the shell would otherwise stop the
-app a minute after its own window count reached zero. Both last until the app's next
+stopped for want of a window. Internal keeps the bare app out of the launcher (a
+desktop shortcut the shell gave it when it was first registered stays); and since only
+the frame has a window, the shell would otherwise stop the app a minute after its own
+window count reached zero. Both last until the app's next
 registration from its manifest alone, which its program makes on every start, so ``up``
 is re-run after every restart (``verify_app.py --restart`` and then ``up --refresh``,
 in one call). ``down`` closes the mock window, removes the frame, and registers the app

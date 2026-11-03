@@ -388,7 +388,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 - **Show the mock inside the mock frame, never as the bare app.** A mock looks like
   a finished app, so on its own it reads as one. The frame puts a "Mock" banner
   around it and a note under the banner saying what is not real yet; the bare app
-  stays out of the launcher and off the desktop while it is up. Check the page, then
+  stays out of the launcher while it is up. Check the page, then
   frame it and open the frame beside the chat, in one call:
 
   ```bash
@@ -494,7 +494,7 @@ uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py d
 ```
 
 `down` closes the mock window, removes the frame, and puts the app back in the
-launcher and on the desktop.
+launcher.
 
 Every page is served under the starter's `Content-Security-Policy`
 (`CONTENT_SECURITY_POLICY` and the `after_request` that sets it; keep it, the app
