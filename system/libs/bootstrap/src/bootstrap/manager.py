@@ -506,7 +506,7 @@ def _migrate_cron_entries_to_routines() -> None:
     on the next boot. Best-effort: the boot must reach supervisord either way.
     """
     try:
-        # own-process: other-tier -- the boot must reach supervisord even while the venv is mid-rebuild
+        # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
         completed = subprocess.run(
             ["uv", "run", "--no-sync", "routines", "migrate-cron"],
             cwd=WORKSPACE_ROOT_DIR if WORKSPACE_ROOT_DIR.is_dir() else None,
@@ -661,7 +661,7 @@ def _run_env_converge_fast_phase() -> None:
     pre-supervisord. Best-effort: a failure must not block boot (the slow-phase
     one-shot logs the environment's real problems).
     """
-    # own-process: other-tier -- the boot must reach supervisord even when the venv is broken
+    # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
     result = subprocess.run(
         ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"],
         capture_output=True,
