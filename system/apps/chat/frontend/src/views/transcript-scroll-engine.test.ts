@@ -100,31 +100,43 @@ function fireResizeObserverOf(target: Element): void {
   }
 }
 
-describe("transcript scroll engine repositions after a chat switch", () => {
-  let engine: TranscriptScrollEngine;
-  let element: HTMLElement;
-  let originalResizeObserver: typeof globalThis.ResizeObserver;
+// Open a chat in FOLLOW on `element`: the engine pins it to the bottom.
+async function openFollowingChat(
+  dataSource: TranscriptScrollDataSource,
+  element: HTMLElement,
+): Promise<TranscriptScrollEngine> {
+  const engine = createTranscriptScrollEngine({ dataSource });
+  engine.setChat("agent-1");
+  engine.computeRenderPlan();
+  engine.afterRender(element);
+  await flushMicrotasks();
+  expect(element.scrollTop).toBe(BOTTOM_PX);
+  return engine;
+}
 
-  beforeEach(() => {
-    StubResizeObserver.instances = [];
-    originalResizeObserver = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
-    element = makeScrollElement();
-    engine = createTranscriptScrollEngine({ dataSource: makeDataSource() });
-  });
+let originalResizeObserver: typeof globalThis.ResizeObserver;
+
+beforeEach(() => {
+  StubResizeObserver.instances = [];
+  originalResizeObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
+});
+
+afterEach(() => {
+  globalThis.ResizeObserver = originalResizeObserver;
+});
+
+describe("transcript scroll engine repositions after a chat switch", () => {
+  let engine: TranscriptScrollEngine | undefined;
 
   afterEach(() => {
-    engine.detach();
-    globalThis.ResizeObserver = originalResizeObserver;
+    engine?.detach();
+    engine = undefined;
   });
 
   it("re-pins FOLLOW to the bottom when the frame's scrollTop is reset (hidden then shown on switch)", async () => {
-    // Open the chat: FOLLOW pins the viewport to the bottom.
-    engine.setChat("agent-1");
-    engine.computeRenderPlan();
-    engine.afterRender(element);
-    await flushMicrotasks();
-    expect(element.scrollTop).toBe(BOTTOM_PX);
+    const element = makeScrollElement();
+    engine = await openFollowingChat(makeDataSource(), element);
 
     // Switching chats hides this frame (display:none), which resets its scroll
     // container to the top, while nothing about the content changes. The engine's
@@ -141,31 +153,22 @@ describe("transcript scroll engine repositions after a chat switch", () => {
 });
 
 describe("transcript scroll engine keeps FOLLOW at the bottom through layout changes", () => {
-  let engine: TranscriptScrollEngine;
+  let engine: TranscriptScrollEngine | undefined;
   let layout: ScrollLayout;
   let element: HTMLElement;
-  let originalResizeObserver: typeof globalThis.ResizeObserver;
 
-  beforeEach(async () => {
-    StubResizeObserver.instances = [];
-    originalResizeObserver = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
+  beforeEach(() => {
     layout = { scrollHeightPx: SCROLL_HEIGHT_PX, clientHeightPx: CLIENT_HEIGHT_PX };
     element = makeScrollElement(layout);
-    engine = createTranscriptScrollEngine({ dataSource: makeDataSource() });
-    engine.setChat("agent-1");
-    engine.computeRenderPlan();
-    engine.afterRender(element);
-    await flushMicrotasks();
-    expect(element.scrollTop).toBe(BOTTOM_PX);
   });
 
   afterEach(() => {
-    engine.detach();
-    globalThis.ResizeObserver = originalResizeObserver;
+    engine?.detach();
+    engine = undefined;
   });
 
   it("returns to the bottom in the same frame after the browser clamps the view up during a redraw", async () => {
+    engine = await openFollowingChat(makeDataSource(), element);
     // The redraw's patch lays the content out shorter for a moment (a spacer
     // shrinks before the row replacing it is inserted), and the browser clamps
     // scrollTop up to fit; the content is back to full height by the time the
@@ -178,7 +181,8 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     expect(element.scrollTop).toBe(BOTTOM_PX);
   });
 
-  it("re-pins to the bottom as soon as the viewport gets shorter, before any redraw", () => {
+  it("re-pins to the bottom as soon as the viewport gets shorter, before any redraw", async () => {
+    engine = await openFollowingChat(makeDataSource(), element);
     // The composer grows a line: the transcript's viewport loses 20px at its
     // bottom while scrollTop stays put. The resize observer runs before paint;
     // the pin must happen there, not a frame later.
@@ -189,13 +193,7 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
   });
 
   it("leaves a viewport resize alone once the reader has scrolled up", async () => {
-    engine.detach();
-    engine = createTranscriptScrollEngine({ dataSource: makeDataSource(200) });
-    engine.setChat("agent-1");
-    engine.computeRenderPlan();
-    engine.afterRender(element);
-    await flushMicrotasks();
-    expect(element.scrollTop).toBe(BOTTOM_PX);
+    engine = await openFollowingChat(makeDataSource(200), element);
 
     element.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
     element.scrollTop = BOTTOM_PX - 100;
