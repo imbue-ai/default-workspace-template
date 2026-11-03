@@ -24,9 +24,10 @@ Run from the repo root via ``uv run --no-sync``:
 
 Exit codes:
     0  Success.
-    1  ``up``: the app has no manifest or is not registered, the frame did not come up,
-       or the window could not be opened or refreshed. ``down``: the frame could not be
-       torn down.
+    1  ``up``: the note is blank, the app has no manifest or is not registered, its
+       registration could not be rewritten, the frame did not come up, or the window
+       could not be opened or refreshed. ``down``: the frame could not be torn down, or
+       the app's registration could not be rewritten.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ FRAMED_APP_OVERRIDES: dict[str, object] = {
 
 
 class MockFrameError(Exception):
-    """The app cannot be framed: it has no manifest, or it is not registered."""
+    """The app cannot be framed or put back: no manifest, not registered, or its row could not be read or rewritten."""
 
 
 @dataclass(frozen=True)
