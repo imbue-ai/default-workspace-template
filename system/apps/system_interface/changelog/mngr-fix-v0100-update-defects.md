@@ -1,0 +1,1 @@
+- The rollback launch in `shell/update_notice.py` carries an `# own-process: outlives-caller` marker: a rollback restarts the shell that started it, so it has to run as a process of its own. It no longer counts against the launch-rule ratchet.

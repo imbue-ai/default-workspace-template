@@ -1,0 +1,1 @@
+- Three boot steps carry `# own-process: other-tier` markers and no longer count against the launch-rule ratchet: update recovery through `update_self.py`, `routines migrate-cron` and `env-converge run --phase fast`. Each has to run even when the venv is broken or mid-rebuild.
