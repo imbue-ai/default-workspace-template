@@ -479,7 +479,6 @@ class Spawner:
 # .venv) is booted: like its supervisord program, it links the project's venv and syncs it
 # from the project's own lock; it then execs the command with that venv first on PATH, so
 # a bare console-script name in the launch argv resolves to the project's own install.
-# own-process: other-tier -- the system python3 links the project's venv before that venv exists
 VENV_LINKS_SCRIPT = "system/scripts/workspace_bare_scripts/venv_links.py"
 
 

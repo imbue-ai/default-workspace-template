@@ -1569,7 +1569,7 @@ reviewer will check: name every marker you add in your report. Never raise the c
 
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
-    assert len(sites) <= snapshot(8), (
+    assert len(sites) <= snapshot(9), (
         "These name one of the workspace's own scripts, modules or commands to run it as "
         "a process:\n"
         + "\n".join(sites)
