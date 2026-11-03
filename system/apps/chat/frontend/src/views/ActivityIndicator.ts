@@ -50,7 +50,12 @@ import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
-import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
+import {
+  getOutgoingMessages,
+  heldSendsLandedDuringSwitch,
+  opensTurnWithHeldSends,
+  sentAtOfArrival,
+} from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 import { handoffPhaseText } from "./handoff-phase";
@@ -245,9 +250,11 @@ export function turnStatusPlacement(chatId: string): "after-sends" | "after-turn
   const chat = getChatById(chatId);
   const outgoing = getOutgoingMessages(chatId);
   if (chat !== undefined && chat.handoff !== null) {
-    // A switch that hands its held sends over as the agent's next turn reports that turn's start.
+    // A switch that hands its held sends over as the agent's next turn reports that turn's start until the
+    // first of them lands; the rest wait behind that turn.
     const isSendWaiting = chat.handoff.held_sends.length > 0 || outgoing.length > 0;
-    return opensTurnWithHeldSends(chat.handoff) && isSendWaiting ? "after-sends" : "after-turn";
+    const isTurnOpening = opensTurnWithHeldSends(chat.handoff) && heldSendsLandedDuringSwitch(chatId) === 0;
+    return isTurnOpening && isSendWaiting ? "after-sends" : "after-turn";
   }
   if (chat !== undefined && isWorkingActivityState(chat.active_agent.activity_state)) {
     return outgoing.some((message) => message.opensTurn) ? "after-sends" : "after-turn";

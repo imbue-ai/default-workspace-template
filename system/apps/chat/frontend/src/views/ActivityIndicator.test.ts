@@ -39,6 +39,12 @@ vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff, status: chatState.status }),
   getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
+// How many of the switching chat's held sends have landed, which the tracker counts from the chats it is pushed.
+const landedHeldSends = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../models/OutgoingMessages", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/OutgoingMessages")>()),
+  heldSendsLandedDuringSwitch: () => landedHeldSends.count,
+}));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
@@ -422,6 +428,7 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     agentState.background_tasks = [];
     agentState.queued_messages = [];
     handoffState.handoff = null;
+    landedHeldSends.count = 0;
     chatState.status = "idle";
     now = NOW;
     resetSettledTurnsForTesting();
@@ -572,6 +579,18 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
       held_sends: [{ message_id: "m-1", text: "Find what's using disk space" }],
     });
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+
+    // Once the first held send has landed and opened the turn, the others wait behind it.
+    handoffState.handoff = handoffStateFixture({
+      phase: "switching",
+      is_fresh_start: true,
+      held_sends: [
+        { message_id: "m-1", text: "Find what's using disk space" },
+        { message_id: "m-2", text: "and this" },
+      ],
+    });
+    landedHeldSends.count = 1;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
 
     // A handoff that carries the conversation over opens the successor's turn with its prompt, which the
     // held sends wait behind.
