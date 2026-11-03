@@ -23,9 +23,10 @@ status, the rendered content, the raw-data/source affordance, and the empty and
 overflow states -- not just that the route returned `200`. Add Playwright
 coverage wherever the value is in the rendered UI rather than the JSON, driving
 it against the isolated instance. In a suite the repo-root `conftest.py`
-reaches, use pytest-playwright's `page` / `context` / `browser` fixtures: that
-conftest already points them at Fortress, the workspace's browser, which is
-installed before any agent starts. A user-built app's suite is its own pytest
+reaches, use its `module_browser` fixture (and `phone_context` for a
+phone-sized touch context): it launches Fortress, the workspace's browser,
+which is installed before any agent starts, and it fails a test that asks for
+pytest-playwright's `page` / `context` / `browser` instead. A user-built app's suite is its own pytest
 root, which that conftest does not reach: `type-app.md`'s "On a phone" says
 how its browser test gets Playwright and launches Fortress. Anywhere else, do
 not write your own launch fixture. Never `playwright install` a managed
