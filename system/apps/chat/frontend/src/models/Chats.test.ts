@@ -21,20 +21,42 @@ describe("buildAgentTerminalUrl", () => {
     vi.unstubAllGlobals();
   });
 
+  function dispatchArgumentsOf(url: string): string[] {
+    return new URLSearchParams(url.split("?")[1]).getAll("arg");
+  }
+
   it("attaches to the agent's tmux session on the terminal app's origin, with the args in dispatch order", () => {
     stubPage("terminal");
-    const url = buildAgentTerminalUrl("sunny hollow");
+    const url = buildAgentTerminalUrl("sunny hollow", false);
     expect(url.startsWith("http://terminal.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421/?")).toBe(true);
-    expect(new URLSearchParams(url.split("?")[1]).getAll("arg")).toEqual(["_", "agent", "sunny hollow"]);
+    expect(dispatchArgumentsOf(url)).toEqual(["_", "agent", "sunny hollow"]);
+  });
+
+  it("attaches as a viewer, after the name, while the chat's window is viewed on somebody else's desktop", () => {
+    stubPage("terminal");
+    expect(dispatchArgumentsOf(buildAgentTerminalUrl("sunny hollow", true))).toEqual([
+      "_",
+      "agent",
+      "sunny hollow",
+      "view",
+    ]);
+  });
+
+  it("sends an empty name for the ambient session, so the viewer argument keeps its place", () => {
+    stubPage("terminal");
+    expect(dispatchArgumentsOf(buildAgentTerminalUrl(null, false))).toEqual(["_", "agent", ""]);
+    expect(dispatchArgumentsOf(buildAgentTerminalUrl(null, true))).toEqual(["_", "agent", "", "view"]);
   });
 
   it("uses the label the page carries for the terminal app, and 'terminal' when it carries none", () => {
     stubPage("terminal-2");
-    expect(buildAgentTerminalUrl("a").startsWith("http://terminal-2.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.")).toBe(
-      true,
-    );
+    expect(
+      buildAgentTerminalUrl("a", false).startsWith("http://terminal-2.host-0af1b2c3d4e5f60718293a4b5c6d7e8f."),
+    ).toBe(true);
     stubPage(null);
-    expect(buildAgentTerminalUrl("a").startsWith("http://terminal.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.")).toBe(true);
+    expect(
+      buildAgentTerminalUrl("a", false).startsWith("http://terminal.host-0af1b2c3d4e5f60718293a4b5c6d7e8f."),
+    ).toBe(true);
   });
 });
 

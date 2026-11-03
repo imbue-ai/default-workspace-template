@@ -13,6 +13,11 @@ running is re-read (and its result added) once it settles; dedup by ``event_id``
 already-emitted call from repeating. A row still mid-write decodes to ``TruncatedError`` and
 stops the scan for that conversation until the next pass.
 
+agy writes a planner step's text into its row while the step is still generating, and the
+transcript takes the text only once the row settles. While a conversation's newest row is such
+a step, its text so far is the reply draft the chat shows (``read_reply_draft``); the scan that
+sees the row settle emits the reply and drops the draft under the same lock.
+
 No subagents in this cut: agy's ``invoke_subagent`` opens a separate conversation, which we
 do not follow yet (``get_subagent_metadata`` -> None, ``is_main_session_event`` -> True).
 """
@@ -28,7 +33,6 @@ from typing import Callable
 from typing import Final
 
 from loguru import logger
-from watchdog.observers import Observer
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.agy_transcript import TruncatedError
@@ -39,12 +43,17 @@ from imbue.chat.harnesses.antigravity.queue_tracker import get_agent_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import session_token
 from imbue.chat.harnesses.antigravity.session_parser import parse_step
 from imbue.chat.harnesses.antigravity.session_parser import parse_step_detail
+from imbue.chat.harnesses.antigravity.session_parser import planner_draft_text
 from imbue.chat.harnesses.antigravity.turn_state import TurnState
 from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
@@ -98,6 +107,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     _index_by_id: dict[str, int]
     _emitted_ids: set[str]
     _scan_from: dict[str, int]
+    # (conversation id, text) of the planner step agy is writing, or None.
+    _reply_draft: tuple[str, str] | None
     _wake: threading.Event
     _stopping: threading.Event
     _thread: threading.Thread | None
@@ -108,13 +119,21 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     _queue_snapshot_callback: Any
     _flush_send: Any
     _flush_is_alive: Any
+    _flush_note_resent: Any
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
     _emit_embargo_until: float
     # Instance-level so a test can shorten it by assignment. A module constant would have to be
     # monkeypatched, which the ratchets forbid (and rightly -- it leaks across tests).
     _delivery_witness_seconds: float
-    _observer: Any
+    # The app's observer once ``set_watch_observer`` hands it over; without it ``start`` watches through one of
+    # its own.
+    _watch_observer: SharedWatchObserver | None
+    # The observer ``start`` watches through, and whether it is this watcher's own, for ``stop`` to release.
+    _active_watch_observer: SharedWatchObserver | None
+    _is_active_watch_observer_owned: bool
+    _wake_handler: WakeOnChangeHandler
+    _watched_dirs: list[Path]
     # One held read-only connection per conversation db, guarded by ``self._lock``. Held
     # rather than opened per read because open/close is what WRITES to the watched
     # directory (open builds the wal-index in ``-shm``, close resets the ``-wal``), and
@@ -136,6 +155,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._emitted_ids = set()
         # Per-conversation cursor: the lowest idx not yet known-terminal (re-read until it is).
         self._scan_from = {}
+        self._reply_draft = None
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._emit_embargo_until = 0.0
@@ -149,9 +169,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._queue_snapshot_callback = None
         self._flush_send = None
         self._flush_is_alive = None
+        self._flush_note_resent = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
-        self._observer = None
+        self._watch_observer = None
+        self._active_watch_observer = None
+        self._is_active_watch_observer_owned = False
+        self._wake_handler = WakeOnChangeHandler(self._wake)
+        self._watched_dirs = []
         self._connections = {}
         return self
 
@@ -211,13 +236,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             # Publish during priming, not one poll later: an unpublished turn state makes the
             # first send after every backend restart fall back to the marker alone.
             self._publish_turn_state()
-        self._observer = Observer()
-        handler = WakeOnChangeHandler(self._wake)
+        self._is_active_watch_observer_owned = self._watch_observer is None
+        watch_observer = SharedWatchObserver.build() if self._watch_observer is None else self._watch_observer
+        self._active_watch_observer = watch_observer
         # Watch whatever exists now; the 1s poll safety net covers a dir/file created later.
         for directory in (self._state_dir, self._conversations_dir()):
-            if directory.is_dir():
-                self._observer.schedule(handler, str(directory), recursive=False)
-        self._observer.start()
+            if directory.is_dir() and watch_observer.subscribe(directory, False, self._wake_handler):
+                self._watched_dirs.append(directory)
         self._thread = threading.Thread(target=self._run, name=f"agy-watcher-{self._agent_id}", daemon=True)
         self._thread.start()
         # Its own thread: a flush runs mngr's send, which blocks on a lock and a bounded
@@ -231,10 +256,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._stopping.set()
         self._wake.set()
         self._flush_wake.set()
-        if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=2.0)
-            self._observer = None
+        watch_observer = self._active_watch_observer
+        self._active_watch_observer = None
+        if watch_observer is not None:
+            for directory in self._watched_dirs:
+                watch_observer.unsubscribe(directory, False, self._wake_handler)
+            if self._is_active_watch_observer_owned:
+                watch_observer.close()
+        self._watched_dirs = []
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
@@ -314,12 +343,17 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         # poll re-read and re-decoded the whole conversation.
         next_scan_from = scan_from
         is_prefix_terminal = True
+        is_scan_whole = True
+        # The newest row's text when it is a planner step agy is still writing.
+        draft_text: str | None = None
         for idx, step_type, status, payload in rows:
             try:
                 decoded = decode_step(conv_id, idx, step_type, status, bytes(payload))
             except TruncatedError:
                 # This row is mid-write; stop here so it is re-read whole next pass.
+                is_scan_whole = False
                 break
+            draft_text = planner_draft_text(decoded)
             for event in parse_step(decoded):
                 event_id = event["event_id"]
                 if event_id in self._emitted_ids:
@@ -337,6 +371,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             else:
                 is_prefix_terminal = False
         self._scan_from[conv_id] = next_scan_from
+        # A scan cut short says nothing about the newest row, so the draft stays as it was.
+        if is_scan_whole:
+            if draft_text is not None:
+                self._reply_draft = (conv_id, draft_text)
+            elif self._reply_draft is not None and self._reply_draft[0] == conv_id:
+                self._reply_draft = None
+            else:
+                # The draft, if any, is another conversation's, which this scan says nothing about.
+                pass
 
     def _read_rows(self, db_path: Path, scan_from: int) -> list[tuple[int, int, int, bytes]]:
         """Read the steps at/after ``scan_from`` via the held connection. Caller must hold
@@ -439,6 +482,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             return None
         return parse_step_detail(decoded).get(event_id)
 
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
+        """The planner step agy is writing, as the last scan read it."""
+        with self._lock:
+            after_event_id = self._events[-1]["event_id"] if self._events else ""
+            text = "" if self._reply_draft is None else self._reply_draft[1].strip()
+        return ReplyDraft(after_event_id=after_event_id, text=text)
+
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         return None
 
@@ -452,13 +502,17 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     # once agy goes idle. These overrides are what make the shared consumers -- the WS
     # snapshot, stop's return block, the tap's availability gate -- see a real queue.
 
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        self._watch_observer = watch_observer
+
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
 
-    def set_flush_hooks(self, send: Any, is_alive: Any) -> None:
-        """Receive the ability to deliver, and to tell whether the agent is still alive."""
+    def set_flush_hooks(self, send: Any, is_alive: Any, note_resent: Any) -> None:
+        """Receive the ability to deliver, to tell whether the agent is still alive, and to record a repeat."""
         self._flush_send = send
         self._flush_is_alive = is_alive
+        self._flush_note_resent = note_resent
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         return self._queue.snapshot()
@@ -604,6 +658,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if not claimed:
             return
         before = self._turn_state.user_turn_texts()
+        first_flushed_at = self._queue.note_flush_began(claimed, time.time())
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
@@ -613,6 +668,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
             if send(block):
                 delivered, witnessed = self._observe_delivery(before, block, claimed)
+                if first_flushed_at is not None and delivered and self._flush_note_resent is not None:
+                    self._flush_note_resent(block, first_flushed_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
         finally:
             # DEPART BEFORE ARRIVE (contract A3b). The queue entry is removed FIRST, and only
             # then are the transcript events it turned into released. Emitting as we found them

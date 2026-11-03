@@ -52,6 +52,7 @@ import {
   getChatById,
   getProvisionalChat,
   hasReceivedChatList,
+  isRoomChat,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -68,7 +69,8 @@ import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
-import { buildAgentTerminalUrl, getTerminalUrl } from "../models/Chats";
+import { buildAgentTerminalUrl } from "../models/Chats";
+import { getShellHandshake } from "../shell";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
@@ -78,6 +80,7 @@ import {
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
 import type { TranscriptEvent } from "../models/Response";
+import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -105,15 +108,11 @@ function getChatTerminalUrl(chatId: string): string {
   // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
   // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
   // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
-  // When the agent isn't in the local cache yet, fall back to the bare
-  // base URL and let agent.sh attach to the ambient session.
+  // When the agent isn't in the local cache yet, the name is empty and
+  // agent.sh attaches to the ambient session. A window viewed on somebody
+  // else's desktop attaches as a viewer, as the terminal app's own wrapper does.
   const agentName = getChatById(chatId)?.active_agent.name;
-  if (!agentName) {
-    const baseUrl = getTerminalUrl();
-    const separator = baseUrl.includes("?") ? "&" : "?";
-    return `${baseUrl}${separator}arg=_&arg=agent`;
-  }
-  return buildAgentTerminalUrl(agentName);
+  return buildAgentTerminalUrl(agentName || null, getShellHandshake()?.isViewing === true);
 }
 
 /** The provisional record of a chat that is not an agent yet, or null once the app lists it
@@ -144,10 +143,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let currentChatId: string | null = null;
   let panelElement: HTMLElement | null = null;
 
-  // Whether the page's frame is on screen. The shell keeps a minimized window's frame mounted
-  // and mithril redraws globally, so the component keeps running while hidden against an
-  // element collapsed to zero size; running scroll work then would corrupt the retained
-  // scroll position. The page feeds the shell's authoritative visibility in via the
+  // Whether the page's frame is laid out. The chat root keeps the frames of chats it is not
+  // showing mounted with `display: none` and mithril redraws globally, so the component keeps
+  // running while hidden against an element collapsed to zero size; running scroll work then
+  // would corrupt the retained scroll position. The page feeds the frame's layout in via the
   // ``isVisible`` attr (see isFrameRendered in shell.ts); the scroll hooks below skip
   // while it is false.
   // Defaults to true so the panel works before the first render sets it.
@@ -406,9 +405,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return m(ActivityIndicator, { key: "turn-status", chatId, events });
   }
 
+  /** The status row as list items, so a room contributes no hole to the keyed list: a room has no agent of its
+   *  own taking turns (the multiplayer spec, section 7.3). */
+  function turnStatusNodes(chatId: string, events: TranscriptEvent[]): m.Children[] {
+    return isRoomChat(chatId) ? [] : [renderTurnStatus(chatId, events)];
+  }
+
   /** Messages already on their way to a chat with no transcript yet, with the row saying where they are. */
   function withTurnStatus(chatId: string, nodes: m.Children[]): m.Children[] {
-    return nodes.length === 0 ? nodes : [...nodes, renderTurnStatus(chatId, [])];
+    return nodes.length === 0 ? nodes : [...nodes, ...turnStatusNodes(chatId, [])];
   }
 
   // The chat this page last showed as being created: the transcript load that follows its create keeps the
@@ -528,6 +533,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
+  /** Load the chat once. */
   function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
@@ -701,12 +707,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       if (tailNodes.length === 0) {
         // An empty chat can still be busy (a compaction, a switch, a background task): the status row
         // says so in place of the ready line.
-        const nodes = isAgentBusy(chatId) ? [renderTurnStatus(chatId, events)] : [];
+        const nodes = isAgentBusy(chatId) ? turnStatusNodes(chatId, events) : [];
         return renderEmptyConversation("message-list-empty", nodes, READY_STATUS);
       }
       return m("div", { class: "message-list-wrapper" }, [
         failedReloadNotice,
-        m("div", { class: MESSAGE_LIST_CLASS }, [...tailNodes, renderTurnStatus(chatId, events)]),
+        m("div", { class: MESSAGE_LIST_CLASS }, [...tailNodes, ...turnStatusNodes(chatId, events)]),
       ]);
     }
 
@@ -728,14 +734,20 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
     const renderKey =
-      `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsKey(chatId)}|${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
+      cachedRows = buildConversationRows(
+        chatId,
+        events,
+        tailTurnSettled,
+        liveCompaction,
+        resentTurnsIn(chatId, events),
+      );
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -769,7 +781,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...renderReplyDraft(chatId),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
-        ...(isTurnStatusAfterSends ? [] : [renderTurnStatus(chatId, events)]),
+        ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
@@ -777,7 +789,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
         // The status row under the user's own send while it waits on the agent.
-        ...(isTurnStatusAfterSends ? [renderTurnStatus(chatId, events)] : []),
+        ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),
     ]);
   }
@@ -814,6 +826,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // The terminal back face attaches to the agent's own tmux session, which a chat still being
       // created does not have: without a name the terminal dispatch attaches to whatever session
       // it finds, so the flip waits for the agent to register.
+      const isRoom = isRoomChat(chatId);
       const isListed = getChatById(chatId) !== undefined;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
@@ -961,7 +974,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.
                 isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
                 m(FastModeNotice, { chatId }),
-                !isListed || (isCompact && !isFlipped)
+                !isListed || isRoom || (isCompact && !isFlipped)
                   ? null
                   : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
                       m(TerminalViewToggle, { on: isFlipped, onToggle: toggleSourceView }),

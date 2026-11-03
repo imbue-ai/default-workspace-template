@@ -16,9 +16,7 @@ tables, code) are left alone.
 What the pane shows is a draft only while it is not a reply the transcript already holds:
 between turns, while a tool runs, and in the moment after a block lands, the last
 assistant block on screen is one the chat has, so it is compared with the latest replies
-of the transcript and dropped when it matches one. The comparison ignores everything but
-letters and digits, and code-fence languages, since the reverse mapping cannot restore
-heading levels, fence languages, or list markers exactly.
+of the transcript and dropped when it matches one (``reply_draft_matching``).
 """
 
 import re
@@ -27,20 +25,13 @@ from typing import Final
 
 from pydantic import PrivateAttr
 
+from imbue.chat.harnesses.reply_draft_matching import is_landed_reply
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr_claude.resources.stream_snapshot import StreamBufferState
 from imbue.mngr_claude.resources.stream_snapshot import convert_block_to_markdown
 from imbue.mngr_claude.resources.stream_snapshot import extract_message_region
 from imbue.mngr_claude.resources.stream_snapshot import strip_ansi
-
-# How much of a draft's start is looked for in the landed replies: long enough that two
-# different replies rarely share it.
-_COMPARED_PREFIX_CHARS: Final[int] = 80
-
-_NON_ALPHANUMERIC_PATTERN: Final[re.Pattern[str]] = re.compile(r"[\W_]+")
-# A code fence's info string (its language), which the pane never shows.
-_CODE_FENCE_INFO_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*```)[^\n]*$", re.MULTILINE)
 
 # The indent the TUI draws every row of an assistant block with (after the marker, on the first).
 _BLOCK_INDENT_WIDTH: Final[int] = 2
@@ -51,24 +42,6 @@ _CODE_FENCE: Final[str] = "```"
 # The markdown the reverse mapping adds around a run, which the pane did not draw.
 _MARKDOWN_LINK_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _MARKDOWN_EMPHASIS_PATTERN: Final[re.Pattern[str]] = re.compile(r"\*\*|`|\*")
-
-
-@pure
-def comparison_key(text: str) -> str:
-    """The text as the draft comparison sees it: its letters and digits, lowercased, without fence languages."""
-    return _NON_ALPHANUMERIC_PATTERN.sub("", _CODE_FENCE_INFO_PATTERN.sub(r"\1", text)).lower()
-
-
-@pure
-def is_landed_reply(draft_text: str, landed_reply_texts: Sequence[str]) -> bool:
-    """Whether ``draft_text`` is (the start of) one of the replies the transcript already holds.
-
-    An empty draft counts as landed: there is nothing to show.
-    """
-    draft_key = comparison_key(draft_text)[:_COMPARED_PREFIX_CHARS]
-    if draft_key == "":
-        return True
-    return any(draft_key in comparison_key(landed_text) for landed_text in landed_reply_texts)
 
 
 @pure

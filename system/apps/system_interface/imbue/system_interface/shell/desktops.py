@@ -15,7 +15,9 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -55,6 +57,7 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
+from imbue.system_interface.shell.ownership import reordered_desktops
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
@@ -74,8 +77,8 @@ DEFAULT_DESKTOP_NAME: Final[str] = "Home"
 DEFAULT_DESKTOP_COLOR: Final[str] = "#2f6b4f"
 DEFAULT_DESKTOP_GLYPH: Final[int] = 0
 
-# Each glyph's signature colour, in glyph order: the frontend's ``SQUIGGLE_GLYPHS`` palette, which is what the
-# settings dialog offers, so a desktop the shell names itself wears a colour the dialog could have picked.
+# Each glyph's signature colour, in glyph order. The shell still fills both fields for a desktop it names itself,
+# since the record keeps them (the multiplayer spec, S7).
 DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
     "#F0603A",
     "#16A34A",
@@ -346,7 +349,8 @@ class DesktopStore(MutableModel):
             self._write_offered_unlocked(offered)
 
     def list_desktops(self) -> list[Desktop]:
-        """Every desktop in creation order; an absent or unreadable file lists none (``ensure_default`` seeds one)."""
+        """Every desktop in display order (creation order, as ``reorder_desktops`` rearranged it); an absent or
+        unreadable file lists none (``ensure_default`` seeds one)."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
         return list(document.desktops) if document is not None else []
@@ -411,7 +415,14 @@ class DesktopStore(MutableModel):
         return DesktopsChangeOutcome(desktops=ensured, is_written=True)
 
     def create_desktop(
-        self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut], windows: Sequence[Window]
+        self,
+        name: str,
+        color: str,
+        glyph: int,
+        shortcuts: Sequence[DesktopShortcut],
+        windows: Sequence[Window],
+        # Whose desktop it is: None for the workspace owner's (the multiplayer spec, section 8.1).
+        owner: ParticipantKey | None,
     ) -> Desktop:
         """Register a new desktop with its seeded shortcuts (whose apps are recorded as offered) and pinned windows and
         no wallpaper; two names that shorten to one id conflict."""
@@ -423,6 +434,7 @@ class DesktopStore(MutableModel):
             wallpaper=None,
             shortcuts=tuple(shortcuts),
             windows=tuple(windows),
+            owner=owner,
         )
         return self.add_desktop(desktop, apps_with_a_shortcut_on((desktop,)))
 
@@ -445,16 +457,32 @@ class DesktopStore(MutableModel):
             )
         return desktop
 
-    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:
-        """Replace one desktop's display metadata; the id, wallpaper, shortcuts, and windows stay."""
+    def update_settings(self, desktop_id: str, name: str, color: str | None, glyph: int | None) -> Desktop:
+        """Rename one desktop, and replace its colour and glyph when given (the desktops phase shows neither; a
+        caller from before it still sends them); the id, owner, wallpaper, shortcuts, and windows stay."""
         return self._replace(
             desktop_id,
             lambda desktop: desktop.model_copy_update(
                 to_update(desktop.field_ref().name, validated_desktop_name(name)),
-                to_update(desktop.field_ref().color, validated_desktop_color(color)),
-                to_update(desktop.field_ref().glyph, validated_desktop_glyph(glyph)),
+                to_update(
+                    desktop.field_ref().color, validated_desktop_color(color) if color is not None else desktop.color
+                ),
+                to_update(
+                    desktop.field_ref().glyph, validated_desktop_glyph(glyph) if glyph is not None else desktop.glyph
+                ),
             ),
         )
+
+    def reorder_desktops(self, ordered_own_ids: Sequence[DesktopId], identity: RequestIdentity) -> list[Desktop]:
+        """Put the requester's own desktops in the order given, the others keeping their places (the multiplayer
+        spec, section 8.2); raises DesktopValueError for an order that is not exactly their own desktops."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            reordered = reordered_desktops(desktops, ordered_own_ids, identity)
+            if reordered != desktops:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=reordered))
+        return list(reordered)
 
     def set_wallpaper(self, desktop_id: str, wallpaper: Wallpaper | None) -> Desktop:
         return self._replace(

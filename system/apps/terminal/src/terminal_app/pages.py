@@ -51,6 +51,7 @@ from terminal_app.errors import (
 )
 from terminal_app.primitives import (
     SESSION_QUERY_KEY,
+    VIEWER_ARGUMENT,
     TerminalTitle,
     TmuxSessionName,
     Workdir,
@@ -83,7 +84,7 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__")
 
 # xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
 _XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
@@ -166,6 +167,16 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
   let connection = null;
+  // Whether the shell says this window is being looked at on somebody else's desktop: the pty then attaches as a
+  // viewer (read-only, and never the client tmux sizes the window by), through the path's viewer argument.
+  let isViewing = false;
+  let shownPage = null;
+  // A framed page points the pty at nothing until the shell's handshake has said whether the window is viewed:
+  // attached before that word, a viewed terminal would join as a full client and size its owner's window for a
+  // moment (the window-size rule follows the latest client). A handshake that never comes (the shell's page
+  // died) is given up on after the grace, and the pty attached as it would be unframed.
+  const HANDSHAKE_GRACE_MS = 2000;
+  let isHandshakeAwaited = window.parent !== window;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -234,9 +245,34 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      pointFrameAt(originFor(page.pty_label) + page.pty_path);
+      if (!isHandshakeAwaited) {
+        pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=__VIEWER_ARGUMENT__" : ""));
+      }
     }
+    shownPage = page;
     connection?.location(pathFor(page.name), page.title);
+  }
+
+  function pointHeldFrame() {
+    if (shownPage !== null && shownPage.pty_label !== "") show(shownPage);
+  }
+
+  // The shell's word on whether the window is viewed: the first one points the held frame, a changed one attaches
+  // the pty again the other way.
+  function takeViewing(next) {
+    const isFirstWord = isHandshakeAwaited;
+    isHandshakeAwaited = false;
+    if (next === isViewing && !isFirstWord) return;
+    isViewing = next;
+    pointHeldFrame();
+  }
+
+  if (isHandshakeAwaited) {
+    setTimeout(() => {
+      if (!isHandshakeAwaited) return;
+      isHandshakeAwaited = false;
+      pointHeldFrame();
+    }, HANDSHAKE_GRACE_MS);
   }
 
   async function refresh(session) {
@@ -392,6 +428,11 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
     if (event.source === window.parent && data.type === "ttyd-focus") focusPty();
     if (event.source === frame.contentWindow && data.type === "terminal:ctrl") setCtrlArmed(data.armed === true);
+    // Typing happens in the pty frame, out of this page's sight: its input reports go up to the shell as this
+    // page's own would (the multiplayer spec, section 4.3), the way the chat root hands up its nested pages'.
+    if (event.source === frame.contentWindow && data.type === "shell:input" && window.parent !== window) {
+      window.parent.postMessage({ type: "shell:input" }, "*");
+    }
   });
   window.addEventListener("focus", () => connection?.focused());
 
@@ -406,6 +447,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       .then(({ connectToShell }) => {
         connection = connectToShell({
           capabilities: { navigation: true, closeChord: false },
+          onHandshake: (handshake) => takeViewing(handshake.isViewing),
           onNavigate: navigate,
           onShown: focusPty,
           onTheme: wearTheme,
@@ -511,6 +553,7 @@ def render_page(config: PageConfig) -> str:
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
         "THEME": _THEME_SCRIPT_CONFIG,
+        "VIEWER_ARGUMENT": VIEWER_ARGUMENT,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 

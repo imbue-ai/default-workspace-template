@@ -130,13 +130,12 @@ class BackupConfig(FrozenModel):
             # start/restore, and restoring an old copy onto a new host would
             # lock the tooling out.
             "**/.ssh/authorized_keys",
-            # The update apply's pre-apply copies: a venv, uv tool
-            # environments (the mngr tool and each critical app's own) and a
-            # built bundle, which are exactly what the globs above exclude
-            # everywhere else. They are also only meaningful to an apply on
-            # this container, and the emergency exit keeps them indefinitely
-            # -- so without this every hourly tick would sweep a full venv
-            # plus several tool environments.
+            # The update apply's pre-apply copies: the mngr tool's environment,
+            # node_modules and the built bundles, which are exactly what the
+            # globs above exclude everywhere else. They are also only
+            # meaningful to an apply on this container, and the emergency exit
+            # keeps them indefinitely -- so without this every hourly tick
+            # would sweep a tool environment and a node_modules tree.
             "**/data/.state/update-apply/snapshots",
             # A throwaway instance's writable copies of an app's data (a preview,
             # or a test run against a copy) and its scratch directory. The data
@@ -161,6 +160,15 @@ class BackupConfig(FrozenModel):
         description=(
             "A `restic backup` that takes longer than this records a `backup_slow` "
             "event, at most once a day"
+        ),
+    )
+    verification_disabled: bool = Field(
+        default=False,
+        description=(
+            "Whether the Imbue Studio app's exec-based verification of this "
+            "workspace's backup service is turned off. Written by the app (per "
+            "workspace, from its backups panel) and read back by it; the backup "
+            "service itself keeps backing up regardless"
         ),
     )
 

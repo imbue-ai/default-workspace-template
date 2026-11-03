@@ -20,9 +20,8 @@ optimistic file, so do not decide anything from it, and never tell the worker to
 that came from it: the gate will be shed again and the round is wasted.
 
 The command lists the idle chats and workers, the apps the workspace may stop with how many windows
-show each, and the browsers no window shows, each with its memory. The figures are summed RSS, so
-they rank candidates rather than promise what stopping one frees. Read the free memory again after
-each round.
+show each, and the browsers no window shows, each with its memory: the anonymous memory of its
+processes, roughly what stopping it frees. Read the free memory again after each round.
 
 ## What this pass may stop
 

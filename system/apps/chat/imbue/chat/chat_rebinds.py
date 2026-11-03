@@ -25,6 +25,8 @@ from typing import assert_never
 
 from loguru import logger as _loguru_logger
 
+from imbue.chat.account_labels import ACCOUNT_LABEL_KEY
+from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
@@ -402,7 +404,7 @@ class RebindRunner:
         if result.returncode != 0:
             reason = mngr_failure_reason("label", result, _LABEL_TIMEOUT_SECONDS)
             raise RebindStepError(f"could not relabel agent {rebind.agent_id} of chat {chat_id}: {reason}")
-        self._deps.note_agent_relabeled(rebind.agent_id, {"account": account_id})
+        self._deps.note_agent_relabeled(rebind.agent_id, {ACCOUNT_LABEL_KEY: account_id})
 
     def _start(self, chat_id: ChatId, rebind_id: str, agent_info: AgentInfo) -> bool:
         """Start the rebound agent; False once the failed phase has been written."""
@@ -453,7 +455,10 @@ class RebindRunner:
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
             deliver_held_send(self._deps.deliver, agent_info, held, chat_id)
         logger.info(
-            "Rebind of chat {}: agent {} is back on account {}", chat_id, agent_id, agent_info.labels.get("account")
+            "Rebind of chat {}: agent {} is back on account {}",
+            chat_id,
+            agent_id,
+            account_id_of(agent_info.harness, agent_info.labels),
         )
 
 

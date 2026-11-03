@@ -18,7 +18,7 @@ from typing import Any
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-_UNIT_PATH = Path(__file__).parent / "env.d" / "1000-playwright-fortress.sh"
+_UNIT_PATH = Path(__file__).parent / "env.d" / "2000-screen.sh"
 _POLICY_HEREDOC = re.compile(r"<<'POLICY'\n(.*?)\nPOLICY\n", re.DOTALL)
 
 # SHA-256 of the SubjectPublicKeyInfo of each compromised eMudhra intermediate,
