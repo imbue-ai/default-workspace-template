@@ -138,7 +138,7 @@ pressure (so it will never report until revived), the poll surfaces that
 promptly and actionably (exit code 75) instead of waiting out the full timeout.
 
 ```bash
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name $NAME \
     --task-file data/.tasks/launch-task/$NAME/task.md

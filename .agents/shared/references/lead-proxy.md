@@ -28,7 +28,7 @@ and wait for one finish report use the same `await` (or the synchronous
 `create_worker.py launch-sync` wrapper) with no gate handling.
 
 ```bash
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>

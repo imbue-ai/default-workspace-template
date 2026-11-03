@@ -62,7 +62,7 @@ mkdir -p "$DATA_ROOT"
    uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py open slack/ingest --by "${MINDS_CHAT_ID:-agent}"
 
    # Wait for those requests in the background, then END YOUR TURN.
-   python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Sync Slack into datalib" -- \
+   python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Sync Slack into datalib" --waiter -- \
      uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py wait <request-id>...
    ```
 
