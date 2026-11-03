@@ -48,7 +48,9 @@ def test_returns_at_once_when_every_app_is_serving(
     tmp_path: Path, listening_url: str
 ) -> None:
     registry = tmp_path / "apps.toml"
-    _write_registry(registry, {"system_interface": listening_url, "chat": listening_url})
+    _write_registry(
+        registry, {"system_interface": listening_url, "chat": listening_url}
+    )
 
     started = time.monotonic()
     waiting_for = wait_for_critical_path.wait_for_apps(
@@ -123,7 +125,9 @@ def test_the_stub_execs_its_command_under_a_bare_python3(
     tmp_path: Path, listening_url: str
 ) -> None:
     registry = tmp_path / "apps.toml"
-    _write_registry(registry, {"system_interface": listening_url, "chat": listening_url})
+    _write_registry(
+        registry, {"system_interface": listening_url, "chat": listening_url}
+    )
     marker = tmp_path / "ran"
 
     completed = subprocess.run(

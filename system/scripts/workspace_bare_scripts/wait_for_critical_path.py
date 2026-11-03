@@ -6,11 +6,11 @@ Usage, as a command prefix in a ``system/supervisord.conf.d/<name>.conf`` (after
     command=python3 system/services/oom_priority/bin/oom_tag_service.py files python3 system/scripts/wait_for_critical_path.py .venv/bin/files-app
 
 supervisord spawns every ``autostart`` program at once, and ``priority=`` only orders those
-spawns: it never waits for one to be ready before the next. On a small slice that is twenty-odd
-cold Python starts sharing a few CPUs, and the user waits on just two of them: the system
-interface, which Imbue Studio polls before it lets the user in, and the chat app, which serves
-the welcome chat they land on. A program that waits here starts once both accept connections
-at the URLs their registry rows name, so the rest of the boot stops competing with them.
+spawns: it never waits for one to be ready before the next. So every cold start shares the CPUs
+with the two a new workspace's user waits on: the system interface, which Imbue Studio polls
+before it lets the user in, and the chat app, which serves the welcome chat they land on. A
+program that waits here starts once both accept connections at the URLs their registry rows
+name.
 
 A row that is not yet in the registry (the first boot of a new workspace) is waited for like
 one that is not yet listening. Past ``_DEADLINE_SECONDS`` the command starts anyway, with one
