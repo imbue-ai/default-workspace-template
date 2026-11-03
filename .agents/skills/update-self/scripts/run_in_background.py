@@ -7,7 +7,7 @@ from pathlib import Path
 # Kept as a stub: every release's update-self flow runs this path from the target release's
 # staged copy with the system python3 and no venv, so the package beside scripts/ is put on
 # sys.path here.
-# import-path: no-venv -- the system python3 runs this stub, in place and from update-self's staged copy
+# import-path: no-venv -- the system python3 runs this stub from update-self's staged copy, with no venv to install its package
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from update_self_skill.run_in_background import main
