@@ -290,6 +290,11 @@ def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
             id="pipe-into-tail",
         ),
         pytest.param(
+            "sleep 240; cat /tmp/out.txt",
+            "foreground `sleep`",
+            id="foreground-sleep",
+        ),
+        pytest.param(
             "git rebase -i HEAD~2",
             "git rebase commands are not allowed",
             id="git-rebase",
