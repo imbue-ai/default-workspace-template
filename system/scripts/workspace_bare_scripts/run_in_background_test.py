@@ -494,7 +494,7 @@ def test_a_waiter_runs_in_the_runners_band_not_the_callers(
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
     """A lead's wait on its worker holds next to no memory; in the caller's most-expendable band
-    it was shed under pressure, and the lead lost its only signal that the worker was done."""
+    a shed would lose the lead's only signal that the worker is done."""
     command = _python_command(
         "print('command', open('/proc/self/oom_score_adj').read().strip())"
     )
