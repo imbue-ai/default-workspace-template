@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
-from env_converge.converge import capture_unless_fresh_rootfs
+from env_converge.converge import DEFAULT_WORKSPACE_DIR, capture_unless_fresh_rootfs
 from env_converge.record import EnvConvergeError, default_record_dir
 from loguru import logger
 
@@ -66,12 +66,6 @@ LOG_FILE = Path("/tmp/host-backup.log")
 # Number of consecutive failed ticks after which the runner raises a prominent,
 # durable alarm so a silent multi-day backup outage cannot go unnoticed.
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
-
-# The checkout whose pinned apt snapshot timestamp the pre-snapshot capture records;
-# matches the host-backup program's `directory=` in
-# system/supervisord.conf.d/host-backup.conf, made explicit so the capture also works
-# when the runner is launched from another cwd.
-WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
 
 SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 
@@ -332,7 +326,9 @@ def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
 
 def _capture_environment_record() -> None:
     """``env-converge capture``'s work, in this process: re-capture the record unless the rootfs is fresh."""
-    capture_unless_fresh_rootfs(default_record_dir(), WORKSPACE_DIR, is_forced=False)
+    capture_unless_fresh_rootfs(
+        default_record_dir(), DEFAULT_WORKSPACE_DIR, is_forced=False
+    )
 
 
 def _refresh_environment_record(
