@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.grok import queue_tracker as grok_queue_tracker
 from imbue.chat.testing import FORTRESS_CHROMIUM_PATH
+from imbue.chat.testing import private_tmux_server
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -314,3 +315,10 @@ def git_work_dir(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+@pytest.fixture
+def isolated_tmux(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """A tmux server of the test's own, for a real ``mngr create`` and everything it starts."""
+    with private_tmux_server(monkeypatch):
+        yield

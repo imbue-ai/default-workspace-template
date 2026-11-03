@@ -21,11 +21,15 @@ dependencies = [
     "imbue-mngr-antigravity",
     "imbue-mngr-grok",
     "imbue-mngr-autocompact",
+    # The latchkey gateway's address, credentials and headers, read from the environment mngr injects.
+    "latchkey-access",
     "oom-priority",
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",
     "pyte>=0.8",
     "simple-websocket>=1.0",
+    # Resolves account-keyed settings (keybindings) for a request identity.
+    "workspace-profile",
     "tk-command-parsing",
     "tomlkit>=0.12",
     "watchdog>=4.0",
@@ -57,6 +61,9 @@ dev = [
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
+    # The stdlib-only scripts whose copies of this package's wire constants the tests pin.
+    "workspace-scripts",
+    "update-self-skill",
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
     # last verified clean against (see the system interface's pyproject).
@@ -121,7 +128,7 @@ omit = [
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 # Makes this directory ty's project (test_no_type_errors runs ty from here). ty
 # skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so
@@ -163,9 +170,10 @@ fail_under = 75
 
 [tool.coverage.paths]
 # Coverage data measured inside the workspace image on Modal (the
-# test-offload CI job) records the sandbox's paths; map them back so
+# test-offload CI job) records the sandbox's resolved paths (its
+# /home/user is a symlink to /mngr-vol/home); map them back so
 # the runner can combine the batches and enforce the floor above.
 source = [
     ".",
-    "/home/user/workspace/system/apps/chat/",
+    "/mngr-vol/home/workspace/system/apps/chat/",
 ]

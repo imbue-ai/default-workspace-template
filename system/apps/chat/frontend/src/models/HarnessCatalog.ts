@@ -70,8 +70,7 @@ export interface HarnessCatalog {
   // The static catalog options. EMPTY for a "dynamic" picker (codex): its options are per-agent,
   // fetched from /model-options on open, not carried here.
   options: CatalogModelOption[];
-  // "eager_then_reconcile" (claude/pi -- optimistic) | "on_change" (codex -- no overlay)
-  // | "read_only" (antigravity -- slots render non-interactive, no picker)
+  // "eager_then_reconcile" (optimistic) | "on_change" (no overlay)
   switch_mode: string;
   picker_mode: string; // "list" | "search" | "dynamic" -- how the model dropdown sources/renders options
   // Whether the "Shoulder tap" button can flush the queue atomically (merge into the live

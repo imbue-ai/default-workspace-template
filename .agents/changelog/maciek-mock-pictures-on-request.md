@@ -1,0 +1,3 @@
+- `build-app` shows the design as pictures in the chat when the user asks for pictures, loops on them like any mock, and builds the served mock from the look the user confirms; without such an ask the mock is still a served page, never a picture in its place. The shared interactive-delivery reference says the same of a detached prototype.
+
+- The interactive-delivery reference's "no production state" rule names what it excludes as production-grade work (production scripts, data layers, tests) and says the scaffold a specialization sets up to serve the prototype is fine, so it no longer reads as a ban on serving the prototype at all.

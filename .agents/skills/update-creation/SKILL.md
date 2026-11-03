@@ -209,7 +209,7 @@ hardening inline: commit, then dispatch. Hardening always runs in the background
 worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$SLUG \
     --template worker \
     --runtime-dir data/.tasks/harden/update-$SLUG/ \
@@ -217,7 +217,7 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 Then background-poll (`create_worker.py await --name update-$SLUG --task-file
-... --timeout 90m`, started through `system/scripts/run_in_background.py`) and
+... --timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py`) and
 follow `.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
@@ -247,9 +247,10 @@ Then merge `mngr/update-$SLUG`, destroy the worker per `lead-proxy.md`
 in the pass, by its type:
 
 - **skill** or **shared**: nothing beyond the merge (the worker's
-  cross-reference sweep is part of the change). If it is a built-in upstream
-  skill, note the local drift to reconcile later via `update-self` /
-  `submit-upstream-changes`.
+  cross-reference sweep is part of the change), except `uv sync --all-packages
+  --frozen` when it has a `python/` project, so the workspace venv carries any
+  dependency the merge added. If it is a built-in upstream skill, note the local
+  drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **app**: refresh its window (`uv run --no-sync workspace-layout refresh
   --app <app-name>`).
 - **service**: it has no window -- restart its programs (`supervisorctl restart

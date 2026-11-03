@@ -66,7 +66,7 @@ A launch path without it never receives typed text, whatever its params are call
 
 The free-text rows of a machine are every launch path with a `text_param` or a `draft_param` of every registered, non-internal app, in the launcher's app order (`launcher_rank`, lowest first, then registry order) and within an app in manifest order.
 The first is the primary text action, the second the secondary; any further ones are rows with no key binding.
-On a stock machine the chat declares three: `new` ("New Chat", primary), `send` ("Send to chat...", secondary; section 9), and `draft` (a row with no key binding, the avatar dialog's draft).
+On a stock machine the chat declares four: `main` ("Send to main chat", primary), `new` ("New Chat", secondary), `send` ("Send to chat...", a row with no key binding; section 9), and `draft` (another, the avatar dialog's draft).
 
 ### 3.2 Running a free-text row
 
@@ -88,12 +88,13 @@ The row's caption shows the text it will send (section 4.2), so what Enter does 
 
 ### 3.3 Running a launch-path row
 
-A launch-path row runs its launch path in one of two modes, decided by the manifest rather than by the row:
+A launch-path row runs its launch path in one of three modes, decided by the manifest rather than by the row:
 
 - a launch path whose `path` equals its app's pin `path` runs in **focus** mode: the app's pinned window on the active desktop is restored and raised, and nothing is opened (the shell's own rule that a focus-mode open at the home path finds the pinned window);
+- every launch path of an unpinned app whose `default_shortcut` mode is `focus` (a one-window app: the Screen, Getting Started, Memory & disk) runs in **one** mode: the launch's target is `focus`, so the shell lands it in the app's window already on the desktop, whichever client opened it, raised in this client's layout, and opens one only when there is none (the Screen spec, section 4.1);
 - every other launch path runs in **new** mode, as its shortcut does: a new window at the path.
 
-On a stock machine "Chat" raises the pinned chat window and "Terminal", "File Viewer", and "Browser" open windows.
+On a stock machine "Chat" raises the pinned chat window, "Screen" and "Browser" land in the one Screen window, and "Terminal" and "File Viewer" open windows.
 
 ### 3.4 The first-visit window
 
@@ -199,7 +200,7 @@ While typing with no launch-path or window match, one faint line above the free-
 A launch-path row reads its launch path's label ("Terminal") with the app's display name as the caption when the two differ.
 A window row reads the window's effective title with the app's display name as the caption, and the desktop's name after it for a window on another desktop; a minimized window's row is dimmed.
 The highlighted row, whatever its kind, carries `Enter` as its last caption: the caption says what Enter does, and moves with the highlight.
-The primary text action reads its launch path's label ("New Chat"); the secondary reads its label ("Send to chat...") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS) as a caption whatever is highlighted, since the chord runs it regardless; with text in the field the caption of either also carries the text's first words, faint, so the row says what it will do with what was typed.
+The primary text action reads its launch path's label ("Send to main chat"); the secondary reads its label ("New Chat") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS) as a caption whatever is highlighted, since the chord runs it regardless; with text in the field the caption of either also carries the text's first words, faint, so the row says what it will do with what was typed.
 A disabled free-text row is drawn faint with its reason as the tooltip.
 
 The highlighted row wears the active fill and `data-highlighted="true"`.
@@ -228,12 +229,12 @@ A refusal from the shell is reported through the store's notification, as every 
 ### 4.4 Starting a chat from Getting Started
 
 A tile or a detail action posts `shell:start-with-text` with its seeded text.
-The shell runs the primary text action with it (section 3.2): on a stock machine, the shell posts the chat's `new` launch path the text, the chat creates the chat and answers `/?chat=<id>`, this client's view of the pinned chat window goes there, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
+The shell runs the primary text action with it (section 3.2): on a stock machine, the shell posts the chat's `main` launch path the text, the chat sends it to the main chat (else the most recently messaged chat, else a new one) and answers `/?chat=<id>`, this client's view of the pinned chat window goes there, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
 The user reads the chat's first turn beside the tiles they came from.
 
 ### 4.5 Sending a text to an existing chat
 
-Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the shell posts it to the chat's intake route, and the pinned chat window is pointed at the page it answers and restored.
+The "Send to chat..." row runs the chat's `send` launch path with the text (section 8; Ctrl+Enter runs `new`, which starts a chat with the text as its first message): the shell posts it to the chat's intake route, and the pinned chat window is pointed at the page it answers and restored.
 With one chat to send to, the chat sends the text there at once and answers `/?chat=<id>`; with none it starts a new chat with the text, as `new` would.
 Otherwise the chat holds the text as a pending intake and answers `/?intake=<token>`: the root shows a picker over its list, a typeahead over every chat's title; Enter or a click applies the intake to that chat (the chat sends the text and the root selects it, reporting `/?chat=<id>`); Escape dismisses the picker, discards the intake, and reports the selection alone, so the text is dropped.
 Sending is the chat app's ordinary send, so a stopped chat is started by it as any send starts one.

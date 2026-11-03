@@ -25,6 +25,9 @@ from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.model import read_model_identity
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import StreamedReply
 
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
@@ -598,3 +601,45 @@ def test_a_loader_reads_the_rollout_without_watching_or_touching_the_model_bar(t
     watcher, _broadcast = _build_watcher(tmp_path)
     assert [event["event_id"] for event in watcher.get_all_events()] == [event["event_id"] for event in events]
     assert model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH).exists()
+
+
+def _streamed_sources(streamed: StreamedReply | None) -> ReplyDraftSources:
+    return ReplyDraftSources(capture_pane=lambda: None, read_streamed_reply=lambda: streamed)
+
+
+def test_reply_draft_is_the_message_codex_streams_after_the_last_event(tmp_path: Path) -> None:
+    _write_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
+    watcher, _ = _build_watcher(tmp_path)
+    last_event_id = watcher.get_all_events()[-1]["event_id"]
+
+    draft = watcher.read_reply_draft(_streamed_sources(StreamedReply(message_id="msg-1", text="Tides rise ")))
+
+    assert draft == ReplyDraft(after_event_id=last_event_id, text="Tides rise")
+
+
+def test_reply_draft_is_dropped_once_the_rollout_records_the_streamed_message(tmp_path: Path) -> None:
+    _write_rollout(
+        tmp_path,
+        [
+            _user_line("tell me about tides", "2026-08-03T00:00:01Z"),
+            _assistant_line("msg-1", "Tides rise twice a day.", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    draft = watcher.read_reply_draft(
+        _streamed_sources(StreamedReply(message_id="msg-1", text="Tides rise twice a day."))
+    )
+
+    assert draft is not None and draft.text == "" and draft.after_event_id == "codex-msg-1"
+
+
+def test_reply_draft_is_empty_without_a_live_stream(tmp_path: Path) -> None:
+    _write_rollout(tmp_path, [_user_line("tell me about tides", "2026-08-03T00:00:01Z")])
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    draft = watcher.read_reply_draft(_streamed_sources(None))
+
+    assert draft is not None and draft.text == ""

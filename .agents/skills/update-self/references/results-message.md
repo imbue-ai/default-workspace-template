@@ -80,15 +80,16 @@ List each, in plain terms:
   saved as it stood, so nothing was lost, and that you can split it up or put
   it back uncommitted if they prefer.
 - **The browser or an app it stopped**: name each one, say it was stopped to
-  make room for the update, and that it is running again. One whose window
-  they had open is worth saying plainly: the window stayed where it was and the
-  page works again. If the update did not land and something could not be
-  started again, say which, and that opening it starts it.
+  make room for the update, and that an app is running again or that a browser
+  kept its tabs and starts the next time they open it. One whose window they
+  had open is worth saying plainly: the window stayed where it was and the page
+  works again. If something could not be started again, say which, and that
+  opening it starts it.
 
 ## The resume note
 
 `run-status resume-chats` sends each chat the pass paused one note
-(`scripts/update_resume_note.py` composes it), so you never write it by hand.
+(`python/update_self_skill/update_resume_note.py` composes it), so you never write it by hand.
 The chat shows the user only its summary line, as a notice labelled "Workspace
 updated" (or "Workspace update not applied" when the update did not land),
 saying the chat was paused for the update and is carrying on. The rest is for

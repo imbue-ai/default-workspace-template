@@ -43,8 +43,6 @@ from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
-from imbue.chat.harnesses.model import SwitchMode
-from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
@@ -113,6 +111,9 @@ class AccountRow(FrozenModel):
     name: str = Field(description="The user's own name for the account; '' for none")
     label: str = Field(description="The provider, the harness and the number as one string")
     reauth_method: str = Field(description="The method 'Sign in again' runs for the account")
+    signed_in_at: str | None = Field(
+        description="When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept"
+    )
 
 
 class AccountsResponse(FrozenModel):
@@ -230,6 +231,7 @@ def list_accounts() -> Response:
             name=numbered.account.name,
             label=numbered.label,
             reauth_method=_reauth_method_id(numbered.account, numbered.harness),
+            signed_in_at=accounts.read_signed_in_at(numbered.account.id),
         )
         for numbered in accounts.number_accounts(index.accounts)
     )
@@ -281,8 +283,7 @@ def account_model_options(account_id: str) -> Response:
     catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
     has no catalog to offer, so the account's own codex is asked for it. A harness whose catalog
     depends on the account (grok) offers the catalog's models the account's own CLI lists, and the
-    whole catalog when it cannot tell. A harness whose model the chat app cannot switch offers
-    nothing (``options`` empty).
+    whole catalog when it cannot tell.
 
     The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
     provider can be on different subscriptions and genuinely offer different models, so an answer
@@ -296,8 +297,6 @@ def account_model_options(account_id: str) -> Response:
     harness = accounts.harness_for(account)
     if harness is None:
         return _error_response(f"Account {account_id} is on a lane this build does not have", status_code=404)
-    if get_catalog(harness).switch_mode is SwitchMode.READ_ONLY:
-        return model_response(ModelOptionsResponse(models=None, options=()))
     options = list_account_options(harness, accounts.account_dir(account_id))
     return model_response(ModelOptionsResponse(models=None, options=options))
 

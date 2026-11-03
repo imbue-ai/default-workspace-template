@@ -1,0 +1,19 @@
+[project]
+name = "launch-custom-agent-skill"
+version = "0.1.0"
+description = "Launches a coding agent that works in the user's own repo or directory"
+requires-python = ">=3.12"
+dependencies = [
+    # Resolves the provider account and binds the agent to it the way a chat is bound.
+    "chat",
+    "imbue-mngr",
+    # Pre-trusts a claude agent's work dir in its account's config.
+    "imbue-mngr-claude",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["launch_custom_agent_skill"]

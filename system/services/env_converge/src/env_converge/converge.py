@@ -11,7 +11,8 @@ Two phases with different contracts:
   are idempotent with fast satisfied-checks -- there are NO marker files;
   version stability comes from the units' pins and the snapshot-pinned apt
   sources, so re-running is deterministic), then installs anything present in
-  the record but missing from this rootfs.
+  the record but missing from this rootfs, except a uv tool named like a
+  workspace app.
 
 Ordering rule (removal stickiness): on a rootfs that carries the identity
 stamp, capture runs FIRST so deliberate removals stick; on a fresh rootfs
@@ -27,10 +28,12 @@ the slow phase completes and stamps.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+import tomllib
+from collections.abc import Callable, Mapping, Sequence, Set
 from pathlib import Path
 
 from imbue.imbue_common.pure import pure
@@ -333,8 +336,54 @@ def _install_missing_cargo(recorded: CargoState | None) -> tuple[list[str], list
     return installed, unavailable
 
 
+def _normalized_package_name(name: str) -> str:
+    """``name`` normalized the way uv names a tool (PEP 503)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def workspace_app_package_names(workspace_dir: Path) -> frozenset[str]:
+    """The normalized ``[project]`` name of every package under ``system/apps/``.
+
+    Every app runs from the workspace venv. A uv tool recorded under one of these
+    names is a per-app install an older build made, and the package index's
+    project of that name is somebody else's, so it must never be replayed.
+    """
+    names: set[str] = set()
+    for pyproject in sorted(
+        (workspace_dir / "system" / "apps").glob("*/pyproject.toml")
+    ):
+        try:
+            name = tomllib.loads(pyproject.read_text()).get("project", {}).get("name")
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            logger.warning(
+                "Could not read the app project name in {} ({}); a recorded uv tool of that name is not held back",
+                pyproject,
+                e,
+            )
+            continue
+        if isinstance(name, str) and name:
+            names.add(_normalized_package_name(name))
+    return frozenset(names)
+
+
+@pure
+def uv_tools_to_replay(
+    recorded_version_by_tool: Mapping[str, str],
+    installed_tools: Set[str],
+    workspace_app_names: Set[str],
+) -> list[str]:
+    """The recorded uv tools missing here that the replay may reinstall, sorted:
+    every one absent from ``installed_tools`` except those named like a workspace app."""
+    return sorted(
+        tool
+        for tool in set(recorded_version_by_tool) - set(installed_tools)
+        if _normalized_package_name(tool) not in workspace_app_names
+    )
+
+
 def install_missing_from_record(
     recorded: RecordSnapshot,
+    workspace_dir: Path,
 ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """Install entries from the given record snapshot that are absent from this rootfs.
 
@@ -345,7 +394,9 @@ def install_missing_from_record(
     Returns (installed_apt, installed_npm, installed_uv, installed_cargo,
     unavailable). The apt install-set is the recorded manual set (dependencies
     follow via apt at the pinned snapshot timestamp, so versions are
-    deterministic without pinning each name).
+    deterministic without pinning each name). A recorded uv tool named like an
+    app under ``workspace_dir``'s ``system/apps/`` is held back and logged, never
+    installed (:func:`uv_tools_to_replay`).
     """
     unavailable: list[str] = []
 
@@ -392,7 +443,20 @@ def install_missing_from_record(
     if recorded.uv_tool_state is not None:
         recorded_uv_versions = recorded.uv_tool_state.version_by_tool
         current_uv = capture_uv_tool_state()
-        missing_uv = sorted(set(recorded_uv_versions) - set(current_uv.version_by_tool))
+        installed_uv_tools = set(current_uv.version_by_tool)
+        missing_uv = uv_tools_to_replay(
+            recorded_uv_versions,
+            installed_uv_tools,
+            workspace_app_package_names(workspace_dir),
+        )
+        held_back_uv = sorted(
+            set(recorded_uv_versions) - installed_uv_tools - set(missing_uv)
+        )
+        if held_back_uv:
+            logger.info(
+                "Not replaying recorded uv tools named like workspace apps (old per-app installs): {}",
+                ", ".join(held_back_uv),
+            )
         for tool in missing_uv:
             spec = f"{tool}=={recorded_uv_versions[tool]}"
             installed, not_installed = _install_missing(
@@ -575,7 +639,7 @@ def run_slow_phase(
 
     unit_results = run_unit_scripts(workspace_dir, overlay_dir)
     installed_apt, installed_npm, installed_uv, installed_cargo, unavailable = (
-        install_missing_from_record(recorded_snapshot)
+        install_missing_from_record(recorded_snapshot, workspace_dir)
     )
 
     # Reality changed (units ran, packages installed) -- or this is a fresh

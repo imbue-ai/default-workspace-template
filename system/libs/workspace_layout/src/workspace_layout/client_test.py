@@ -6,8 +6,8 @@ from app_manifest.primitives import AppName
 
 from workspace_layout.agent_identity import ENV_MINDS_CHAT_ID
 from workspace_layout.agent_identity import ENV_MNGR_AGENT_ID
-from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
+from workspace_layout.answers import InventoryClient
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.client import ShellLayoutClient
 from workspace_layout.client import requester_from_environment
@@ -274,8 +274,14 @@ def test_a_2xx_to_a_show_that_is_not_a_show_answer_is_malformed(loopback_shell: 
 
 
 def test_the_connected_clients_are_the_listed_clients_holding_a_socket(loopback_shell: LoopbackShell) -> None:
-    on_home = ClientView(id=ClientId("c1"), active_desktop=DesktopId("home"), last_seen=FAKE_TIME, is_connected=True)
-    away = ClientView(id=ClientId("c2"), last_seen=FAKE_TIME, is_connected=False)
+    on_home = InventoryClient(
+        id=ClientId("c1"),
+        active_desktop=DesktopId("home"),
+        last_seen=FAKE_TIME,
+        is_connected=True,
+        shown=(WindowId("win-0123456789abcdef"),),
+    )
+    away = InventoryClient(id=ClientId("c2"), last_seen=FAKE_TIME, is_connected=False)
     loopback_shell.get_answers[CLIENTS_ROUTE] = (
         200,
         {

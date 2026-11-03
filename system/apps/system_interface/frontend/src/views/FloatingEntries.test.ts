@@ -22,7 +22,13 @@ function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
     isDetached: false,
     isFocused: false,
     isPinned: true,
-    look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
+    look: {
+      mode: "floating",
+      style: "plain",
+      declaredStyle: "avatar",
+      position: { x: 0.5, y: 0.5 },
+      isWindowShown: true,
+    },
     ...overrides,
   };
 }
@@ -86,7 +92,13 @@ describe("FloatingEntries", () => {
       entries: [
         pinnedEntry({
           ...away,
-          look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
+          look: {
+            mode: "floating",
+            style: "avatar",
+            declaredStyle: "avatar",
+            position: { x: 0.5, y: 0.5 },
+            isWindowShown: true,
+          },
         }),
       ],
     });
@@ -101,7 +113,7 @@ describe("FloatingEntries", () => {
         pinnedEntry({
           isMinimized: false,
           isFocused: true,
-          look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: null },
+          look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: null, isWindowShown: true },
         }),
       ],
       avatar: avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } }),

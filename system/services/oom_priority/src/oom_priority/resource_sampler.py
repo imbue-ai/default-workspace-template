@@ -310,13 +310,13 @@ RootsReader = Callable[[], dict[int, Root]]
 
 def read_roots(
     supervisor_socket: Path = supervisor_rpc.SUPERVISOR_SOCKET,
-    is_alive: Callable[[int], bool] = registry.is_process_alive,
+    proc: Path = PROC,
 ) -> dict[int, Root]:
     """The processes a stretch's CPU is credited to: each registered agent's main pid and each supervised program's."""
     roots: dict[int, Root] = {}
     for program, pid in supervisor_rpc.supervised_pids(supervisor_socket).items():
         roots[pid] = {"kind": "program", "program": program}
-    for agent_id, pids in registry.live_pids_by_agent_id(is_alive).items():
+    for agent_id, pids in registry.live_pids_by_agent_id(proc).items():
         for pid in pids:
             roots[pid] = {"kind": "chat", "agent_id": agent_id}
     return roots

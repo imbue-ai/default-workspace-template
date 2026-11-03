@@ -1,7 +1,8 @@
 # Window-bound resources and new-window shortcuts
 
 Status: agreed design (2026-09-20), implemented on `mngr/desktop-ui-phase-6`; amended by [stop-when-no-windows.md](stop-when-no-windows.md) (the close hint goes only to a running app, and an app's process is the shell's to stop once no window shows it).
-Audience: implementers of `system/apps/terminal`, `system/apps/browser`, `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `uv run --no-sync workspace-layout`, and the `manage-desktop` and `agentic-browser-fleet` skills.
+For the browser, superseded by the Screen spec ([screen/spec.md](screen/spec.md), D3 and D15, 2026-10-17): the browser is a launch path of the Screen, whose stack never stops for emptiness, so section 4.4 and decision 6 no longer hold and `system/apps/browser` is gone; the terminal's part stands.
+Audience: implementers of `system/apps/terminal`, `system/apps/screen` (where the browser lives now), `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `uv run --no-sync workspace-layout`, and the `manage-desktop` and `agentic-browser-fleet` skills.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md), [concepts](../blueprint/desktop-interface/concepts.md)) in two places that the first live test showed do not feel like a desktop:
 

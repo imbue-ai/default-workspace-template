@@ -7,6 +7,9 @@ the file while it is fresh (``--host-meminfo``, ``earlyoom.conf``), and so does
 this, falling back to ``/proc/meminfo``. The resource sampler records memory
 through it, and the system monitor app shows the same figures.
 
+It also reads one process's anonymous memory, which the memory candidates command
+(``bin/memory_candidates.py``) sums per candidate.
+
 Stdlib-only (see ``paths``): the sampler runs under a plain ``python3``.
 """
 
@@ -34,6 +37,22 @@ def parse_kib_fields(text: str) -> dict[str, int]:
     return values
 
 
+def is_host_meminfo_fresh(host_meminfo: Path, now_seconds: float) -> bool:
+    """Whether the headroom file is new enough that earlyoom still acts on it.
+
+    One rule for every reader of the guard's figure (``read_meminfo`` here, the
+    candidates command's own ``read_free_memory``), since it is earlyoom's rule
+    and not ours. A file that cannot be stat'd is stale: there is nothing to act
+    on, so ``/proc/meminfo`` is the answer.
+    """
+    try:
+        return (
+            now_seconds - host_meminfo.stat().st_mtime <= HOST_MEMINFO_MAX_AGE_SECONDS
+        )
+    except OSError:
+        return False
+
+
 def read_meminfo(
     proc: Path = PROC,
     host_meminfo: Path = HOST_MEMINFO_PATH,
@@ -41,13 +60,36 @@ def read_meminfo(
 ) -> dict[str, int]:
     """Total, available, and used memory in bytes: the figures the memory guard acts on."""
     values: dict[str, int] = {}
-    try:
-        if clock() - host_meminfo.stat().st_mtime <= HOST_MEMINFO_MAX_AGE_SECONDS:
+    if is_host_meminfo_fresh(host_meminfo, clock()):
+        try:
             values = parse_kib_fields(host_meminfo.read_text())
-    except OSError:
-        values = {}
+        except OSError:
+            values = {}
     if "MemTotal" not in values or "MemAvailable" not in values:
         values = parse_kib_fields((proc / "meminfo").read_text())
     total = values["MemTotal"]
     available = values.get("MemAvailable", values.get("MemFree", 0))
     return {"total": total, "available": available, "used": total - available}
+
+
+def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
+    """A process's anonymous memory in KiB: the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup``,
+    or of ``smaps`` under gVisor, which has no rollup, summed. None when it is gone or unreadable.
+
+    Roughly what stopping the process frees. Under gVisor ``VmRSS`` counts the whole span of every
+    mapping the process has touched, so it reads up to ten times higher for an agent's harness,
+    which maps a large binary.
+    """
+    for name in ("smaps_rollup", "smaps"):
+        try:
+            text = (proc / str(pid) / name).read_text(errors="replace")
+        except OSError:
+            continue
+        total = 0
+        for line in text.splitlines():
+            key, _, rest = line.partition(":")
+            fields = rest.split()
+            if key == "Anonymous" and fields and fields[0].isdigit():
+                total += int(fields[0])
+        return total
+    return None

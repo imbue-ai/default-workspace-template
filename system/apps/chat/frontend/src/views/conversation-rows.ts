@@ -14,9 +14,10 @@
  * step decoration on stdout, which buildSections parses); there is no
  * side-channel enrichment. `isTailSettled` settles the frontier spinner on the
  * tail turn (see `isTailTurnSettled`), and `liveCompaction` places the start
- * chip of a compaction still running (see `liveCompactionOf`). The pre-login
- * auth-error prefix is hidden here (a no-op for a subagent, which never has
- * one) so the two views stay byte-identical.
+ * chip of a compaction still running (see `liveCompactionOf`). A message a
+ * sign-in failure refused, and the failure, are hidden here once it was sent
+ * again right after the failure (a no-op for a subagent, which never has one)
+ * so the two views stay byte-identical.
  */
 
 import m from "mithril";
@@ -28,14 +29,15 @@ import {
   isChipOnlyEvent,
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
-  computeAuthErrorHiddenEventIds,
   type RunPart,
 } from "./message-renderers";
+import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderHandoffNode } from "./handoff-node";
+import type { ResentTurns } from "../models/ResentSends";
 
 // Per-type fallback row heights, used until a row has been measured (live or
 // offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
@@ -110,6 +112,7 @@ function buildRows(
   chatId: string,
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
+  resentTurnIds: ReadonlySet<string>,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
   // The compactions that landed after a turn's reply: one chip row of their own below it.
@@ -129,7 +132,7 @@ function buildRows(
         key: userEvent.event_id,
         estimate: ESTIMATED_USER_HEIGHT_PX,
         anchorEventId: userEvent.event_id,
-        render: () => renderUserMessage(userEvent) as m.Vnode,
+        render: () => renderUserMessage(userEvent, resentTurnIds.has(userEvent.event_id)) as m.Vnode,
       });
     }
 
@@ -278,22 +281,27 @@ function runAnchorEventId(head: RunPart): string | null {
 
 /**
  * The full events -> virtualized rows pipeline shared by both conversation
- * views: hide the pre-login auth-error prefix, walk the transcript into turn
+ * views: hide the refused messages that were sent again (and their sign-in
+ * failures), walk the transcript into turn
  * sections, then flatten into top-level rows. The structure and decoration --
  * which steps exist, their order, grouping, titles, summaries -- come purely
- * from the transcript walk.
+ * from the transcript walk. ``resentTurns`` (the main chat's own, see
+ * models/ResentSends) puts "Sent again" under the messages the chat app sent a
+ * second time and folds their second copies into it.
  */
 export function buildConversationRows(
   chatId: string,
   events: TranscriptEvent[],
   isTailSettled: boolean,
   liveCompaction: LiveCompaction | null = null,
+  resentTurns: ResentTurns | null = null,
 ): RowDescriptor[] {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
+  for (const eventId of resentTurns?.foldedTurnIds ?? []) hiddenEventIds.add(eventId);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
-  return buildRows(chatId, sections, toolResults);
+  return buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set());
 }
 
 /**

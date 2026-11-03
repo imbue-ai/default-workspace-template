@@ -285,7 +285,7 @@ Every chat agent the chat app creates carries `MINDS_CHAT_ID=<chat id>` in its e
 Agents created outside the chat app (a `mngr create --template chat` from a terminal, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
 Those creates are no longer unbound: a create that names no harness and no account resolves the workspace's default account through `.mngr/settings.local.toml` (written by the chat app's `create_defaults.py` from the account store), carries its `account=<id>` label, and is refused by `system/scripts/require_create_account.py` when no account is signed in.
 That changes what they run on, not what they are: they remain own chats with no `MINDS_CHAT_ID`.
-The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the window-surfacing labels, the claude version-check waiver, and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create above.
+The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the window-surfacing labels and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create above.
 
 - `layout.py` builds the requester address from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`.
   The shell resolves `self` and attributes ops to clients through that address, so an archived or successor agent's ops land on the chat's tab and client.
@@ -443,7 +443,6 @@ As landed in phase 9, which lets a rebind take a model pick (section 6), revisin
 - The dialog opened from Change, for either kind of switch, starts from the pick already armed for that account, so confirming it again does not drop the pick. Picking the armed account again from the provider chooser ("switch to another provider" under an auth-failed turn, or "+ Add a provider") keeps the pick the same way: a rebind stays armed with it, and a handoff's dialog starts from it.
 - Armed, the strip names the pick ("Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"), and the chip and the Model row read the pick, else, for a rebind, the model the agent keeps.
 - The failed page names the step for a rebind as for a handoff: "Could not restart Claude Code" or "Could not set the model on Claude Code".
-- The dialog offers no picker for a harness whose model bar is read-only (antigravity, whose model is changed from the agent's terminal), for either kind of switch, and a new chat started from a rebind's dialog there does not carry the chat's model over: a pick made there could never be applied, and a rebind's retry would rerun it forever. The server holds the same line for any other caller: `GET /api/accounts/<account_id>/model-options` offers such a harness nothing, and a pick for one is rejected at the model step at once, without the retry a refused switch gets.
 
 ### 5.2 Trigger and preconditions
 

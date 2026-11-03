@@ -328,12 +328,13 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
     """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell:
     what ``test_layout_pipeline.py`` drives ``workspace-layout`` against."""
     registry_path = tmp_path / "apps.toml"
-    port = find_free_port()
-    base_url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
-    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
 
     with serve_app(stand_in_app()) as seeded, serve_app(stand_in_app()) as stub:
+        # Reserved only once both stand-ins are bound, or one of their ephemeral binds can take the freed port.
+        port = find_free_port()
+        base_url = f"http://127.0.0.1:{port}"
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         write_registry(
             registry_path,
             registry_row_toml(

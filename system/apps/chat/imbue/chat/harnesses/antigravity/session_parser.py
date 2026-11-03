@@ -182,7 +182,8 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
             return []
         return _user_message(step)
     if step.step_type_name == "PLANNER_RESPONSE":
-        # Assistant text is only shown once the step settles -- never a partial stream.
+        # Assistant text joins the transcript only once the step settles; until then the
+        # chat shows it as the reply draft (``planner_draft_text``).
         if not step.is_terminal:
             return []
         text = step.assistant_text or ""
@@ -201,6 +202,13 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
         event["is_auth_error"] = is_auth_error_text(step.error_text)
         return [event]
     return []
+
+
+def planner_draft_text(step: DecodedStep) -> str | None:
+    """The text of a planner step agy is still writing, or None for any other step."""
+    if step.step_type_name != "PLANNER_RESPONSE" or step.is_terminal:
+        return None
+    return step.assistant_text or None
 
 
 def parse_step_detail(step: DecodedStep) -> dict[str, dict[str, Any]]:

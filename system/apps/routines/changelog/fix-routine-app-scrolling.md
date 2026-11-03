@@ -1,0 +1,1 @@
+The Routines pages scroll again. The shared base style keeps the page body from scrolling, and the pages had no scrolling area of their own, so anything below the window edge could not be reached. Each page now draws inside a window-tall scroller.

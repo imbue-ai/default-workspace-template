@@ -170,12 +170,18 @@ def session_page_path(name: TmuxSessionName) -> str:
     return f"/?{SESSION_QUERY_KEY}={name}"
 
 
+# The argument a wrapper appends to the pty path (``&arg=view``) when the shell says its window is being viewed on
+# somebody else's desktop (the multiplayer spec, section 8.3): the session script attaches read-only, and as a
+# client tmux never sizes the window by.
+VIEWER_ARGUMENT: Final[str] = "view"
+
+
 @pure
 def pty_path_for_session(name: TmuxSessionName, workdir: Workdir | None) -> str:
-    """The path on the pty origin that attaches to ``name``: the ttyd argument shape the dispatch reads."""
-    arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name]
-    if workdir is not None:
-        arguments.append(workdir)
+    """The path on the pty origin that attaches to ``name``: the ttyd argument shape the dispatch reads. The workdir
+    argument is always sent (empty for none), so the viewer marker a wrapper appends (``VIEWER_ARGUMENT``) is
+    always the session script's third argument."""
+    arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name, workdir if workdir is not None else ""]
     query = "&".join(
         f"{_URL_ARGUMENT_KEY}={urllib.parse.quote(argument, safe='')}"
         for argument in arguments

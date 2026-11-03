@@ -209,6 +209,7 @@ HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.OPENCODE: "OpenCode",
     HarnessType.GROK: "Grok Build",
     HarnessType.SEED: "Imbue Studio",
+    HarnessType.ROOM: "Chat room",
 }
 
 # The characters of a URL a sign-in CLI prints; a wrapped URL's continuation rows hold nothing else.

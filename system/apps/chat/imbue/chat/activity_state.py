@@ -108,6 +108,10 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # whole time.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
 
+# The lifecycle of an agent whose process exited while its tmux pane lives on: a crash, a kill, an
+# out-of-memory shed of the process. A deliberate stop takes the pane with it and reads STOPPED.
+EXITED_LIFECYCLE_STATE: str = "DONE"
+
 # The lifecycle verdict meaning "could not observe", not "dead": mngr maps provider and probe
 # failures here (see mngr's ``AgentLifecycleState.UNKNOWN``). Consumers treat it as
 # non-evidence, so live state (the activity dot, the queued-message mirror) must never be
