@@ -134,12 +134,20 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
 /** The chat's reply draft as a reply node, or nothing when there is none to show. */
-function renderReplyDraft(chatId: string, rows: readonly RowDescriptor[]): m.Vnode[] {
+function renderReplyDraft(chatId: string, isHeaded: boolean): m.Vnode[] {
   const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
-  if (draft === null) return [];
-  // It continues the stretch the transcript ends in, so it wears the header only when that stretch has not.
-  const isHeaded = !(rows[rows.length - 1]?.isAgentHeaderShown ?? false);
-  return [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, isHeaded)];
+  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, isHeaded)];
+}
+
+/** The agent's nodes past the rows (a handoff the transcript does not show yet, then the reply draft). They
+ *  continue the stretch the transcript ends in, so the first of them wears the header only when it has not. */
+function renderAgentTail(chatId: string, rows: readonly RowDescriptor[], hasOpenRequest: boolean): m.Vnode[] {
+  const isTailHeaded = !(rows[rows.length - 1]?.isAgentHeaderShown ?? false);
+  const handoffNode = renderHandoffTailNode(chatId, hasOpenRequest, isTailHeaded);
+  return [
+    ...(handoffNode === null ? [] : [handoffNode]),
+    ...renderReplyDraft(chatId, isTailHeaded && handoffNode === null),
+  ];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -657,7 +665,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const tailNodes =
       getEventCount(chatId) === 0
         ? [
-            renderHandoffTailNode(chatId, false),
+            renderHandoffTailNode(chatId, false, true),
             ...renderQueuedMessages(chatId),
             ...renderHeldSends(chatId),
             ...renderOutgoingMessages(chatId),
@@ -773,15 +781,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
         // A switch the transcript does not show yet (draining, or restarting in place) gets its
-        // node here; once the summary request is on the stream the rows carry it. Spread rather
-        // than a hole: the list is keyed.
-        ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
-          (node) => node !== null,
-        ),
-        // The reply the agent is still writing, which its transcript does not hold yet, while the
-        // window reaches the live end. A node of its own rather than a row: a draft changes a few
-        // times a second, and a row would re-walk the whole held transcript on every change.
-        ...renderReplyDraft(chatId, rows),
+        // node here; once the summary request is on the stream the rows carry it. Then the reply
+        // the agent is still writing, which its transcript does not hold yet, while the window
+        // reaches the live end: a node of its own rather than a row, since a draft changes a few
+        // times a second and a row would re-walk the whole held transcript on every change.
+        ...renderAgentTail(chatId, rows, hasOpenHandoffRequest(events, chat?.handoff ?? null)),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),

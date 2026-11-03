@@ -567,6 +567,106 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
         expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
+def _assistant_line(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+
+
+def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": output}],
+        },
+    }
+
+
+# A turn shaped like the ones the agent column was drawn for: a line of intent, a tool call, a finished step, and
+# the closing reply below the timeline.
+_STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-st-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Install the update"},
+    },
+    _assistant_line(
+        "uuid-st-2",
+        "2026-01-01T00:00:01Z",
+        [
+            {"type": "text", "text": "Checks all passed. Installing now."},
+            {"type": "tool_use", "id": "toolu_st1", "name": "Read", "input": {"file_path": "/tmp/project/notes.txt"}},
+        ],
+        "tool_use",
+    ),
+    _tool_result_line("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
+    _assistant_line(
+        "uuid-st-4",
+        "2026-01-01T00:00:03Z",
+        [
+            {
+                "type": "tool_use",
+                "id": "toolu_st2",
+                "name": "Bash",
+                "input": {"command": 'tk close ws-step-a1b2 "Installed the update."'},
+            }
+        ],
+        "tool_use",
+    ),
+    _tool_result_line(
+        "uuid-st-5",
+        "2026-01-01T00:00:04Z",
+        "toolu_st2",
+        "Updated ws-step-a1b2 -> closed\n"
+        "tk-step ws-step-a1b2 title: Install the update\n"
+        "tk-step ws-step-a1b2 summary: Installed the update.",
+    ),
+    _assistant_line(
+        "uuid-st-6",
+        "2026-01-01T00:00:05Z",
+        [{"type": "text", "text": "Your workspace is on the new version."}],
+        "end_turn",
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_stretch_of_the_agents_output_is_headed_once_and_its_work_shares_its_bubbles_edge(
+    tmp_path: Path, page: Page
+) -> None:
+    """The agent's name and face head its turn once, and its bubbles, tool calls and step timeline start on one edge,
+    with the closing reply below the timeline drawn as a bubble too."""
+    with _running_e2e_server(tmp_path, session_events=_STEPPED_TURN_SESSION_EVENTS) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        reply = chat.locator(".pv-final [data-machine-bubble]")
+        expect(reply).to_have_text("Your workspace is on the new version.", timeout=15000)
+
+        expect(chat.locator("[data-machine-header]")).to_have_count(1)
+        bubble_left = _box(chat.locator("[data-machine-bubble]").first)["left"]
+        face_right = _box(chat.locator(".machine-face"))["right"]
+        assert bubble_left > face_right, "the agent's bubble starts under its face, not beside it"
+        for name, locator in (
+            ("the tool-call row", chat.locator(".tool-chip-group").first),
+            ("the step bullet", chat.locator(".pv-tl-bullet").first),
+            ("the closing reply", reply),
+        ):
+            assert abs(_box(locator)["left"] - bubble_left) <= 1, f"{name} does not start on the bubbles' edge"
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Page) -> None:
     """New events written to the session file appear in the UI as they stream in."""

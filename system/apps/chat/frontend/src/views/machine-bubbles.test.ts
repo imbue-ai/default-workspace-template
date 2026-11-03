@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import { setParticipantsForTesting } from "../models/Participants";
-import { agentColumn, machineBubbles } from "./machine-bubbles";
+import { AGENT_COLUMN_CLASS, agentColumn, machineBubbles } from "./machine-bubbles";
 
 vi.mock("../markdown", () => ({ MarkdownContent: { view: () => null } }));
 
@@ -57,7 +57,7 @@ describe("agentColumn", () => {
     expect(root.querySelector(".machine-face img")?.getAttribute("src")).toBe(
       "/api/participants/workspace-agent/picture",
     );
-    expect(root.querySelector(".content")?.parentElement?.className).toBe("ml-8");
+    expect(root.querySelector(".content")?.parentElement?.className).toBe(AGENT_COLUMN_CLASS);
   });
 
   it("holds the same column with no name or face for a row that continues a stretch", () => {
@@ -65,7 +65,7 @@ describe("agentColumn", () => {
 
     expect(root.querySelector("[data-machine-header]")).toBeNull();
     expect(root.querySelector(".machine-face")).toBeNull();
-    expect(root.querySelector(".content")?.parentElement?.className).toBe("ml-8");
+    expect(root.querySelector(".content")?.parentElement?.className).toBe(AGENT_COLUMN_CLASS);
   });
 
   it("wears a monogram before the roster has landed", () => {

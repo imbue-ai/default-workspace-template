@@ -20,7 +20,7 @@ export const MACHINE_FACE_SIZE_PX = 24;
 
 /** The agent's column: the face's width plus the gap beside it, so the agent's work starts where its bubbles do.
  *  A margin, so a row in the message list's stretching flex column keeps the column's right edge. */
-export const AGENT_COLUMN_CLASS = "ml-8";
+export const AGENT_COLUMN_CLASS = "ml-(--width-agent-face)";
 
 export interface MachineBubblesAttrs {
   readonly text: string;
@@ -36,12 +36,12 @@ export interface MachineBubblesAttrs {
 export function machineBubbles(attrs: MachineBubblesAttrs): m.Vnode | null {
   const text = attrs.text.trim();
   if (!text) return null;
-  // 80% of the whole row, as another person's bubble is: the column it sits in starts 2rem (the face and gap) in.
+  // 80% of the whole row, as another person's bubble is, though the agent's column starts a face's width in.
   const bubble = m(
     "div",
     {
       class:
-        "machine-bubble max-w-[calc((100%+2rem)*0.8)] rounded-[18px] bg-bubble-other px-4 py-2.5 text-(length:--font-size-body) " +
+        "machine-bubble max-w-[calc((100%+var(--width-agent-face))*0.8)] rounded-[18px] bg-bubble-other px-4 py-2.5 text-(length:--font-size-body) " +
         "leading-[1.4] text-primary wrap-break-word " +
         (attrs.isBesideFace ? "rounded-tl-[4px]" : ""),
       "data-machine-bubble": "",

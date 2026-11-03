@@ -68,8 +68,6 @@ export interface RowDescriptor {
   // m.Children (not m.Vnode) because a row can be a component vnode
   // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
-  /** Whether the row wears the agent's name and face: the first row of a stretch of the agent's output. */
-  isHeaded: boolean;
   /** Whether the stretch of the agent's output this row leaves open has worn the header already, so a row of the
    *  agent's that follows goes without it. */
   isAgentHeaderShown: boolean;
@@ -125,16 +123,16 @@ function buildRows(
   // A stretch of the agent's output runs until a person speaks or another agent takes over; system chips and
   // notices between its rows do not end it.
   let isAgentHeaderShown = false;
-  const pushRow = (row: Omit<RowDescriptor, "isHeaded" | "isAgentHeaderShown">): void => {
-    rows.push({ ...row, isHeaded: false, isAgentHeaderShown });
+  const pushRow = (row: Omit<RowDescriptor, "isAgentHeaderShown">): void => {
+    rows.push({ ...row, isAgentHeaderShown });
   };
   const pushAgentRow = (
-    row: Omit<RowDescriptor, "render" | "isHeaded" | "isAgentHeaderShown">,
+    row: Omit<RowDescriptor, "render" | "isAgentHeaderShown">,
     render: (isHeaded: boolean) => m.Children,
   ): void => {
     const isHeaded = !isAgentHeaderShown;
     isAgentHeaderShown = true;
-    rows.push({ ...row, render: () => render(isHeaded), isHeaded, isAgentHeaderShown });
+    rows.push({ ...row, render: () => render(isHeaded), isAgentHeaderShown });
   };
   // The compactions that landed after a turn's reply: one chip row of their own below it.
   const pushTrailingCompactionRow = (parts: CompactionPart[]): void => {

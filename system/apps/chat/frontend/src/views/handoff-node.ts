@@ -179,7 +179,7 @@ export function renderHandoffNode(
  *  reached the stream. Null once the transcript carries the request, when nothing is converging, and for a switch
  *  with no summary to show (a restart on another account, or a fresh start): the activity line by the composer is
  *  the one place that says it is under way. */
-export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): m.Vnode | null {
+export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean, isHeaded: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
   const handoff = chat?.handoff ?? null;
   if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
@@ -192,7 +192,7 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): 
       class: "handoff-tail-node progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
     },
     agentColumn(
-      false,
+      isHeaded,
       m("div.pv.pv--timeline.relative", [
         m(
           "div.pv-timeline-nodes",

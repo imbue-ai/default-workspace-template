@@ -17,6 +17,7 @@ import {
   type RowDescriptor,
 } from "./conversation-rows";
 import { AutocompactNotice } from "./AutocompactNotice";
+import { AGENT_COLUMN_CLASS } from "./machine-bubbles";
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 
 function userMsg(ts: string, content: string, id = `u-${ts}`): UserMessageEvent {
@@ -310,19 +311,22 @@ describe("buildConversationRows", () => {
 describe("the agent's name and face over its stretches of output", () => {
   const STEP_DONE = "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Install the update";
 
-  function headedKeys(rows: RowDescriptor[]): string[] {
-    return rows.filter((row) => row.isHeaded).map((row) => row.key);
+  /** Each row mounted on its own, as the windowed list mounts it. */
+  function renderRow(row: RowDescriptor): HTMLElement {
+    const slot = document.createElement("div");
+    m.render(slot, row.render());
+    return slot;
   }
 
-  /** Each row mounted on its own, as the windowed list mounts it. */
   function renderRows(rows: RowDescriptor[]): HTMLElement {
     const list = document.createElement("div");
-    for (const row of rows) {
-      const slot = document.createElement("div");
-      m.render(slot, row.render());
-      list.appendChild(slot);
-    }
+    for (const row of rows) list.appendChild(renderRow(row));
     return list;
+  }
+
+  /** The keys of the rows that draw the agent's name and face. */
+  function headedKeys(rows: RowDescriptor[]): string[] {
+    return rows.filter((row) => renderRow(row).querySelector("[data-machine-header]") !== null).map((row) => row.key);
   }
 
   it("heads only the first row of a stretch, through prose, tool work and more prose", () => {
@@ -420,7 +424,7 @@ describe("the agent's name and face over its stretches of output", () => {
     const block = renderRows(rows).querySelector(".progress-block")!;
     expect(block.querySelectorAll("[data-machine-header]")).toHaveLength(1);
     // The timeline and every bubble share the agent's column.
-    expect(block.querySelector(".pv--timeline")?.parentElement?.className).toBe("ml-8");
+    expect(block.querySelector(".pv--timeline")?.parentElement?.className).toBe(AGENT_COLUMN_CLASS);
     const bubbleTexts = [...block.querySelectorAll("[data-machine-bubble]")].map((bubble) =>
       bubble.textContent?.trim(),
     );
