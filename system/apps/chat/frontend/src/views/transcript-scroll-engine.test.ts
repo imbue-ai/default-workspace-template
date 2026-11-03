@@ -172,7 +172,7 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     // The redraw's patch lays the content out shorter for a moment (a spacer
     // shrinks before the row replacing it is inserted), and the browser clamps
     // scrollTop up to fit; the content is back to full height by the time the
-    // engine positions. Gliding back from the clamp painted it as a bounce.
+    // engine positions. A glide back from the clamp would paint as a bounce.
     engine.computeRenderPlan();
     element.scrollTop = BOTTOM_PX - 150;
     engine.afterRender(element);
