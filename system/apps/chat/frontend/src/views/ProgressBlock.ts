@@ -5,19 +5,22 @@
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
  * (rendered inline, thread-breaking -- including a step's ejected closing
  * prose), and chips. Step nodes carry their own grouped events; expanding a step
- * reveals that grouped work. The wrap-up reply renders below the timeline.
+ * reveals that grouped work. The wrap-up reply renders below the timeline, in a
+ * bubble like the rest of the agent's prose, and the whole block sits in the
+ * agent's column.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
  */
 
 import m from "mithril";
-import { MarkdownContent, renderMarkdown } from "../markdown";
+import { renderMarkdown } from "../markdown";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
 import { renderAssistantRun, renderPermissionItem, renderUserMessage } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
+import { agentColumn } from "./machine-bubbles";
 import {
   TIMELINE_BODY_CLASS,
   TIMELINE_BULLET_CLASS,
@@ -40,6 +43,8 @@ interface ProgressBlockAttrs {
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
+  /** Whether the block opens a stretch of the agent's output, so it wears the agent's name and face. */
+  isHeaded: boolean;
   /** Optional DOM id for the root, so a virtualized list can measure this
    *  block's height by querying ``.message-list > [id]``. */
   id?: string;
@@ -174,7 +179,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
+      const { items, trailing_reply, toolResults, chatId, isHeaded, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
       // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
@@ -200,7 +205,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
             // The whole ungrouped run at once, so its tool calls merge into one
             // chip row the way a step's revealed work does.
-            renderAssistantRun(item.events, toolResults, chatId),
+            renderAssistantRun(item.events, toolResults, chatId, { isBesideFace: isHeaded && idx === 0 }),
           );
         }
         if (item.kind === "permission") {
@@ -219,7 +224,6 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               toolResults,
               chatId,
               item.resolutionsByRequestId,
-              item.event.event_id,
               item.secretNotesByRequestId,
             ),
           );
@@ -250,7 +254,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal text-primary",
           id,
         },
-        [
+        agentColumn(isHeaded, [
           m("div.pv.pv--timeline.relative", [
             // The vertical thread the bullets sit on; nodes mask it with their
             // own opaque backgrounds.
@@ -260,20 +264,14 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             }),
             m("div.pv-timeline-nodes", timelineNodes),
           ]),
-          trailing_reply.length > 0
-            ? trailing_reply.map((ev) =>
-                m(
-                  "div",
-                  { class: "pv-final mt-4 text-(length:--font-size-body) leading-normal text-primary" },
-                  m(MarkdownContent, {
-                    content: ev.text ?? "",
-                    requestedAt: ev.timestamp,
-                    expansionKeyPrefix: ev.event_id,
-                  }),
-                ),
-              )
-            : null,
-        ],
+          trailing_reply.map((ev) =>
+            m(
+              "div",
+              { class: "pv-final mt-4 text-(length:--font-size-body) leading-normal text-primary" },
+              renderAssistantRun([ev], toolResults, chatId),
+            ),
+          ),
+        ]),
       );
     },
   };

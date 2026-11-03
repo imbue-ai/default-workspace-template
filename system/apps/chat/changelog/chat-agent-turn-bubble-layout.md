@@ -1,0 +1,3 @@
+The agent's name and face now head each stretch of its output once, instead of every bubble that follows a tool call or a step. A stretch runs until a person speaks or another agent takes over; a system notice in between (a finished background task, Stop-hook feedback) does not start a new one. When a turn opens with steps or tool calls, the name and face sit at the top of them.
+
+Everything the agent produces now starts on the same edge as its bubbles: the step timeline, tool-call rows, sub-agent and permission cards, the handoff node, and the status and done lines under the latest turn. A turn's closing reply below its steps is drawn as a bubble too, like the rest of the agent's prose.

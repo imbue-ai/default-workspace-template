@@ -20,6 +20,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { getChatById } from "../models/Chats";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { liveArrivalOfAgentWork, type TranscriptEvent } from "../models/Response";
+import { AGENT_COLUMN_CLASS } from "./machine-bubbles";
 import { formatElapsed, latestTurnSpan } from "./turnTiming";
 
 /** What the mark says for the transcript's latest turn, or null when it shows nothing. */
@@ -53,7 +54,7 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
         "div",
         {
           class:
-            "turn-done-mark mb-5 flex min-h-5 items-center gap-1.5 px-1 " +
+            `turn-done-mark mb-5 ${AGENT_COLUMN_CLASS} flex min-h-5 items-center gap-1.5 px-1 ` +
             "text-(length:--font-size-helper) text-faint",
           role: "status",
         },

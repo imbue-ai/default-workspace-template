@@ -31,7 +31,7 @@ import type { AssistantMessageEvent, ToolResultEvent } from "../models/Response"
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { closeProviderChooser, getUnpickableAccount } from "../models/Providers";
 import { setParticipantsForTesting } from "../models/Participants";
-import { StableAssistantMessage } from "./message-renderers";
+import { StableAssistantMessage, renderAssistantMessage } from "./message-renderers";
 
 const ACCOUNT_ID = "acct-openai";
 
@@ -79,7 +79,7 @@ beforeEach(() => {
   const event = authErrorEvent();
   const toolResults = new Map<string, ToolResultEvent>();
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
+    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1", isBesideFace: false }),
   });
 });
 
@@ -111,7 +111,7 @@ describe("the auth-error note without a hand-cranked render", () => {
   });
 });
 
-describe("the machine-bubble header without a hand-cranked render", () => {
+describe("the agent's header without a hand-cranked render", () => {
   afterEach(() => {
     setParticipantsForTesting(null, []);
   });
@@ -127,7 +127,7 @@ describe("the machine-bubble header without a hand-cranked render", () => {
     };
     const toolResults = new Map<string, ToolResultEvent>();
     m.mount(document.getElementById("root") as HTMLElement, {
-      view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
+      view: () => renderAssistantMessage(event, toolResults, "chat-1", true),
     });
     const header = (): HTMLElement | null => document.querySelector("[data-machine-header]");
     const face = (): HTMLElement | null => document.querySelector(".machine-face");

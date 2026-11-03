@@ -6,7 +6,8 @@
  * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
  * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
  * node, a trailing wrap-up reply, or the chip row of a compaction that followed
- * it. Sharing it here means a subagent's "View conversation"
+ * it. Every row of the agent's output sits in the agent's column, and the first
+ * row of each stretch of it wears the agent's name and face. Sharing it here means a subagent's "View conversation"
  * gets the real progress view -- step timeline, statuses, summaries -- and the
  * same windowed virtualization as the main chat, with zero rendering drift.
  *
@@ -27,14 +28,15 @@ import {
   renderAssistantMessage,
   renderAssistantRunRow,
   isChipOnlyEvent,
-  renderPermissionItem,
+  renderPermissionRow,
   buildToolResultsWithSkillExpansions,
   type RunPart,
 } from "./message-renderers";
 import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
-import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
+import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
+import { agentColumn } from "./machine-bubbles";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderHandoffNode } from "./handoff-node";
 import type { ResentTurns } from "../models/ResentSends";
@@ -66,6 +68,11 @@ export interface RowDescriptor {
   // m.Children (not m.Vnode) because a row can be a component vnode
   // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
+  /** Whether the row wears the agent's name and face: the first row of a stretch of the agent's output. */
+  isHeaded: boolean;
+  /** Whether the stretch of the agent's output this row leaves open has worn the header already, so a row of the
+   *  agent's that follows goes without it. */
+  isAgentHeaderShown: boolean;
 }
 
 /** A run of consecutive rows to render, `[startIndex, endIndex)`, or a spacer
@@ -115,20 +122,34 @@ function buildRows(
   resentTurnIds: ReadonlySet<string>,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
+  // A stretch of the agent's output runs until a person speaks or another agent takes over; system chips and
+  // notices between its rows do not end it.
+  let isAgentHeaderShown = false;
+  const pushRow = (row: Omit<RowDescriptor, "isHeaded" | "isAgentHeaderShown">): void => {
+    rows.push({ ...row, isHeaded: false, isAgentHeaderShown });
+  };
+  const pushAgentRow = (
+    row: Omit<RowDescriptor, "render" | "isHeaded" | "isAgentHeaderShown">,
+    render: (isHeaded: boolean) => m.Children,
+  ): void => {
+    const isHeaded = !isAgentHeaderShown;
+    isAgentHeaderShown = true;
+    rows.push({ ...row, render: () => render(isHeaded), isHeaded, isAgentHeaderShown });
+  };
   // The compactions that landed after a turn's reply: one chip row of their own below it.
   const pushTrailingCompactionRow = (parts: CompactionPart[]): void => {
     if (parts.length === 0) return;
-    rows.push({
-      key: parts[0].event_id,
-      estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
-      anchorEventId: runAnchorEventId(parts[0]),
-      render: () => renderAssistantRunRow(parts, toolResults, chatId),
-    });
+    pushAgentRow(
+      { key: parts[0].event_id, estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX, anchorEventId: runAnchorEventId(parts[0]) },
+      (isHeaded) => renderAssistantRunRow(parts, toolResults, chatId, isHeaded),
+    );
   };
   for (const section of sections) {
+    if (section.is_after_switch) isAgentHeaderShown = false;
     const userEvent = section.user_event;
     if (userEvent !== null && !isHiddenUserMessage(userEvent)) {
-      rows.push({
+      if (isGenuineUserTurn(userEvent)) isAgentHeaderShown = false;
+      pushRow({
         key: userEvent.event_id,
         estimate: ESTIMATED_USER_HEIGHT_PX,
         anchorEventId: userEvent.event_id,
@@ -139,11 +160,9 @@ function buildRows(
     const hasSteps = section.items.some((i) => i.kind === "step");
     if (hasSteps) {
       const key = `progress-${section.key}`;
-      rows.push({
-        key,
-        estimate: ESTIMATED_PROGRESS_HEIGHT_PX,
-        anchorEventId: userEvent?.event_id ?? null,
-        render: () =>
+      pushAgentRow(
+        { key, estimate: ESTIMATED_PROGRESS_HEIGHT_PX, anchorEventId: userEvent?.event_id ?? null },
+        (isHeaded) =>
           m(ProgressBlock, {
             id: key,
             key,
@@ -151,8 +170,9 @@ function buildRows(
             trailing_reply: section.trailing_reply,
             toolResults,
             chatId,
+            isHeaded,
           }),
-      });
+      );
       pushTrailingCompactionRow(section.trailing_status);
       continue;
     }
@@ -179,25 +199,25 @@ function buildRows(
           // renderer -- nothing was merged, so there is nothing to gain by
           // giving up the memo.
           if (run.length === 1 && head.type === "assistant_message" && !isChipOnlyEvent(head, toolResults)) {
-            rows.push({
-              key: head.event_id,
-              estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-              anchorEventId: head.event_id,
-              render: () => renderAssistantMessage(head, toolResults, chatId),
-            });
+            pushAgentRow(
+              { key: head.event_id, estimate: ESTIMATED_ASSISTANT_HEIGHT_PX, anchorEventId: head.event_id },
+              (isHeaded) => renderAssistantMessage(head, toolResults, chatId, isHeaded),
+            );
             continue;
           }
           // Keyed and anchored on the run's head: the row stands where that
           // event does in the transcript, which is what scroll persistence and
           // the fill planner resolve a row by.
-          rows.push({
-            key: head.event_id,
-            estimate: isChipOnlyEvent(head, toolResults)
-              ? ESTIMATED_CHIP_ROW_HEIGHT_PX
-              : ESTIMATED_ASSISTANT_HEIGHT_PX,
-            anchorEventId: runAnchorEventId(head),
-            render: () => renderAssistantRunRow(run, toolResults, chatId),
-          });
+          pushAgentRow(
+            {
+              key: head.event_id,
+              estimate: isChipOnlyEvent(head, toolResults)
+                ? ESTIMATED_CHIP_ROW_HEIGHT_PX
+                : ESTIMATED_ASSISTANT_HEIGHT_PX,
+              anchorEventId: runAnchorEventId(head),
+            },
+            (isHeaded) => renderAssistantRunRow(run, toolResults, chatId, isHeaded),
+          );
         }
       } else if (item.kind === "permission") {
         // A permission request lifted out of its step: rendered inline as an
@@ -206,26 +226,23 @@ function buildRows(
         const resolutionsByRequestId = item.resolutionsByRequestId;
         const secretNotesByRequestId = item.secretNotesByRequestId;
         const permKey = `perm-${permissionEvent.event_id}`;
-        rows.push({
-          key: permKey,
-          estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-          anchorEventId: permissionEvent.event_id,
-          // Pass the row key as the DOM id so the measured height is cached under
-          // the same key the window math looks up (see renderPermissionItem).
-          render: () =>
-            renderPermissionItem(
+        pushAgentRow(
+          { key: permKey, estimate: ESTIMATED_ASSISTANT_HEIGHT_PX, anchorEventId: permissionEvent.event_id },
+          (isHeaded) =>
+            renderPermissionRow(
               permissionEvent,
               toolResults,
               chatId,
-              resolutionsByRequestId,
               permKey,
+              isHeaded,
+              resolutionsByRequestId,
               secretNotesByRequestId,
             ),
-        });
+        );
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
-          rows.push({
+          pushRow({
             key: chipEvent.event_id,
             estimate: ESTIMATED_USER_HEIGHT_PX,
             anchorEventId: chipEvent.event_id,
@@ -238,11 +255,13 @@ function buildRows(
         // virtualized list can measure it.
         const node = item.node;
         const key = `handoff-${node.key}`;
-        rows.push({
-          key,
-          estimate: ESTIMATED_USER_HEIGHT_PX,
-          anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
-          render: () =>
+        pushAgentRow(
+          {
+            key,
+            estimate: ESTIMATED_USER_HEIGHT_PX,
+            anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
+          },
+          (isHeaded) =>
             m(
               "div",
               {
@@ -250,23 +269,24 @@ function buildRows(
                 key,
                 class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
               },
-              m("div.pv.pv--timeline.relative", [
-                m(
-                  "div.pv-timeline-nodes",
-                  renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
-                ),
-              ]),
+              agentColumn(
+                isHeaded,
+                m("div.pv.pv--timeline.relative", [
+                  m(
+                    "div.pv-timeline-nodes",
+                    renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
+                  ),
+                ]),
+              ),
             ),
-        });
+        );
       }
     }
     for (const event of section.trailing_reply) {
-      rows.push({
-        key: event.event_id,
-        estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-        anchorEventId: event.event_id,
-        render: () => renderAssistantMessage(event, toolResults, chatId),
-      });
+      pushAgentRow(
+        { key: event.event_id, estimate: ESTIMATED_ASSISTANT_HEIGHT_PX, anchorEventId: event.event_id },
+        (isHeaded) => renderAssistantMessage(event, toolResults, chatId, isHeaded),
+      );
     }
     pushTrailingCompactionRow(section.trailing_status);
   }

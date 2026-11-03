@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import { setParticipantsForTesting } from "../models/Participants";
-import { machineBubbles } from "./machine-bubbles";
+import { agentColumn, machineBubbles } from "./machine-bubbles";
 
 vi.mock("../markdown", () => ({ MarkdownContent: { view: () => null } }));
 
@@ -19,7 +19,23 @@ function render(node: m.Children): HTMLElement {
 describe("machineBubbles", () => {
   const attrs = { text: "first\n\nsecond", timestamp: "t", expansionKeyPrefix: "e1" };
 
-  it("draws the whole reply as one bubble under the workspace agent's face and name when headed", () => {
+  it("draws the whole reply as one bubble, squared toward the face only beside it", () => {
+    const beside = render(machineBubbles({ ...attrs, isBesideFace: true })).querySelectorAll("[data-machine-bubble]");
+    expect(beside).toHaveLength(1);
+    expect(beside[0].className).toContain("rounded-tl-[4px]");
+
+    const below = render(machineBubbles({ ...attrs, isBesideFace: false })).querySelector("[data-machine-bubble]");
+    expect(below?.className).not.toContain("rounded-tl-[4px]");
+  });
+
+  it("draws nothing for whitespace-only text", () => {
+    expect(machineBubbles({ ...attrs, text: "\n", isBesideFace: true })).toBeNull();
+    expect(machineBubbles({ ...attrs, text: " \n\n ", isBesideFace: true })).toBeNull();
+  });
+});
+
+describe("agentColumn", () => {
+  it("heads the column with the workspace agent's name over it and face beside it", () => {
     setParticipantsForTesting("owner", [
       {
         key: "workspace-agent",
@@ -35,37 +51,26 @@ describe("machineBubbles", () => {
         last_input_at: null,
       },
     ]);
-    const root = render(machineBubbles({ ...attrs, isHeaded: true }));
+    const root = render(agentColumn(true, m("p.content", "work")));
 
-    // The person-turn geometry: the name over the bubble, the face in the gutter beside it.
-    const header = root.querySelector("[data-machine-header]");
-    expect(header?.textContent).toBe("Atlas");
+    expect(root.querySelector("[data-machine-header]")?.textContent).toBe("Atlas");
     expect(root.querySelector(".machine-face img")?.getAttribute("src")).toBe(
       "/api/participants/workspace-agent/picture",
     );
-    const bubbles = root.querySelectorAll("[data-machine-bubble]");
-    expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].className).toContain("rounded-tl-[4px]");
+    expect(root.querySelector(".content")?.parentElement?.className).toBe("ml-8");
   });
 
-  it("keeps an unheaded bubble's top-left corner round and its gutter held by a spacer", () => {
-    const root = render(machineBubbles({ ...attrs, isHeaded: false }));
-    const bubbles = root.querySelectorAll("[data-machine-bubble]");
-    expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].className).not.toContain("rounded-tl-[4px]");
+  it("holds the same column with no name or face for a row that continues a stretch", () => {
+    const root = render(agentColumn(false, m("p.content", "work")));
+
+    expect(root.querySelector("[data-machine-header]")).toBeNull();
     expect(root.querySelector(".machine-face")).toBeNull();
-    expect(root.querySelector("span.w-6[aria-hidden]")).not.toBeNull();
+    expect(root.querySelector(".content")?.parentElement?.className).toBe("ml-8");
   });
 
-  it("draws nothing for whitespace-only text", () => {
-    expect(machineBubbles({ ...attrs, text: "\n", isHeaded: true })).toBeNull();
-    expect(machineBubbles({ ...attrs, text: " \n\n ", isHeaded: true })).toBeNull();
-  });
+  it("wears a monogram before the roster has landed", () => {
+    const root = render(agentColumn(true, null));
 
-  it("wears no header past the run's first group, and a monogram before the roster has landed", () => {
-    expect(render(machineBubbles({ ...attrs, isHeaded: false })).querySelector("[data-machine-header]")).toBeNull();
-
-    const root = render(machineBubbles({ ...attrs, isHeaded: true }));
     expect(root.querySelector("[data-machine-header]")?.textContent).toBe("Agent");
     const face = root.querySelector(".machine-face");
     expect(face?.querySelector("img")).toBeNull();

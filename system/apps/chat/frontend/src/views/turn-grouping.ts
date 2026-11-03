@@ -196,6 +196,8 @@ export interface SectionView {
    *  switch that carries no message. */
   user_event: UserMessageEvent | null;
   key: string;
+  /** Whether the section opens on an agent switch: what follows is another agent's. */
+  is_after_switch: boolean;
   items: TimelineItem[];
   /** The final run of ungrouped prose: the user-facing reply, rendered below
    *  the timeline. */
@@ -466,6 +468,7 @@ function isSubsequentTurnActivity(entry: SectionEntry): boolean {
 interface SectionBuilder {
   user_event: UserMessageEvent | null;
   key: string;
+  is_after_switch: boolean;
   /** Step nodes in first-appearance (transcript) order. */
   steps: Map<string, StepNode>;
   step_order: string[];
@@ -478,10 +481,11 @@ interface SectionBuilder {
   open_handoff: HandoffNode | null;
 }
 
-function newSection(user_event: UserMessageEvent | null, key: string): SectionBuilder {
+function newSection(user_event: UserMessageEvent | null, key: string, is_after_switch: boolean): SectionBuilder {
   return {
     user_event,
     key,
+    is_after_switch,
     steps: new Map(),
     step_order: [],
     entries: [],
@@ -617,8 +621,12 @@ export function buildSections(
   // for the same file can mark the earlier card superseded.
   const pendingSecretRequestByFile = new Map<string, string>();
   const secretNotesByRequestId = new Map<string, string>();
-  const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
-    const section = newSection(user_event, key);
+  const ensureSection = (
+    user_event: UserMessageEvent | null,
+    key: string,
+    is_after_switch = false,
+  ): SectionBuilder => {
+    const section = newSection(user_event, key, is_after_switch);
     // Re-open carried-over steps at the top of the new section.
     for (const id of carryover) {
       openStep(section, id, /* is_carryover */ true);
@@ -637,7 +645,7 @@ export function buildSections(
       // The chat's first agent taking over from the seed segment, which no agent wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
       if (current !== null) carryover = openStepsAtEnd(current);
-      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`, true);
       continue;
     }
     if (e.type === "agent_switch") {
@@ -657,7 +665,7 @@ export function buildSections(
         current.entries.push({ kind: "handoff", node: lastSwitched });
       }
       carryover = openStepsAtEnd(current);
-      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`, true);
       continue;
     }
     if (e.type === "user_message") {
@@ -1101,5 +1109,12 @@ function finalizeSection(
     }
   }
 
-  return { user_event: section.user_event, key: section.key, items, trailing_reply, trailing_status };
+  return {
+    user_event: section.user_event,
+    key: section.key,
+    is_after_switch: section.is_after_switch,
+    items,
+    trailing_reply,
+    trailing_status,
+  };
 }

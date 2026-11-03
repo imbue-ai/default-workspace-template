@@ -17,6 +17,7 @@ import type { ToolResultEvent } from "../models/Response";
 import { harnessLabel } from "./harness-labels";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantRun } from "./message-renderers";
+import { agentColumn } from "./machine-bubbles";
 import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
 import {
@@ -190,8 +191,14 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): 
       key: "handoff-tail",
       class: "handoff-tail-node progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
     },
-    m("div.pv.pv--timeline.relative", [
-      m("div.pv-timeline-nodes", renderHandoffNode(node, chatId, new Map(), { isLast: true, expansionKey: node.key })),
-    ]),
+    agentColumn(
+      false,
+      m("div.pv.pv--timeline.relative", [
+        m(
+          "div.pv-timeline-nodes",
+          renderHandoffNode(node, chatId, new Map(), { isLast: true, expansionKey: node.key }),
+        ),
+      ]),
+    ),
   );
 }

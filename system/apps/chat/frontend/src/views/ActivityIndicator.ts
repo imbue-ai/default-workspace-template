@@ -55,6 +55,7 @@ import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
+import { AGENT_COLUMN_CLASS } from "./machine-bubbles";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 import { formatElapsed, latestTurnSpan, type TurnSpan } from "./turnTiming";
@@ -144,7 +145,7 @@ const WAKE_STATE = "WAKING";
 
 // The row's place in the message column it sits in, spaced like a message so the reply that
 // replaces it does not move what is above it.
-const STRIP_COLUMN_CLASS = "mb-5 w-full";
+const STRIP_COLUMN_CLASS = `mb-5 ${AGENT_COLUMN_CLASS}`;
 
 // How long a turn (or a send waiting on the agent) runs before the row says how long it has run:
 // a quick answer needs no clock, a long one should show that it is still moving.

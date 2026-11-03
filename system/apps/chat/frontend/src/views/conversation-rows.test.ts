@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import m from "mithril";
 import type {
   TranscriptEvent,
   ToolResultEvent,
@@ -302,6 +304,134 @@ describe("buildConversationRows", () => {
       true,
     );
     expect(fresh.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
+  });
+});
+
+describe("the agent's name and face over its stretches of output", () => {
+  const STEP_DONE = "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Install the update";
+
+  function headedKeys(rows: RowDescriptor[]): string[] {
+    return rows.filter((row) => row.isHeaded).map((row) => row.key);
+  }
+
+  /** Each row mounted on its own, as the windowed list mounts it. */
+  function renderRows(rows: RowDescriptor[]): HTMLElement {
+    const list = document.createElement("div");
+    for (const row of rows) {
+      const slot = document.createElement("div");
+      m.render(slot, row.render());
+      list.appendChild(slot);
+    }
+    return list;
+  }
+
+  it("heads only the first row of a stretch, through prose, tool work and more prose", () => {
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "does this version move the avatar?"),
+        assistantText("t2", "I'll check whether this version moves it."),
+        toolMsg("t3", "c1", "Search the new version's history"),
+        assistantText("t4", "The new version does move it.", "end_turn"),
+      ],
+      true,
+    );
+
+    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
+    expect(headedKeys(rows)).toEqual(["a-t2"]);
+    expect(renderRows(rows).querySelectorAll("[data-machine-header]")).toHaveLength(1);
+  });
+
+  it("heads the stretch again once the person speaks, but not after a system notice", () => {
+    const notice: UserMessageEvent = {
+      ...userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "n1"),
+      display: "notice",
+      display_label: "Background task completed",
+      display_body: 'Background command "Wait for the worker" completed',
+    };
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "install it"),
+        assistantText("t2", "Waiting on the background agent.", "end_turn"),
+        notice,
+        assistantText("t5", "It finished; installing now.", "end_turn"),
+        userMsg("t6", "thanks"),
+        assistantText("t7", "Any time.", "end_turn"),
+      ],
+      true,
+    );
+
+    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "n1", "a-t5", "u-t6", "a-t7"]);
+    expect(headedKeys(rows)).toEqual(["a-t2", "a-t7"]);
+    expect(rows[rows.length - 1].isAgentHeaderShown).toBe(true);
+  });
+
+  it("heads the stretch again after another agent takes over", () => {
+    const agentSwitch: AgentSwitchEvent = {
+      timestamp: "t3",
+      type: "agent_switch",
+      event_id: "sw1",
+      source: "chat",
+      agent_id: "agent-b",
+      from_agent_id: "agent-a",
+      to_agent_id: "agent-b",
+      from_harness: "claude",
+      to_harness: "codex",
+      seq: 1,
+      message_id: null,
+      message: null,
+      is_fresh_start: false,
+    };
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "hello"),
+        assistantText("t2", "from claude", "end_turn"),
+        agentSwitch,
+        assistantText("t4", "from codex"),
+      ],
+      true,
+    );
+
+    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
+    expect(headedKeys(rows)).toEqual(["a-t2", "a-t4"]);
+  });
+
+  it("heads a turn with steps once, over its timeline, and draws its prose and reply as bubbles", () => {
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "install the update"),
+        assistantText("t2", "Checks all passed. Installing now."),
+        tkMsg("t3", 'tk close cod-step-aaa "Installed the update"', "c1"),
+        result("c1", STEP_DONE),
+        toolMsg("t4", "c2", "Notify the user and show this chat"),
+        assistantText("t5", "The script moved in the update."),
+        toolMsg("t6", "c3", "Send the finished notification"),
+        assistantText("t7", "Your workspace is on the new version.", "end_turn"),
+      ],
+      true,
+    );
+
+    expect(rows.map((row) => row.key)).toEqual(["u-t1", "progress-section-u-t1"]);
+    expect(headedKeys(rows)).toEqual(["progress-section-u-t1"]);
+
+    const block = renderRows(rows).querySelector(".progress-block")!;
+    expect(block.querySelectorAll("[data-machine-header]")).toHaveLength(1);
+    // The timeline and every bubble share the agent's column.
+    expect(block.querySelector(".pv--timeline")?.parentElement?.className).toBe("ml-8");
+    const bubbleTexts = [...block.querySelectorAll("[data-machine-bubble]")].map((bubble) =>
+      bubble.textContent?.trim(),
+    );
+    expect(bubbleTexts).toEqual([
+      "Checks all passed. Installing now.",
+      "The script moved in the update.",
+      "Your workspace is on the new version.",
+    ]);
+    expect(block.querySelector(".pv-final [data-machine-bubble]")?.textContent?.trim()).toBe(
+      "Your workspace is on the new version.",
+    );
   });
 });
 

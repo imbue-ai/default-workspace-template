@@ -134,9 +134,12 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
 /** The chat's reply draft as a reply node, or nothing when there is none to show. */
-function renderReplyDraft(chatId: string): m.Vnode[] {
+function renderReplyDraft(chatId: string, rows: readonly RowDescriptor[]): m.Vnode[] {
   const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
-  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)];
+  if (draft === null) return [];
+  // It continues the stretch the transcript ends in, so it wears the header only when that stretch has not.
+  const isHeaded = !(rows[rows.length - 1]?.isAgentHeaderShown ?? false);
+  return [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, isHeaded)];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -778,7 +781,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // The reply the agent is still writing, which its transcript does not hold yet, while the
         // window reaches the live end. A node of its own rather than a row: a draft changes a few
         // times a second, and a row would re-walk the whole held transcript on every change.
-        ...renderReplyDraft(chatId),
+        ...renderReplyDraft(chatId, rows),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
