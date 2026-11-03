@@ -6,8 +6,8 @@
  * whose comma-separated values are the markdown for each uploaded file: an
  * inline image (``![path](path)``) for images, a file link (``[path](path)``, which
  * opens the file in Files) otherwise, each referencing the file by its absolute path on the agent VM
- * (e.g. "/code/uploads/<id>/<name>"). The line stays visible in the bubble and
- * renders through the shared markdown renderer -- the chat app serves
+ * (e.g. "/code/uploads/<id>/<name>"). The bubble drops the label and renders the
+ * values through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
  * reader and the agent (which records the same text in its transcript, and can
  * open the file at the path it names). Appending in the frontend (rather than
@@ -45,12 +45,11 @@ const MULTIPLE_ATTACHMENT_PREFIX = "See attachments here: ";
 // link (``[]``) instead. Matches the inline formats the file server serves.
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 
-// Group 1 captures the whole "See attachment here: ..." block (rendered as
-// markdown by the bubble); group 2 captures just the newline-separated values,
-// used to verify the block is genuinely ours before treating it as one. The
-// user text is set off by a blank line (\n\n), while the items within the block
-// are single-newline separated -- so ([\s\S]+?) may span lines to the end.
-const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)(See attachments? here: ([\s\S]+?))\s*$/;
+// The group captures the newline-separated values after the label, which the
+// bubble renders as markdown and which are checked to verify the block is
+// genuinely ours. The user text is set off by a blank line (\n\n), while the
+// items within the block are single-newline separated -- so ([\s\S]+?) may span lines to the end.
+const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)See attachments? here: ([\s\S]+?)\s*$/;
 
 export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSION_RE.test(path);
@@ -106,16 +105,16 @@ export function buildMessageWithAttachments(text: string, attachmentPaths: reado
  * Split a sent message's content into the user-visible text and the trailing
  * "See attachment here:" block built by ``buildMessageWithAttachments``. The
  * block is recognized only when every listed item references an uploads path,
- * so a user who merely types a similar sentence is never misread. The block is
- * returned verbatim (its values are markdown) for the bubble to render inline;
- * ``attachmentBlock`` is null when there is no block.
+ * so a user who merely types a similar sentence is never misread. The block's
+ * values are returned without the label (they are markdown) for the bubble to
+ * render inline; ``attachmentBlock`` is null when there is no block.
  */
 export function parseMessageAttachments(content: string): { visibleText: string; attachmentBlock: string | null } {
   const match = content.match(ATTACHMENT_BLOCK_RE);
   if (match === null) {
     return { visibleText: content, attachmentBlock: null };
   }
-  const items = match[2].split("\n").map((item) => item.trim());
+  const items = match[1].split("\n").map((item) => item.trim());
   if (!items.every((item) => item.includes(UPLOADS_PATH_MARKER))) {
     return { visibleText: content, attachmentBlock: null };
   }

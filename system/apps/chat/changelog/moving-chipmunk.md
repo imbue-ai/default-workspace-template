@@ -1,0 +1,1 @@
+A message with attached files no longer shows a "See attachment here:" label in its bubble: the images and file links appear on their own under your text. The agent still receives the label with the file paths.

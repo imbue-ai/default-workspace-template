@@ -99,21 +99,19 @@ describe("parseMessageAttachments", () => {
     expect(parsed.attachmentBlock).toBeNull();
   });
 
-  it("splits the build output into visible text and the verbatim markdown block", () => {
+  it("splits the build output into visible text and the block's markdown, without its label", () => {
     const content = buildMessageWithAttachments("look at these", [IMAGE_PATH, FILE_PATH]);
 
     const parsed = parseMessageAttachments(content);
 
     expect(parsed.visibleText).toBe("look at these");
-    expect(parsed.attachmentBlock).toBe(
-      `See attachments here: ![${IMAGE_PATH}](${IMAGE_PATH})\n[${FILE_PATH}](${FILE_PATH})`,
-    );
+    expect(parsed.attachmentBlock).toBe(`![${IMAGE_PATH}](${IMAGE_PATH})\n[${FILE_PATH}](${FILE_PATH})`);
   });
 
   it("yields empty visible text for an attachments-only message", () => {
     const parsed = parseMessageAttachments(buildMessageWithAttachments("", [IMAGE_PATH]));
     expect(parsed.visibleText).toBe("");
-    expect(parsed.attachmentBlock).toBe(`See attachment here: ![${IMAGE_PATH}](${IMAGE_PATH})`);
+    expect(parsed.attachmentBlock).toBe(`![${IMAGE_PATH}](${IMAGE_PATH})`);
   });
 
   it("does not treat a similar sentence whose paths are not uploads as a block", () => {
