@@ -49,13 +49,22 @@ async function requestJson(method, path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
-  const parsed = text ? JSON.parse(text) : null;
+  let parsed = null;
+  let isReadable = true;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch (error) {
+    // A proxy's own error page, say, rather than the workspace's JSON.
+    console.warn(`${method} ${path} answered ${response.status} with a body that is not JSON`, error);
+    isReadable = false;
+  }
   if (!response.ok) {
     throw new WorkspaceAnswerError(
       parsed && parsed.detail ? parsed.detail : `The workspace answered ${response.status}`,
       response.status,
     );
   }
+  if (!isReadable) throw new WorkspaceAnswerError("The workspace's answer is not readable", response.status);
   return parsed;
 }
 
