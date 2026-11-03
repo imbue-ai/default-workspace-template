@@ -561,13 +561,6 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, chatId: string):
   ]);
 }
 
-export interface AssistantRunOptions {
-  /** Each permission or secret card's verdict, by its request id (see the timeline walk). */
-  readonly resolutionsByRequestId?: ReadonlyMap<string, RequestResolution>;
-  /** The user's note on a declined secret request, by request id. */
-  readonly secretNotesByRequestId?: ReadonlyMap<string, string>;
-}
-
 /**
  * Render a run of assistant events as interleaved prose and tool-chip rows.
  *
@@ -588,10 +581,9 @@ export function renderAssistantRun(
   events: RunPart[],
   toolResults: Map<string, ToolResultEvent>,
   chatId: string,
-  options: AssistantRunOptions = {},
+  resolutionsByRequestId: ReadonlyMap<string, RequestResolution> = new Map(),
+  secretNotesByRequestId: ReadonlyMap<string, string> = new Map(),
 ): m.Children[] {
-  const resolutionsByRequestId = options.resolutionsByRequestId ?? new Map<string, RequestResolution>();
-  const secretNotesByRequestId = options.secretNotesByRequestId ?? new Map<string, string>();
   const children: m.Children[] = [];
   // One array for the whole run, emptied in place by `splice` rather than
   // reassigned: appendEventParts holds this same reference, so swapping in a
@@ -643,7 +635,7 @@ export function renderAssistantMessageChildren(
   resolutionsByRequestId: ReadonlyMap<string, RequestResolution> = new Map(),
   secretNotesByRequestId: ReadonlyMap<string, string> = new Map(),
 ): m.Children[] {
-  return renderAssistantRun([event], toolResults, chatId, { resolutionsByRequestId, secretNotesByRequestId });
+  return renderAssistantRun([event], toolResults, chatId, resolutionsByRequestId, secretNotesByRequestId);
 }
 
 /** One event's contribution to a run: its thinking toggle, its prose and its
