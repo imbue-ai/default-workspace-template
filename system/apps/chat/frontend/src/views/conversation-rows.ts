@@ -64,12 +64,11 @@ export interface RowDescriptor {
   key: string;
   estimate: number;
   // The transcript event this row starts at, for mapping a row anchor to a
-  // global event index (scroll persistence and fill-planner focus). Null only
-  // for a turn section with no opening user message; consumers fall back to the
-  // previous row's event.
+  // global event index (scroll persistence and fill-planner focus): a stretch's
+  // first part that has one. Null when none of its parts does (the compaction
+  // running now, a step block whose section opened with no user message);
+  // consumers fall back to the previous row's event.
   anchorEventId: string | null;
-  // m.Children (not m.Vnode) because a row can be a component vnode
-  // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
   /** Whether the agent's output past the rows continues this row's bubble: the last row, when it is a stretch of the
    *  agent's output that no switch to another agent has ended. */
