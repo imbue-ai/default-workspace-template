@@ -1340,11 +1340,11 @@ def frame(
     runs (a live app's own supervisord program): the wrapper is booted with ``kind``
     and ``note`` for its banner and registered as ``frame_service_name`` under
     ``display_name``, and the inner service's registration is left alone. Re-running
-    it re-boots the wrapper on the port it had while that port is free (a changed
-    note, say; a fresh one when another process took it), so its registration --
-    and the origin an open window shows it at -- stays put. ``down``
-    with the same ``name`` kills the wrapper and deregisters it, and never touches the
-    inner service.
+    it (a changed note, say) re-boots the wrapper on the port it had, so its
+    registration -- and the origin an open window shows it at -- stays put; when
+    another process has taken that port, the wrapper boots on a fresh one and its
+    row is re-pointed there. ``down`` with the same ``name`` kills the wrapper and
+    deregisters it, and never touches the inner service.
 
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
     with it; a failed re-frame keeps only its record (``read_frame``), so a later
