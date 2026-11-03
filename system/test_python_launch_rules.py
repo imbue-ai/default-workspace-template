@@ -1180,15 +1180,33 @@ def _sys_path_edits_outside_the_bare_search_paths(
     repo_root: Path, allowed: tuple[Path, ...]
 ) -> list[str]:
     resolved_allowed = {path.resolve() for path in allowed}
-    return [
-        f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
-        for relative in _tracked_python_files(repo_root)
-        if relative not in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS
-        for line, target in _sys_path_insert_targets(
-            (repo_root / relative).read_text(), repo_root / relative
+    offenders: list[str] = []
+    for relative in _tracked_python_files(repo_root):
+        if relative in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS:
+            continue
+        source = (repo_root / relative).read_text()
+        outside = [
+            (line, target)
+            for line, target in _sys_path_insert_targets(source, repo_root / relative)
+            if target not in resolved_allowed
+        ]
+        kept = {
+            site.line
+            for site in _sites(
+                relative,
+                source.splitlines(),
+                [line for line, _ in outside],
+                _statement_spans(ast.parse(source)),
+                _IMPORT_PATH_MARKER,
+            )
+            if site.is_kept()
+        }
+        offenders.extend(
+            f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
+            for line, target in outside
+            if line not in kept
         )
-        if target not in resolved_allowed
-    ]
+    return offenders
 
 
 def test_sys_path_edits_only_add_a_bare_search_path() -> None:
@@ -1199,7 +1217,8 @@ def test_sys_path_edits_only_add_a_bare_search_path() -> None:
         "A sys.path edit may only add a bare search path (entry_points_testing.BARE_SEARCH_PATHS: "
         "where the bare packages and the stdlib-only libraries live), written as path arithmetic on "
         "Path(__file__) so the bare type check, which searches exactly those directories, resolves "
-        "what the runtime imports:\n" + "\n".join(offenders)
+        "what the runtime imports, unless an `# import-path: <reason> -- <why>` marker keeps it "
+        "(.agents/shared/references/running-python.md):\n" + "\n".join(offenders)
     )
 
 
@@ -1230,6 +1249,8 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
         '    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))\n'
         'sys.path.append(str(Path(__file__).resolve().parent / "elsewhere"))\n'
         "sys.path.insert(0, computed_somewhere)\n"
+        "# import-path: other-tree -- the target release's tree, known only at run time\n"
+        "sys.path.insert(0, target_tree)\n"
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
