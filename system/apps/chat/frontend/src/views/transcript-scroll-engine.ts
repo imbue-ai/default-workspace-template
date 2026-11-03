@@ -1153,10 +1153,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         // churn content grows hundreds of px per frame and a glide would lag
         // it into a visible sustained gap; and a large catch-up would read as
         // animation. Both snap.
-        // A clamp the browser made during this frame's patch has already moved
-        // the view up; gliding back from it would paint that move and then slide
-        // down over several frames -- the bounce at the bottom. Snap instead, so
-        // the frame paints at the bottom.
+        // A clamp absorbed this frame (by the patch, or by content shrinking
+        // before it) has already moved the view up; gliding back from it would
+        // paint that move and then slide down over several frames -- the bounce
+        // at the bottom. Snap instead, so the frame paints at the bottom.
         const isChurning =
           didAbsorbClamp ||
           fillInFlight ||
