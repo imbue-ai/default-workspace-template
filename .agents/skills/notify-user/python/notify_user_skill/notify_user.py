@@ -152,9 +152,14 @@ class WatchersUnknownError(Exception):
     """The chat app could not say who is watching this chat."""
 
 
+def _chat_id(environ: dict[str, str]) -> str:
+    """This chat's id ("" when unknown): the chat's own, else the agent's, which a chat that never moved shares."""
+    return environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+
+
 def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
     """The instance ids of the pages watching this chat; raises WatchersUnknownError naming why they are unknown."""
-    chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+    chat_id = _chat_id(environ)
     if not chat_id:
         raise WatchersUnknownError(f"{ENV_CHAT_ID} is not set")
     status, text = http.get(
@@ -256,7 +261,7 @@ def device_notification(
 ) -> dict[str, str]:
     """The notification the devices show: the title over the message, or the message as the title (cut, and then
     carried in the body) when there is none, each cut to what the shell takes; tapping it opens this chat."""
-    chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+    chat_id = _chat_id(environ)
     path = (
         "/?" + urllib.parse.urlencode({"open": f"chat:/?chat={chat_id}"})
         if chat_id
