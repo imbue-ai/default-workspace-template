@@ -116,7 +116,7 @@ from typing import Callable, NamedTuple, Sequence
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
 
-from workspace_bare_scripts import forward_port
+from workspace_bare_scripts import forward_port, run_in_background
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -346,16 +346,7 @@ class Runner:
     def process_start_time(self, pid: int) -> str:
         """When ``pid`` started, in clock ticks since boot (``/proc/<pid>/stat`` field 22),
         or '' where ``/proc`` does not have it (macOS, or a process already gone)."""
-        try:
-            # The command name is arbitrary bytes; the numeric fields after it are ASCII.
-            stat_line = Path(f"/proc/{pid}/stat").read_text(
-                encoding="utf-8", errors="replace"
-            )
-        except OSError:
-            return ""
-        # Fields after the parenthesized command name, which may hold spaces; field 22 is the 20th.
-        fields = stat_line.rpartition(")")[2].split()
-        return fields[19] if len(fields) > 19 else ""
+        return run_in_background.process_start_time(pid)
 
 
 class Registry:
