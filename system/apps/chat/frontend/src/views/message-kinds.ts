@@ -53,7 +53,7 @@ export enum Rail {
   /** The "user" channel (`.message-user` / `.message-system-collapsed`): a person's bubble, or a system chip,
    *  which sits on the agent bubble's text edge inside a stretch of the agent's output. */
   User = "user",
-  /** Left, full-width "assistant" channel -- used when a user_message's content
+  /** The agent's channel, inside its bubble -- used when a user_message's content
    *  is relocated into an assistant-side block (e.g. a skill body folded into its
    *  `Tool: Skill` call). */
   Assistant = "assistant",

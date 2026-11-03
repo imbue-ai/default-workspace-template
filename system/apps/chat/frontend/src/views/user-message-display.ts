@@ -81,7 +81,7 @@ export const OTHER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-tl-[4px] bg-bubbl
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
  *  of source; only the label and body differ. Width-capped like the user
- *  bubbles on its rail (the assistant flow's blocks run full-width instead). */
+ *  bubbles. */
 function renderSystemChip(label: string, body: string, expansionKey: string): m.Vnode {
   return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
