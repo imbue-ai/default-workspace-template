@@ -113,8 +113,7 @@ COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-tem
 COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
 # The venv-link helper the install runs before its sync, at the path it runs it from.
 COPY system/scripts/workspace_bare_scripts/venv_links.py /home/user/workspace/system/scripts/workspace_bare_scripts/venv_links.py
-RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
-    chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
+RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # End pre-COPY manifest layer. Source-changing layers begin below.
 
@@ -124,8 +123,7 @@ COPY . /home/user/workspace/
 # With a private pin, set_mngr_pin.py gives this RUN the same secret mount as
 # the dependency install above: the mngr tool install and the venv sync fetch
 # mngr from the pin.
-RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
-    bash /home/user/workspace/system/scripts/build_workspace.sh
+RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped
 # image has /home/user/workspace/ EMPTY. At runtime, /home/user is a persistent
