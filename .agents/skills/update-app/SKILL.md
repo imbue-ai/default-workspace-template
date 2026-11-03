@@ -207,13 +207,13 @@ process restarts:
   With no window open yet, pass `--open` instead of `--refresh`: the call
   opens the window only after the checks pass, the order step 3 asks for.
 
-  While `build-app`'s mock frame is still up around the app, the user's
-  window is the frame's: in this call, or the dependency change's below, drop
-  `--refresh` / `--open` and end the call with `&& uv run --no-sync
-  .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app
-  <name> --note "<what is not real yet>" --refresh`, which also keeps the
-  restarted app out of the launcher. Once it reads its real data, take the
-  frame down as `build-app` Step 2 says.
+  For an app `build-app` made, end this call, or the dependency change's
+  below, with `&& uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <name>` in place of
+  `--refresh`: while the app's mock frame is up it re-frames the app with
+  the frame's own note (keeping the restarted app out of the launcher) and
+  reloads the mock window, and otherwise it reloads the app's own windows.
+  Once a framed app reads its real data, take the frame down as `build-app`
+  Step 2 says.
 
   A daemon with no port cannot use `verify_app.py` (it needs a port to
   check), so bounce it with supervisord directly; the call waits out the
@@ -272,11 +272,10 @@ to click Refresh:
 uv run --no-sync workspace-layout refresh --app <name>
 ```
 
-While `build-app`'s mock frame is still up around the app, the user's window
-is the frame's, not the app's: reload it with `uv run --no-sync
-.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name>
---note "<what is not real yet>" --refresh` (`--open` to surface it), never
-`refresh` or `open` the app itself.
+For an app `build-app` made, reload with `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app
+<name>` instead: while its mock frame is up the user's window is the frame's,
+which that reloads, and otherwise it reloads the app's own windows. Never
+`open` a framed app itself; its window is the frame's.
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with

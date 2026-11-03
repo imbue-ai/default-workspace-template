@@ -1220,6 +1220,38 @@ def up(
     return 0
 
 
+# The key under which a frame's state records what it was booted with.
+FRAME_STATE_KEY = "frame"
+
+
+class FrameRecord(NamedTuple):
+    """What a frame was booted with, as ``frame()`` takes it: enough to boot it again unchanged."""
+
+    inner_service: str
+    frame_service_name: str
+    title: str
+    display_name: str
+    kind: str
+    note: str | None
+    inner_path: str
+
+
+def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
+    """What the frame ``name`` was last booted with, or None when no frame by that name is recorded.
+
+    Raises InstanceError when the state file is unreadable, or records an instance
+    that is not a frame.
+    """
+    state_path = _state_path(repo_root, name)
+    if not state_path.exists():
+        return None
+    try:
+        recorded = json.loads(state_path.read_text())[FRAME_STATE_KEY]
+        return FrameRecord(**recorded)
+    except (json.JSONDecodeError, OSError, KeyError, TypeError) as exc:
+        raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
+
+
 def frame(
     name: str,
     repo_root: Path,
@@ -1326,12 +1358,19 @@ def frame(
             services.append(frame_service_name)
         state = {
             "name": name,
-            "inner_service": inner_service,
             "wrapper_port": wrapper_port,
-            "inner_path": inner_path,
             "pids": pids,
             "services": services,
             "wrapper_log": str(wrapper_log_path),
+            FRAME_STATE_KEY: FrameRecord(
+                inner_service=inner_service,
+                frame_service_name=frame_service_name,
+                title=title,
+                display_name=display_name,
+                kind=kind,
+                note=note,
+                inner_path=inner_path,
+            )._asdict(),
         }
         state_path.write_text(json.dumps(state, indent=2))
     except (InstanceError, OSError) as exc:

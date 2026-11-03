@@ -401,11 +401,13 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   refresh and archive don't work yet."). Never open the app itself (`verify_app.py
   --open`, `workspace-layout open <name>`) while it is a mock.
 - Loop: present -> take feedback -> update the mock so the change is *visible* ->
-  re-present, with the same call ending in `--refresh` in place of `--open` (and
-  `--screenshot` dropped). Run `mock_frame.py up` after every restart, since the
-  app's restart registers it as an ordinary app again; and change the note
-  whenever what is real changes. Do not accept feedback and move on having only
-  asserted you'll apply it.
+  re-present, with the restart call ending in `&& uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app
+  <name>` (and `--screenshot` dropped). `refresh` re-frames the app with the
+  frame's current note, which every restart needs, since the restart registers
+  the app as an ordinary app again. When what is real changes, end the call with
+  `mock_frame.py up --app <name> --note "<the new note>" --refresh` instead. Do
+  not accept feedback and move on having only asserted you'll apply it.
 - Loop until the user **explicitly confirms** the look-and-feel is right.
 
 The user may respond to the mock with a request for functionality that requires updated backend support.
@@ -484,7 +486,9 @@ showing a confirmed `sample.json` (the `fetch-process-show` hand-off) is still a
 mock until it reads from the real source (the crystallized pipeline's output, the
 live API), even once its routes are real. Each time a piece becomes real, update
 the note to say what still is not ("Your real inbox loads now; archive doesn't
-work yet."), with `mock_frame.py up ... --refresh` after the restart as in Step 1.
+work yet."), with `mock_frame.py up --app <name> --note "..." --refresh` after the
+restart as in Step 1; a restart that changes nothing real ends with
+`mock_frame.py refresh --app <name>`.
 
 Once the app reads its real data and does what the user will use it for, take the
 frame down and open the app itself in its place:
@@ -606,8 +610,8 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 
 `--open` is Step 4 folded in; for an app already on the user's screen, use
 `--refresh` instead and drop `--screenshot`. While the mock frame is still up
-(above), drop `--open` / `--refresh` and end the call with `mock_frame.py up ...
---refresh` instead. Leave `--restart` out right after
+(above), drop `--open` / `--refresh` and end the call with `mock_frame.py refresh
+--app <name>` instead. Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
 route needs exercising, append one `curl` to the same tool call. Test files
 and the test gate belong to Step 5's background pass, not to the chat turn.
@@ -630,8 +634,8 @@ uv run --no-sync workspace-layout open <name> --beside
 ```
 
 While the mock frame is still up, the window the user has is the frame's, not the
-app's: surface it with `mock_frame.py up ... --open`, and reload it with
-`mock_frame.py up ... --refresh`, never `open` or `refresh` the app itself.
+app's: surface it with `mock_frame.py up --app <name> --open`, and reload it with
+`mock_frame.py refresh --app <name>`, never `open` or `refresh` the app itself.
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
 conversation, taking half the backdrop at the chat's own height. The chat is

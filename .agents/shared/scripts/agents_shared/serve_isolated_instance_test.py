@@ -1471,6 +1471,36 @@ def test_a_failed_reframe_deregisters_the_frame_rather_than_leave_it_routing_now
     assert not mod._state_path(tmp_path, _FRAME_NAME).exists()
 
 
+def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
+    tmp_path: Path,
+) -> None:
+    """What lets a caller that never saw the note re-frame the app exactly as it was."""
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, runner=runner, registry=registry) == 0
+
+    assert mod.read_frame(_FRAME_NAME, tmp_path) == mod.FrameRecord(
+        inner_service="inbox",
+        frame_service_name=_FRAME_NAME,
+        title="Inbox",
+        display_name="Inbox (mock)",
+        kind=wrapper_mod.KIND_MOCK,
+        note="Sample data; refresh does not work yet.",
+        inner_path="/",
+    )
+    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+
+
+def test_reading_a_frame_from_a_state_that_records_none_is_an_error(
+    tmp_path: Path,
+) -> None:
+    assert _up_preview(tmp_path) == 0
+
+    with pytest.raises(mod.InstanceError, match="records no frame"):
+        mod.read_frame(_NAME, tmp_path)
+
+
 def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
     runner = _RecordingRunner()
     registry = _RecordingRegistry()

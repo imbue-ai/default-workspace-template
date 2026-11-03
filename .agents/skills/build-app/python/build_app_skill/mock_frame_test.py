@@ -41,6 +41,8 @@ class _RecordingFrames(mock_frame.Frames):
     # The app's registry row as the frame saw it when it came up.
     row_at_up: dict[str, object] | None = None
     registry: Path | None = None
+    # What the frame is up with, as the real substrate records it on a successful boot.
+    current: mock_frame.RecordedFrame | None = None
 
     def up(
         self, app: mock_frame.FramedApp, note: str, inner_path: str, repo_root: Path
@@ -48,10 +50,18 @@ class _RecordingFrames(mock_frame.Frames):
         self.ups.append(_FrameCall(app, note, inner_path))
         if self.registry is not None:
             self.row_at_up = _row(self.registry)
+        if self.up_code == 0:
+            self.current = mock_frame.RecordedFrame(note=note, inner_path=inner_path)
         return self.up_code
+
+    def recorded(
+        self, app_name: str, repo_root: Path
+    ) -> mock_frame.RecordedFrame | None:
+        return self.current
 
     def down(self, app_name: str, repo_root: Path) -> int:
         self.downs.append(app_name)
+        self.current = None
         return self.down_code
 
 
@@ -220,6 +230,91 @@ def test_a_refused_rerun_leaves_the_frame_from_the_earlier_run_in_charge(
     assert len(frames.ups) == 1
     # Still out of the launcher and kept running: the earlier frame's window shows it.
     assert _row(registry) == framed_row
+
+
+def test_refresh_after_a_restart_reframes_with_the_recorded_note_and_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that never wrote the note, or the agent after a ``verify_app --restart``
+    (whose registration un-hid the app), reloads the mock with the app's name alone."""
+    registry = _registered_app(tmp_path, monkeypatch)
+    frames = _RecordingFrames(registry=registry)
+    assert (
+        mock_frame.up(
+            _APP,
+            _NOTE,
+            tmp_path,
+            inner_path="/inbox",
+            surface="open",
+            frames=frames,
+            layout=_RecordingLayout(),
+        )
+        == 0
+    )
+    framed_row = _row(registry)
+    forward_port.register_manifest(
+        registry, tmp_path / "system" / "apps" / "inbox_status" / "app.toml", _URL
+    )
+    layout = _RecordingLayout()
+
+    code = mock_frame.refresh(_APP, tmp_path, frames=frames, layout=layout)
+
+    assert code == 0
+    assert [(call.note, call.inner_path) for call in frames.ups] == [
+        (_NOTE, "/inbox"),
+        (_NOTE, "/inbox"),
+    ]
+    assert _row(registry) == framed_row
+    assert layout.ops == [["refresh", "--app", "inbox-status-mock"]]
+
+
+def test_refresh_with_no_frame_up_reloads_the_apps_own_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registered_app(tmp_path, monkeypatch)
+    plain_row = _row(registry)
+    frames = _RecordingFrames()
+    layout = _RecordingLayout()
+
+    code = mock_frame.refresh(_APP, tmp_path, frames=frames, layout=layout)
+
+    assert code == 0
+    assert frames.ups == []
+    assert layout.ops == [["refresh", "--app", _APP]]
+    assert _row(registry) == plain_row
+
+
+def test_up_without_a_note_keeps_the_frames_note_and_a_first_frame_needs_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _registered_app(tmp_path, monkeypatch)
+    frames = _RecordingFrames()
+
+    assert (
+        mock_frame.up(_APP, None, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 1
+    )
+    assert frames.ups == []
+    assert (
+        mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 0
+    )
+    assert (
+        mock_frame.up(
+            _APP,
+            None,
+            tmp_path,
+            inner_path="/archive",
+            frames=frames,
+            layout=_RecordingLayout(),
+        )
+        == 0
+    )
+
+    assert [(call.note, call.inner_path) for call in frames.ups] == [
+        (_NOTE, "/"),
+        (_NOTE, "/archive"),
+    ]
 
 
 def test_down_closes_the_mock_window_removes_the_frame_and_restores_the_app(
