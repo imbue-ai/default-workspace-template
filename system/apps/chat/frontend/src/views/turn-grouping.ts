@@ -31,7 +31,8 @@
  *
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
- * its last-known state. A turn the agent did nothing in (two boundaries back to
+ * its last-known state. It belongs to the earlier request, so the new turn's
+ * prose does not join it until the agent works while it is open or moves a step. A turn the agent did nothing in (two boundaries back to
  * back) keeps no copy, so the step shows once, under the later boundary.
  *
  * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
@@ -476,6 +477,10 @@ interface SectionBuilder {
    *  SectionEntry), used to assemble timeline items in transcript order. */
   entries: SectionEntry[];
   current_step_id: string | null;
+  /** A step carried over into a turn the user started, which the agent has not taken up again
+   *  in it: it stays on the timeline, but nothing the agent says joins it until the agent works
+   *  while it is open or moves a step. */
+  dormant_step_id: string | null;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -489,6 +494,7 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     step_order: [],
     entries: [],
     current_step_id: null,
+    dormant_step_id: null,
     open_handoff: null,
   };
 }
@@ -748,6 +754,12 @@ export function buildSections(
       lastSwitched = null;
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
+      if (isGenuineUserTurn(e)) {
+        // The user moved on: a step the agent left open belongs to the earlier request, so an
+        // answer to this one does not join it unless the agent takes the step up again.
+        current.dormant_step_id = current.current_step_id;
+        current.current_step_id = null;
+      }
       continue;
     }
     if (e.type === "assistant_message") {
@@ -759,6 +771,14 @@ export function buildSections(
         continue;
       }
       const parsed = parseMessage(e, toolResults);
+      if (current.dormant_step_id !== null) {
+        if (parsed.transitions.length > 0) {
+          current.dormant_step_id = null;
+        } else if (parsed.render !== null && isWork(parsed.render)) {
+          current.current_step_id = current.dormant_step_id;
+          current.dormant_step_id = null;
+        }
+      }
       // Apply transitions in transcript order so each step node lands at its
       // real position -- a batched `tk close a && tk start b` must keep a's node
       // before b's. Then route this message's content to the step it belongs

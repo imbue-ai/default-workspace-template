@@ -611,6 +611,42 @@ describe("narration and close-time ejection", () => {
     expect(sections.map((s) => s.live_step_id)).toEqual([null, "s1"]);
   });
 
+  // A step the agent left open belongs to the earlier request: an answer to the user's next
+  // message is the turn's reply, not that step's narration, while it is written and once it lands.
+  it("keeps a step left open by an earlier turn out of the next turn's answer", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "what's the difference between RAM and disk?"),
+      assistantText("t4", "RAM is short-term memory; disk keeps files.", "ans"),
+    ];
+    const writing = run(events.slice(0, -1), /* idle */ false);
+    expect(writing[1].live_step_id).toBeNull();
+
+    const landed = run(events, /* idle */ true);
+    expect(landed[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+    expect(stepItems(landed[1].items)[0].events).toHaveLength(0);
+  });
+
+  // The agent working while the carried-over step is open takes it up again.
+  it("takes a carried-over step up again once the agent works in it", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "keep going"),
+      assistantText("t4", "Looking at the cache next.", "narr"),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBe("s1");
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
   // With every step closed, the agent's next words are ungrouped prose, not a step's.
   it("names no live step once the open step has closed", () => {
     const events = [
