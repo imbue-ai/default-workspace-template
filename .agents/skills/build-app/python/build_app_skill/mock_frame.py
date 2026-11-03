@@ -116,7 +116,9 @@ class Layout:
 
 
 def frame_name(app_name: str) -> str:
-    return f"{app_name}{FRAME_SUFFIX}"
+    """The frame's service name: the app's own, marked as a mock, within the registry's cap."""
+    room = forward_port.MAX_SERVICE_NAME_LENGTH - len(FRAME_SUFFIX)
+    return f"{app_name[:room].rstrip('-')}{FRAME_SUFFIX}"
 
 
 def frame_display_name(display_name: str) -> str:

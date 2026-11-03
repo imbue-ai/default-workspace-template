@@ -257,11 +257,18 @@ def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
     assert [row["name"] for row in rows] == []
 
 
-def test_the_mock_windows_name_stays_within_the_registry_cap() -> None:
+def test_the_frames_names_stay_within_the_registry_caps() -> None:
     long_name = "x" * forward_port.MAX_DISPLAY_NAME_LENGTH
+    # The longest app name there can be, cut where the suffix would follow a hyphen.
+    long_app_name = "weekly-engineering-standup-notes"
+    assert len(long_app_name) == forward_port.MAX_SERVICE_NAME_LENGTH
 
     display_name = mock_frame.frame_display_name(long_name)
+    service_name = mock_frame.frame_name(long_app_name)
 
     assert len(display_name) == forward_port.MAX_DISPLAY_NAME_LENGTH
     assert forward_port.validate_display_name(display_name) is None
     assert display_name.endswith(mock_frame.DISPLAY_NAME_SUFFIX)
+    assert forward_port.validate_service_name(service_name) is None
+    assert service_name == "weekly-engineering-standup-mock"
+    assert mock_frame.frame_name(_APP) == "inbox-status-mock"
