@@ -111,8 +111,9 @@ does), and check:
   focus.
 
 Look at the screenshots at both sizes, as `web-frontend-testing.md` requires
-for any page you change. Commit one `browser` test at 393x852 that asserts no
-sideways scroll and runs the app's main action by tapping it.
+for any page you change. Commit one `browser` test in that phone context
+(393x852, `has_touch=True`, `is_mobile=True`; `page.tap` fails without touch)
+that asserts no sideways scroll and runs the app's main action by tapping it.
 
 ### When it is shared
 
