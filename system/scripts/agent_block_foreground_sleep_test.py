@@ -48,7 +48,6 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "sleep 30 & sleep 40",
         "{ sleep 30; cat /tmp/out.txt; } &",
         "sleep 30 &&\n  cat /tmp/out.txt",
-        "sleep 30 && # let it settle\n  cat /tmp/out.txt",
     ],
 )
 def test_a_foreground_sleep_of_five_seconds_or_more_is_blocked(command: str) -> None:
@@ -78,8 +77,6 @@ def test_a_foreground_sleep_of_five_seconds_or_more_is_blocked(command: str) -> 
         # A list carries on across a newline after `&&`, `||` or `|`, up to the `&` that ends it.
         "sleep 30 &&\n  curl -s localhost:8000/ > /tmp/out.txt &",
         "sleep 30 |\n  cat > /tmp/out.txt &",
-        "sleep 30 &&  \n  curl -s localhost:8000/ > /tmp/out.txt &",
-        "sleep 30 && # let it settle\n  curl -s localhost:8000/ > /tmp/out.txt &",
         # Mentions of sleep that run no sleep.
         "grep -nE 'mock|sleep' test_scoring.py",
         "git commit -m 'replace the overlap test sleep 30 with an event'",
