@@ -154,7 +154,10 @@ class ChatTransitionRecord(FrozenModel):
         raise NotImplementedError
 
     def held_send_for(self, message_id: str) -> HeldSend | None:
-        return next((held for held in self.held_sends if held.message_id == message_id), None)
+        """The send under ``message_id`` the switch holds or has delivered, or None."""
+        return next(
+            (held for held in (*self.delivered_sends, *self.held_sends) if held.message_id == message_id), None
+        )
 
     def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
         """The held sends other than the confirming message, in order."""

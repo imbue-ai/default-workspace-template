@@ -7450,6 +7450,8 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
     seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
     is_delivering_trigger = threading.Event()
     is_follow_up_held = threading.Event()
+    is_delivering_last = threading.Event()
+    is_last_retried = threading.Event()
     listed_while_delivering: dict[str, list[str]] = {}
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
@@ -7458,6 +7460,9 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
         if message_id == "m-1":
             is_delivering_trigger.set()
             is_follow_up_held.wait(timeout=10.0)
+        if message_id == "m-3":
+            is_delivering_last.set()
+            is_last_retried.wait(timeout=10.0)
         sent.append((agent_info.id, text, message_id))
         return SendOutcome.FAILED if message_id == "m-2" else SendOutcome.OK
 
@@ -7474,6 +7479,10 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
         assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
         assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
         is_follow_up_held.set()
+        wait_for(is_delivering_last.is_set, timeout=15.0)
+        # A client retrying a send the switch has already taken to deliver does not have it delivered again.
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_last_retried.set()
         _wait_until_settled(store, chat_id)
         assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
         assert listed_while_delivering == {
