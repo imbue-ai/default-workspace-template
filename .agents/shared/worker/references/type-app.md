@@ -122,7 +122,8 @@ workspace or on this app (`system/services/share_gateway/README.md`,
 just the pages the user clicks. Each request carries `X-Imbue-Identity`
 ("Request identity" there): `owner` is always present; a person over a share
 adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
-`granter`, with no `user_id`; and a request with no header is the owner's.
+`granter`, with no `user_id` ("Visiting agents", "Admission"); and a request
+with no header is the owner's.
 Read it with `workspace_layout.identity`, as the shell and the chat app do.
 The scaffold gives an app only `app-schema`, so when the app lacks it, add
 `workspace-layout` as an editable path dependency in the app's own directory
