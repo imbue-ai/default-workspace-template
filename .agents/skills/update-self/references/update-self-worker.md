@@ -91,6 +91,8 @@ Triage each conflict; the first rule that applies wins:
   --package-lock-only` for npm) and `git add` the result.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
+- **`system/test_python_launch_rules.py` -> take upstream**, whatever this
+  workspace changed in it (below).
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
@@ -112,6 +114,13 @@ divergent `uv.lock`s into a semantically invalid file (duplicate `[[package]]`
 entries), which has bricked a live workspace before. When `classify-merge`
 shows a lockfile changed on **both** sides relative to the base, discard the
 auto-merge and regenerate before committing, even with no conflict reported.
+
+**The launch rules end the merge as upstream's copy, conflict or not.** A
+count in `system/test_python_launch_rules.py` raised in this workspace (an
+earlier update's way past the workspace's own launches or import-path edits)
+is not kept, even when it merged cleanly:
+`git checkout "$TARGET_REF" -- system/test_python_launch_rules.py && git add system/test_python_launch_rules.py`.
+The sites it covered are fixed in the workspace's own code in 4b.
 
 No conflicts at all -- after the lockfile check -- means a clean pull; commit.
 
@@ -337,6 +346,14 @@ in your report.
   import, a user service whose program line runs under `uv run`, or a type
   error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
+  The launch rules (`system/test_python_launch_rules.py`) hold the
+  workspace's own code to the template's counts. A count that fails on the
+  workspace's own launches or import-path edits is fixed by restructuring that
+  code, as the test's message and the migration reference's "Launches and
+  import-path edits in the user's code" describe -- never by raising the count
+  (Step 2 put upstream's copy in place). That restructuring is part of this
+  update's work even though it reaches past the merged set, and it runs that
+  code's own suites.
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a
   `pyproject.toml` or `uv.lock` at all, merged or pulled in

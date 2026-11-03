@@ -47,7 +47,8 @@ above, whether the skill is the user's):
 | `test_no_one_off_runs_a_user_packages_command_from_the_root_venv` names a user file | [A user app, service or lib](#a-user-app-service-or-lib), step 4 |
 | `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A packaged skill](#a-packaged-skill), last step |
-| `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
+| `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
+| `test_prevent_sys_path_edits` or `test_prevent_running_the_workspaces_own_code_as_a_process` fails and lists a user file | [Launches and import-path edits in the user's code](#launches-and-import-path-edits-in-the-users-code) |
 | `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
 
 ## A user skill with scripts
@@ -202,6 +203,48 @@ check sees it; after editing one, re-install it live with
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).
+
+## Launches and import-path edits in the user's code
+
+`system/test_python_launch_rules.py` counts two things across the whole tree,
+the user's code included: places that run one of the workspace's own scripts,
+modules or commands as a process, and files that edit the import path. The
+counts are the template's own, so any such site in the user's skills, apps,
+services, libs or shell scripts fails them. That is the point: the user's code
+is held to the same rule, and this update is when it gets there.
+
+Fix each site the user's code adds, during the update, by restructuring it --
+not by raising a count, which is a local edit to a built-in file that every
+later update has to reconcile. The goal is code that imports what it uses;
+passing the test is how you know you got there, not the goal itself. You may
+change the caller, the code it reaches for, and their `pyproject.toml` files,
+even though they are not what the update came to change. The failure message
+lists every site and how each kind becomes an import. The common ones:
+
+- **An app runs the root venv's interpreter, or a file of its own package,
+  because its own project lacks a package** (an app shelling out to a
+  Playwright script because its venv has no Playwright): declare the package
+  in the app's `pyproject.toml` (`uv add` in its directory) and import the
+  module.
+- **An app runs a skill's script to get its result** (several apps each
+  running a skill's `run.py` with a timeout): add the skill's `python/` project
+  to the app as an editable path source and call its functions. A deadline over
+  network calls that each have a timeout goes in as an argument, checked
+  between calls.
+- **A shell script runs `python3` with `PYTHONPATH` pointing at a package's
+  source**, and often a test re-creates that run: give the package a console
+  script if it has none, run it from a venv that installs it
+  (`uv run --no-sync --project <package> <command>`, or from the venv of the
+  app whose script it is, with the package as an editable path dependency), and
+  delete the test's `PYTHONPATH`.
+
+A site that one of the reasons in `.agents/shared/references/running-python.md`
+("When a launch or an import-path edit has to stay") really applies to -- a
+wrapper that hands secrets to the program it runs, say -- keeps its process with
+the marker that section shows. Name every marker you add, and every site you
+restructured, in your report. A restructure that would change what the user
+sees an app or skill do is a `question` (case (c) in `update-self-worker.md`),
+like a type error whose fix does.
 
 ## Type errors in the user's skills and apps
 

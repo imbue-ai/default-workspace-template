@@ -132,8 +132,47 @@ Start a process only when the call needs one of its own:
 - the process is the point: a wrapper that execs the command it is given, or
   a server.
 
+A deadline is a reason only for work that can hang where no timeout reaches.
+Work made of network or subprocess calls that each carry a timeout of their own
+takes the deadline as an argument and checks it between calls.
+
 A test counts the places that name one of the workspace's own programs to
-run, and the count only goes down.
+run, and the count only goes down; another counts the files that edit the
+import path (`sys.path`, `PYTHONPATH` in Python or a shell script, a pytest
+`pythonpath` setting). Both are in `system/test_python_launch_rules.py`, and
+their failure messages say how each kind of site becomes an import.
+
+## When a launch or an import-path edit has to stay
+
+A site that one of the reasons above really applies to keeps its process with
+a marker among the comment lines directly above its statement, naming the
+reason:
+
+```python
+# own-process: wrapper -- hands the pairing link to node without Python reading it
+command = ["python3", WITH_SECRETS, SECRETS_FILE, "--", "node", str(SCRIPT)]
+```
+
+| Reason | The bullet above it stands for |
+|---|---|
+| `other-tier` | the code is the other tier's |
+| `outlives-caller` | the work must outlive its caller |
+| `deadline` | the work must be cut off at a deadline, and can hang where no timeout reaches |
+| `other-tree` | the code to run is another tree's |
+| `wrapper` | a wrapper that execs the command it is given |
+| `server` | a server |
+
+An import-path edit that has to stay takes `# import-path: <reason> -- <why>`
+the same way, with `no-venv` (the code runs with no venv to install what it
+imports: the bare tier, or `uv run --no-project`) or `other-tree` (it loads
+code from a tree known only at run time).
+
+A marked site is not counted. A marker with another reason, with no why, or
+with no site of its kind below it fails the test. Each marker is a claim
+someone will check, so an agent that adds one names it in its report; and a
+marker is never the way past a count when the site can become an import --
+restructuring the caller and the code it reaches for is the expected fix, even
+when they are not the code the agent came to change.
 
 ## Long-running processes: sync, then `exec` the entry point
 
