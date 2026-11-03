@@ -19,6 +19,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1481,6 +1482,32 @@ def test_a_frame_never_signals_a_pid_a_restart_handed_to_another_process(
 
     assert not runner.killed_pgroup(first_pid)
     assert runner.killed_pgroup(second_pid)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="start times are read from /proc")
+def test_a_real_process_start_time_holds_for_its_life_and_follows_its_parents(
+    tmp_path: Path,
+) -> None:
+    """The field ``process_start_time`` reads must be the kernel's start time: fixed while
+    the process runs (or a live wrapper would read as not ours), no earlier than the
+    parent that spawned it, and gone once the process is."""
+    runner = mod.Runner()
+    pid = mod.Spawner().spawn_detached(
+        ["sleep", "30"],
+        cwd=str(tmp_path),
+        env={"PATH": "/usr/bin:/bin"},
+        log_path=str(tmp_path / "sleep.log"),
+    )
+    try:
+        started = runner.process_start_time(pid)
+        assert started.isdigit()
+        assert int(runner.process_start_time(os.getpid())) <= int(started)
+        assert runner.process_start_time(pid) == started
+    finally:
+        runner.kill_process_group(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+
+    assert runner.process_start_time(pid) == ""
 
 
 def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry(
