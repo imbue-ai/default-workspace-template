@@ -209,6 +209,7 @@ def test_every_hand_parsed_command_is_one_the_contract_declares() -> None:
     assert set(_HAND_PARSED_COMMANDS) <= names
 
 
+@pytest.mark.timeout(60)
 def test_every_declared_command_takes_every_argument_the_app_passes() -> None:
     contract = _load_contract()
     failures: list[str] = []
@@ -226,6 +227,7 @@ def test_every_declared_command_takes_every_argument_the_app_passes() -> None:
     assert not failures, "\n\n".join(failures)
 
 
+@pytest.mark.timeout(60)
 def test_the_bug_report_collector_runs_with_no_venv_and_prints_nothing_when_asked_for_nothing() -> (
     None
 ):
@@ -244,6 +246,7 @@ def test_the_bug_report_collector_runs_with_no_venv_and_prints_nothing_when_aske
     )
 
 
+@pytest.mark.timeout(60)
 def test_an_unknown_argument_exits_with_the_status_the_app_reads_as_an_older_template() -> (
     None
 ):
