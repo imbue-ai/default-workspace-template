@@ -142,9 +142,9 @@ of this without turning sharing on.
   touches files outside the app's own data. A route that hands a visitor a
   secret or a credential is a defect: make it owner-only, answering a visitor
   403 the way the chat app's `system/apps/chat/imbue/chat/identity.py` does.
-  Whether visitors may change, delete or spend is the user's call, not yours:
-  unless the task file says, keep the behavior and name each such route in
-  your report. The API document is what a visiting agent reads to learn the app
+  Whether visitors may change, delete, spend, or run a command or touch files
+  outside the app's data is the user's call, not yours: unless the task file
+  says, keep the behavior and name each such route in your report. The API document is what a visiting agent reads to learn the app
   (`build-app`'s "The app describes its own API"), so a route's description
   says when it is owner-only.
 - **Who did what.** When the app stores something a person or an agent made
