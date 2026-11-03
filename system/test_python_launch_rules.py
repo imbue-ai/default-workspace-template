@@ -889,8 +889,10 @@ def _sys_path_edit_lines(tree: ast.AST) -> list[int]:
     return sorted(lines)
 
 
-# Every form of edit ``_sys_path_edit_lines`` reads is spelled with one of these words, or as
-# ``<sys or its alias>.path``, so a file with neither has none and is not parsed.
+# A file with none of these words and no ``<sys or its alias>.path`` is not parsed. The ordinary
+# spelling of every edit ``_sys_path_edit_lines`` reads has one; an exotic one (a comment between
+# ``sys`` and ``.path``, a ``PYTHONPATH`` key built from escapes) can pass, as ``getattr(sys,
+# "path")`` passes the AST check itself: these scans catch ordinary code, not evasion.
 _IMPORT_PATH_WORDS = ("PYTHONPATH", "syspath_prepend", "addsitedir", "from sys import")
 _SYS_ALIAS_RE = re.compile(r"\bsys\s+as\s+(\w+)")
 
