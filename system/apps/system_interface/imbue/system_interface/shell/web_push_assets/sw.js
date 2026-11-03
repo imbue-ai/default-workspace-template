@@ -30,7 +30,11 @@ self.addEventListener("push", (event) => {
     icon: `${shellRoot()}/apple-touch-icon.png`,
     data: { url: targetUrl(data.path) },
   };
-  if (typeof data.tag === "string" && data.tag) options.tag = data.tag;
+  // A notification replacing one with the same tag alerts again only with renotify, which requires a tag.
+  if (typeof data.tag === "string" && data.tag) {
+    options.tag = data.tag;
+    options.renotify = true;
+  }
   event.waitUntil(self.registration.showNotification(data.title || "Your workspace", options));
 });
 
