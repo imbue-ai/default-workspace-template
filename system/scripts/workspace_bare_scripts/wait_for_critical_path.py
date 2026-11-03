@@ -38,14 +38,50 @@ _POLL_INTERVAL_SECONDS = 0.25
 _CONNECT_TIMEOUT_SECONDS = 0.5
 
 
-def _registered_url_by_name(registry: Path) -> dict[str, str]:
-    """Each registry row's ``url`` by its ``name``; empty while the registry is missing or unreadable."""
+class UnreadableRegistryError(Exception):
+    """The registry exists but holds no readable ``[[apps]]`` array."""
+
+
+def _read_registry_rows(registry: Path) -> list[object]:
+    """The registry's ``[[apps]]`` rows; empty while it does not exist yet (a new workspace's first boot)."""
     try:
-        document = tomllib.loads(registry.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+        text = registry.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as error:
+        raise UnreadableRegistryError(f"cannot read {registry}: {error}") from error
+    try:
+        document = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise UnreadableRegistryError(
+            f"{registry} is not valid TOML: {error}"
+        ) from error
     rows = document.get("apps", [])
     if not isinstance(rows, list):
+        raise UnreadableRegistryError(
+            f"{registry} has an 'apps' key that is not an array of tables"
+        )
+    return rows
+
+
+def _registry_problem(registry: Path) -> str | None:
+    """Why the registry yields no rows, for the deadline line; None when it reads or does not exist yet."""
+    try:
+        _read_registry_rows(registry)
+    except UnreadableRegistryError as error:
+        return str(error)
+    return None
+
+
+def _registered_url_by_name(registry: Path) -> dict[str, str]:
+    """Each registry row's ``url`` by its ``name``.
+
+    Empty while the registry is missing or unreadable; the deadline line reports an unreadable one
+    (``_registry_problem``) rather than every poll.
+    """
+    try:
+        rows = _read_registry_rows(registry)
+    except UnreadableRegistryError:
         return {}
     return {
         row["name"]: row["url"]
@@ -104,13 +140,16 @@ def main() -> None:
     if not command:
         print("usage: wait_for_critical_path.py <command> [args...]", file=sys.stderr)
         sys.exit(2)
+    registry = apps_file()
     waiting_for = wait_for_apps(
-        apps_file(), CRITICAL_PATH_APPS, _DEADLINE_SECONDS, _POLL_INTERVAL_SECONDS
+        registry, CRITICAL_PATH_APPS, _DEADLINE_SECONDS, _POLL_INTERVAL_SECONDS
     )
     if waiting_for:
+        problem = _registry_problem(registry)
+        reason = f" ({problem})" if problem is not None else ""
         print(
             f"wait_for_critical_path: {', '.join(waiting_for)} not serving after "
-            f"{_DEADLINE_SECONDS:.0f}s; starting anyway",
+            f"{_DEADLINE_SECONDS:.0f}s{reason}; starting anyway",
             file=sys.stderr,
         )
     os.execvp(command[0], command)

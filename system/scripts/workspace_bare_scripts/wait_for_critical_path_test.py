@@ -98,6 +98,23 @@ def test_an_unparseable_registry_is_waited_on_rather_than_raised(
     assert wait_for_critical_path.wait_for_apps(
         registry, ("system_interface",), 0.2, 0.05
     ) == ["system_interface"]
+    problem = wait_for_critical_path._registry_problem(registry)
+    assert problem is not None and "not valid TOML" in problem
+
+
+def test_only_an_unreadable_registry_is_reported_as_a_problem(
+    tmp_path: Path, listening_url: str
+) -> None:
+    assert wait_for_critical_path._registry_problem(tmp_path / "missing.toml") is None
+
+    healthy = tmp_path / "apps.toml"
+    _write_registry(healthy, {"system_interface": listening_url})
+    assert wait_for_critical_path._registry_problem(healthy) is None
+
+    not_an_array = tmp_path / "not_an_array.toml"
+    not_an_array.write_text('apps = "system_interface"\n')
+    problem = wait_for_critical_path._registry_problem(not_an_array)
+    assert problem is not None and "not an array" in problem
 
 
 def test_a_url_with_an_unparseable_port_is_waited_on_rather_than_raised(
