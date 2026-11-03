@@ -24,10 +24,11 @@ Run from the repo root via ``uv run --no-sync``:
 
 Exit codes:
     0  Success.
-    1  ``up``: the note is blank, the app has no manifest or is not registered, its
-       registration could not be rewritten, the frame did not come up, or the window
-       could not be opened or refreshed. ``down``: the frame could not be torn down, or
-       the app's registration could not be rewritten.
+    1  ``up``: the note is blank, the path does not start with ``/``, the app has no
+       manifest or is not registered, its registration could not be rewritten, the
+       frame did not come up, or the window could not be opened or refreshed.
+       ``down``: the frame could not be torn down, or the app's registration could
+       not be rewritten.
 """
 
 from __future__ import annotations
@@ -184,6 +185,14 @@ def up(
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window."""
     if not note.strip():
         sys.stderr.write("mock frame: --note must say what is not real yet.\n")
+        return 1
+    # Refused here, before the registry is touched: the frame refuses it too, but only
+    # after the app was re-registered, and the plain registration put back then would
+    # un-hide an app a frame from an earlier run still shows.
+    if not inner_path.startswith("/"):
+        sys.stderr.write(
+            f"mock frame: --path must start with '/', got {inner_path!r}.\n"
+        )
         return 1
     app = find_app(app_name, repo_root)
     _register(app, repo_root, FRAMED_APP_OVERRIDES)

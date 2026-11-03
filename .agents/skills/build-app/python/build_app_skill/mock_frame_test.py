@@ -191,18 +191,35 @@ def test_up_refuses_an_app_that_is_not_running(
     assert frames.ups == []
 
 
-def test_up_refuses_a_blank_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("note", "inner_path"),
+    [("  ", "/"), (_NOTE, "inbox")],
+    ids=["blank-note", "bad-path"],
+)
+def test_a_refused_rerun_leaves_the_frame_from_the_earlier_run_in_charge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, note: str, inner_path: str
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
-    plain_row = _row(registry)
     frames = _RecordingFrames()
+    assert (
+        mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 0
+    )
+    framed_row = _row(registry)
 
-    code = mock_frame.up(_APP, "  ", tmp_path, frames=frames, layout=_RecordingLayout())
+    code = mock_frame.up(
+        _APP,
+        note,
+        tmp_path,
+        inner_path=inner_path,
+        frames=frames,
+        layout=_RecordingLayout(),
+    )
 
     assert code == 1
-    assert frames.ups == []
-    assert _row(registry) == plain_row
+    assert len(frames.ups) == 1
+    # Still out of the launcher and kept running: the earlier frame's window shows it.
+    assert _row(registry) == framed_row
 
 
 def test_down_closes_the_mock_window_removes_the_frame_and_restores_the_app(
