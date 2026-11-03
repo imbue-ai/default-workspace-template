@@ -236,7 +236,7 @@ jobs:
       OFFLOAD_VERSION: "0.10.0"
     steps:
       - name: Fetch the Modal token from Vault
-        uses: imbue-ai/use-vault-secrets@main
+        uses: imbue-ai/use-vault-secrets@b9522dcb19272d8e428e945a7e66d2e35c791bec # main, 2026-10-21
         with:
           role: dwt_ci_gh
           secrets: |
@@ -281,7 +281,7 @@ jobs:
         run: uv run python -m compileall -q -j 4 system catalog
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
 
       - name: Cache the offload binary
         uses: actions/cache@v5
