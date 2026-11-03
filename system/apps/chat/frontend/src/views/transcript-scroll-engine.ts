@@ -1156,14 +1156,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         // content shrinking before it) has already moved the view up, so
         // gliding back would paint that move and then slide down over several
         // frames -- a bounce at the bottom. All three snap.
-        const shouldSnap =
+        const isSnapRequired =
           didAbsorbClamp ||
           fillInFlight ||
           spacerTopPx > 0 ||
           spacerBottomPx > 0 ||
           (geometry !== null && geometry.unmeasuredCount > 0);
         if (Math.abs(pinDeltaPx) > 0.5) {
-          if (!shouldSnap && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
+          if (!isSnapRequired && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
             smoothWriteScrollTop(targetPx, "follow-pin");
           } else {
             cancelSmoothScroll();
