@@ -917,8 +917,9 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # The confirming message leads the list for as long as the switch lasts: a handoff folds it
     # into the successor's prompt, a rebind delivers it first, and either way the page keeps
     # showing it until its turn appears in the transcript. A switch made with nothing to say
-    # (a fresh start picked from the provider menu) has no confirming message to show.
-    others = transition.held_sends_after_trigger()
+    # (a fresh start picked from the provider menu) has no confirming message to show. The
+    # other held sends stay listed the same way once the switch has delivered them.
+    others = transition.shown_sends_after_trigger()
     trigger = (
         (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
         if transition.trigger_text
@@ -3527,7 +3528,8 @@ class AgentManager:
             raise RebindCancelledError(str(e)) from e
 
     def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
-        """Pop the oldest held send, or finish the switch (clear its entry) and return None once none remain.
+        """Pop the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
+        once none remain.
 
         A finished rebind on a chat of one agent takes its record with it: a record exists only
         for a chat that has had a handoff, and the agent's ``account`` label is the truth again.
@@ -3539,7 +3541,8 @@ class AgentManager:
             if transition.held_sends:
                 held = transition.held_sends[0]
                 remaining = transition.model_copy_update(
-                    to_update(transition.field_ref().held_sends, transition.held_sends[1:])
+                    to_update(transition.field_ref().held_sends, transition.held_sends[1:]),
+                    to_update(transition.field_ref().delivered_sends, (*transition.delivered_sends, held)),
                 )
                 self._write_record_locked(record.with_converging(remaining))
                 return held

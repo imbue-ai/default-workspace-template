@@ -242,7 +242,7 @@ The `rebind` entry (section 6) sits in the same place, and a record carries at m
 }
 ```
 
-The two entries share their common fields (`ChatTransitionRecord` in code): the phase, the target, the confirming message, the held sends, the returned queue, the error and its `failed_step`, and, since phase 9, the `model_pick` (`null` for none), which the handoff entry alone carried in phase 8.
+The two entries share their common fields (`ChatTransitionRecord` in code): the phase, the target, the confirming message, the held sends and those already delivered (`delivered_sends`, 5.7), the returned queue, the error and its `failed_step`, and, since phase 9, the `model_pick` (`null` for none), which the handoff entry alone carried in phase 8.
 A rebind changes no membership; when it completes on a chat of one agent the record is dropped again, so a record still exists only for a chat that has had a handoff.
 
 The own-chat rule: when listing instances, every non-primary agent that appears in no record as a non-first member is a chat of its own.
@@ -522,6 +522,7 @@ Cancel is refused with 409 in `switching` and later.
 - The trigger message is the first of the held sends.
   It rode the new agent's `mngr create --message-file` together with the handoff prompt until phase 8, which made the create silent: the prompt now carries the message at its end and goes through the send path (5.8), and the others follow it once the agent is ready.
 - Delivery pops one held send at a time under the same lock the message route appends under, and the `handoff` entry is cleared only once the list is empty, so a send that arrives during delivery is delivered by the same loop rather than overtaking one still held.
+  A popped send moves to the entry's `delivered_sends`, and the snapshot's `held_sends` lists those after the confirming message until the entry is cleared: its turn reaches the transcript only after delivery, so the page keeps showing it from the snapshot until then.
 - A cancel returns the trigger message to the composer and delivers the other held sends to the old agent (5.6).
 - Held sends survive a chat-app restart because they are persisted on the record's `handoff` entry.
 

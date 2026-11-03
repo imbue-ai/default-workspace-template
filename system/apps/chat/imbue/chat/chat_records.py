@@ -124,6 +124,13 @@ class ChatTransitionRecord(FrozenModel):
     held_sends: tuple[HeldSend, ...] = Field(
         default=(), description="The sends received while converging, in order; delivered once the switch is done"
     )
+    delivered_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description=(
+            "The held sends the switch has taken off the held list to deliver, in order, kept until the switch is "
+            "done so the page can keep showing them until their turns appear in the transcript"
+        ),
+    )
     returned_block: str = Field(
         default="", description="The queued text draining took off the agent, for the composer"
     )
@@ -151,6 +158,12 @@ class ChatTransitionRecord(FrozenModel):
     def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
         """The held sends other than the confirming message, in order."""
         return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
+
+    def shown_sends_after_trigger(self) -> tuple[HeldSend, ...]:
+        """The sends the switch holds or has delivered, other than the confirming message, in order."""
+        return tuple(
+            held for held in (*self.delivered_sends, *self.held_sends) if held.message_id != self.trigger_message_id
+        )
 
 
 class ChatHandoffRecord(ChatTransitionRecord):

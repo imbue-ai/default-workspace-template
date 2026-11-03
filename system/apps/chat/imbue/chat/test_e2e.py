@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +44,8 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
@@ -67,7 +70,9 @@ from imbue.chat.testing import scripted_send_mngr_messenger
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
@@ -1688,6 +1693,34 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         assert box_once_landed["y"] == box_while_starting["y"]
 
 
+# Records, on every change to a chat page, whether the message ``__watchedText`` names is on the page once it has been,
+# and whether the status row is ever drawn above it: what the page showed in its place each time, if anything.
+_RECORD_MESSAGE_GAPS_SCRIPT = """
+(() => {
+  window.__messageGaps = [];
+  window.__rowsAbove = [];
+  let isShown = false;
+  const check = () => {
+    const text = window.__watchedText;
+    if (!text || !document.querySelector(".message-list-wrapper, .message-list-not-found")) return;
+    const bubble = [...document.querySelectorAll(".outgoing-message, .held-send, .message-user")].find(
+      (element) => (element.innerText || "").includes(text),
+    );
+    if (bubble === undefined) {
+      if (isShown) window.__messageGaps.push((document.body.innerText || "").slice(0, 200));
+      return;
+    }
+    isShown = true;
+    const row = document.querySelector(".agent-activity-indicator");
+    if (row !== null && (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      window.__rowsAbove.push(row.innerText || "(dot)");
+    }
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
 # once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
 @pytest.mark.flaky
@@ -1988,6 +2021,85 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
         expect(provider_row).not_to_contain_text("next message")
+
+
+class _HookedSendMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that runs each of ``during_send`` with the message while its send is in flight."""
+
+    during_send: list[Callable[[str], None]] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        for run in self.during_send:
+            run(message)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_delivers_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A message sent while a chat switches is held, and the switch takes it off its held list as it delivers it,
+    before its turn reaches the transcript; the chat's state is pushed meanwhile. The message stays on the page
+    throughout, and the switch's status row stays above it."""
+    confirming = "Carry on on the other account"
+    follow_up = "Find what's using disk space here"
+    page.add_init_script(f"window.__watchedText = {json.dumps(follow_up)};" + _RECORD_MESSAGE_GAPS_SCRIPT)
+    is_delivering = {confirming: threading.Event(), follow_up: threading.Event()}
+    is_released = {confirming: threading.Event(), follow_up: threading.Event()}
+    messenger = _HookedSendMngrMessenger()
+    with _switched_workspace(
+        tmp_path, messenger=messenger, additional_accounts=(("anthropic", "Anthropic"),)
+    ) as server:
+        manager = server.chat_state.agent_manager
+
+        def push_and_hold(sent: str) -> None:
+            if sent not in is_delivering:
+                return
+            manager._broadcast_chats_updated()
+            is_delivering[sent].set()
+            is_released[sent].wait(timeout=60.0)
+
+        messenger.during_send.append(push_and_hold)
+        try:
+            _open_fixture_chat(page, server)
+            chat = _chat(page)
+            expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+            _open_provider_menu(chat)
+            chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
+            expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
+            _switch_and_send(chat, confirming)
+            wait_for(is_delivering[confirming].is_set, timeout=30.0, error_message="the switch never delivered")
+
+            # Sent from another window: every page shows a held send from the chat's snapshot.
+            request = urllib.request.Request(
+                f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/message",
+                data=json.dumps({"message": follow_up, "message_id": "follow-up-1"}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 202
+            # Holding a send pushes nothing of its own; with the delivery paused, the test stands in for the pushes
+            # a running chat makes all the time.
+            manager._broadcast_chats_updated()
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=15000)
+            is_released[confirming].set()
+
+            wait_for(is_delivering[follow_up].is_set, timeout=30.0, error_message="the follow-up was never delivered")
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=5000)
+        finally:
+            for event in is_released.values():
+                event.set()
+        frame = _chat_frame(page)
+        assert frame.evaluate("window.__messageGaps") == []
+        assert frame.evaluate("window.__rowsAbove") == []
 
 
 # A turn that failed on the chat's own credential: Claude Code's stamped login notice.
