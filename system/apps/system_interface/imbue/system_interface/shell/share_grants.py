@@ -166,8 +166,12 @@ class ShareIdentitiesReader(MutableModel):
     def read_identities(self) -> dict[str, GrantedIdentity]:
         """What the desktop recorded of each granted account, by user id; nothing while the file is absent, or
         while it is one this shell cannot read, which is warned about once per version of the file."""
-        version = self.document_version()
-        if version is None:
+        try:
+            version = self.share_identities_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return {}
+        except OSError as e:
+            logger.warning("Could not stat the share identities at {}: {}", self.share_identities_path, e)
             return {}
         try:
             raw = json.loads(self.share_identities_path.read_text(encoding="utf-8"))
