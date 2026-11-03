@@ -45,6 +45,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.pin is None
     assert row.window_closed_path is None
     assert row.message_handlers == ()
+    assert row.keybindings == ()
 
 
 def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
@@ -67,6 +68,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'window_closed_path = "/api/window-closed"\n'
         'message_handlers = [{type = "minds:focus-chat", path = "/api/focus-chat"}, '
         '{type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/"]}]\n'
+        'keybindings = [{id = "rename", label = "Rename the selected entry", default_chords = ["f2"]}]\n'
     )
 
     rows = read_registry(registry)
@@ -79,6 +81,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert [(handler.type, handler.path, handler.show, handler.showing) for handler in row.message_handlers] == [
         ("minds:focus-chat", "/api/focus-chat", None, ()),
         ("open:file", None, "{path}?view", ("{path}", "{path}/")),
+    ]
+    assert [(action.id, action.label, action.default_chords) for action in row.keybindings] == [
+        ("rename", "Rename the selected entry", ("f2",)),
     ]
     assert row.display_name == "Files"
     assert row.priority == "files"

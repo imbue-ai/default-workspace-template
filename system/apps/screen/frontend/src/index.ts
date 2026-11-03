@@ -27,7 +27,6 @@ import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
-import { pageStorage, readNeedsRelay } from "./relay_memory";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
 import { windowScheduler } from "./scheduler";
@@ -36,7 +35,6 @@ import { SCREENCAST_FPS } from "./screencast";
 import {
   ServiceEvents,
   ServiceRequestError,
-  fetchConnectInfo,
   fetchState,
   postCancelPendingUrl,
   postInputSeen,
@@ -339,7 +337,17 @@ class Viewer {
       }
       this.signInError = null;
       this.session = session;
-      const socket = new NekoSocket(session.token, () => this.onNekoOpen());
+      // A stopped socket's close lands after the fact, possibly once its replacement is open: only the viewer's
+      // own socket speaks for isNekoOpen.
+      const socket = new NekoSocket(
+        session.token,
+        () => {
+          if (this.socket === socket) this.onNekoOpen();
+        },
+        () => {
+          if (this.socket === socket) this.isNekoOpen = false;
+        },
+      );
       this.socket = socket;
       this.stream = new NekoStream(
         socket,
@@ -410,18 +418,11 @@ class Viewer {
     this.visibility.evaluate();
   }
 
-  /** The visibility machine says this viewer should hold media (spec section 8.2). */
+  /** The visibility machine says this viewer should hold media (spec section 8.2). Before the socket is open there
+   *  is no stream to ask; its open resets the machine, which asks again. */
   private requestMedia(): void {
     if (!this.stream || !this.state || !this.isNekoOpen) return;
-    const videoId = this.state.video_id;
-    // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
-    const isRelay = readNeedsRelay(pageStorage());
-    fetchConnectInfo(isRelay)
-      .then((connectInfo) => {
-        // A release while the fetch was in flight means a hidden viewer: it asks for nothing until seen again.
-        if (this.visibility.wantsMedia) this.stream?.request(videoId, connectInfo, isRelay);
-      })
-      .catch((error) => console.error("[screen] connect-info failed", error));
+    this.stream.request(this.state.video_id);
   }
 
   /** Hidden for the delay: the media goes, the socket, the session and the lease stay. */
@@ -450,8 +451,7 @@ class Viewer {
     // The belt: a display:none flip or a frame the observer missed is caught within the interval.
     window.setInterval(() => {
       const rect = this.stage.getBoundingClientRect();
-      const isLaidOut = rect.width > 4 && rect.height > 4;
-      if (!isLaidOut) this.visibility.setIntersecting(false);
+      this.visibility.setLaidOut(rect.width > 4 && rect.height > 4);
       this.visibility.setDocumentHidden(document.hidden);
       this.visibility.evaluate();
       this.render();
@@ -527,6 +527,7 @@ class Viewer {
     this.screencast = null;
     this.stream?.close();
     this.socket?.stop();
+    this.input?.dispose();
     this.stream = null;
     this.socket = null;
     this.input = null;

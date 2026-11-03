@@ -76,6 +76,8 @@ export interface ProviderAccount {
   label: string;
   /** The lane method "Sign in again" runs: a key account is given a key again, not a browser sign-in. */
   reauth_method: string;
+  /** When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept. */
+  signed_in_at: string | null;
 }
 
 interface FlowStart {

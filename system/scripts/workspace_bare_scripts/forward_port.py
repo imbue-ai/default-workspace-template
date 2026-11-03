@@ -24,9 +24,9 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing), and
-``theming_mode`` (the ``[theming]`` table's mode, when the manifest has one);
-the icon is read from the file the manifest names, relative to the manifest. Every manifest
+default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
+``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
+when the manifest has one); the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
@@ -181,7 +181,7 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
 # structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
-# ``message_handlers``) are handled on their own. ``program`` defaults to the
+# ``message_handlers``, ``keybindings``) are handled on their own. ``program`` defaults to the
 # name when the manifest omits it.
 _MANIFEST_STRING_KEYS = (
     "display_name",
@@ -222,6 +222,7 @@ _MANIFEST_OWNED_KEYS = (
     "pin",
     "window_closed_path",
     "message_handlers",
+    "keybindings",
     "theming_mode",
 )
 
@@ -661,7 +662,7 @@ def _read_manifest(
 def _copied_tables(
     entries: Any, path: Path, key: str, copy_entry: _TableCopier
 ) -> tuple[list[dict[str, object]] | None, str | None]:
-    """A manifest array of tables (``launch_paths``, ``message_handlers``) as the registry row
+    """A manifest array of tables (``launch_paths``, ``message_handlers``, ``keybindings``) as the registry row
     carries it, each entry copied by ``copy_entry``. Returns ``(copied, None)``, or
     ``(None, error)`` when the value is not an array or an entry is not shaped as the
     manifest requires."""
@@ -836,10 +837,41 @@ def _copied_message_handler(
     return copied, None
 
 
+def _copied_keybinding(
+    action: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """One manifest keybinding action as the registry row carries it: ``id``, ``label``, and ``default_chords``.
+    Returns ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    if not (
+        isinstance(action, dict)
+        and isinstance(action.get("id"), str)
+        and isinstance(action.get("label"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every keybinding needs a string 'id' and 'label'",
+        )
+    default_chords = action.get("default_chords", [])
+    if not (
+        isinstance(default_chords, list)
+        and all(isinstance(chord, str) for chord in default_chords)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: a keybinding's default_chords must be an array of strings",
+        )
+    return {
+        "id": action["id"],
+        "label": action["label"],
+        "default_chords": list(default_chords),
+    }, None
+
+
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
 _MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
     ("launch_paths", _copied_launch_path),
     ("message_handlers", _copied_message_handler),
+    ("keybindings", _copied_keybinding),
 )
 
 
@@ -1070,8 +1102,8 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, system, launcher_rank, default_shortcut, "
-            "launch_paths with their text_param, pin, window_closed_path, message_handlers) are copied onto the row on "
-            "every call."
+            "launch_paths with their text_param, pin, window_closed_path, message_handlers, keybindings) are copied "
+            "onto the row on every call."
         ),
     )
     parser.add_argument(

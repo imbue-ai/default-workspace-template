@@ -73,6 +73,7 @@ import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog
 import { Backdrop } from "./Backdrop";
 import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { GRID_SHARE, gridFor, overviewPresentationOf } from "./Overview";
 import type { OverviewAttrs, OverviewGrid, OverviewTile } from "./Overview";
@@ -196,6 +197,8 @@ export function App(): m.Component<AppAttrs> {
   let wallpaperDialogDesktopId: string | null = null;
   /** The desktop whose theme chooser is up. */
   let themeDialogDesktopId: string | null = null;
+  /** Whether the keyboard shortcuts dialog is up. */
+  let isKeyboardShortcutsDialogOpen = false;
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
   let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
@@ -397,13 +400,19 @@ export function App(): m.Component<AppAttrs> {
    *  Re-measuring per frame is the placement a drag already does, driven by the transition
    *  instead of by the pointer. */
   function followTravellingWindows(): void {
+    let hasTravelEnded = false;
     for (const windowId of [...travellingWindows.keys()]) {
       // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
       // transitions cancelled on a chrome already out of the document, where the event never reaches the
       // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
-      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
-      else pages?.placePage(windowId);
+      if (windowElement(windowId) === null) {
+        travellingWindows.delete(windowId);
+        hasTravelEnded = true;
+      } else {
+        pages?.placePage(windowId);
+      }
     }
+    if (hasTravelEnded && travellingWindows.size === 0) pages?.reconcile();
     travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
   }
 
@@ -425,6 +434,8 @@ export function App(): m.Component<AppAttrs> {
     travellingWindows.delete(windowId);
     // Where the chrome landed, not the last value a frame happened to catch on the way.
     pages?.placePage(windowId);
+    // A window that travelled over another's page covers it only once it has landed.
+    if (travellingWindows.size === 0) pages?.reconcile();
   }
 
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
@@ -770,9 +781,10 @@ export function App(): m.Component<AppAttrs> {
     store?.closeOverview();
   }
 
-  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, the wallpaper, and
-   *  the theme. While viewing somebody else's desktop (section 8.3) only the new desktop stays: the overview button
-   *  is hidden too, and the wallpaper and the theme are the viewed desktop's, not the viewer's to change. */
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, the wallpaper, the
+   *  theme, and the keyboard shortcuts. While viewing somebody else's desktop (section 8.3) only the new desktop and
+   *  the shortcuts stay: the overview button is hidden too, and the wallpaper and the theme are the viewed desktop's,
+   *  not the viewer's to change, while the shortcuts are the viewer's own wherever they are. */
   function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
     const active = current.getState().activeDesktopId;
     const isViewing = current.viewedDesktop() !== null;
@@ -805,6 +817,15 @@ export function App(): m.Component<AppAttrs> {
         isDisabled: active === null || isViewing,
         onSelect: () => {
           if (active !== null) themeDialogDesktopId = active;
+        },
+      },
+      { kind: "divider" },
+      {
+        kind: "action",
+        key: "keyboard-shortcuts",
+        label: "Keyboard shortcuts...",
+        onSelect: () => {
+          isKeyboardShortcutsDialogOpen = true;
         },
       },
     ];
@@ -1081,6 +1102,14 @@ export function App(): m.Component<AppAttrs> {
       },
       onCancel: () => {
         wallpaperDialogDesktopId = null;
+      },
+    });
+  }
+
+  function keyboardShortcutsDialogView(): m.Children {
+    return m(KeyboardShortcutsDialog, {
+      onClose: () => {
+        isKeyboardShortcutsDialogOpen = false;
       },
     });
   }
@@ -1522,6 +1551,7 @@ export function App(): m.Component<AppAttrs> {
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
+          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),

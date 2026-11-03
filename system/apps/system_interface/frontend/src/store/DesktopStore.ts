@@ -27,6 +27,7 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
+import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
@@ -281,6 +282,8 @@ export interface PageDriver {
   reloadApp(appName: string): void;
   /** Send every page of an app the theme it wears again (its theming was turned on or off). */
   resendTheme(appName: string): void;
+  /** Tell every greeted page somebody changed a keybinding, so it re-fetches its resolved chords. */
+  broadcastKeybindingsChanged(): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
@@ -847,7 +850,7 @@ export class DesktopStore {
 
   /** The backdrop the frames are fractions of: the owner's while a viewed desktop is drawn in a letterbox, else
    *  this one. */
-  private frameBackdrop(): PixelSize {
+  frameBackdrop(): PixelSize {
     return this.viewingLetterbox()?.size ?? this.backdrop;
   }
 
@@ -1177,6 +1180,10 @@ export class DesktopStore {
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
+      },
+      onKeybindingsChanged: () => {
+        void refreshShellKeybindings();
+        this.pageDriver?.broadcastKeybindingsChanged();
       },
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
@@ -3367,11 +3374,16 @@ export class DesktopStore {
     void this.flushPendingSave();
   }
 
+  /** The move or resize of a window in progress, else null. */
+  windowGesture(): MoveGesture | ResizeGesture | null {
+    const gesture = this.gesture;
+    return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
+  }
+
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
-    const gesture = this.gesture;
-    if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
-    if (gesture.windowId !== windowId) return null;
+    const gesture = this.windowGesture();
+    if (gesture === null || gesture.windowId !== windowId) return null;
     return gesture.currentRect;
   }
 
