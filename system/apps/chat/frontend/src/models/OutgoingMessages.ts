@@ -21,9 +21,10 @@
  */
 import m from "mithril";
 
-import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
+import { addChatsUpdatedListener, getChatById, isHandoffCancellable } from "./Chats";
 import type { DisplayDecision, HandoffState } from "./Chats";
 import type { SendStatus } from "./Response";
+import { isChatBusyWithTurn } from "./activityState";
 
 export interface OutgoingMessage {
   id: string;
@@ -38,6 +39,9 @@ export interface OutgoingMessage {
   sentAt: number;
   /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
   displayDecision?: DisplayDecision;
+  /** Whether the send opens the agent's next turn, rather than waiting behind one already running: the status
+   *  row reporting that turn stays under it until it reaches the transcript. */
+  opensTurn: boolean;
 }
 
 /** Just the render decision a backend record carries, or undefined for a plain message. */
@@ -62,19 +66,23 @@ const sentAtByArrivalId = new Map<string, number>();
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
- *  so the caller can drop it on failure. */
+ *  so the caller can drop it on failure. A message sent while the chat is busy waits behind what it
+ *  is doing, so it opens no turn unless ``opensTurn`` says otherwise. */
 export function addOutgoing(
   chatId: string,
   content: string,
   messageId?: string,
   displayDecision?: DisplayDecision,
+  opensTurn?: boolean,
 ): string {
   const id = `outgoing-${nextId++}`;
   const sentAt = Date.now();
+  const chat = getChatById(chatId);
   (byChat[chatId] ??= []).push({
     id,
     content,
     sentAt,
+    opensTurn: opensTurn ?? (chat === undefined || !isChatBusyWithTurn(chat)),
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
   });
@@ -194,6 +202,12 @@ interface HeldSnapshot {
   handoff: HandoffState;
 }
 
+/** Whether a switch hands its held sends to the agent as its next turn's own messages: a fresh start, or a rebind.
+ *  A handoff that carries the conversation over opens the successor's turn with its prompt instead. */
+export function opensTurnWithHeldSends(handoff: HandoffState): boolean {
+  return handoff.kind === "rebind" || handoff.is_fresh_start;
+}
+
 /**
  * Follow the agents store so a newly-queued message drops its "Sending…" bubble the instant
  * it becomes a real queued entry (no overlap). Deduped by queued_id, so re-pushed snapshots
@@ -206,7 +220,9 @@ interface HeldSnapshot {
  * The successor's items that landed before then (the backend delivers the held sends before it
  * clears the switch) consume them at that point instead. A cancelled switch returns its
  * confirming message to the composer, so that one is skipped; so is a confirming message the
- * switch marker already shows (``isCarriedBySwitch``), whose turn is the marker itself.
+ * switch marker already shows (``isCarriedBySwitch``), whose turn is the marker itself. Only the
+ * first to come back opens the agent's next turn, and only when the switch hands its held sends
+ * over as that turn's own messages.
  */
 export function trackBackendArrivals(
   isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
@@ -245,9 +261,13 @@ export function trackBackendArrivals(
         const isCancelled =
           isHandoffCancellable(previous.handoff) && previous.retiringAgentId === chat.active_agent.agent_id;
         const returning = previous.handoff.held_sends;
+        // A cancel delivers them to the agent the chat stays on, behind whatever it is still doing.
+        const opensTurn = isCancelled ? !isChatBusyWithTurn(chat) : opensTurnWithHeldSends(previous.handoff);
+        let hasOpenedTurn = false;
         for (const held of isCancelled ? returning.slice(1) : returning) {
           if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held));
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), opensTurn && !hasOpenedTurn);
+          hasOpenedTurn = true;
         }
         for (let i = 0; i < consumedBySuccessor; i++) {
           removeOldest(chat.chat_id);

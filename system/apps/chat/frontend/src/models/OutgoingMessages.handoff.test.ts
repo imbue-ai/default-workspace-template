@@ -237,6 +237,37 @@ describe("the bubbles of a chat switching harness", () => {
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
   });
 
+  it("lets the first held send back from a fresh start open the successor's turn, and only that one", () => {
+    const chat = `a-${Math.random()}`;
+    const heldSends = [
+      { message_id: "m-1", text: "Find what's using disk space" },
+      { message_id: "m-2", text: "and this" },
+    ];
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-new" },
+        handoff: handoffStateFixture({ phase: "switching", is_fresh_start: true, held_sends: heldSends }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
+    expect(getOutgoingMessages(chat).map((o) => [o.content, o.opensTurn])).toEqual([
+      ["Find what's using disk space", true],
+      ["and this", false],
+    ]);
+  });
+
+  it("opens no turn with the held sends back from a handoff whose prompt opens the successor's turn", () => {
+    const chat = `a-${Math.random()}`;
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-new" },
+        handoff: handoffStateFixture({ phase: "switching", held_sends: [{ message_id: "m-2", text: "and this" }] }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
+    expect(getOutgoingMessages(chat).map((o) => [o.content, o.opensTurn])).toEqual([["and this", false]]);
+  });
+
   it("does nothing for a chat that ends a push without ever having switched", () => {
     const chat = `a-${Math.random()}`;
     push([chatSnapshotFixture(chat)]);

@@ -4,6 +4,8 @@
  * the strings directly; this names the one several of them branch on.
  */
 
+import type { ChatSnapshot } from "./Chats";
+
 // The agent's context is being compacted. Wins over a turn in progress while it lasts.
 export const COMPACTING_STATE = "COMPACTING";
 
@@ -12,4 +14,9 @@ const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_
 /** Whether the server-derived activity state means the agent is busy with a turn or a compaction. */
 export function isWorkingActivityState(state: string | null | undefined): boolean {
   return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
+}
+
+/** Whether the chat is busy with something a message sent now would wait behind: a turn, a compaction, or a switch. */
+export function isChatBusyWithTurn(chat: ChatSnapshot): boolean {
+  return chat.handoff !== null || isWorkingActivityState(chat.active_agent.activity_state);
 }
