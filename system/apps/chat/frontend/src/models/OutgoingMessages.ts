@@ -196,6 +196,12 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
   }
 }
 
+/** How many of the user items the chat's agent took while its switch lasts have landed: the held sends the
+ *  snapshot still lists that have reached the transcript (or the agent's queue), oldest first. */
+export function heldSendsLandedDuringSwitch(chatId: string): number {
+  return successorArrivalsByChat.get(chatId) ?? 0;
+}
+
 /** What the previous snapshot said of a switching chat: the agent it was leaving, and what it held. */
 interface HeldSnapshot {
   retiringAgentId: string;

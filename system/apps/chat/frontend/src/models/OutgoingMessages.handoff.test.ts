@@ -14,6 +14,7 @@ import {
   addOutgoing,
   dropOutgoingByMessageId,
   getOutgoingMessages,
+  heldSendsLandedDuringSwitch,
   noteBackendArrivals,
   trackBackendArrivals,
 } from "./OutgoingMessages";
@@ -237,11 +238,15 @@ describe("the bubbles of a chat switching harness", () => {
     });
     push([converging]);
     expect(getOutgoingMessages(chat)).toEqual([]);
+    expect(heldSendsLandedDuringSwitch(chat)).toBe(0);
     noteBackendArrivals(chat, ["u-trigger"]);
+    // The snapshot still lists the delivered confirming message, whose turn has landed.
+    expect(heldSendsLandedDuringSwitch(chat)).toBe(1);
     // The rebind cleared on the same agent: the confirming message's turn already arrived, so
     // only the other held send comes back as a bubble.
     push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-same" } })]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
+    expect(heldSendsLandedDuringSwitch(chat)).toBe(0);
   });
 
   it("lets the first held send back from a fresh start open the successor's turn, and only that one", () => {

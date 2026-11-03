@@ -4,22 +4,25 @@
  * They come from the chat's snapshot (``handoff.held_sends``), not from the page: the confirming
  * message first, then anything sent since. Each renders as the row the optimistic outgoing overlay
  * uses (the user bubble, or the notice a background-task report becomes), drawn as an ordinary
- * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). They stay
- * until the snapshot stops listing them, so a reloaded page shows them too; the confirming message
- * stands down earlier, once the switch marker that carries it is on the transcript (the
- * successor's opening turn is its real form).
+ * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). The snapshot
+ * keeps listing a send the switch has delivered until the switch is done, so a reloaded page shows
+ * them too; each stands down earlier once its real form is on the transcript: the confirming message
+ * once the switch marker that carries it is (the successor's opening turn), and the others, oldest
+ * first, as the turns the agent took during the switch land (``heldSendsLandedDuringSwitch``).
  */
 
 import m from "mithril";
 import { getChatById, getProvisionalChat } from "../models/Chats";
-import { getOutgoingMessages } from "../models/OutgoingMessages";
+import { getOutgoingMessages, heldSendsLandedDuringSwitch } from "../models/OutgoingMessages";
 import { isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
 
 export function renderHeldSends(chatId: string): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
-  const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
+  const standing = chat.handoff.held_sends
+    .filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id))
+    .slice(heldSendsLandedDuringSwitch(chatId));
   return standing.map((held) =>
     renderNotYetRealBubble({
       key: `held-${held.message_id}`,
