@@ -167,19 +167,27 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     engine = undefined;
   });
 
-  it("returns to the bottom in the same frame after the browser clamps the view up during a redraw", async () => {
-    engine = await openFollowingChat(makeDataSource(), element);
-    // The redraw's patch lays the content out shorter for a moment (a spacer
-    // shrinks before the row replacing it is inserted), and the browser clamps
-    // scrollTop up to fit; the content is back to full height by the time the
-    // engine positions. A glide back from the clamp would paint as a bounce.
-    engine.computeRenderPlan();
-    element.scrollTop = BOTTOM_PX - 150;
-    engine.afterRender(element);
-    await flushMicrotasks();
+  // The redraw's patch lays the content out shorter for a moment (a spacer
+  // shrinks before the row replacing it is inserted), or content shrinks before
+  // the redraw (an image, a font swap), and the browser clamps scrollTop up to
+  // fit; the content is back to full height by the time the engine positions.
+  // A glide back from the clamp would paint as a bounce.
+  it.each([
+    { clampLands: "during the redraw's patch", isDuringPatch: true },
+    { clampLands: "before the redraw", isDuringPatch: false },
+  ])(
+    "returns to the bottom in the same frame after the browser clamps the view up $clampLands",
+    async ({ isDuringPatch }) => {
+      engine = await openFollowingChat(makeDataSource(), element);
+      if (!isDuringPatch) element.scrollTop = BOTTOM_PX - 150;
+      engine.computeRenderPlan();
+      if (isDuringPatch) element.scrollTop = BOTTOM_PX - 150;
+      engine.afterRender(element);
+      await flushMicrotasks();
 
-    expect(element.scrollTop).toBe(BOTTOM_PX);
-  });
+      expect(element.scrollTop).toBe(BOTTOM_PX);
+    },
+  );
 
   it("re-pins to the bottom as soon as the viewport gets shorter, before any redraw", async () => {
     engine = await openFollowingChat(makeDataSource(), element);
