@@ -2186,6 +2186,26 @@ describe("agent switches", () => {
     expect(sections[1].items.map((i) => i.kind)).toEqual(["step"]);
     expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "handoff"]);
   });
+
+  // The successor answers the message the user switched with: a step the retiring agent left open
+  // does not take that answer as its caption, until the successor works in it.
+  it("keeps a step carried over a switch out of the successor's answer until it works in it", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Check overall disk usage")),
+      agentSwitch("t2", "sw1", "claude", "codex", ["m-trigger", "what's RAM?"]),
+      assistantText("t3", "RAM is short-term memory.", "ans"),
+    ];
+    const answering = run(events, /* idle */ false);
+    expect(answering[1].live_step_id).toBeNull();
+    expect(stepItems(answering[1].items)[0].events).toHaveLength(0);
+    expect(answering[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+
+    const working = run([...events, workMsg("t4", "Bash", "w1"), result("t4", "w1", "ok")], /* idle */ false);
+    expect(working[1].live_step_id).toBe("s1");
+    expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
 });
 
 describe("secret requests", () => {
