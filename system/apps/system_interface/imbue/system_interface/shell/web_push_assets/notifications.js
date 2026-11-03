@@ -260,14 +260,19 @@ async function sendTest() {
 async function forgetDevice(deviceId) {
   try {
     await requestJson("DELETE", `api/web-push/devices/${encodeURIComponent(deviceId)}`);
-    if (deviceId === thisDeviceId) {
-      const subscription = await currentSubscription();
-      if (subscription) await subscription.unsubscribe();
-    }
   } catch (error) {
     await render();
     showStatus(`Could not remove the device: ${error.message}`, "bad");
     return;
+  }
+  if (deviceId === thisDeviceId) {
+    // The workspace has forgotten the device; a subscription the browser keeps is replaced when it is turned on again.
+    try {
+      const subscription = await currentSubscription();
+      if (subscription) await subscription.unsubscribe();
+    } catch (error) {
+      console.warn("Removed this device, but could not drop this browser's push subscription", error);
+    }
   }
   await render();
 }
