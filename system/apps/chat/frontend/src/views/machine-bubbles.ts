@@ -4,9 +4,9 @@
  * beside the people's bubbles rather than as a block of text.
  *
  * The gutter belongs to the agent's column, not to a bubble: everything the agent produces starts one face-and-gap
- * in, and the name and face head only the first row of each stretch of the agent's output, whatever that row holds. Tool chips, cards, and step timelines are not
- * prose and stay outside the bubbles, so a turn that interleaves prose and tool calls reads as several bubbles with
- * the tool work between them, all on one edge.
+ * in, and the name and face head only the first row of each stretch of the agent's output, whatever that row holds.
+ * Tool chips, cards, and step timelines are not prose and stay outside the bubbles, so a turn that interleaves prose
+ * and tool calls reads as several bubbles with the tool work between them, all on one edge.
  */
 
 import m from "mithril";
