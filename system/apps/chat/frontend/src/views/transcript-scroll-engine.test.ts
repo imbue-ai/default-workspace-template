@@ -200,6 +200,19 @@ describe("transcript scroll engine keeps FOLLOW at the bottom through layout cha
     expect(element.scrollTop).toBe(SCROLL_HEIGHT_PX - (CLIENT_HEIGHT_PX - 20));
   });
 
+  it("leaves a viewport resize alone while the reader's upward scroll has not been reported yet", async () => {
+    engine = await openFollowingChat(makeDataSource(), element);
+
+    // A Page Up moves the view before its scroll event arrives, and a key press
+    // does not leave FOLLOW on its own.
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
+    element.scrollTop = BOTTOM_PX - 100;
+    layout.clientHeightPx = CLIENT_HEIGHT_PX - 20;
+    fireResizeObserverOf(element);
+
+    expect(element.scrollTop).toBe(BOTTOM_PX - 100);
+  });
+
   it("leaves a viewport resize alone once the reader has scrolled up", async () => {
     engine = await openFollowingChat(makeDataSource(200), element);
 
