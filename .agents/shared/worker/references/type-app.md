@@ -115,9 +115,10 @@ phone, never as a new desktop look: under the media queries the workspace's
 own apps switch on (`system/libs/workspace_ui/src/device_queries.ts`), a
 phone-sized viewport either way round, which covers 852x393 where a
 `max-width` breakpoint does not, or `(pointer: coarse)` for what a finger
-needs (hover-only controls, tap targets). Look at the screenshots at both phone sizes and at the desktop size the
-user confirmed, as `web-frontend-testing.md` requires for any page you change.
-Commit one `browser` test in that phone context (393x852, `has_touch=True`,
+needs (hover-only controls, tap targets). Look at the screenshots at both
+phone sizes and at the desktop size the user confirmed, as
+`web-frontend-testing.md` requires for any page you change. Commit one
+`browser` test in that phone context (393x852, `has_touch=True`,
 `is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
 scroll and runs the app's main action by tapping it. The repo-root
 `conftest.py` does not reach a user-built app's suite and its dev group has
