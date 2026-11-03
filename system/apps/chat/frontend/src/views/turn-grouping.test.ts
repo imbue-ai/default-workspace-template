@@ -628,7 +628,9 @@ describe("narration and close-time ejection", () => {
 
     const landed = run(events, /* idle */ true);
     expect(landed[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
-    expect(stepItems(landed[1].items)[0].events).toHaveLength(0);
+    // The step stays where it was left, frozen, and is not drawn again in a turn that never took it up.
+    expect(stepItems(landed[1].items)).toHaveLength(0);
+    expect(stepItems(landed[0].items).map((step) => step.ticket_id)).toEqual(["s1"]);
   });
 
   // The agent working while the carried-over step is open takes it up again.
@@ -704,7 +706,7 @@ describe("narration and close-time ejection", () => {
     const sections = run(events, /* idle */ false);
     expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
     expect(sections[2].live_step_id).toBeNull();
-    expect(stepItems(sections[2].items)[0].events).toHaveLength(0);
+    expect(stepItems(sections[2].items)).toHaveLength(0);
     expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
   });
 
@@ -2224,7 +2226,7 @@ describe("agent switches", () => {
     ];
     const answering = run(events, /* idle */ false);
     expect(answering[1].live_step_id).toBeNull();
-    expect(stepItems(answering[1].items)[0].events).toHaveLength(0);
+    expect(stepItems(answering[1].items)).toHaveLength(0);
     expect(answering[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
 
     const working = run([...events, workMsg("t4", "Bash", "w1"), result("t4", "w1", "ok")], /* idle */ false);

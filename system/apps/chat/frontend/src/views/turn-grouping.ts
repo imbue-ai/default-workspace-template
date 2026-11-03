@@ -33,7 +33,7 @@
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state. It belongs to the earlier request, so the new turn's
  * prose does not join it until the agent works while it is open or moves a
- * step; the same holds for a step carried over a switch to another agent, whose
+ * step, and a turn that never takes it up does not draw it again; the same holds for a step carried over a switch to another agent, whose
  * successor starts on the message the user switched with. A turn the agent did
  * nothing in (two boundaries back to back) keeps no copy, so the step shows
  * once, under the later boundary.
@@ -482,9 +482,12 @@ interface SectionBuilder {
   entries: SectionEntry[];
   current_step_id: string | null;
   /** A step carried over into a turn the user started (a message, or a switch to another
-   *  agent), which the agent has not taken up again in it: it stays on the timeline, but nothing
-   *  the agent says joins it until the agent works while it is open or moves a step. */
+   *  agent), which the agent has not taken up again in it: nothing the agent says joins it until
+   *  the agent works while it is open or moves a step. */
   dormant_step_id: string | null;
+  /** Whether this section's carryover entered dormant: a carried-over step the agent never takes
+   *  up in it is left off its timeline (it still shows, frozen, in the turn it came from). */
+  has_dormant_carryover: boolean;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -499,6 +502,7 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     entries: [],
     current_step_id: null,
     dormant_step_id: null,
+    has_dormant_carryover: false,
     open_handoff: null,
   };
 }
@@ -881,6 +885,7 @@ function openStep(section: SectionBuilder, id: string, is_carryover: boolean): v
 function setCarryoverDormant(section: SectionBuilder): void {
   section.dormant_step_id = section.current_step_id;
   section.current_step_id = null;
+  section.has_dormant_carryover = true;
 }
 
 function applyTransition(section: SectionBuilder, t: { id: string; status: "in_progress" | "closed" }): void {
@@ -974,6 +979,24 @@ function finalizeSection(
     section.entries = [];
     section.steps.clear();
     section.step_order = [];
+  }
+
+  // A step left open by an earlier request that the agent never took up in this turn is not part
+  // of it: showing it again here would read as the agent going back to it.
+  if (section.has_dormant_carryover) {
+    const untakenIds = new Set(
+      section.step_order.filter((id) => {
+        const node = section.steps.get(id)!;
+        return (
+          node.is_carryover && node.status === "active" && node.events.length === 0 && id !== section.current_step_id
+        );
+      }),
+    );
+    if (untakenIds.size > 0) {
+      section.entries = section.entries.filter((entry) => entry.kind !== "step" || !untakenIds.has(entry.id));
+      section.step_order = section.step_order.filter((id) => !untakenIds.has(id));
+      for (const id of untakenIds) section.steps.delete(id);
+    }
   }
 
   // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
