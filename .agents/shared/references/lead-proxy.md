@@ -281,7 +281,7 @@ On `type: status`:
   after the go-live, in their terms, whether people they share the app with
   should be able to do those things ("Should people you share the tracker
   with be able to delete entries, or only you?"), and make the change they
-  choose through `update-creation`.
+  choose through `update-app`.
   Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>
