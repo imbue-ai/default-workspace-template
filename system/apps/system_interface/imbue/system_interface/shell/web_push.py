@@ -35,6 +35,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellError
+from imbue.system_interface.shell.primitives import PushDeviceId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -123,7 +124,7 @@ class DeviceRegistrationRequest(FrozenModel):
 class RegisteredDevice(FrozenModel):
     """One device that turned notifications on, as ``devices.json`` keeps it."""
 
-    device_id: str = Field(description="The device's id: a digest of its push endpoint")
+    device_id: PushDeviceId = Field(description="The device's id: a digest of its push endpoint")
     label: str = Field(description="What to call the device")
     subscription: BrowserPushSubscription = Field(description="The device's push subscription")
     registered_at: datetime = Field(description="When the device last turned notifications on")
@@ -139,7 +140,7 @@ class _DevicesDocument(FrozenModel):
 class DeviceView(FrozenModel):
     """A registered device as the notifications page lists it: its subscription stays on the server."""
 
-    device_id: str = Field(description="The device's id: a digest of its push endpoint")
+    device_id: PushDeviceId = Field(description="The device's id: a digest of its push endpoint")
     label: str = Field(description="What to call the device")
     push_provider: str = Field(description="Whose push service carries the device's messages")
     registered_at: datetime = Field(description="When the device last turned notifications on")
@@ -192,7 +193,7 @@ class PushProviderAnswer(FrozenModel):
 class DeviceDelivery(FrozenModel):
     """What happened to one notification on its way to one device."""
 
-    device_id: str = Field(description="The device's id")
+    device_id: PushDeviceId = Field(description="The device's id")
     label: str = Field(description="What to call the device")
     push_provider: str = Field(description="Whose push service was posted to")
     status_code: int | None = Field(description="The push service's HTTP status, or None when it did not answer")
@@ -213,9 +214,9 @@ class PushSendOutcome(FrozenModel):
 
 
 @pure
-def device_id_of(endpoint: str) -> str:
+def device_id_of(endpoint: str) -> PushDeviceId:
     """The id a device is listed and addressed under: a digest of its endpoint, which itself stays on the server."""
-    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:_DEVICE_ID_LENGTH]
+    return PushDeviceId(hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:_DEVICE_ID_LENGTH])
 
 
 @pure
@@ -354,7 +355,7 @@ class WebPushNotifier(MutableModel):
             self._write_devices(devices)
         return devices[-1]
 
-    def forget(self, device_ids: frozenset[str]) -> bool:
+    def forget(self, device_ids: frozenset[PushDeviceId]) -> bool:
         """Forget these devices; whether any of them was registered."""
         with STATE_FILES_LOCK:
             devices = self.list_devices()
@@ -364,7 +365,9 @@ class WebPushNotifier(MutableModel):
             self._write_devices(kept)
         return True
 
-    def send(self, notification: PushNotificationRequest, device_ids: frozenset[str] | None) -> PushSendOutcome:
+    def send(
+        self, notification: PushNotificationRequest, device_ids: frozenset[PushDeviceId] | None
+    ) -> PushSendOutcome:
         """Post the notification to every registered device (or to those of ``device_ids``), forgetting each one
         whose push service says its subscription is gone."""
         devices = tuple(

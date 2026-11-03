@@ -29,6 +29,7 @@ from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import DevicesListing
 from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import RegisteredDevice
 from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import WebPushPublicKey
 from imbue.system_interface.shell.web_push import device_view
@@ -102,6 +103,11 @@ def _refuse_device_change() -> ResponseReturnValue | None:
     return _refuse_if_preview()
 
 
+def _registered_device(web_push: WebPushNotifier, device_id: str) -> RegisteredDevice | None:
+    """The registered device a route's URL names; None for an id no device has, a malformed one included."""
+    return next((device for device in web_push.list_devices() if device.device_id == device_id), None)
+
+
 def get_public_key() -> ResponseReturnValue:
     """The key a browser subscribes with."""
     return model_response(WebPushPublicKey(public_key=_web_push().public_key()))
@@ -129,7 +135,9 @@ def forget_device(device_id: str) -> ResponseReturnValue:
     refusal = _refuse_device_change()
     if refusal is not None:
         return refusal
-    if not _web_push().forget(frozenset({device_id})):
+    web_push = _web_push()
+    device = _registered_device(web_push, device_id)
+    if device is None or not web_push.forget(frozenset({device.device_id})):
         return detail_response(f"No registered device {device_id!r}", HTTP_NOT_FOUND)
     return "", HTTP_NO_CONTENT
 
@@ -140,9 +148,10 @@ def send_test_notification(device_id: str) -> ResponseReturnValue:
     if refusal is not None:
         return refusal
     web_push = _web_push()
-    if all(device.device_id != device_id for device in web_push.list_devices()):
+    device = _registered_device(web_push, device_id)
+    if device is None:
         return detail_response(f"No registered device {device_id!r}", HTTP_NOT_FOUND)
-    return model_response(web_push.send(TEST_NOTIFICATION, frozenset({device_id})))
+    return model_response(web_push.send(TEST_NOTIFICATION, frozenset({device.device_id})))
 
 
 def send_notification() -> ResponseReturnValue:
