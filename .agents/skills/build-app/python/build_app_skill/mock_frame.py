@@ -222,10 +222,10 @@ def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> i
     code = frames.down(app_name, repo_root)
     try:
         app = find_app(app_name, repo_root)
-    except MockFrameError:
+    except MockFrameError as exc:
         sys.stderr.write(
-            f"mock frame: {app_name!r} has no manifest or is not registered, so its "
-            "registration is left as it is.\n"
+            f"mock frame: the frame is down, but {app_name!r}'s registration is left as "
+            f"it is: {exc}\n"
         )
         return code
     _register(app, repo_root, None)

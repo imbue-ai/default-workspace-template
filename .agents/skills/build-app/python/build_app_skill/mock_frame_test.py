@@ -245,7 +245,7 @@ def test_down_restores_the_app_even_when_no_mock_window_is_open_or_the_frame_wil
 
 
 def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
     frames = _RecordingFrames()
@@ -260,6 +260,7 @@ def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
     assert frames.downs == [_APP]
     rows = tomllib.loads(registry.read_text()).get("apps", [])
     assert [row["name"] for row in rows] == []
+    assert "is not registered" in capsys.readouterr().err
 
 
 def test_the_frames_names_stay_within_the_registry_caps() -> None:
