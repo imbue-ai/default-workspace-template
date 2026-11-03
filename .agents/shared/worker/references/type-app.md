@@ -123,14 +123,13 @@ just the pages the user clicks. Each request carries `X-Imbue-Identity`
 ("Request identity" there): `owner` is always present; a person over a share
 adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
 `granter`, with no `user_id` ("Visiting agents", "Admission"); and a request
-with no header is the owner's.
-Read it with `workspace_layout.identity`, as the shell and the chat app do.
-The scaffold gives an app only `app-schema`, so when the app lacks it, add
-`workspace-layout` as an editable path dependency in the app's own directory
-(`.agents/shared/references/running-python.md`, "User packages are standalone
-projects"). Use `parse_identity_header` (it raises `InvalidIdentityHeaderError`
-for a header that does not parse: answer that with a 400, never read it as the
-owner's), `is_owner_participant`, and
+with no header is the owner's. Read it with `workspace_layout.identity`, as
+the shell and the chat app do. The scaffold gives an app only `app-schema`, so
+when the app lacks it, add `workspace-layout` as an editable path dependency
+in the app's own directory (`.agents/shared/references/running-python.md`,
+"User packages are standalone projects"). Use `parse_identity_header` (it
+raises `InvalidIdentityHeaderError` for a header that does not parse: answer
+that with a 400, never read it as the owner's), `is_owner_participant`, and
 `participant_key_of`, which names the requester `user:<id>`, `agent:<id>`, or
 `owner`. Locally the header looks the same, so the test client exercises all
 of this without turning sharing on.
