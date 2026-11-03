@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- earlyoom runs it after each kill from supervisord's environment, where uv is not on hand
+# import-path: no-venv -- earlyoom's -N hook execs this path through its python3 shebang after each kill, so a shed is recorded even when the venv is missing or broken
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority.ledger import append_shed_record
