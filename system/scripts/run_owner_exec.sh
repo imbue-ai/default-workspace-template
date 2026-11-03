@@ -11,6 +11,9 @@ set -euo pipefail
 REPO_ROOT="${MINDS_WORKSPACE_ROOT:-/home/user/workspace}"
 CONFIG_DIR="${REPO_ROOT}/data/.state"
 CONFIG_PATH="${CONFIG_DIR}/owner_exec_inner.toml"
+# Loopback everywhere but an auth sandbox, whose boot script binds every interface so Modal's
+# encrypted tunnel reaches the daemon (system/libs/auth_sandbox/README.md).
+LISTEN_HOST="${OWNER_EXEC_LISTEN_HOST:-127.0.0.1}"
 mkdir -p "$CONFIG_DIR"
 
 # Converge the pinned binary before exec'ing it. The installer is idempotent
@@ -44,7 +47,7 @@ python3 "${REPO_ROOT}/system/scripts/forward_port.py" \
 cat > "$CONFIG_PATH" <<TOML
 role = "inner"
 host_id = "${HOST_ID}"
-listen_host = "127.0.0.1"
+listen_host = "${LISTEN_HOST}"
 listen_port = 8793
 repo_root = "${REPO_ROOT}"
 authorized_keys_path = "${HOME}/.ssh/authorized_keys"
