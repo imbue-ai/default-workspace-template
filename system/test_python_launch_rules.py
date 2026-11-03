@@ -889,8 +889,23 @@ def _sys_path_edit_lines(tree: ast.AST) -> list[int]:
     return sorted(lines)
 
 
+# Every form of edit ``_sys_path_edit_lines`` reads is spelled with one of these words, or as
+# ``<sys or its alias>.path``, so a file with neither has none and is not parsed.
+_IMPORT_PATH_WORDS = ("PYTHONPATH", "syspath_prepend", "addsitedir", "from sys import")
+_SYS_ALIAS_RE = re.compile(r"\bsys\s+as\s+(\w+)")
+
+
+def _may_edit_import_path(text: str) -> bool:
+    if any(word in text for word in _IMPORT_PATH_WORDS):
+        return True
+    names = {"sys", *_SYS_ALIAS_RE.findall(text)}
+    return any(re.search(rf"\b{re.escape(name)}\s*\.\s*path\b", text) for name in names)
+
+
 def _edits_sys_path(source: str) -> bool:
-    return bool(_sys_path_edit_lines(ast.parse(source)))
+    return _may_edit_import_path(source) and bool(
+        _sys_path_edit_lines(ast.parse(source))
+    )
 
 
 def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
@@ -982,8 +997,11 @@ def _import_path_sites_in(repo_root: Path, relative: str) -> list[_Site]:
     text = (repo_root / relative).read_text(errors="replace")
     lines = text.splitlines()
     if relative.endswith(".py"):
+        if not _may_edit_import_path(text):
+            return []
         tree = ast.parse(text)
-        flagged, spans = _sys_path_edit_lines(tree), _statement_spans(tree)
+        flagged = _sys_path_edit_lines(tree)
+        spans = _statement_spans(tree) if flagged else []
     elif relative.endswith(".sh"):
         flagged, spans = _shell_pythonpath_lines(lines), _shell_statement_spans(lines)
     else:
