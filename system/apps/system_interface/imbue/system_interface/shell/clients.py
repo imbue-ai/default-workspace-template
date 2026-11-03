@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import EntryMode
 from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
@@ -39,12 +40,20 @@ from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 CLIENTS_FILENAME: Final[str] = "clients.json"
-CLIENTS_FILE_VERSION: Final[int] = 2
+CLIENTS_FILE_VERSION: Final[int] = 3
 # The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
 # CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, ``_folded_if_legacy`` (reading the
 # file straight through ``parse_versioned_document``), and clients_test's version-one test around late October
 # 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
+# The file from when the avatar floated by default: dragging it saved its whole presentation, the default floating
+# mode included, so a stored mode there is no sign the user chose it, and every client's avatar is docked once.
+# CLEANUP: drop ``_FLOATING_AVATAR_CLIENTS_FILE_VERSION``, ``_docked_avatar_client``, ``_folded_if_floating_avatar``,
+# and clients_test's avatar-docking test around early January 2027, once every workspace has written a version-3
+# clients.json (the first write after this release does).
+_FLOATING_AVATAR_CLIENTS_FILE_VERSION: Final[int] = 2
+# The pinned app whose entry is the workspace's avatar.
+_AVATAR_APP_NAME: Final[str] = "chat"
 
 # A client unseen for this long is dropped, together with every layout it owns.
 CLIENT_RETENTION: Final[timedelta] = timedelta(days=90)
@@ -142,8 +151,36 @@ def _folded_if_legacy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     if raw is None or raw.get("version") != _LEGACY_CLIENTS_FILE_VERSION or not isinstance(raw.get("clients"), dict):
         return raw
     return {
-        "version": CLIENTS_FILE_VERSION,
+        "version": _FLOATING_AVATAR_CLIENTS_FILE_VERSION,
         "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
+    }
+
+
+@pure
+def _docked_avatar_client(entry: Any) -> Any:
+    """A version-2 entry as version 3 reads it: its avatar in the taskbar with no floating position, its other
+    pinned entries as they are."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("entries"), dict):
+        return entry
+    avatar = entry["entries"].get(_AVATAR_APP_NAME)
+    if not isinstance(avatar, dict):
+        return entry
+    docked = {**avatar, "mode": EntryMode.BAR.value, "position": None}
+    return {**entry, "entries": {**entry["entries"], _AVATAR_APP_NAME: docked}}
+
+
+@pure
+def _folded_if_floating_avatar(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A version-2 document as a version-3 one, entry by entry; any other document (or none) as it is."""
+    if (
+        raw is None
+        or raw.get("version") != _FLOATING_AVATAR_CLIENTS_FILE_VERSION
+        or not isinstance(raw.get("clients"), dict)
+    ):
+        return raw
+    return {
+        "version": CLIENTS_FILE_VERSION,
+        "clients": {client_id: _docked_avatar_client(entry) for client_id, entry in raw["clients"].items()},
     }
 
 
@@ -181,7 +218,10 @@ class ClientStore(MutableModel):
 
     def _read_unlocked(self) -> ClientsDocument:
         document = parse_versioned_document(
-            _folded_if_legacy(read_json_object(self._path())), ClientsDocument, CLIENTS_FILE_VERSION, self._path()
+            _folded_if_floating_avatar(_folded_if_legacy(read_json_object(self._path()))),
+            ClientsDocument,
+            CLIENTS_FILE_VERSION,
+            self._path(),
         )
         return document if document is not None else ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
 

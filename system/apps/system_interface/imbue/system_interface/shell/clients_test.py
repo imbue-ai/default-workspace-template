@@ -59,7 +59,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "desktop_revision": 2,
         "viewport": None,
     }
-    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
+    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 3
 
 
 def test_set_active_desktop_moves_a_recorded_client_and_refuses_an_unknown_one(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> N
     assert store.prune_unseen(TEST_NOW) == []
 
 
-def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_two(tmp_path: Path) -> None:
+def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_three(tmp_path: Path) -> None:
     """The tabbed shell's file carried a device kind and a view per client; a client that reported a desktop keeps
     it, one that never did lands on the desktop of its view's id (or the first desktop, when none has it)."""
     legacy = {
@@ -168,7 +168,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
 
     store.record_report(client_report("c3", "home"), TEST_NOW, is_redirected=False)
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
-    assert written["version"] == 2
+    assert written["version"] == 3
     assert set(written["clients"]) == {"viewer", "desktopper", "c3"}
     assert set(written["clients"]["viewer"]) == {
         "active_desktop",
@@ -181,6 +181,49 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
         "desktop_moved_by",
         "viewport",
     }
+
+
+def test_a_version_two_file_docks_every_clients_avatar_once_and_a_later_floating_choice_sticks(tmp_path: Path) -> None:
+    """A version-2 shell saved the avatar's then-default floating mode on any drag, so reading one puts the chat entry
+    in the taskbar and forgets its position; other pinned entries keep theirs, and a choice made after it is kept."""
+    floating_avatar = {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}, "is_window_shown": False}
+    floating_other = {"mode": "floating", "style": "plain", "position": {"x": 0.1, "y": 0.2}}
+    earlier = {
+        "version": 2,
+        "clients": {
+            "laptop": {
+                "active_desktop": "home",
+                "last_seen": "2026-10-20T00:00:00+00:00",
+                "entries": {"chat": floating_avatar, "notes": floating_other},
+            },
+            "monitor": {"active_desktop": "home", "last_seen": "2026-10-21T00:00:00+00:00", "entries": {}},
+        },
+    }
+    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps(earlier))
+    store = ClientStore(state_directory=tmp_path)
+
+    laptop = store.get_client("laptop")
+    assert laptop is not None
+    assert laptop.entries == {
+        "chat": EntryPresentation(mode=EntryMode.BAR, style=PinStyle.AVATAR, position=None, is_window_shown=False),
+        "notes": EntryPresentation(
+            mode=EntryMode.FLOATING, style=PinStyle.PLAIN, position=FloatingPosition(x=0.1, y=0.2)
+        ),
+    }
+    monitor = store.get_client("monitor")
+    assert monitor is not None and monitor.entries == {}
+
+    # The first write saves the docked entries at version 3; floating the avatar again then survives fresh reads.
+    store.record_report(client_report("monitor", "home"), TEST_NOW, is_redirected=False)
+    written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
+    assert written["version"] == 3
+    assert written["clients"]["laptop"]["entries"]["chat"]["mode"] == "bar"
+    refloated = EntryPresentation(
+        mode=EntryMode.FLOATING, style=PinStyle.AVATAR, position=FloatingPosition(x=0.5, y=0.5)
+    )
+    store.set_entry_presentation(ClientId("laptop"), AppName("chat"), refloated, TEST_NOW + timedelta(minutes=1))
+    reread = ClientStore(state_directory=tmp_path).get_client("laptop")
+    assert reread is not None and reread.entries["chat"] == refloated
 
 
 def test_set_viewport_stores_a_recorded_clients_backdrop_size_which_its_reports_and_arrivals_keep(
@@ -210,7 +253,7 @@ def test_set_viewport_stores_a_recorded_clients_backdrop_size_which_its_reports_
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:
     (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 7, "clients": {}}))
     assert ClientStore(state_directory=tmp_path).list_clients() == []
-    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 2, "clients": "nope"}))
+    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 3, "clients": "nope"}))
     assert ClientStore(state_directory=tmp_path).list_clients() == []
 
 
@@ -304,4 +347,4 @@ def test_a_version_two_file_written_before_the_shown_history_reads_it_as_empty(t
     (client,) = store.list_clients()
     assert client.shown_history == ()
     assert store.record_shown(ClientId("c1"), WindowId(_window_id(1)), TEST_NOW).shown_history == (_window_id(1),)
-    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
+    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 3
