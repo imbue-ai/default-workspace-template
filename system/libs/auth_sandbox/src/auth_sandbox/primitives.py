@@ -38,12 +38,21 @@ SCREEN_DISPLAY: Final[str] = ":99"
 SCREEN_RUNTIME_DIR: Final[str] = "/tmp/screen-runtime"
 SCREEN_PULSE_SERVER: Final[str] = f"unix:{SCREEN_RUNTIME_DIR}/pulse.sock"
 SCREEN_SERVICE_URL: Final[str] = "http://127.0.0.1:8090"
+# The connect-info document the connector writes once it has read the sandbox's tunnels (the raw TCP one to
+# neko's ICE mux) and the Screen reads on every connect-info request; outside RUNTIME_DIR, which is root-only.
+CONNECT_INFO_PATH: Final[Path] = Path("/run/auth-sandbox-connect-info.json")
 
 # The non-secret environment the connector passes at sandbox create (spec 5.2) that the boot script and
 # the commands read from the process environment.
 HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_HOST_ID"
 REGION_ENV_VAR: Final[str] = "AUTH_SANDBOX_REGION"
 WORKSPACE_HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_WORKSPACE_HOST_ID"
+# What the boot script lays the sandbox out from: the owner's OpenSSH public key line (the whole of
+# authorized_keys), the hosted chrome's origin (owner-exec's CORS origin and the Screen's frame-ancestors)
+# and the lower-case hex SHA-256 of the Screen's owner token (the Screen's gate).
+AUTHORIZED_KEY_ENV_VAR: Final[str] = "AUTH_SANDBOX_AUTHORIZED_KEY"
+CHROME_ORIGIN_ENV_VAR: Final[str] = "AUTH_SANDBOX_CHROME_ORIGIN"
+SCREEN_TOKEN_SHA256_ENV_VAR: Final[str] = "AUTH_SANDBOX_SCREEN_TOKEN_SHA256"
 # Optional overrides of what the region implies for the launcher's geo pins.
 TIMEZONE_ENV_VAR: Final[str] = "AUTH_SANDBOX_TIMEZONE"
 COUNTRY_ENV_VAR: Final[str] = "AUTH_SANDBOX_COUNTRY"

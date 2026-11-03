@@ -39,11 +39,16 @@ Everything user-specific lives under `/run/auth-sandbox/`, which dies with the s
 | `export/` | `auth-sandbox-export` | `credentials.json.enc`, `data-format-version`, `browser_state.json.enc` under the transfer key |
 | `host/data.json` | the boot script | `{"host_id": ...}`, which owner-exec reads its audience `container:<host id>` from |
 
-## The environment the connector passes
+## What the connector passes at create
 
 The connector creates the sandbox with no secrets, only these variables, which the boot script and the commands read from the process environment:
 
 - `AUTH_SANDBOX_HOST_ID` (required): the host id the connector minted for the sandbox; owner-exec's audience is `container:<this>`.
+- `AUTH_SANDBOX_AUTHORIZED_KEY` (required): the user's OpenSSH public key line, which the boot script writes as the whole of `/home/user/.ssh/authorized_keys`, the key owner-exec verifies every request against.
+- `AUTH_SANDBOX_CHROME_ORIGIN` (required): the hosted chrome's origin, with no trailing slash.
+  The boot script writes `export SHARE_CHROME_ORIGIN=<origin>` to `/home/user/workspace/data/.secrets/share.env`, where owner-exec reads its CORS origin, and passes it to the Screen as `SCREEN_FRAME_ANCESTORS`.
+- `AUTH_SANDBOX_SCREEN_TOKEN_SHA256` (required): the lower-case hex SHA-256 of the Screen's owner token, which the connector mints, returns to the chrome once and never stores.
+  The boot script passes it to the Screen as `SCREEN_OWNER_TOKEN_SHA256`, which turns on the Screen's gate (`system/apps/screen/README.md`, "Gate mode").
 - `AUTH_SANDBOX_ID`, `AUTH_SANDBOX_CONNECTOR_URL`: the sandbox's own id and the connector it belongs to, for whatever later needs them.
 - `AUTH_SANDBOX_REGION`: the region the sandbox runs in.
   The sign-in pins the Fortress launcher's timezone and country from it (`TILION_TZ`, `TILION_COUNTRY`; `us-east` is New York, `eu-west` Dublin, `ap-northeast` Tokyo, and so on by longest prefix; an unknown region gets UTC and US) so no geo lookup sits on the critical path.
@@ -51,20 +56,33 @@ The connector creates the sandbox with no secrets, only these variables, which t
 - `AUTH_SANDBOX_WORKSPACE_HOST_ID`: the workspace being signed in; the launcher's fingerprint seed (`TILION_SEED`) is derived from it, so a service sees one device across that workspace's sign-ins.
 - `AUTH_SANDBOX_LATCHKEY_BINARY` (optional): which `latchkey` the commands run; the npm global on `PATH` otherwise.
 
+The boot script refuses to start when a required variable is missing or malformed (a key with a line break, an origin with a path, a digest that is not 64 lower-case hex digits).
+
 The sign-in also sets `TILION_NO_ACTIVATE=1`, `DISPLAY=:99`, the Screen's `XDG_RUNTIME_DIR` and `PULSE_SERVER`, `LATCHKEY_DISABLE_COUNTING=1`, and drops any `LATCHKEY_GATEWAY` from its environment.
 
-## What the connector writes after boot
+## The boot script and how the sandbox is reached
 
-The boot script (`sandbox/boot.sh`, installed at `/opt/auth-sandbox/boot.sh`) creates the tmpfs layout, generates the sandbox key, copies the template `config.json` into the latchkey directory, starts the sandbox's supervisord (`sandbox/supervisord.conf`: the Screen service with its stack group and watcher, the share gateway, and owner-exec; no chat, no agents, no env-converge), asks the Screen service to start its stack, and waits.
-It sets `HOME=/home/user` and `MNGR_HOST_DIR=/run/auth-sandbox/host`.
+The boot script (`sandbox/boot.sh`, installed at `/opt/auth-sandbox/boot.sh`) creates the tmpfs layout, generates the sandbox key, copies the template `config.json` into the latchkey directory, writes `authorized_keys` and `share.env`, starts the sandbox's supervisord (`sandbox/supervisord.conf`: the Screen service with its stack group and watcher, and owner-exec; no share gateway, no chat, no agents, no env-converge), asks the Screen service to start its stack, and waits.
+It sets `HOME=/home/user` and `MNGR_HOST_DIR=/run/auth-sandbox/host`, and exports for the programs `SCREEN_LISTEN_HOST=0.0.0.0`, `OWNER_EXEC_LISTEN_HOST=0.0.0.0` (read by `system/scripts/run_owner_exec.sh`), `SCREEN_OWNER_TOKEN_SHA256`, `SCREEN_FRAME_ANCESTORS` and `SCREEN_CONNECT_INFO_PATH=/run/auth-sandbox-connect-info.json`.
 
-The share comes up when the connector writes, relative to `/home/user/workspace/`:
+The sandbox is reached over Modal's own tunnels, with no relay and no certificate of ours in it:
 
-- `data/.secrets/share.env` with the share variables plus `SHARE_COOKIE_HOST_ONLY=1` (the gateway then sets its session cookies for the request host alone).
-- `data/.secrets/share_auth_label` in the shape `auth-[a-z0-9]{8}`, the connector's choice of the gateway's auth host label.
-- `data/.secrets/share_tls/cert.pem` and `data/.secrets/share_tls/key.pem`: the region's wildcard certificate (SANs exactly `auth.<region>.<content domain>` and `*.auth.<region>.<content domain>`, which is what the gateway's reuse check requires) and its key, so the gateway's first bring-up skips the CSR.
-- `data/.secrets/share_grants.toml`: an owner-only grants document.
-- `/home/user/.ssh/authorized_keys`: the user's public key, the whole file.
+| What | Port | Modal | Reached as |
+|---|---|---|---|
+| The Screen | 8090 | `encrypted_ports` | `https://<host>.w.modal.host`, gated: loopback, or the owner session the owner token opens |
+| owner-exec | 8793 | `encrypted_ports` | `https://<host>.w.modal.host`, every request signed with the owner's key |
+| neko's ICE TCP mux | 59000 | `unencrypted_ports` | raw TCP at `<host>.r<n>.modal.host:<port>`, the WebRTC media |
+
+## The connect-info file
+
+The connector writes `/run/auth-sandbox-connect-info.json` (outside `/run/auth-sandbox/`, which is root-only) right after it reads the sandbox's tunnels, which may be before or after the boot script runs, so the boot script never touches it.
+It is a connect-info document naming the raw TCP tunnel to the media port:
+
+```json
+{"candidates": [{"host": "<raw tcp host>", "port": <raw tcp port>, "protocol": "tcp", "guest_port": 59000}], "ice_servers": [], "expires_at": null}
+```
+
+The Screen reads it on every `GET /api/connect-info` (`SCREEN_CONNECT_INFO_PATH`), so the viewer's WebRTC reaches neko through the tunnel; an absent or unreadable file is simply no answer from that broker.
 
 ## The image
 
