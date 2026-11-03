@@ -31,6 +31,16 @@ function showAnswer(answer) {
   lastAnswerBody.textContent = JSON.stringify(answer, null, 2);
 }
 
+// What the workspace refused, with its HTTP status.
+class WorkspaceAnswerError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const HTTP_FORBIDDEN = 403;
+
 async function requestJson(method, path, body) {
   const response = await fetch(path, {
     method,
@@ -41,7 +51,10 @@ async function requestJson(method, path, body) {
   const text = await response.text();
   const parsed = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new Error(parsed && parsed.detail ? parsed.detail : `The workspace answered ${response.status}`);
+    throw new WorkspaceAnswerError(
+      parsed && parsed.detail ? parsed.detail : `The workspace answered ${response.status}`,
+      response.status,
+    );
   }
   return parsed;
 }
@@ -114,12 +127,14 @@ function renderDevices(devices) {
   }
 }
 
+// The devices with notifications on; a refusal (the requester is not the owner, who alone registers) is thrown.
 async function refreshDevices() {
   try {
     const listing = await requestJson("GET", "api/web-push/devices");
     renderDevices(listing.devices);
     return listing.devices;
   } catch (error) {
+    if (error.status === HTTP_FORBIDDEN) throw error;
     noDevicesNote.hidden = false;
     noDevicesNote.textContent = error.message;
     return [];
@@ -163,7 +178,16 @@ async function render() {
   }
   const subscription = Notification.permission === "granted" ? await currentSubscription() : null;
   thisDeviceId = subscription ? await deviceIdOf(subscription) : null;
-  const devices = await refreshDevices();
+  let devices;
+  try {
+    devices = await refreshDevices();
+  } catch (error) {
+    showButtons({ isOn: false });
+    turnOnButton.hidden = true;
+    noDevicesNote.hidden = true;
+    showStatus(error.message, "bad");
+    return;
+  }
   const isRegistered = thisDeviceId !== null && devices.some((device) => device.device_id === thisDeviceId);
   showButtons({ isOn: isRegistered });
   showStatus(
