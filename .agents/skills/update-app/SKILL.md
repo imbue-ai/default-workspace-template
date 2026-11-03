@@ -207,6 +207,13 @@ process restarts:
   With no window open yet, pass `--open` instead of `--refresh`: the call
   opens the window only after the checks pass, the order step 3 asks for.
 
+  While `build-app`'s mock frame is still up around the app, the user's
+  window is the frame's: drop both and end the call with `&& uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app
+  <name> --note "<what is not real yet>" --refresh`, which also keeps the
+  restarted app out of the launcher. Once it reads its real data, take the
+  frame down as `build-app` Step 2 says.
+
   A daemon with no port cannot use `verify_app.py` (it needs a port to
   check), so bounce it with supervisord directly; the call waits out the
   program's `startsecs`, which is 30 s only if its block sets `startsecs=30`:
