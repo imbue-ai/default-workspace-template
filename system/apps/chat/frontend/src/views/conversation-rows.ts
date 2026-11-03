@@ -3,18 +3,16 @@
  *
  * Both views render the same way: a single in-order walk of the transcript
  * (buildSections) into turn sections, flattened into the virtualized list's
- * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
- * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
- * node, a trailing wrap-up reply, or the chip row of a compaction that followed
- * it. Sharing it here means a subagent's "View conversation"
- * gets the real progress view -- step timeline, statuses, summaries -- and the
- * same windowed virtualization as the main chat, with zero rendering drift.
- *
- * A stretch of the agent's output -- everything from the first thing it does after
- * a person speaks until the next person speaks or another agent takes over -- is
- * one row: one bubble under the agent's name and face (see machine-bubbles),
- * holding its prose, tool calls, progress blocks, cards and the system notices
- * among them.
+ * top-level rows (buildRows): a person's message, or a stretch of the agent's
+ * output -- everything from the first thing it does after a person speaks until
+ * the next person speaks or another agent takes over -- as one bubble under the
+ * agent's name and face (see machine-bubbles). A stretch's parts are a whole
+ * ProgressBlock for a turn that has tk steps, an ungrouped assistant message, a
+ * system chip or notice, a handoff node, a trailing wrap-up reply, or the chip
+ * row of a compaction that followed it. Sharing it here means a subagent's "View
+ * conversation" gets the real progress view -- step timeline, statuses,
+ * summaries -- and the same windowed virtualization as the main chat, with zero
+ * rendering drift.
  *
  * Structure and decoration both come from the transcript walk (tk prints its
  * step decoration on stdout, which buildSections parses); there is no
