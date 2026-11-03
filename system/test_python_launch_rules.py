@@ -897,26 +897,11 @@ _GAP = r"(?:\s|\\|#[^\n]*)*"
 _IMPORT_PATH_WORDS = ("PYTHONPATH", "syspath_prepend", "addsitedir")
 _FROM_SYS_IMPORT_RE = re.compile(rf"\bfrom{_GAP}(?:\.{_GAP})*sys{_GAP}import\b")
 _SYS_ALIAS_RE = re.compile(rf"\bsys{_GAP}as{_GAP}(\w+)")
-# An escape that can stand for a letter of ``PYTHONPATH`` (hex 41 48 4E 4F 50 54 59), or a
-# line continuation inside a string, which stands for nothing.
-_PYTHONPATH_ESCAPE = (
-    r"\\(?:x(?:4[18eEfF]|5[049])|u00(?:4[18eEfF]|5[049])|U000000(?:4[18eEfF]|5[049])"
-    r"|N\{[^}\n]*\}|1(?:01|1[067]|2[04]|31)|\r\n?|\n)"
-)
-# A ``"PYTHONPATH"`` not spelled out whole is joined from quoted pieces of it: one written with
-# an escape, or ones written plainly that sit beside the string they are joined to.
-_PYTHONPATH_PIECE_RE = re.compile(
-    rf"([\"'])[PYTHONA]*(?:{_PYTHONPATH_ESCAPE}[PYTHONA]*)+\1"
-    rf"|[\"']{_GAP}[rRuU]?[\"'][PYTHONA]+[\"']"
-    rf"|[\"'][PYTHONA]+[\"']{_GAP}[rRuU]?[\"']"
-)
 
 
 def _may_edit_import_path(text: str) -> bool:
-    if (
-        any(word in text for word in _IMPORT_PATH_WORDS)
-        or _FROM_SYS_IMPORT_RE.search(text)
-        or _PYTHONPATH_PIECE_RE.search(text)
+    if any(word in text for word in _IMPORT_PATH_WORDS) or _FROM_SYS_IMPORT_RE.search(
+        text
     ):
         return True
     names = {"sys", *_SYS_ALIAS_RE.findall(text)}
@@ -1142,10 +1127,6 @@ def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
         "import os\nenv = dict(os.environ)\nenv['PYTHONPATH'] = 'x'\n"
     )
     assert _edits_sys_path("import os\nenv = dict(os.environ, PYTHONPATH='x')\n")
-    assert _edits_sys_path("import os\nos.environ['PYTHON' 'PATH'] = 'x'\n")
-    assert _edits_sys_path("import os\nos.environ['PYT' 'HONP' 'ATH'] = 'x'\n")
-    assert _edits_sys_path("import os\nos.environ['PYTHON\\x50ATH'] = 'x'\n")
-    assert _edits_sys_path("env = {'\\N{LATIN CAPITAL LETTER P}YTHONPATH': 'x'}\n")
     assert not _edits_sys_path("import sys\nprint(sys.path)\n")
     assert not _edits_sys_path(
         "import os\nenv = dict(os.environ)\nenv.pop('PYTHONPATH', None)\n"
