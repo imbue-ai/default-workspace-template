@@ -22,13 +22,17 @@ Assert on markers that are true if and only if a route behaves correctly --
 status, the rendered content, the raw-data/source affordance, and the empty and
 overflow states -- not just that the route returned `200`. Add Playwright
 coverage wherever the value is in the rendered UI rather than the JSON, driving
-it against the isolated instance. Use pytest-playwright's `page` / `context` /
-`browser` fixtures: the repo-root `conftest.py` already points them at
-Fortress, the workspace's browser, which is installed before any agent starts.
-Do not write your own launch fixture, do not `playwright install` a managed
+it against the isolated instance. In a suite the repo-root `conftest.py`
+reaches, use pytest-playwright's `page` / `context` / `browser` fixtures: that
+conftest already points them at Fortress, the workspace's browser, which is
+installed before any agent starts. A user-built app's suite is its own pytest
+root, which that conftest does not reach: `type-app.md`'s "On a phone" says
+how its browser test gets Playwright and launches Fortress. Anywhere else, do
+not write your own launch fixture. Never `playwright install` a managed
 browser, and never skip browser tests on browser presence -- a browser that
-cannot launch must fail the run. The only per-suite setup a browser test needs
-is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
+cannot launch must fail the run. Under the repo-root conftest, the only
+per-suite setup a browser test needs is a
+`pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
 10-second default does not cover a browser launch. Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
