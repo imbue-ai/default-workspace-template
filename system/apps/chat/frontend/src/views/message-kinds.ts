@@ -50,7 +50,8 @@
 
 /** Which side / channel a message renders on. */
 export enum Rail {
-  /** Right-aligned "user" channel (`.message-user` / `.message-system-collapsed`). */
+  /** The "user" channel (`.message-user` / `.message-system-collapsed`): a person's bubble, or a system chip,
+   *  which sits on the agent bubble's text edge inside a stretch of the agent's output. */
   User = "user",
   /** Left, full-width "assistant" channel -- used when a user_message's content
    *  is relocated into an assistant-side block (e.g. a skill body folded into its
@@ -197,7 +198,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "chips in the agent's chip rows, beside its tool calls: a start chip named as " +
       "the activity strip names the compaction ('Compacting while idle…', package-open " +
       "glyph) and a finish chip reading 'Compacted' (package glyph). They join the " +
-      "chip run at the event's transcript position (or a row of their own when " +
+      "chip run at the event's transcript position (or a chip run of their own when " +
       "nothing chips beside them, as under a `/compact` bubble), and " +
       "follow the reply when the event landed after it. Either chip opens the tool " +
       "chips' detail panel on why it ran and where to change that; under it, the " +

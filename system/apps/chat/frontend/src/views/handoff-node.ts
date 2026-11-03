@@ -3,7 +3,7 @@
  * while it runs, "Handed off from Claude Code to Codex" once the switch has landed, expandable to
  * the retiring agent's summary turn and the prompt the successor started with. A landed switch
  * draws a rule under the node: everything below it is the successor's. One rendering whether
- * the node sits in a progress block's timeline or stands as a row of its own, and whether it
+ * the node sits in a progress block's timeline or stands in a frame of its own, and whether it
  * was built from the transcript
  * (``HandoffNode``) or, before the summary request has landed there, from the chat's snapshot
  * alone (``renderHandoffTailNode``).
