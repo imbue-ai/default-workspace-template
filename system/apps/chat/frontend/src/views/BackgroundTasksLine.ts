@@ -71,7 +71,7 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
           {
             type: "button",
             class:
-              "background-tasks-line__summary flex w-full items-center gap-2 px-1 text-left " +
+              "background-tasks-line__summary flex w-full items-center gap-2 pr-1 text-left " +
               "text-(length:--font-size-helper) text-secondary hover:text-primary",
             "aria-expanded": String(isExpanded),
             onclick: () => {
