@@ -55,10 +55,10 @@ const byChat: Record<string, OutgoingMessage[]> = {};
 // Arrival ids already accounted for, per chat -- so a re-streamed transcript
 // event or a re-pushed queued snapshot does not drop a bubble twice.
 const seenArrivalIds: Record<string, Set<string>> = {};
-// For a chat whose switch has named its successor: how many of the successor's real user
-// items arrived while the snapshot still held the sends. The held sends come back as bubbles
-// only when the switch ends, so these arrivals consume them then, oldest first, as they would
-// have had the bubbles been standing when they landed.
+// For a chat whose switch has named its successor, or is a rebind of its own agent: how many of
+// that agent's real user items arrived while the snapshot still listed the held sends. While the
+// switch lasts they stand the listed sends down, oldest first; the held sends come back as
+// bubbles when it ends, and these arrivals consume them then the same way.
 const successorArrivalsByChat = new Map<string, number>();
 // When the user sent each message that has reached the backend, by the id of the real item that
 // replaced its bubble: where the turn that message opened starts, as the user lived it.
