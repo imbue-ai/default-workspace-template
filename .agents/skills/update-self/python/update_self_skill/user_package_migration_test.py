@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -614,6 +615,79 @@ def test_a_package_with_tests_gets_what_they_run_with_and_its_own_pytest_root(
     pyproject = tomllib.loads(plan.package_text)
     assert pyproject["dependency-groups"]["dev"] == [dependency]
     assert pyproject["tool"]["pytest"]["ini_options"] == {"testpaths": ["."]}
+
+
+_ROOT_ONLY_MODULE = ".agents/skills/report/python/report.py"
+
+
+def _ty_checked_files(project_dir: Path) -> set[str]:
+    """The files ``ty check`` reports on, run from ``project_dir`` the way an app's own type check is."""
+    result = subprocess.run(
+        [
+            str(Path(sys.executable).parent / "ty"),
+            "check",
+            "--output-format",
+            "concise",
+        ],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        line.split(":")[0] for line in result.stdout.splitlines() if "error[" in line
+    }
+
+
+def test_a_package_that_type_checks_itself_gets_ty_at_the_roots_pin_and_its_own_ty_project(
+    workspace: Path,
+) -> None:
+    # The root project checks the workspace's skills against the root venv; from an app's
+    # directory and venv their imports cannot resolve, so the app's check must not reach them.
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text()
+        + '\n[dependency-groups]\ndev = ["ty==0.0.85"]\n\n[tool.ty.src]\ninclude = [".agents"]\n'
+    )
+    _write(workspace / _ROOT_ONLY_MODULE, "import only_in_the_root_venv\n")
+    app = workspace / "system/apps/widget"
+    _write(app / "src/widget/runner.py", "def main() -> None:\n    pass\n")
+    _write(
+        app / "test_widget_ratchets.py",
+        "from pathlib import Path\n\n"
+        "from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors\n\n\n"
+        "def test_no_type_errors() -> None:\n"
+        "    check_no_type_errors(Path(__file__).parent)\n",
+    )
+    assert any(path.endswith(_ROOT_ONLY_MODULE) for path in _ty_checked_files(app))
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+    (app / "pyproject.toml").write_text(plan.package_text)
+
+    pyproject = tomllib.loads(plan.package_text)
+    assert sorted(pyproject["dependency-groups"]["dev"]) == [
+        "imbue-common[testing]",
+        "ty==0.0.85",
+    ]
+    assert pyproject["tool"]["ty"] == {}
+    assert not any(path.endswith(_ROOT_ONLY_MODULE) for path in _ty_checked_files(app))
+
+
+def test_a_package_whose_tests_do_not_type_check_it_gets_no_ty(workspace: Path) -> None:
+    _write(
+        workspace / "system/apps/widget/src/widget/runner_test.py",
+        "def test_runs() -> None:\n    pass\n",
+    )
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+
+    pyproject = tomllib.loads(plan.package_text)
+    assert pyproject["dependency-groups"]["dev"] == ["pytest"]
+    assert "ty" not in pyproject["tool"]
 
 
 def test_a_user_package_on_a_user_lib_gets_a_path_source_to_it(tmp_path: Path) -> None:

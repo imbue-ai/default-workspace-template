@@ -19,7 +19,9 @@ writes today, keeping the versions it runs on:
    a workspace member it depends on through the root's sources -- becomes an editable path
    source, so the shared code stays live;
 3. it gets a dev dependency its tests run with (``pytest``, or ``imbue-common[testing]``
-   for tests that use the ratchet helpers) and its own pytest root, when it has tests;
+   for tests that use the ratchet helpers) and its own pytest root, when it has tests,
+   and when they type-check it, ``ty`` at the root's pin and a ``[tool.ty]`` table, so the
+   check runs from its own venv over its own directory;
 4. it leaves the root ``pyproject.toml``'s dependencies and sources;
 5. its program line links its venv, syncs its own project ``--locked`` and execs from its
    own ``.venv/bin``, and each one-off of its commands written in a tracked agent-facing
@@ -58,6 +60,14 @@ from update_self_skill import user_packages, venv_links
 PYTEST_DEPENDENCY = "pytest"
 RATCHET_TEST_DEPENDENCY = "imbue-common[testing]"
 _RATCHET_IMPORTS = ("imbue.imbue_common.ratchet_testing", "inline_snapshot")
+# A package whose tests type-check it runs ty from its own directory and venv, as build-app's
+# scaffold sets up: ty pinned in its dev group at the root's version, and a [tool.ty] table
+# so ty takes the directory as its project instead of walking up to the root's.
+_TYPE_CHECK_CALL = "check_no_type_errors"
+_TY_PROJECT_TABLE = (
+    "# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.\n"
+    "[tool.ty]\n"
+)
 _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
 _TABLE_HEADER = re.compile(r"^\s*\[")
 # What separates the steps of a program's `bash -c` script, as user_packages splits them.
@@ -238,6 +248,21 @@ def _add_dev_requirement(text: str, requirement: str) -> str:
 def _add_pytest_root(text: str) -> str:
     separator = "" if text.endswith("\n\n") else "\n"
     return text + separator + '[tool.pytest.ini_options]\ntestpaths = ["."]\n'
+
+
+def _add_ty_project(text: str) -> str:
+    separator = "" if text.endswith("\n\n") else "\n"
+    return text + separator + _TY_PROJECT_TABLE
+
+
+def _root_ty_requirement(root: dict) -> str:
+    """The root's pinned ``ty`` requirement, which a package's own type check runs at too."""
+    for requirement in _declared_requirements(root):
+        if _requirement_name(requirement) == "ty":
+            return requirement
+    raise MigrationError(
+        "the root pyproject.toml pins no ty to give a package whose tests type-check it"
+    )
 
 
 def _remove_from_root(text: str, name: str) -> str:
@@ -629,6 +654,21 @@ def plan_migration(
         if not pyproject.get("tool", {}).get("pytest", {}).get("ini_options"):
             package_text = _add_pytest_root(package_text)
             notes.append("makes its directory its tests' own pytest root")
+        if any(
+            _TYPE_CHECK_CALL in path.read_text(errors="replace") for path in test_files
+        ):
+            if not any(
+                _requirement_name(requirement) == "ty"
+                for requirement in _declared_requirements(pyproject)
+            ):
+                ty = _root_ty_requirement(_read_toml(repo_root / "pyproject.toml"))
+                package_text = _add_dev_requirement(package_text, ty)
+                notes.append(f"adds `{ty}` to its dev group, for its own type check")
+            if "ty" not in pyproject.get("tool", {}):
+                package_text = _add_ty_project(package_text)
+                notes.append(
+                    "makes its directory ty's project, so its type check covers it alone"
+                )
     if changed:
         package_text = _set_sources(
             package_text, {**own_sources, **changed}, set(changed)
