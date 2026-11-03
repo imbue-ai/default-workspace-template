@@ -717,9 +717,9 @@ _REASONS_BY_MARKER: dict[str, frozenset[str]] = {
     ),
     _IMPORT_PATH_MARKER: frozenset({"no-venv", "other-tree"}),
 }
-_MARKER_RE = re.compile(
-    r"^\s*#\s*(own-process|import-path):\s*(\S*)\s*(?:--\s*(.*?))?\s*$"
-)
+# Any comment that opens like a marker is one, so a malformed marker is reported rather than
+# passed over.
+_MARKER_RE = re.compile(r"^\s*#\s*(own-process|import-path):(.*)$")
 
 
 class _Marker(NamedTuple):
@@ -752,8 +752,9 @@ def _markers(lines: list[str]) -> list[_Marker]:
     for number, line in enumerate(lines, start=1):
         match = _MARKER_RE.match(line)
         if match:
-            kind, reason, why = match.groups()
-            found.append(_Marker(number, kind, reason, why or ""))
+            kind, rest = match.groups()
+            reason, _, why = rest.partition("--")
+            found.append(_Marker(number, kind, reason.strip(), why.strip()))
     return found
 
 
@@ -1674,6 +1675,8 @@ def test_a_marker_keeps_the_statement_below_it_for_a_named_reason(
                     'SEPARATED = "pkg/tool.py"',
                     "# own-process: server -- nothing below names a program",
                     "VALUE = 1",
+                    "# own-process: wrapper hands the secret to the child only",
+                    'NO_SEPARATOR = "pkg/tool.py"',
                 ]
             ),
         },
@@ -1683,12 +1686,14 @@ def test_a_marker_keeps_the_statement_below_it_for_a_named_reason(
         "pkg/caller.py:8",
         "pkg/caller.py:10",
         "pkg/caller.py:13",
+        "pkg/caller.py:17",
     ]
     assert [problem.split(": ", 1)[0] for problem in _marker_problems(tmp_path)] == [
         "pkg/caller.py:7",
         "pkg/caller.py:9",
         "pkg/caller.py:11",
         "pkg/caller.py:14",
+        "pkg/caller.py:16",
     ]
 
 
