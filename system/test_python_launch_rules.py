@@ -1536,6 +1536,9 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
             element.value if isinstance(element, ast.Constant) else None
             for element in node.elts
         ]
+        # Behind a splatted prefix (``[*LAUNCHER, "tool-cmd"]``) the program the argv runs
+        # cannot be read, so any console-script name in it may be that program.
+        is_program_unknown = bool(node.elts) and isinstance(node.elts[0], ast.Starred)
         return (
             any(
                 word == "-m"
@@ -1544,6 +1547,7 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
                 for word, after in zip(words, words[1:])
             )
             or _command_word(words) in programs.commands
+            or (is_program_unknown and any(word in programs.commands for word in words))
         )
     return False
 
@@ -1734,6 +1738,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'IS_ROOT = (ROOT / "pkg" / "tool.py").exists()',
                 'SOURCE = Path("pkg/tool.py").read_text()',
                 'subprocess.run(["uv", "--project", "pkg", "run", "--no-sync", "tool-cmd"])',
+                'subprocess.run([*UV_RUN, "tool-cmd"])',
             ]
         )
     )
@@ -1754,6 +1759,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:8",
         "pkg/caller.py:16",
         "pkg/caller.py:21",
+        "pkg/caller.py:22",
     ]
 
 
