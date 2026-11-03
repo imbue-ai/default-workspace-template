@@ -942,7 +942,8 @@ def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path
             page.keyboard.type(f"typed line {line} " + "lorem ipsum " * 3)
             page.keyboard.press("Shift+Enter")
             assert frame.evaluate(_DRAFT_AT_BOTTOM_JS), f"the line being typed is cut off after line {line}"
-        page.wait_for_timeout(300)
+        frames_while_typing = frame.evaluate("() => window.__paintedGaps.length")
+        frame.wait_for_function(f"() => window.__paintedGaps.length >= {frames_while_typing + 10}", timeout=5000)
         painted_gaps = frame.evaluate(_STOP_PAINTED_GAP_RECORDER_JS)
         assert painted_gaps, "no frames were recorded"
         assert max(painted_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(painted_gaps)}px"
