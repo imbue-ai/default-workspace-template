@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.identity import RequestIdentity
@@ -120,11 +121,22 @@ def test_a_visitor_can_neither_register_nor_list_nor_remove_devices(client: Flas
     assert [device["device_id"] for device in client.get("/api/web-push/devices").get_json()["devices"]] == [device_id]
 
 
-def test_a_registration_with_an_endpoint_that_is_not_https_is_refused(client: FlaskClient) -> None:
-    response = client.post("/api/web-push/devices", json=_registration("http://push.example.com/device"))
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://push.example.com/device",
+        # Origins the VAPID claim cannot be signed for, which would fail the send to every device.
+        "https://user:secret@push.example.com/device",
+        "https://[2001:db8::1]/device",
+        "https://push.example.com:port/device",
+    ],
+)
+def test_a_registration_with_an_endpoint_off_an_https_host_is_refused(client: FlaskClient, endpoint: str) -> None:
+    response = client.post("/api/web-push/devices", json=_registration(endpoint))
 
     assert response.status_code == 400
     assert "https" in response.get_json()["detail"]
+    assert client.get("/api/web-push/devices").get_json()["devices"] == []
 
 
 def test_a_registration_whose_keys_are_not_base64url_is_refused(client: FlaskClient) -> None:

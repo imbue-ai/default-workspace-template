@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from abc import ABC
 from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor
@@ -69,6 +70,9 @@ _ANSWER_EXCERPT_LENGTH: Final[int] = 500
 _DEVICE_ID_LENGTH: Final[int] = 16
 # A key off this alphabet makes pywebpush raise outside the errors a post reports, failing the send to every device.
 _BASE64URL_PATTERN: Final[str] = r"^[A-Za-z0-9_-]+={0,2}$"
+# The endpoint's origin is the audience the VAPID claim is signed for, and py_vapid refuses one off this shape, failing
+# the send to every device.
+_SIGNABLE_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(r"https://[^/:]+(:\d+)?")
 
 _PUSH_PROVIDER_NAME_BY_DOMAIN: Final[dict[str, str]] = {
     "mozilla.com": "Mozilla",
@@ -111,8 +115,12 @@ class BrowserPushSubscription(FrozenModel):
     @classmethod
     def _endpoint_is_https(cls, value: str) -> str:
         parts = urlsplit(value)
-        if parts.scheme != "https" or not parts.hostname:
-            raise InvalidShellValueError("a push endpoint is an https URL")
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or not _SIGNABLE_ORIGIN_PATTERN.fullmatch(f"https://{parts.netloc}")
+        ):
+            raise InvalidShellValueError("a push endpoint is an https URL on a host name, with at most a port")
         return value
 
 
