@@ -1,4 +1,10 @@
+from pathlib import Path
+
+import pytest
+
 from env_converge.capture import (
+    CaptureCommandError,
+    capture_npm_state,
     parse_cargo_install_list,
     parse_dpkg_versions,
     parse_manual_packages,
@@ -78,3 +84,14 @@ def test_parse_rustup_toolchain_list_no_default() -> None:
     )
     assert toolchains == ("nightly-x86_64-unknown-linux-gnu",)
     assert default is None
+
+
+def test_capture_npm_state_whose_retry_cannot_run_npm_is_a_capture_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both npm attempts failing to run surface as CaptureCommandError, the error every probe
+    raises, so a caller that tolerates a failed capture tolerates this one too."""
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    with pytest.raises(CaptureCommandError, match="npm ls"):
+        capture_npm_state()
