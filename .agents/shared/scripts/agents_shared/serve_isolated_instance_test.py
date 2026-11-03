@@ -1267,6 +1267,24 @@ def test_wrapper_page_escapes_the_title() -> None:
     assert "&lt;b&gt;x&lt;/b&gt;" in html
 
 
+def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
+    page = wrapper_mod.build_wrapper_html(
+        "inbox",
+        "Inbox",
+        kind=wrapper_mod.KIND_MOCK,
+        note="<b>Refresh</b> is not wired up",
+    )
+    preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
+
+    assert '<span class="tag">Mock</span>' in page
+    assert "&lt;b&gt;Refresh&lt;/b&gt; is not wired up" in page
+    assert "<b>Refresh</b>" not in page
+    assert '<span class="tag">Preview</span>' in preview_page
+    assert 'class="preview-note"' not in preview_page
+    with pytest.raises(ValueError, match="kind must be one of"):
+        wrapper_mod.build_wrapper_html("inbox", "Inbox", kind="draft")
+
+
 def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1465,21 +1483,3 @@ def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
     assert runner.killed_pgroup(spawner.detached_pids[0])
     assert registry.removed == [_FRAME_NAME]
     assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
-
-
-def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
-    page = wrapper_mod.build_wrapper_html(
-        "inbox",
-        "Inbox",
-        kind=wrapper_mod.KIND_MOCK,
-        note="<b>Refresh</b> is not wired up",
-    )
-    preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
-
-    assert '<span class="tag">Mock</span>' in page
-    assert "&lt;b&gt;Refresh&lt;/b&gt; is not wired up" in page
-    assert "<b>Refresh</b>" not in page
-    assert '<span class="tag">Preview</span>' in preview_page
-    assert 'class="preview-note"' not in preview_page
-    with pytest.raises(ValueError, match="kind must be one of"):
-        wrapper_mod.build_wrapper_html("inbox", "Inbox", kind="draft")
