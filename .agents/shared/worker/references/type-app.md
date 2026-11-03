@@ -110,10 +110,18 @@ does), and check:
 - A text field's font is at least 16px, or iOS zooms the page when it gains
   focus.
 
-Look at the screenshots at both sizes, as `web-frontend-testing.md` requires
-for any page you change. Commit one `browser` test in that phone context
-(393x852, `has_touch=True`, `is_mobile=True`; `page.tap` fails without touch)
-that asserts no sideways scroll and runs the app's main action by tapping it.
+The user confirmed the desktop layout, so a fix for a phone applies only at
+narrow widths (a media query, a layout that wraps), never as a new desktop
+look. Look at the screenshots at both phone sizes and at the desktop size the
+user confirmed, as `web-frontend-testing.md` requires for any page you change.
+Commit one `browser` test in that phone context (393x852, `has_touch=True`,
+`is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
+scroll and runs the app's main action by tapping it. The repo-root
+`conftest.py` does not reach a user-built app's suite and its dev group has
+no Playwright, so add `playwright` to that group (`uv add --dev playwright` in
+its directory), register the `browser` marker in its
+`[tool.pytest.ini_options]`, and launch Fortress by its path inside the test,
+as `AGENTS.md` says.
 
 ### When it is shared
 
