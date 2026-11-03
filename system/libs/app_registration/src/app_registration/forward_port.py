@@ -1089,10 +1089,15 @@ def register(
         )
 
 
-def register_manifest(path: Path, manifest_path: Path, url: str) -> None:
+def register_manifest(
+    path: Path, manifest_path: Path, url: str, name_from_flag: str | None = None
+) -> None:
     """Register the app ``manifest_path`` describes at ``url`` in the registry at ``path``, as
-    ``--manifest`` does; raises RegistrationError when the manifest or the registration is refused."""
-    manifest_fields, icon_path, manifest_error = _read_manifest(manifest_path, None)
+    ``--manifest`` does (``name_from_flag``, ``--name``, must match the manifest's); raises
+    RegistrationError when the manifest or the registration is refused."""
+    manifest_fields, icon_path, manifest_error = _read_manifest(
+        manifest_path, name_from_flag
+    )
     if manifest_error is not None:
         raise RegistrationError(manifest_error)
     register(
@@ -1219,34 +1224,23 @@ def main() -> None:
             "--display-name, --theming-mode, or --internal"
         )
 
-    manifest_fields: dict[str, object] | None = None
-    icon_path: Path | None = (
-        Path(args.icon_file) if args.icon_file is not None else None
-    )
-    if args.manifest is not None:
-        manifest_fields, icon_path, manifest_error = _read_manifest(
-            Path(args.manifest), args.name
-        )
-        if manifest_error is not None:
-            parser.error(manifest_error)
-        name = str(manifest_fields["name"])
-    else:
-        name = args.name
-
     try:
-        if args.remove:
-            remove(apps_file(), name)
+        if args.manifest is not None:
+            register_manifest(
+                apps_file(), Path(args.manifest), args.url, name_from_flag=args.name
+            )
+        elif args.remove:
+            remove(apps_file(), args.name)
         else:
             register(
                 apps_file(),
-                name,
+                args.name,
                 args.url,
-                icon_path=icon_path,
+                icon_path=Path(args.icon_file) if args.icon_file is not None else None,
                 is_icon_declined=args.no_icon,
                 internal=args.internal,
                 program=args.program,
                 display_name=args.display_name,
-                manifest_fields=manifest_fields,
                 theming_mode=args.theming_mode,
             )
     except RegistrationError as error:
