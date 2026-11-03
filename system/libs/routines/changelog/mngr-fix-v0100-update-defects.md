@@ -1,1 +1,1 @@
-- The detached runner process for a routine's run carries an `# own-process: outlives-caller` marker, so it no longer counts against the launch-rule ratchet.
+- The detached runner process for a routine's run carries the `# own-process: outlives-caller` marker the launch rules now require.

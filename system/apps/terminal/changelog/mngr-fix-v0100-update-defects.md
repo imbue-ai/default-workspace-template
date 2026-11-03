@@ -1,1 +1,1 @@
-- The OOM-band wrapper that every terminal session's shell runs through carries an `# own-process: wrapper` marker, so it no longer counts against the launch-rule ratchet.
+- The OOM-band wrapper that every terminal session's shell runs through carries the `# own-process: wrapper` marker the launch rules now require.
