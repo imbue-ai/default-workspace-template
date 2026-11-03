@@ -429,7 +429,7 @@ def is_agent_running(agent_id: str, proc_dir: Path = Path("/proc")) -> bool:
             if os.getpgid(int(entry.name)) == own_group:
                 continue
             environ = (entry / "environ").read_bytes()
-        except (OSError, ProcessLookupError):
+        except OSError:
             continue
         if needle in environ.split(b"\0"):
             return True
