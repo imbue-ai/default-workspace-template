@@ -1,0 +1,1 @@
+The status row ("Thinking…", a running tool) no longer jumps above the message you just sent when the agent starts working before that message reaches the conversation: it stays under your message until the message lands. A message sent while the agent is already working on an earlier turn still waits below that turn's status row.

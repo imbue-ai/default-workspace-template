@@ -545,14 +545,50 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     expect(partOf(render([opening]), "elapsed")).toBe("8s");
   });
 
-  it("puts the row under the user's own send while it waits, and under the turn while the agent works", () => {
+  it("keeps the row under a send that started the turn until the send reaches the transcript", () => {
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
 
     addOutgoing(CHAT_ID, "hello");
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
 
-    // A message sent while the agent works on an earlier turn waits below that turn's row.
+    now = NOW + 1_000;
+    agentState.activity_state = "THINKING";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+    now = NOW + 2_000;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+
+    noteBackendArrivals(CHAT_ID, ["u-hello"]);
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("puts a send made while the agent works on an earlier turn below that turn's row", () => {
     agentState.activity_state = "THINKING";
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+
+    now = NOW + 1_000;
+    addOutgoing(CHAT_ID, "and another thing");
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("dates the turn from when its row first rendered, so a send behind a turn on an empty transcript waits below it", () => {
+    agentState.activity_state = "THINKING";
+    render([]);
+
+    now = NOW + 1_000;
+    addOutgoing(CHAT_ID, "and another thing");
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("counts a send made after the agent went idle as starting the next turn", () => {
+    agentState.activity_state = "THINKING";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+    agentState.activity_state = "IDLE";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+
+    now = NOW + 1_000;
+    addOutgoing(CHAT_ID, "next");
+    now = NOW + 2_000;
+    agentState.activity_state = "THINKING";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
   });
 });
