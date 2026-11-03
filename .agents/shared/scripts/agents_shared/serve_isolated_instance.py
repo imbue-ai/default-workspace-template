@@ -13,12 +13,12 @@ This is the shared substrate under three service flows:
 - ``build-app`` shows a new app that is still a mock inside the labeled frame,
   around the app's own live program, through ``mock_frame.py``.
 
-The two ``update-app`` flows are the same motion: launch the service on a free port, with environment
-overrides that isolate its writable state, wait until it is healthy, and
-(optionally) surface it to the user as a labeled "preview" window. The only thing
-that differs is *what* is launched and *how* its state is isolated -- so this
-script is deliberately unopinionated and takes all of that as parameters. The
-calling skill supplies the specifics.
+The two ``update-app`` flows are the same motion: launch the service on a free
+port, with environment overrides that isolate its writable state, wait until it
+is healthy, and (optionally) surface it to the user as a labeled "preview"
+window. The only thing that differs is *what* is launched and *how* its state is
+isolated -- so this script is deliberately unopinionated and takes all of that as
+parameters. The calling skill supplies the specifics.
 
 The shapes:
 
