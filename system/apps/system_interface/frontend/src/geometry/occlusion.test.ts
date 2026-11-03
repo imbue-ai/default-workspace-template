@@ -62,6 +62,20 @@ describe("isPageCovered", () => {
     expect(isPageCovered(underTopStrip, [{ ...seeThrough, hasTitleBar: false }], BACKDROP, METRICS)).toBe(false);
   });
 
+  it("gives a fullscreen window square corners, which a rounded one in front leaves showing and a fullscreen one covers", () => {
+    const fullscreenPage = { rect: FULL, hasTitleBar: false };
+    // Rounded windows over the top corners, and a maximized one over the rest: only the bottom corners stay open.
+    const roundedFront = [
+      opaque({ x: -50, y: 0, width: 100, height: 100 }),
+      opaque({ x: 950, y: 0, width: 100, height: 100 }),
+      opaque(FULL),
+    ];
+    expect(isPageCovered(titled(FULL), roundedFront, BACKDROP, METRICS)).toBe(true);
+    expect(isPageCovered(fullscreenPage, roundedFront, BACKDROP, METRICS)).toBe(false);
+    const fullscreenFront = { rect: FULL, hasTitleBar: false, isContentOpaque: true };
+    expect(isPageCovered(fullscreenPage, [fullscreenFront], BACKDROP, METRICS)).toBe(true);
+  });
+
   it("counts a page whose content box lies wholly below the backdrop as covered", () => {
     expect(isPageCovered(titled({ x: 100, y: 790, width: 400, height: 300 }), [], BACKDROP, METRICS)).toBe(true);
   });

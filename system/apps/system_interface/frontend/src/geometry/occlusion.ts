@@ -3,17 +3,19 @@
  * rendering it. A wrong "covered" leaves a hole where the user expects the page, so every approximation here
  * errs towards "not covered".
  *
- * A window is a rounded rectangle (``windowRadius`` at each corner). Its title bar, which a fullscreen window does
- * without, is always opaque; its content area is opaque only while its own page (or the stopped-app placeholder)
- * fills it, and is otherwise see-through.
- * A front window covers with its rectangle less the corner squares, which keeps its rounded corners out of the
- * cover. A page is its window's content box with the window's two bottom corners rounded, so its own corner
- * squares need covering only where no front window rounds the same corner at the same point.
+ * A window is a rounded rectangle (``windowRadius`` at each corner) with a title bar, or a fullscreen window: a
+ * plain rectangle with neither. Its title bar is always opaque; its content area is opaque only while its own page
+ * (or the stopped-app placeholder) fills it, and is otherwise see-through.
+ * A front window covers with its rectangle less its corner squares, which keeps its rounded corners out of the
+ * cover. A page is its window's content box with the window's two bottom corners rounded as the window's are, so
+ * its own corner squares need covering only where no front window has the same corner at the same point, rounded
+ * no more than the page's.
  */
 
 import type { PixelRect, PixelSize } from "./frames";
 
-/** Where a window is drawn, and whether it has a title bar above its content area. */
+/** Where a window is drawn, and whether it has a title bar above its content area: one without (a fullscreen
+ *  window) has square corners too. */
 export interface DrawnWindowRect {
   readonly rect: PixelRect;
   readonly hasTitleBar: boolean;
@@ -40,7 +42,7 @@ export function isPageCovered(
   drawnArea: PixelSize,
   metrics: OcclusionMetrics,
 ): boolean {
-  const radius = metrics.windowRadius;
+  const radius = radiusOf(drawn, metrics);
   const window = drawn.rect;
   const titleBarHeight = titleBarHeightOf(drawn, metrics);
   const content: PixelRect = {
@@ -59,7 +61,10 @@ export function isPageCovered(
     { x: left, isLeft: true },
     { x: right, isLeft: false },
   ]) {
-    if (front.some((other) => roundsSameBottomCorner(other, corner.x, bottom, corner.isLeft))) {
+    const isCornerCovered = front.some(
+      (other) => radiusOf(other, metrics) <= radius && hasSameBottomCorner(other, corner.x, bottom, corner.isLeft),
+    );
+    if (isCornerCovered) {
       covers.push({ x: corner.isLeft ? left : right - radius, y: bottom - radius, width: radius, height: radius });
     }
   }
@@ -70,7 +75,7 @@ export function isPageCovered(
  *  content is opaque, else the title bar (if it has one) less its two top corner squares. */
 function opaqueParts(window: FrontWindow, metrics: OcclusionMetrics): PixelRect[] {
   const { x, y, width } = window.rect;
-  const radius = metrics.windowRadius;
+  const radius = radiusOf(window, metrics);
   const height = window.isContentOpaque
     ? window.rect.height
     : Math.min(titleBarHeightOf(window, metrics), window.rect.height);
@@ -85,8 +90,12 @@ function titleBarHeightOf(window: DrawnWindowRect, metrics: OcclusionMetrics): n
   return window.hasTitleBar ? metrics.titleBarHeight : 0;
 }
 
-/** Whether ``window`` paints a rounded bottom corner at (``cornerX``, ``bottom``) on the given side. */
-function roundsSameBottomCorner(window: FrontWindow, cornerX: number, bottom: number, isLeft: boolean): boolean {
+function radiusOf(window: DrawnWindowRect, metrics: OcclusionMetrics): number {
+  return window.hasTitleBar ? metrics.windowRadius : 0;
+}
+
+/** Whether ``window`` paints its bottom corner at (``cornerX``, ``bottom``) on the given side. */
+function hasSameBottomCorner(window: FrontWindow, cornerX: number, bottom: number, isLeft: boolean): boolean {
   if (!window.isContentOpaque) return false;
   const { rect } = window;
   const x = isLeft ? rect.x : rect.x + rect.width;
