@@ -60,6 +60,8 @@ _HAND_PARSED_COMMANDS = {
 
 _UNKNOWN_OPTION = "--studio-contract-probe-unknown-option"
 _COMMAND_TIMEOUT_SECONDS = 60
+_SYSTEM_PYTHON = "system_python"
+_ROOT_VENV_ENTRY_POINT = "root_venv_entry_point"
 
 
 def _broken_contract_message(command: dict[str, Any], problem: str) -> str:
@@ -70,10 +72,6 @@ def _broken_contract_message(command: dict[str, Any], problem: str) -> str:
         "declares it rather than changing these checks; a change to the interface is made "
         "in mngr (apps/minds/docs/workspace-command-contract.md)."
     )
-
-
-_SYSTEM_PYTHON = "system_python"
-_ROOT_VENV_ENTRY_POINT = "root_venv_entry_point"
 
 
 def _load_contract() -> dict[str, Any]:
