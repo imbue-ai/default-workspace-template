@@ -41,7 +41,8 @@ class _RecordingFrames(mock_frame.Frames):
     # The app's registry row as the frame saw it when it came up.
     row_at_up: dict[str, object] | None = None
     registry: Path | None = None
-    # What the frame is up with, as the real substrate records it on a successful boot.
+    # The frame's record, kept as the real substrate keeps it: written by a successful
+    # boot or a failed re-frame, never by a failed first frame.
     current: mock_frame.RecordedFrame | None = None
 
     def up(
@@ -50,7 +51,7 @@ class _RecordingFrames(mock_frame.Frames):
         self.ups.append(_FrameCall(app, note, inner_path))
         if self.registry is not None:
             self.row_at_up = _row(self.registry)
-        if self.up_code == 0:
+        if self.up_code == 0 or self.current is not None:
             self.current = mock_frame.RecordedFrame(note=note, inner_path=inner_path)
         return self.up_code
 
