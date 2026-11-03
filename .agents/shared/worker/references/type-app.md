@@ -110,9 +110,12 @@ does), and check:
 - A text field's font is at least 16px, or iOS zooms the page when it gains
   focus.
 
-The user confirmed the desktop layout, so a fix for a phone applies only at
-narrow widths (a media query, a layout that wraps), never as a new desktop
-look. Look at the screenshots at both phone sizes and at the desktop size the
+The user confirmed the desktop layout, so a fix for a phone applies only on a
+phone, never as a new desktop look: under the media queries the workspace's
+own apps switch on (`system/libs/workspace_ui/src/device_queries.ts`), a
+phone-sized viewport either way round, which covers 852x393 where a
+`max-width` breakpoint does not, or `(pointer: coarse)` for what a finger
+needs (hover-only controls, tap targets). Look at the screenshots at both phone sizes and at the desktop size the
 user confirmed, as `web-frontend-testing.md` requires for any page you change.
 Commit one `browser` test in that phone context (393x852, `has_touch=True`,
 `is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
