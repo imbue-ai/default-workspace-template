@@ -212,7 +212,10 @@ def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> i
     its registration is then left alone, since registering it would add it back.
     """
     if layout.run(["close", frame_name(app_name)]) != 0:
-        sys.stderr.write(f"note: no {frame_name(app_name)} window was open to close.\n")
+        sys.stderr.write(
+            f"note: the {frame_name(app_name)} window was not closed (see above; most "
+            "often none was open); the frame comes down regardless.\n"
+        )
     code = frames.down(app_name, repo_root)
     try:
         app = find_app(app_name, repo_root)
