@@ -223,6 +223,10 @@ change the caller, the code it reaches for, and their `pyproject.toml` files,
 even though they are not what the update came to change. The failure message
 lists every site and how each kind becomes an import. The common ones:
 
+- **A user skill's script puts its own directory on `sys.path` to import a
+  sibling module**: package the skill and import the sibling from the package
+  ([A packaged skill](#a-packaged-skill), step 2), or, for one standard-library
+  script, make it [a bare skill](#a-bare-skill).
 - **An app runs the root venv's interpreter, or a file of its own package,
   because its own project lacks a package** (an app shelling out to a
   Playwright script because its venv has no Playwright): declare the package
