@@ -14,7 +14,7 @@ because this file's directory is first on sys.path, so run it as ``python3 <path
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- the guard hooks run it before every tool call, so a broken or unsynced venv must not take the guards down
+# import-path: no-venv -- the guard hooks run it to decide whether to refuse a tool call, so a broken or unsynced venv must not take the guards down
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "libs" / "tk_command_parsing" / "src")
 )
