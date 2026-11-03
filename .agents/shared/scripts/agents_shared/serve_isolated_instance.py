@@ -1252,6 +1252,24 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
 
+def _keep_frame_record(repo_root: Path, name: str, record: dict[str, object]) -> None:
+    """Leave a state for ``name`` holding only its frame record: nothing running, nothing registered."""
+    state_path = _state_path(repo_root, name)
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {"name": name, "pids": [], "services": [], FRAME_STATE_KEY: record},
+                indent=2,
+            )
+        )
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not keep the frame's record at {state_path}: {exc}; the "
+            "next frame needs its note and page passed again.\n"
+        )
+
+
 def frame(
     name: str,
     repo_root: Path,
@@ -1281,9 +1299,11 @@ def frame(
     inner service.
 
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
-    with it; an inner path without a leading ``/``, an unreadable state file, or a
-    previous wrapper that survives SIGKILL is refused before anything changes,
-    leaving a previous frame as it was.
+    with it; a failed re-frame keeps only its record (``read_frame``), so a later
+    call can boot it again on a fresh port without being told the note. An inner
+    path without a leading ``/``, an unreadable state file, or a previous wrapper
+    that survives SIGKILL is refused before anything changes, leaving a previous
+    frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
@@ -1292,7 +1312,8 @@ def frame(
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
-    if state_path.exists():
+    is_reframe = state_path.exists()
+    if is_reframe:
         try:
             previous = json.loads(state_path.read_text())
         except (json.JSONDecodeError, OSError) as exc:
@@ -1330,6 +1351,15 @@ def frame(
     ]
     if note:
         wrapper_args += ["--note", note]
+    record = FrameRecord(
+        inner_service=inner_service,
+        frame_service_name=frame_service_name,
+        title=title,
+        display_name=display_name,
+        kind=kind,
+        note=note,
+        inner_path=inner_path,
+    )._asdict()
     pids: list[int] = []
     # Counted as registered from the start when re-framing: the row is already there,
     # and a failed re-boot must not leave it routing at a dead port.
@@ -1362,15 +1392,7 @@ def frame(
             "pids": pids,
             "services": services,
             "wrapper_log": str(wrapper_log_path),
-            FRAME_STATE_KEY: FrameRecord(
-                inner_service=inner_service,
-                frame_service_name=frame_service_name,
-                title=title,
-                display_name=display_name,
-                kind=kind,
-                note=note,
-                inner_path=inner_path,
-            )._asdict(),
+            FRAME_STATE_KEY: record,
         }
         state_path.write_text(json.dumps(state, indent=2))
     except (InstanceError, OSError) as exc:
@@ -1385,6 +1407,8 @@ def frame(
             services=services,
             sleeper=sleeper,
         )
+        if is_reframe:
+            _keep_frame_record(repo_root, name, record)
         return 1
     sys.stderr.write(
         f"frame up: '{frame_service_name}' frames '{inner_service}' (wrapper on port "

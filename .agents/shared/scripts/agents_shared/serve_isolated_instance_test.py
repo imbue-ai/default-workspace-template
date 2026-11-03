@@ -1458,17 +1458,45 @@ def test_reframing_reboots_the_wrapper_on_its_port_without_deregistering_it(
     assert state["pids"] == [spawner.detached_pids[1]]
 
 
-def test_a_failed_reframe_deregisters_the_frame_rather_than_leave_it_routing_nowhere(
+def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry(
     tmp_path: Path,
 ) -> None:
+    """The row must not route to a dead port, but the record is all a caller that never
+    saw the note has to boot the frame again with, so it survives the failure."""
     registry = _RecordingRegistry()
-    assert _frame(tmp_path, registry=registry) == 0
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+    recorded = mod.read_frame(_FRAME_NAME, tmp_path)
+    assert recorded is not None
 
-    code = _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None))
+    code = _frame(
+        tmp_path,
+        registry=registry,
+        spawner=spawner,
+        http=_FakeHttp(lambda _url: None),
+    )
 
     assert code == 1
     assert registry.removed == [_FRAME_NAME]
-    assert not mod._state_path(tmp_path, _FRAME_NAME).exists()
+    assert mod.read_frame(_FRAME_NAME, tmp_path) == recorded
+
+    retry_spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=retry_spawner) == 0
+    [retry_argv] = retry_spawner.detached_spawns
+    # Registered afresh (the failure removed the row), and never removed again.
+    assert registry.removed == [_FRAME_NAME]
+    assert registry.registered[-1] == _Registration(
+        _FRAME_NAME,
+        f"http://localhost:{_wrapper_arg(retry_argv, '--port')}",
+        internal=False,
+        display_name="Inbox (mock)",
+    )
+    assert _wrapper_arg(retry_argv, "--note") == recorded.note
+    assert (
+        mod.down(_FRAME_NAME, tmp_path, runner=_RecordingRunner(), registry=registry)
+        == 0
+    )
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
 
 
 def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
