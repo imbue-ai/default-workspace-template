@@ -68,12 +68,13 @@ self.addEventListener("pushsubscriptionchange", (event) => {
       const options = event.oldSubscription ? event.oldSubscription.options : null;
       if (!options || !options.applicationServerKey) return;
       const subscription = event.newSubscription || (await self.registration.pushManager.subscribe(options));
-      await fetch(`${shellRoot()}/api/web-push/devices`, {
+      const response = await fetch(`${shellRoot()}/api/web-push/devices`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscription: subscription.toJSON(), label: "Renewed subscription" }),
       });
-    })().catch(() => {}),
+      if (!response.ok) throw new Error(`the workspace answered ${response.status}`);
+    })().catch((error) => console.warn("Could not register the renewed push subscription", error)),
   );
 });
