@@ -9,9 +9,9 @@ editing), and re-registers the app itself from its manifest as internal and neve
 stopped for want of a window. Internal keeps the bare app out of the launcher (a
 desktop shortcut the shell gave it when it was first registered stays); and since only
 the frame has a window, the shell would otherwise stop the app a minute after its own
-window count reached zero. Both last until the app's next
-registration from its manifest alone, which its program makes on every start, so ``up``
-is re-run after every restart (``verify_app.py --restart`` and then ``up --refresh``,
+window count reached zero. Both last until the app's next registration from its
+manifest alone, which its program makes on every start, so ``up`` is re-run after every
+restart (``verify_app.py --restart`` and then ``up --refresh``,
 in one call). ``down`` closes the mock window, removes the frame, and registers the app
 from its manifest again, so it is an ordinary app the user can open; for an app that has
 since been removed it takes the frame down and leaves the registry alone.
@@ -186,9 +186,8 @@ def up(
     if not note.strip():
         sys.stderr.write("mock frame: --note must say what is not real yet.\n")
         return 1
-    # Refused here, before the registry is touched: the frame refuses it too, but only
-    # after the app was re-registered, and the plain registration put back then would
-    # un-hide an app a frame from an earlier run still shows.
+    # Checked before the registry is touched: a frame failure restores the plain
+    # registration, which would un-hide an app an earlier run's frame still shows.
     if not inner_path.startswith("/"):
         sys.stderr.write(
             f"mock frame: --path must start with '/', got {inner_path!r}.\n"
