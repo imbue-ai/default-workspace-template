@@ -142,7 +142,7 @@ Committed on branch `<branch-name>`. Ready to merge.
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
-- Phone: <what you fixed for a phone, or "nothing needed">
+- Phone: <what you fixed for a phone and what you could not, or "nothing needed">
 - Sharing: <routes made owner-only; each route that lets a visitor change, delete or spend, left as it was for the user to decide; the access log, or "none, visitors can only read">
 ```
 
