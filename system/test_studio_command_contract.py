@@ -3,8 +3,9 @@
 The Imbue Studio app runs scripts of this template inside the workspace (sending a chat a
 message, seeding the welcome chat, collecting a bug report, ...). Which ones, with what
 arguments, and what it reads back is the app's workspace command contract,
-``apps/minds/imbue/minds/workspace_programs/workspace_command_contract.py`` in mngr, which
-``system/scripts/fetch_mngr_assets.sh`` vendors here from the commit ``pyproject.toml`` pins.
+``apps/minds/imbue/minds/workspace_programs/workspace_command_contract.py`` in mngr, published
+beside it as ``workspace_command_contract.json``, which ``system/scripts/fetch_mngr_assets.sh``
+vendors here from the commit ``pyproject.toml`` pins.
 These checks run every declared command for real against this checkout. They live directly in
 ``system/``, so every change runs them (``app-manifest select-tests`` always selects
 ``system/test_*.py``).
@@ -22,13 +23,12 @@ may not have it, so an absent vendor directory skips rather than fails.
 from __future__ import annotations
 
 import ast
-import importlib.util
+import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
@@ -42,7 +42,7 @@ _CONTRACT_PATH = (
     / "imbue"
     / "minds"
     / "workspace_programs"
-    / "workspace_command_contract.py"
+    / "workspace_command_contract.json"
 )
 
 # The contract version these scripts were last reviewed against. A new version changes what an
@@ -72,7 +72,11 @@ def _broken_contract_message(command: dict[str, Any], problem: str) -> str:
     )
 
 
-def _load_contract() -> ModuleType:
+_SYSTEM_PYTHON = "system_python"
+_ROOT_VENV_ENTRY_POINT = "root_venv_entry_point"
+
+
+def _load_contract() -> dict[str, Any]:
     if not _VENDOR_ASSETS_DIR.is_dir():
         pytest.skip(
             "mngr assets are not vendored here; run system/scripts/fetch_mngr_assets.sh first"
@@ -82,26 +86,25 @@ def _load_contract() -> ModuleType:
     assert _CONTRACT_PATH.is_file(), (
         f"{_CONTRACT_PATH.relative_to(REPO_ROOT)} is missing from the vendored mngr assets"
     )
-    spec = importlib.util.spec_from_file_location(
-        "vendored_workspace_command_contract", _CONTRACT_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
-def _command_prefix(contract: ModuleType, command: dict[str, Any]) -> list[str]:
+def _command_named(contract: dict[str, Any], name: str) -> dict[str, Any]:
+    (command,) = [c for c in contract["commands"] if c["name"] == name]
+    return command
+
+
+def _command_prefix(command: dict[str, Any]) -> list[str]:
     """How the app starts ``command``: the system python with no site-packages, or the root venv's script."""
-    if command["runner"] == contract.CommandRunner.SYSTEM_PYTHON:
+    if command["runner"] == _SYSTEM_PYTHON:
         return [sys.executable, "-S", "-s", str(REPO_ROOT / command["target"])]
-    if command["runner"] == contract.CommandRunner.ROOT_VENV_ENTRY_POINT:
+    if command["runner"] == _ROOT_VENV_ENTRY_POINT:
         return [str(Path(sys.executable).parent / command["target"])]
     raise AssertionError(f"unknown runner {command['runner']!r} for {command['name']}")
 
 
-def _environment(contract: ModuleType, command: dict[str, Any]) -> dict[str, str]:
-    if command["runner"] == contract.CommandRunner.SYSTEM_PYTHON:
+def _environment(command: dict[str, Any]) -> dict[str, str]:
+    if command["runner"] == _SYSTEM_PYTHON:
         return {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     return dict(os.environ)
 
@@ -130,12 +133,12 @@ def _string_literals(path: Path) -> set[str]:
     }
 
 
-def _argparse_problems(contract: ModuleType, command: dict[str, Any]) -> list[str]:
+def _argparse_problems(command: dict[str, Any]) -> list[str]:
     problems: list[str] = []
     for invocation in command["invocations"]:
         result = _run(
-            [*_command_prefix(contract, command), *invocation["subcommand"], "--help"],
-            _environment(contract, command),
+            [*_command_prefix(command), *invocation["subcommand"], "--help"],
+            _environment(command),
         )
         shown = " ".join([command["target"], *invocation["subcommand"], "--help"])
         if result.returncode != 0:
@@ -179,9 +182,9 @@ def _hand_parsed_problems(command: dict[str, Any], module_path: Path) -> list[st
 def test_the_contract_is_the_version_these_scripts_were_reviewed_against() -> None:
     contract = _load_contract()
 
-    assert contract.CONTRACT_VERSION == _REVIEWED_CONTRACT_VERSION, (
+    assert contract["contract_version"] == _REVIEWED_CONTRACT_VERSION, (
         f"the pinned Imbue Studio app declares workspace command contract version "
-        f"{contract.CONTRACT_VERSION}, and these scripts were last reviewed against "
+        f"{contract["contract_version"]}, and these scripts were last reviewed against "
         f"{_REVIEWED_CONTRACT_VERSION}: check every command against the new version, then "
         "move _REVIEWED_CONTRACT_VERSION"
     )
@@ -189,7 +192,7 @@ def test_the_contract_is_the_version_these_scripts_were_reviewed_against() -> No
 
 def test_every_hand_parsed_command_is_one_the_contract_declares() -> None:
     contract = _load_contract()
-    names = {command["name"] for command in contract.WORKSPACE_COMMANDS}
+    names = {command["name"] for command in contract["commands"]}
 
     assert set(_HAND_PARSED_COMMANDS) <= names
 
@@ -197,10 +200,10 @@ def test_every_hand_parsed_command_is_one_the_contract_declares() -> None:
 def test_every_declared_command_takes_every_argument_the_app_passes() -> None:
     contract = _load_contract()
     failures: list[str] = []
-    for command in contract.WORKSPACE_COMMANDS:
+    for command in contract["commands"]:
         hand_parsed_module = _HAND_PARSED_COMMANDS.get(command["name"])
         problems = (
-            _argparse_problems(contract, command)
+            _argparse_problems(command)
             if hand_parsed_module is None
             else _hand_parsed_problems(command, hand_parsed_module)
         )
@@ -215,10 +218,10 @@ def test_the_bug_report_collector_runs_with_no_venv_and_prints_nothing_when_aske
     None
 ):
     contract = _load_contract()
-    command = contract.COLLECT_BUG_REPORT_DIAGNOSTICS
+    command = _command_named(contract, "collect_bug_report_diagnostics")
     result = _run(
-        [*_command_prefix(contract, command), "--scan-timeout=1"],
-        _environment(contract, command),
+        [*_command_prefix(command), "--scan-timeout=1"],
+        _environment(command),
     )
 
     assert result.returncode == 0, _broken_contract_message(
@@ -234,13 +237,13 @@ def test_an_unknown_argument_exits_with_the_status_the_app_reads_as_an_older_tem
 ):
     contract = _load_contract()
     failures: list[str] = []
-    for command in contract.WORKSPACE_COMMANDS:
+    for command in contract["commands"]:
         expected = command["usage_error_exit_code"]
         if expected is None:
             continue
         result = _run(
-            [*_command_prefix(contract, command), _UNKNOWN_OPTION],
-            _environment(contract, command),
+            [*_command_prefix(command), _UNKNOWN_OPTION],
+            _environment(command),
         )
         if result.returncode != expected:
             failures.append(
@@ -258,7 +261,7 @@ def test_every_path_the_app_checks_for_is_here() -> None:
     contract = _load_contract()
     missing = [
         f"`{required['path']}`: {required['reason']}"
-        for required in contract.REQUIRED_PATHS
+        for required in contract["required_paths"]
         if not (REPO_ROOT / required["path"]).exists()
     ]
 

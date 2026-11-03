@@ -17,7 +17,7 @@
 #                                                   the workspace profile snapshot's
 #                                                   format and keys, which
 #                                                   workspace_profile is tested against
-#   apps/minds/imbue/minds/workspace_programs/workspace_command_contract.py
+#   apps/minds/imbue/minds/workspace_programs/workspace_command_contract.json
 #                                                   the commands Imbue Studio runs in
 #                                                   this workspace, which
 #                                                   system/test_studio_command_contract.py
@@ -40,7 +40,7 @@ ASSET_PATHS=(
     apps/minds/electron/link-externality-vectors.json
     style_guide.md
     apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
-    apps/minds/imbue/minds/workspace_programs/workspace_command_contract.py
+    apps/minds/imbue/minds/workspace_programs/workspace_command_contract.json
 )
 
 read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
