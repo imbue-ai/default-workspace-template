@@ -945,8 +945,9 @@ def up(
     title it additionally boots the labeled wrapper frame, opening the inner
     service at ``inner_path``. ``theming_mode`` is the served app's ``[theming]``
     mode, recorded on the inner service's row so the workspace themes it as it
-    would the app. ``project`` names the standalone project ``command`` boots from
-    (``project_launcher``), relative to ``cwd``; its venv is linked before each boot.
+    would the app. ``project`` names a standalone project, relative to ``cwd``, that
+    ``command`` boots from: its venv is linked before each boot and ``command`` runs
+    behind ``project_launcher``.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -973,6 +974,8 @@ def up(
         return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
+    if project is not None:
+        command = [*project_launcher(project), *command]
 
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
@@ -1534,8 +1537,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         launch = list(args.launch)
         if launch and launch[0] == "--":
             launch = launch[1:]
-        if args.project is not None:
-            launch = [*project_launcher(args.project), *launch]
         try:
             env_overrides = parse_env_assignments(args.env)
             port_env_by_name = parse_port_envs(args.port_env, args.port)

@@ -799,13 +799,13 @@ def test_a_project_instance_links_its_venv_before_every_boot(tmp_path: Path) -> 
         == 0
     )
     assert linker.linked == [tmp_path / "system" / "apps" / "widget"]
-    assert len(up_spawner.detached_spawns) == 1
+    [up_argv] = up_spawner.detached_spawns
+    assert up_argv == [*mod.project_launcher("system/apps/widget"), *_LAUNCH]
 
-    assert (
-        _refresh(tmp_path, spawner=_FakeSpawner(detached_pid=5555), venv_linker=linker)
-        == 0
-    )
+    refresh_spawner = _FakeSpawner(detached_pid=5555)
+    assert _refresh(tmp_path, spawner=refresh_spawner, venv_linker=linker) == 0
     assert linker.linked == [tmp_path / "system" / "apps" / "widget"] * 2
+    assert refresh_spawner.detached_spawns == [up_argv]
 
 
 def test_an_instance_of_no_project_links_nothing(tmp_path: Path) -> None:

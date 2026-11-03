@@ -161,11 +161,7 @@ def build_instance_spec(
     return InstanceSpec(
         name=instance_name(manifest.name),
         command=[
-            *(
-                LAUNCHER
-                if project is None
-                else serve_isolated_instance.project_launcher(project)
-            ),
+            *(LAUNCHER if project is None else ()),
             *(resolve_own_placeholders(part, registry_copy) for part in launch),
         ],
         cwd=worktree,

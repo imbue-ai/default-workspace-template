@@ -19,7 +19,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from agents_shared import serve_isolated_instance
 
 from update_app_skill import preview_app as mod
 from update_app_skill import preview_boot as boot
@@ -650,8 +649,5 @@ def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) ->
     )
 
     spec = instances.up_spec("notes-preview")
-    assert spec.command == [
-        *serve_isolated_instance.project_launcher("system/apps/notes"),
-        "notes",
-    ]
+    assert spec.command == ["notes"]
     assert spec.project == "system/apps/notes"
