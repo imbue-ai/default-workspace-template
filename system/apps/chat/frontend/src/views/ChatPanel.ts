@@ -150,10 +150,16 @@ function renderAgentLiveTail(chatId: string): m.Vnode[] {
   ];
 }
 
-/** The agent's output past the transcript, when no stretch at the end of the rows takes it (the transcript ends on a
- *  person's turn, or on a switch to another agent): a stretch of its own. */
+/** Whether the last row's bubble holds the agent's output past the transcript: the row is an open stretch of the
+ *  agent's output, and the held window reaches the live end, so no unloaded events lie between the two. */
+function isLiveTailInLastRow(chatId: string, rows: readonly RowDescriptor[]): boolean {
+  return !hasMoreAfter(chatId) && (rows[rows.length - 1]?.takesLiveTail ?? false);
+}
+
+/** The agent's output past the transcript, when the last row does not hold it (the transcript ends on a person's
+ *  turn or on a switch to another agent, or the window stops short of the live end): a stretch of its own. */
 function renderStandaloneLiveTail(chatId: string, rows: readonly RowDescriptor[]): m.Vnode[] {
-  return (rows[rows.length - 1]?.takesLiveTail ?? false) ? [] : asAgentTurn(renderAgentLiveTail(chatId));
+  return isLiveTailInLastRow(chatId, rows) ? [] : asAgentTurn(renderAgentLiveTail(chatId));
 }
 
 /** The agent's nodes as a stretch of their own, or nothing when there are none. */
@@ -769,7 +775,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
-        () => renderAgentLiveTail(chatId),
+        () => (hasMoreAfter(chatId) ? [] : renderAgentLiveTail(chatId)),
       );
       rowsCacheKey = renderKey;
     }
@@ -793,7 +799,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
         // The agent's output past the transcript sits in the last row's bubble when that row is the
-        // agent's; after a person's turn it is a stretch of its own.
+        // agent's and ends the transcript; otherwise it is a stretch of its own.
         ...renderStandaloneLiveTail(chatId, rows),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
