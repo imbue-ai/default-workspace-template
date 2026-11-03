@@ -1,7 +1,9 @@
 /**
  * The backend's per-agent activity states (``ActivityState``), as the ``activity_state`` of a
  * chat's active agent carries them: IDLE, THINKING, TOOL_RUNNING and COMPACTING. The views read
- * the strings directly; this names the one several of them branch on.
+ * the strings directly; this names the one several of them branch on, and the questions the views
+ * and the outgoing-message model ask of them: whether the agent is working, and whether a chat is
+ * busy with something a message sent now would wait behind.
  */
 
 import type { ChatSnapshot } from "./Chats";
