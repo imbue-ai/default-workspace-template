@@ -464,7 +464,7 @@ class VenvLinker:
     def link_project(self, project_dir: Path) -> None:
         """Make ``project_dir``'s ``.venv`` a link to a target beside the uv cache, as its
         program's start does; raises OSError or RuntimeError when it cannot."""
-        venv_links.ensure(None, [project_dir])
+        venv_links.ensure(None, [project_dir.resolve()])
 
 
 def _link_project_venv(
