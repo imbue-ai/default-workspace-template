@@ -2572,7 +2572,7 @@ def build_parser() -> argparse.ArgumentParser:
         "await",
         help="Block until the worker's report file appears (or an unconsumed "
         "milestone lands beside it), then print it. "
-        "Run it through system/scripts/workspace_bare_scripts/run_in_background.py, then end the turn -- "
+        "Run it through system/scripts/workspace_bare_scripts/run_in_background.py --waiter, then end the turn -- "
         "its result arrives in your chat and wakes you. Re-invoke once per gate cycle.",
     )
     await_parser.add_argument(
