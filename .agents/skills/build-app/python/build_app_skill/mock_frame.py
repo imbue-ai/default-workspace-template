@@ -198,6 +198,16 @@ def _register(
         raise MockFrameError(f"could not re-register {app.name!r}: {exc}") from exc
 
 
+def _run_layout(layout: Layout, argv: Sequence[str]) -> int:
+    """Run one ``workspace-layout`` op that shows the user something; 1, reported, when it fails."""
+    if layout.run(argv) != 0:
+        sys.stderr.write(
+            f"mock frame: workspace-layout {' '.join(argv)} failed (see above).\n"
+        )
+        return 1
+    return 0
+
+
 def up(
     app_name: str,
     note: str | None,
@@ -245,17 +255,12 @@ def up(
             f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
         )
         return 0
-    argv = (
+    return _run_layout(
+        layout,
         ["open", frame_name(app_name), "--beside"]
         if surface == "open"
-        else ["refresh", "--app", frame_name(app_name)]
+        else ["refresh", "--app", frame_name(app_name)],
     )
-    if layout.run(argv) != 0:
-        sys.stderr.write(
-            f"mock frame: workspace-layout {' '.join(argv)} failed (see above).\n"
-        )
-        return 1
-    return 0
 
 
 def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
@@ -276,13 +281,7 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
             frames=frames,
             layout=layout,
         )
-    argv = ["refresh", "--app", app_name]
-    if layout.run(argv) != 0:
-        sys.stderr.write(
-            f"mock frame: workspace-layout {' '.join(argv)} failed (see above).\n"
-        )
-        return 1
-    return 0
+    return _run_layout(layout, ["refresh", "--app", app_name])
 
 
 def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
