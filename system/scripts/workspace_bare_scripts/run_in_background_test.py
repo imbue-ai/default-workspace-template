@@ -577,6 +577,33 @@ def test_a_waiter_ended_with_its_stopped_agent_is_reported_not_restarted(
     assert "started it again" not in body["message"]
 
 
+@pytest.mark.parametrize(
+    ("comm", "is_running"),
+    [("claude\n", True), (f"{run_in_background.TMUX_SERVER_COMM}\n", False)],
+    ids=["agent-process", "tmux-server"],
+)
+def test_only_a_process_mngr_stop_would_kill_counts_as_the_running_agent(
+    tmp_path: Path, comm: str, is_running: bool
+) -> None:
+    """``mngr stop`` leaves the shared tmux server running even when it carries the agent's id,
+    so a server carrying it does not make a stopped agent read as running."""
+    agent_id = f"agent-{secrets.token_hex(16)}"
+    # A real process outside this test's process group, whose /proc entry the fake one stands in for.
+    other_group = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        entry = tmp_path / str(other_group.pid)
+        entry.mkdir()
+        (entry / "environ").write_bytes(
+            f"HOME=/home/user\0{run_in_background.AGENT_ID_ENV}={agent_id}\0".encode()
+        )
+        (entry / "comm").write_text(comm)
+
+        assert run_in_background.is_agent_running(agent_id, tmp_path) is is_running
+    finally:
+        other_group.kill()
+        other_group.wait()
+
+
 class _ScriptedRuns:
     """Stands in for running the command: returns the scripted exit statuses in turn."""
 

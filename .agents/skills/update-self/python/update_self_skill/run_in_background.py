@@ -138,6 +138,7 @@ WAITER_REARM_SETTLE_SECONDS = 5.0
 # Exit statuses of a command a signal ended: a negative one when the signal reached it
 # directly, 128 plus the signal when it reached a wrapper (``uv run``) that passed it on.
 SIGNAL_EXIT_STATUSES = frozenset({128 + 15, 128 + 9})
+TMUX_SERVER_COMM = "tmux: server"
 
 MAX_INLINE_OUTPUT_CHARS = 20_000
 # How much of a long output's start is kept: enough for a report's frontmatter, which a
@@ -417,7 +418,9 @@ def is_signal_exit(returncode: int) -> bool:
 def is_agent_running(agent_id: str, proc_dir: Path = Path("/proc")) -> bool:
     """Whether a process outside this runner's own process group carries the agent's id: the
     test ``mngr stop`` kills by, so a stopped agent has none. The group holds this runner and the
-    command it ran, which carries the id without being the agent. False where ``/proc`` is absent."""
+    command it ran, which carries the id without being the agent. The shared tmux server, which
+    ``mngr stop`` leaves running though it can carry the id of the agent that forked it, is not
+    the agent either. False where ``/proc`` is absent."""
     needle = f"{AGENT_ID_ENV}={agent_id}".encode()
     if not proc_dir.is_dir():
         return False
@@ -431,7 +434,13 @@ def is_agent_running(agent_id: str, proc_dir: Path = Path("/proc")) -> bool:
             environ = (entry / "environ").read_bytes()
         except OSError:
             continue
-        if needle in environ.split(b"\0"):
+        if needle not in environ.split(b"\0"):
+            continue
+        try:
+            comm = (entry / "comm").read_text(errors="replace").strip()
+        except OSError:
+            comm = ""
+        if comm != TMUX_SERVER_COMM:
             return True
     return False
 
