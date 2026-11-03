@@ -523,12 +523,13 @@ _SHED_ONCE_SOURCE = (
     "print('the worker reported')\n"
 )
 _REARM_DEADLINE_SECONDS = run_in_background.WAITER_REARM_SETTLE_SECONDS + 10
-
-
-@pytest.mark.skipif(
+_NEEDS_PROC_ENVIRON = pytest.mark.skipif(
     not Path("/proc/self/environ").exists(),
     reason="needs Linux's /proc/<pid>/environ, which tells a running agent from a stopped one",
 )
+
+
+@_NEEDS_PROC_ENVIRON
 @pytest.mark.usefixtures("fake_mngr")
 def test_a_shed_waiter_is_started_again_while_its_agent_still_runs(
     fake_chat_app: Any, tmp_path: Path
@@ -558,10 +559,7 @@ def test_a_shed_waiter_is_started_again_while_its_agent_still_runs(
     assert "the worker reported" in body["message"]
 
 
-@pytest.mark.skipif(
-    not Path("/proc/self/environ").exists(),
-    reason="needs Linux's /proc/<pid>/environ, which tells a running agent from a stopped one",
-)
+@_NEEDS_PROC_ENVIRON
 @pytest.mark.usefixtures("fake_mngr")
 def test_a_waiter_ended_with_its_stopped_agent_is_reported_not_restarted(
     fake_chat_app: Any, tmp_path: Path
