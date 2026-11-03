@@ -66,13 +66,21 @@ class _RecordingLayout(mock_frame.Layout):
         return self.codes_by_verb.get(argv[0], 0)
 
 
-def _registered_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A scaffolded app registered from its manifest, as its program does on start; the registry's path."""
+def _scaffolded_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """A scaffolded app that has not registered yet, and a sandboxed registry; the registry's path and the app's lib dir."""
     registry = tmp_path / "data" / ".state" / "apps.toml"
     monkeypatch.setenv(forward_port.ENV_APPS_FILE, str(registry))
     lib_dir = scaffold_flask_lib._write_lib(
         tmp_path, _APP, "inbox status dashboard", "Inbox status", 8081, [], _ICON
     )
+    return registry, lib_dir
+
+
+def _registered_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A scaffolded app registered from its manifest, as its program does on start; the registry's path."""
+    registry, lib_dir = _scaffolded_app(tmp_path, monkeypatch)
     forward_port.register_manifest(registry, lib_dir / "app.toml", _URL)
     return registry
 
@@ -174,10 +182,7 @@ def test_a_frame_that_does_not_come_up_leaves_the_app_an_ordinary_app(
 def test_up_refuses_an_app_that_is_not_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(forward_port.ENV_APPS_FILE, str(tmp_path / "apps.toml"))
-    scaffold_flask_lib._write_lib(
-        tmp_path, _APP, "inbox status dashboard", "Inbox status", 8081, [], _ICON
-    )
+    _scaffolded_app(tmp_path, monkeypatch)
     frames = _RecordingFrames()
 
     with pytest.raises(mock_frame.MockFrameError, match="not registered"):
