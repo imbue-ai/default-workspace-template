@@ -1518,8 +1518,9 @@ _ARGV_RUNNERS = frozenset(
 
 def _command_word(words: list[object]) -> str | None:
     """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
-    run's options; None when a word that is not a literal stands where it would be read, or
-    the first word is a program that runs the argv after it."""
+    run's options; None when it cannot be read: a word that is not a literal stands where it
+    would be, the first word is a program that runs the argv after it, or the word follows a
+    run option that may take it as its value."""
     if not words or not isinstance(words[0], str) or words[0] in _ARGV_RUNNERS:
         return None
     if words[0] != "uv":
@@ -1529,7 +1530,17 @@ def _command_word(words: list[object]) -> str | None:
         return None
     if index >= len(words) or words[index] != "run":
         return words[0]
-    index = _past_options(words, index + 1, _OPTIONS_WITH_VALUES)
+    start = index + 1
+    index = _past_options(words, start, _OPTIONS_WITH_VALUES)
+    previous = words[index - 1] if index > start else None
+    if (
+        isinstance(previous, str)
+        and previous.startswith("-")
+        and previous not in _OPTIONS_WITH_VALUES | _NON_SYNCING_OPTIONS | {"--"}
+        and "=" not in previous
+    ):
+        # An option this scan does not know may take the word after it as its value.
+        return None
     command = words[index] if index < len(words) else None
     return command if isinstance(command, str) else None
 
@@ -1770,6 +1781,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'subprocess.run(["uv", "run", *FLAGS, "tool-cmd"])',
                 'subprocess.run(["uv", *GLOBAL_OPTIONS, "run", "tool-cmd"])',
                 'subprocess.run(["timeout", "60", "tool-cmd"])',
+                'subprocess.run(["uv", "run", "-p", "3.12", "tool-cmd"])',
             ]
         )
     )
@@ -1795,6 +1807,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:24",
         "pkg/caller.py:25",
         "pkg/caller.py:26",
+        "pkg/caller.py:27",
     ]
 
 
