@@ -1048,7 +1048,9 @@ caching answer relayed -- so the page needs no second origin.
 Each stretch of the agent's output is one grey bubble under the workspace's name and
 picture: a stretch runs until a person speaks or another agent takes over, and holds
 the agent's prose, tool chips, cards, step timeline and the system notices among
-them, all starting on the bubble's text edge. The reply the agent is still writing,
+them, all starting on the bubble's text edge. A command a person runs in bash mode
+(`!ls`) and its output are theirs, not the agent's: they stand on the person's side
+and end the stretch (display `person_chip`). The reply the agent is still writing,
 and a switch the transcript does not show yet, join the last bubble while its
 stretch is open, and open a bubble of their own after a person's turn or a switch
 to another agent. The bubble is as wide as the widest thing in it, up to 80% of the
