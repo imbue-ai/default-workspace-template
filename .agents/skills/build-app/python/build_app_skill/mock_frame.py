@@ -105,7 +105,7 @@ class Frames:
         )
 
     def recorded(self, app_name: str, repo_root: Path) -> RecordedFrame | None:
-        """The note and path the app's frame was last booted with, or None when no frame is recorded."""
+        """The note and path the app's frame was last booted with, or None when no frame with a note is recorded."""
         try:
             record = serve_isolated_instance.read_frame(frame_name(app_name), repo_root)
         except serve_isolated_instance.InstanceError as exc:
