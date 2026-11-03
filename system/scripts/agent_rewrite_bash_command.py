@@ -11,7 +11,7 @@ on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPAT
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- every harness's hook config runs it before each Bash command to add the OOM tag and commit identity, which a broken or unsynced venv must not strip
+# import-path: no-venv -- claude's, codex's, pi's and agy's hooks run it before each Bash command to add the OOM tag and commit identity, which a broken or unsynced venv must not strip
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )
