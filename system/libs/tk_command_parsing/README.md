@@ -52,14 +52,15 @@ interpreted the way a shell would.
   blocks a pipe into `head`/`tail` whose input would have to be regenerated. It
   groups the segments into pipelines by their `terminator` and inspects the
   `command_words` of each stage that feeds the pipe.
-- `system/scripts/workspace_bare_scripts/agent_block_foreground_sleep_check.py` -- the PreToolUse gate
-  that blocks a foreground `sleep` of 5 seconds or more. It reads the duration of every
-  segment whose `command_words` run `sleep`, and uses `terminator` to tell a list sent to the
-  background with `&` from one that runs in the foreground.
+- `system/scripts/workspace_bare_scripts/agent_block_foreground_sleep_check.py` -- the PreToolUse
+  gate that blocks a foreground `sleep` of 5 seconds or more. It reads the
+  duration of every segment whose `command_words` run `sleep`, and uses
+  `terminator` to tell a list sent to the background with `&` from one that
+  runs in the foreground.
 
-These gates, and the secrets guard above, import this package under a bare `python3` (no virtualenv) via an
-explicit `sys.path` entry, which is why this package is **stdlib-only** and must
-stay that way.
+These gates, and the secrets guard above, import this package under a bare
+`python3` (no virtualenv) via an explicit `sys.path` entry, which is why this
+package is **stdlib-only** and must stay that way.
 
 `extract_create_titles` / `flag_values` are part of the parsing surface for
 callers that need step titles out of a `tk create --step` command; keeping the
