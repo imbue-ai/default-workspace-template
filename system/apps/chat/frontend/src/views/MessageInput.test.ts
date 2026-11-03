@@ -237,6 +237,7 @@ vi.mock("../models/Providers", () => ({
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import {
   MessageInput,
@@ -717,9 +718,9 @@ describe("MessageInput draft scroll position", () => {
   /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
    *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The caret sits at
    *  `caretPosition`, or at the end. */
-  function makeOverflowingDraftTextarea(caretPosition?: number) {
+  function makeOverflowingDraftTextarea(caretPosition?: number, draftSuffix = "") {
     let storedScrollTopPx = 0;
-    const value = "a long draft ".repeat(40);
+    const value = "a long draft ".repeat(40) + draftSuffix;
     const caret = caretPosition ?? value.length;
     return {
       value,
@@ -727,6 +728,10 @@ describe("MessageInput draft scroll position", () => {
       selectionEnd: caret,
       style: { height: "", overflowY: "" },
       focus: () => undefined,
+      setSelectionRange(start: number, end: number): void {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+      },
       get clientHeight(): number {
         return this.style.height === "" || this.style.height === "auto" ? ONE_LINE_PX : parseFloat(this.style.height);
       },
@@ -742,17 +747,23 @@ describe("MessageInput draft scroll position", () => {
     };
   }
 
-  /** Mount the composer around `textarea` and lay it out once; returns the textarea's input and redraw hooks. */
+  /** Mount the composer around `textarea` and lay it out once; returns the textarea's input, key and redraw
+   *  hooks. */
   function mountComposer(textarea: ReturnType<typeof makeOverflowingDraftTextarea>) {
     const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
     const textareaVnode = findByTag(tree, "textarea");
     const onupdate = textareaVnode?.attrs?.onupdate as (vnode: unknown) => void;
     const oninput = textareaVnode?.attrs?.oninput as (event: unknown) => void;
+    const onkeydown = textareaVnode?.attrs?.onkeydown as (event: unknown) => void;
     (findByClass(tree, "message-input-row")?.attrs?.oncreate as (vnode: unknown) => void)({
       dom: fakeComposerRow(new Set()),
     });
     onupdate({ dom: textarea });
-    return { redraw: () => onupdate({ dom: textarea }), type: () => oninput({ target: textarea }) };
+    return {
+      redraw: () => onupdate({ dom: textarea }),
+      type: () => oninput({ target: textarea }),
+      press: (key: string) => onkeydown({ key, preventDefault: () => undefined }),
+    };
   }
 
   it("leaves an overflowing draft where its reader scrolled it when the composer redraws", () => {
@@ -785,6 +796,25 @@ describe("MessageInput draft scroll position", () => {
     composer.type();
 
     expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("scrolls an overflowing draft all the way down after picking a mention at its end", () => {
+    mocks.isRoom = true;
+    setMentionsForTesting([{ handle: "alice", display_name: "Alice", kind: "invited", key: "alice", chat_id: null }]);
+    try {
+      const textarea = makeOverflowingDraftTextarea(undefined, "@al");
+      const composer = mountComposer(textarea);
+      composer.type();
+      textarea.scrollTop = DRAFT_CONTENT_PX - COMPOSER_CAP_PX - 5;
+
+      composer.press("Enter");
+
+      expect(textarea.value.endsWith("@alice ")).toBe(true);
+      expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - COMPOSER_CAP_PX);
+    } finally {
+      mocks.isRoom = false;
+      setMentionsForTesting([]);
+    }
   });
 });
 
