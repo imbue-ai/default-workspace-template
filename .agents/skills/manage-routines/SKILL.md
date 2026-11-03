@@ -44,8 +44,18 @@ zone. If the two differ and the schedule's times depend on it, tell the user
 which zone the routine will run in, and that they can change the workspace's
 zone in Workspace settings > Timezone.
 
-Only when the user asks you to set the workspace's timezone, set it the way
-that page does:
+Only when the user asks you to set the workspace's timezone, set it through
+Imbue Studio, which checks the zone and records it as the user's choice. This
+needs the `minds-workspaces-update` permission for this workspace (the
+`imbue-studio` skill says how to ask for one):
+
+```bash
+latchkey curl -XPATCH http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/$MNGR_AGENT_ID \
+  -H 'Content-Type: application/json' -d '{"timezone": "<Area/City>"}'
+```
+
+If Imbue Studio cannot be reached, or its answer has no `timezone` field (an
+older app), set it the same way by hand:
 
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
