@@ -1266,10 +1266,15 @@ def refresh(
     untouched -- since the port is unchanged, they keep routing to the new
     process. The caller reloads the window's iframe itself (this never touches it).
 
+    An instance booted from a standalone project has the project's venv linked
+    again first.
+
     Returns 0 once the rebooted inner server is healthy; 1 if there is no
-    refreshable instance, the old server survived SIGKILL, or the new one did not
-    come up (in which case the preview window shows an error until the underlying
-    build is fixed and refresh is retried -- but nothing else was disturbed).
+    refreshable instance, the project's venv could not be linked (the running
+    server is left as it was), the old server survived SIGKILL, or the new one did
+    not come up (in which case the preview window shows an error until the
+    underlying build is fixed and refresh is retried -- but nothing else was
+    disturbed).
     """
     state_path = _state_path(repo_root, name)
     if not state_path.exists():
