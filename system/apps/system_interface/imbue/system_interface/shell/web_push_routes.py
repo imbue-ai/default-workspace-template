@@ -24,6 +24,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import detail_response
+from imbue.system_interface.shell.route_helpers import refuse_if_preview
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
@@ -87,20 +88,12 @@ def _refuse_unless_owner() -> ResponseReturnValue | None:
     return None
 
 
-def _refuse_if_preview() -> ResponseReturnValue | None:
-    """A preview shell boots over a copy of the live state, signing key and devices included: it must not reach the
-    owner's devices."""
-    if get_state().is_preview:
-        return detail_response(WEB_PUSH_PREVIEW_DETAIL, HTTP_FORBIDDEN)
-    return None
-
-
 def _refuse_device_change() -> ResponseReturnValue | None:
     """A device registration, removal, or test is the owner's, and a preview's would reach the live devices."""
     refusal = _refuse_unless_owner()
     if refusal is not None:
         return refusal
-    return _refuse_if_preview()
+    return refuse_if_preview(WEB_PUSH_PREVIEW_DETAIL)
 
 
 def _registered_device(web_push: WebPushNotifier, device_id: str) -> RegisteredDevice | None:
@@ -159,7 +152,7 @@ def send_notification() -> ResponseReturnValue:
     apps, and never through a share's proxy."""
     refusal = require_loopback()
     if refusal is None:
-        refusal = _refuse_if_preview()
+        refusal = refuse_if_preview(WEB_PUSH_PREVIEW_DETAIL)
     if refusal is not None:
         return refusal
     if request_identity().is_header_present:

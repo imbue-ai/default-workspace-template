@@ -1,5 +1,5 @@
-"""The request helpers the shell's route modules share: status codes, the loopback gate, error bodies, the requester's
-identity, and how an op settles on the one client it targets (desktop contracts.md section 8)."""
+"""The request helpers the shell's route modules share: status codes, the loopback and preview gates, error bodies, the
+requester's identity, and how an op settles on the one client it targets (desktop contracts.md section 8)."""
 
 from typing import Final
 
@@ -12,6 +12,7 @@ from workspace_layout.identity import parse_identity_header
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
+from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import NoTargetClientError
@@ -50,6 +51,22 @@ def request_identity() -> RequestIdentity:
 def require_loopback() -> ResponseReturnValue | None:
     if (request.remote_addr or "") not in LOOPBACK_CLIENT_HOSTS:
         return detail_response("this route is only callable from loopback", HTTP_FORBIDDEN)
+    return None
+
+
+# What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
+# app's stop and start reach supervisord, the update notice's verbs act on the live apply's
+# rollback point, the embedder-message relay posts to live apps, and the Web Push verbs reach the
+# owner's live devices with the copied signing key. Everything else a preview offers (opening,
+# placing, and closing windows, a refresh, the interface reload, the avatar) edits the preview's
+# own state or reaches only the preview's own windows, so it stays live for the person judging the
+# change.
+PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
+
+
+def refuse_if_preview(detail: str = PREVIEW_REFUSAL_DETAIL) -> ResponseReturnValue | None:
+    if get_state().is_preview:
+        return detail_response(detail, HTTP_FORBIDDEN)
     return None
 
 
