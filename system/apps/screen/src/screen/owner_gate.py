@@ -113,10 +113,16 @@ def owner_session_cookie_value(gate: OwnerGate) -> str:
 
 @pure
 def has_owner_session(gate: OwnerGate, cookies: MultiDict[str, str]) -> bool:
-    """Whether any value the request carries under either session cookie name is the owner session."""
-    expected = owner_session_cookie_value(gate)
+    """Whether any value the request carries under either session cookie name is the owner session.
+
+    Compared as bytes: ``hmac.compare_digest`` raises on a non-ASCII ``str``, which a cookie another ``modal.host``
+    page set can carry, and the session is hex, so no replaced character can match it.
+    """
+    expected = owner_session_cookie_value(gate).encode("ascii")
     return any(
-        hmac.compare_digest(value, expected) for name in OWNER_SESSION_COOKIE_NAMES for value in cookies.getlist(name)
+        hmac.compare_digest(value.encode("utf-8", errors="replace"), expected)
+        for name in OWNER_SESSION_COOKIE_NAMES
+        for value in cookies.getlist(name)
     )
 
 

@@ -191,6 +191,18 @@ def test_a_foreign_cookie_value_ahead_of_the_session_does_not_mask_it(
     assert not has_owner_session(owner_gate, elsewhere)
 
 
+@pytest.mark.parametrize("foreign_value", ["\xc3\xa9", '"\\351"'])
+def test_a_non_ascii_foreign_cookie_value_neither_masks_the_session_nor_fails_the_request(
+    gated_client: FlaskClient, owner_gate: OwnerGate, foreign_value: str
+) -> None:
+    real = owner_session_cookie_value(owner_gate)
+    shadowed = {"Cookie": f"{OWNER_SESSION_COOKIE_NAME}={foreign_value}; {OWNER_SESSION_COOKIE_NAME}={real}"}
+    assert gated_client.get("/health", headers=shadowed, environ_base=_TUNNEL).status_code == 200
+    forged_only = {"Cookie": f"{OWNER_SESSION_COOKIE_NAME}={foreign_value}"}
+    assert gated_client.get("/health", headers=forged_only, environ_base=_TUNNEL).status_code == 401
+    assert not has_owner_session(owner_gate, MultiDict([(OWNER_SESSION_COOKIE_NAME, "\u00e9")]))
+
+
 def test_a_session_from_another_start_is_refused(gated_client: FlaskClient, owner_gate: OwnerGate) -> None:
     other_start = owner_gate.model_copy(update={"session_secret": SecretBytes(uuid4().bytes)})
     headers = _owner_cookie(other_start)
