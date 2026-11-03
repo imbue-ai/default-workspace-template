@@ -193,15 +193,14 @@ def post_to_studio_app(
     password = environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:
         sys.stderr.write(
-            "notify-user: the latchkey gateway env is not set, so the Imbue Studio app cannot be reached; "
-            "the notification did not go out.\n"
+            "notify-user: the latchkey gateway env is not set, so the Imbue Studio app cannot be reached.\n"
         )
         return False
     agent_id = environ.get(ENV_AGENT_ID, "")
     if not agent_id:
         sys.stderr.write(
             f"notify-user: {ENV_AGENT_ID} is not set, so the sending agent cannot be "
-            "identified; the notification did not go out.\n"
+            "identified to the Imbue Studio app.\n"
         )
         return False
     headers = {
@@ -229,12 +228,11 @@ def post_to_studio_app(
         return True
     if status is None:
         sys.stderr.write(
-            f"notify-user: the Imbue Studio app was unreachable ({text}); the notification did not go out.\n"
+            f"notify-user: the Imbue Studio app was unreachable ({text}).\n"
         )
     else:
         sys.stderr.write(
-            f"notify-user: the Imbue Studio app answered {status} ({text.strip()[:200]}); the notification "
-            "did not go out.\n"
+            f"notify-user: the Imbue Studio app answered {status} ({text.strip()[:200]}).\n"
         )
     return False
 
@@ -342,7 +340,10 @@ def notify(
             if is_app_accepted
             else f"notify-user: pushed to {pushed_count} of your devices, though not to the Imbue Studio app.\n"
         )
-    return is_app_accepted or pushed_count > 0
+    is_sent = is_app_accepted or pushed_count > 0
+    if not is_sent:
+        sys.stderr.write("notify-user: the notification did not go out.\n")
+    return is_sent
 
 
 def main(argv: list[str] | None = None) -> int:

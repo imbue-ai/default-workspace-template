@@ -424,10 +424,10 @@ def test_a_device_that_took_it_counts_when_the_app_did_not(
 
     assert notify_user.notify("Done.", None, http=http, environ=environ) is True
 
-    assert (
-        "pushed to 1 of your devices, though not to the Imbue Studio app"
-        in capsys.readouterr().err
-    )
+    stderr = capsys.readouterr().err
+    assert "the Imbue Studio app was unreachable" in stderr
+    assert "pushed to 1 of your devices, though not to the Imbue Studio app" in stderr
+    assert "did not go out" not in stderr
 
 
 @pytest.mark.parametrize(
