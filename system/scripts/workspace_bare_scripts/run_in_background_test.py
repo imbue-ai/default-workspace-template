@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import secrets
 import shlex
 import signal
@@ -973,3 +974,47 @@ def test_a_process_whose_name_is_not_utf8_still_has_a_start_time(
     finally:
         process.kill()
         process.wait()
+
+
+def _documented_worker_waits(repo_root: Path) -> list[tuple[str, str]]:
+    """Every ``(file, command)`` in the tracked docs and code that waits on a worker through this
+    script, with shell line continuations joined."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.md", "*.py"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    found: list[tuple[str, str]] = []
+    for relative in tracked:
+        path = repo_root / relative
+        if (
+            not relative
+            or "changelog" in Path(relative).parts
+            or relative.endswith("_test.py")
+            or not path.is_file()
+        ):
+            continue
+        text = path.read_text(errors="replace").replace("\\\n", " ")
+        found.extend(
+            (relative, " ".join(line.split()))
+            for line in text.splitlines()
+            if re.search(r"run_in_background\.py\s+--", line)
+            and "create_worker.py await" in line
+        )
+    return found
+
+
+def test_every_documented_wait_on_a_worker_runs_as_a_waiter() -> None:
+    """A lead's wait on its worker in the caller's band is shed under memory pressure, and the
+    lead never hears that the worker finished."""
+    repo_root = Path(__file__).resolve().parents[3]
+    waits = _documented_worker_waits(repo_root)
+
+    assert waits, "found no documented wait on a worker; the scan is broken"
+    assert [
+        (relative, command)
+        for relative, command in waits
+        if "--waiter" not in command.split(" -- ", 1)[0]
+    ] == []
