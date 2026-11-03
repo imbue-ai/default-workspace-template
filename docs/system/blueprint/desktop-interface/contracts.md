@@ -157,7 +157,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 `desktop_moved_by` (default null) is the page whose report wrote the current revision, null when an op or an arrival did; the shell keeps it to order a page's reports against the moves it had not heard of (section 6), and does not answer it.
 `shown_history` (default `[]`) is what the client's phone layout showed (`plan-phone-interface.md`), most recent last: window ids, and `"home"` for the home grid, each at most once and at most 20; a close drops the window from every client's history.
 `viewport` (default null) is the backdrop size the client's desktop layout last reported (`POST /api/clients/<client_id>/viewport`, section 5.4), in CSS pixels: the box its window frames are fractions of, which a window viewing one of the client's desktops draws the layout at (the multiplayer spec, section 8.3); null for a client that never reported one (a phone, a pulled-out window, an older shell).
-A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and read on as a version-2 file on the next write.
+A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and then read as a version-2 file.
 A version-2 file (written while a pinned entry could float by default, and a drag of one saved that default mode as the client's own) is read with every client's entries in `bar` mode with a null `position`, and rewritten at version 3 on the next write.
 
 ### 4.3a `users.json`
