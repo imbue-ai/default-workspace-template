@@ -1497,12 +1497,14 @@ def _joined_path(node: ast.BinOp) -> str:
 
 def _command_word(words: list[object]) -> str | None:
     """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
-    run's options."""
+    run's options; None when a word that is not a literal stands where it would be read."""
     if not words or not isinstance(words[0], str):
         return None
     if words[0] != "uv":
         return words[0]
     index = _past_options(words, 1, _UV_GLOBAL_OPTIONS_WITH_VALUES)
+    if index < len(words) and not isinstance(words[index], str):
+        return None
     if index >= len(words) or words[index] != "run":
         return words[0]
     index = _past_options(words, index + 1, _OPTIONS_WITH_VALUES)
@@ -1536,10 +1538,10 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
             element.value if isinstance(element, ast.Constant) else None
             for element in node.elts
         ]
-        # Behind a prefix that is not a literal (``[*LAUNCHER, "tool-cmd"]``,
-        # ``[UV, "run", "tool-cmd"]``) the program the argv runs cannot be read, so any
-        # console-script name in it may be that program.
-        is_program_unknown = bool(words) and not isinstance(words[0], str)
+        # Behind a word that is not a literal (``[*LAUNCHER, "tool-cmd"]``,
+        # ``[UV, "run", "tool-cmd"]``, ``["uv", "run", *FLAGS, "tool-cmd"]``) the program the
+        # argv runs cannot be read, so any console-script name in it may be that program.
+        command = _command_word(words)
         return (
             any(
                 word == "-m"
@@ -1547,8 +1549,8 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
                 and after.split(".")[0] in programs.packages
                 for word, after in zip(words, words[1:])
             )
-            or _command_word(words) in programs.commands
-            or (is_program_unknown and any(word in programs.commands for word in words))
+            or command in programs.commands
+            or (command is None and any(word in programs.commands for word in words))
         )
     return False
 
@@ -1743,6 +1745,8 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'subprocess.run(["uv", "--project", "pkg", "run", "--no-sync", "tool-cmd"])',
                 'subprocess.run([*UV_RUN, "tool-cmd"])',
                 'subprocess.run([UV, "run", "--no-sync", "tool-cmd"])',
+                'subprocess.run(["uv", "run", *FLAGS, "tool-cmd"])',
+                'subprocess.run(["uv", *GLOBAL_OPTIONS, "run", "tool-cmd"])',
             ]
         )
     )
@@ -1765,6 +1769,8 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:21",
         "pkg/caller.py:22",
         "pkg/caller.py:23",
+        "pkg/caller.py:24",
+        "pkg/caller.py:25",
     ]
 
 
