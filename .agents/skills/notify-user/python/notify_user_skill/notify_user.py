@@ -364,19 +364,21 @@ def notify(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Notify the user from this chat through the Imbue Studio app."
+        description="Notify the user from this chat in the Imbue Studio app and on their devices."
     )
     parser.add_argument(
-        "--title", default=None, help="Optional title, shown as a prefix on the message"
+        "--title",
+        default=None,
+        help="Optional title: a prefix on the message in the app, its heading on a device",
     )
     parser.add_argument("message", help="One sentence summarizing what was done")
     args = parser.parse_args(argv)
-    is_accepted = notify(
+    is_sent = notify(
         args.message, args.title, http=HttpClient(), environ=dict(os.environ)
     )
-    if is_accepted:
+    if is_sent:
         sys.stderr.write("notify-user: notification sent.\n")
-    return 0 if is_accepted else 1
+    return 0 if is_sent else 1
 
 
 if __name__ == "__main__":
