@@ -51,9 +51,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 
-# import-path: no-venv -- update-self's memory pass runs it mid-update, so like update-self it must not depend on the venv the update is changing
+# import-path: no-venv -- agents run it as `python3 <path>` when memory is short (after a shed, in update-self, in the harden gate), and it imports nothing a venv installs
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-# import-path: no-venv -- update-self's memory pass runs it mid-update, so like update-self it must not depend on the venv the update is changing
+# import-path: no-venv -- agents run it as `python3 <path>` when memory is short (after a shed, in update-self, in the harden gate), and it imports nothing a venv installs
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[3] / "libs" / "chat_background_tasks" / "src"),
