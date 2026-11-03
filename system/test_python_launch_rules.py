@@ -1495,10 +1495,32 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
+# Programs that run the argv after them (``timeout 60 tool-cmd``), past options and values
+# this scan does not parse.
+_ARGV_RUNNERS = frozenset(
+    {
+        "chrt",
+        "env",
+        "exec",
+        "flock",
+        "ionice",
+        "nice",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "taskset",
+        "timeout",
+        "xargs",
+    }
+)
+
+
 def _command_word(words: list[object]) -> str | None:
     """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
-    run's options; None when a word that is not a literal stands where it would be read."""
-    if not words or not isinstance(words[0], str):
+    run's options; None when a word that is not a literal stands where it would be read, or
+    the first word is a program that runs the argv after it."""
+    if not words or not isinstance(words[0], str) or words[0] in _ARGV_RUNNERS:
         return None
     if words[0] != "uv":
         return words[0]
@@ -1747,6 +1769,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'subprocess.run([UV, "run", "--no-sync", "tool-cmd"])',
                 'subprocess.run(["uv", "run", *FLAGS, "tool-cmd"])',
                 'subprocess.run(["uv", *GLOBAL_OPTIONS, "run", "tool-cmd"])',
+                'subprocess.run(["timeout", "60", "tool-cmd"])',
             ]
         )
     )
@@ -1771,6 +1794,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:23",
         "pkg/caller.py:24",
         "pkg/caller.py:25",
+        "pkg/caller.py:26",
     ]
 
 
