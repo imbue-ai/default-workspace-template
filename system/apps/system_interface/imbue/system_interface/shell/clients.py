@@ -47,7 +47,7 @@ CLIENTS_FILE_VERSION: Final[int] = 3
 # 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 # The file from when pinned entries floated by default: dragging one saved its whole presentation, the default
-# floating mode included, so a stored mode there is no sign the user chose it, and every entry moves to the taskbar.
+# floating mode included, so a stored mode there is no sign the user chose it.
 # CLEANUP: drop ``_FLOATING_DEFAULT_CLIENTS_FILE_VERSION``, ``_in_taskbar_client``, ``_folded_if_floating_default``,
 # and clients_test's version-two test around early January 2027, once every workspace has written a version-3
 # clients.json (the first write after this release does).
