@@ -18,10 +18,10 @@ Each rule is checked against the real tree and against a planted violation:
   system ``python3`` has no venv, so a venv-tier script run that way fails at its first
   third-party import. A ``uv run <path>.py`` names a script that exists, so a path that
   moved is rewritten wherever it is written down.
-- Code imports packages. Edits to the import path (``sys.path``, ``PYTHONPATH``, pytest's
-  ``pythonpath``), loading a module from a file path, and production code naming one of the
-  workspace's own scripts, modules or commands to run it as a process are counted, and the
-  counts only go down.
+- Code imports packages. An edit to the import path (``sys.path``, ``PYTHONPATH``, pytest's
+  ``pythonpath``), and production code naming one of the workspace's own scripts, modules or
+  commands to run it as a process, each fail unless a marker names why it has to stay.
+  Loading a module from a file path is counted, and the count only goes down.
 """
 
 from __future__ import annotations
@@ -708,7 +708,7 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
 # marker among the comment lines directly above its statement,
 # ``# own-process: <reason> -- <why>`` or ``# import-path: <reason> -- <why>``, naming one
 # of the reasons running-python.md ("When a launch or an import-path edit has to stay")
-# gives. A marked site is not counted.
+# gives. Every unmarked site fails its test.
 _OWN_PROCESS_MARKER = "own-process"
 _IMPORT_PATH_MARKER = "import-path"
 _REASONS_BY_MARKER: dict[str, frozenset[str]] = {
@@ -996,7 +996,7 @@ def _import_path_sites(repo_root: Path) -> list[_Site]:
 
 
 def _sys_path_editors(sites: list[_Site]) -> list[str]:
-    """The files with an import-path edit no marker keeps; the count is of these."""
+    """The files with an import-path edit no marker keeps."""
     return sorted({site.relative for site in sites if not site.is_kept()})
 
 
@@ -1023,14 +1023,14 @@ An edit that has to stay -- the code runs with no venv to install its packages, 
 code from a tree known only at run time -- keeps it: put
 `# import-path: <reason> -- <why this edit has to stay>` among the comment lines directly
 above its statement, with <reason> one of: {reasons}. A marker is a claim a reviewer will
-check: name every marker you add in your report. Never raise the count.
+check: name every marker you add in your report. Never edit this test to let a site
+through.
 """
 
 
 def test_prevent_sys_path_edits() -> None:
     sites = _import_path_sites(REPO_ROOT)
-    offenders = _sys_path_editors(sites)
-    assert len(offenders) <= snapshot(1), (
+    assert not _sys_path_editors(sites), (
         "These change where imports are looked up (sys.path, PYTHONPATH in Python or a shell "
         "script, or a pytest pythonpath setting):\n"
         + "\n".join(site.describe() for site in sites if not site.is_kept())
@@ -1609,7 +1609,7 @@ def _launch_sites(repo_root: Path) -> list[_Site]:
 
 
 def _program_launch_sites(repo_root: Path) -> list[str]:
-    """The launches no marker keeps; the count is of these."""
+    """The launches no marker keeps."""
     return [site.describe() for site in _launch_sites(repo_root) if not site.is_kept()]
 
 
@@ -1635,13 +1635,14 @@ How each kind of site becomes an import (.agents/shared/references/running-pytho
 A site that needs a process of its own, for one of the reasons that section gives, keeps
 it: put `# own-process: <reason> -- <why this site needs it>` among the comment lines
 directly above its statement, with <reason> one of: {reasons}. A marker is a claim a
-reviewer will check: name every marker you add in your report. Never raise the count.
+reviewer will check: name every marker you add in your report. Never edit this test to let
+a site through.
 """
 
 
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
-    assert len(sites) <= snapshot(9), (
+    assert not sites, (
         "These name one of the workspace's own scripts, modules or commands to run it as "
         "a process:\n"
         + "\n".join(sites)

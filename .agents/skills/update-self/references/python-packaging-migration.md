@@ -208,15 +208,16 @@ check sees it; after editing one, re-install it live with
 
 ## Launches and import-path edits in the user's code
 
-`system/test_python_launch_rules.py` counts two things across the whole tree,
-the user's code included: places that run one of the workspace's own scripts,
-modules or commands as a process, and files that edit the import path. The
-counts are the template's own, so any such site in the user's skills, apps,
-services, libs or shell scripts fails them. That is the point: the user's code
-is held to the same rule, and this update is when it gets there.
+`system/test_python_launch_rules.py` fails on two things anywhere in the tree,
+the user's code included: a place that runs one of the workspace's own scripts,
+modules or commands as a process, and an edit to the import path, each unless a
+marker names why it has to stay. So any unmarked site in the user's skills,
+apps, services, libs or shell scripts fails it. That is the point: the user's
+code is held to the same rule as the template's, and this update is when it
+gets there.
 
 Fix each site the user's code adds, during the update, by restructuring it --
-not by raising a count, which is a local edit to a built-in file that every
+not by editing the test, which is a local edit to a built-in file that every
 later update has to reconcile. The goal is code that imports what it uses;
 passing the test is how you know you got there, not the goal itself. You may
 change the caller, the code it reaches for, and their `pyproject.toml` files,

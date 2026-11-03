@@ -444,6 +444,7 @@ def test_a_scaffolded_app_passes_its_own_tests(tmp_path: Path) -> None:
         name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"
     }
 
+    # import-path: no-venv -- outside a workspace the scaffolded app has no venv of its own, so its tests run from this one
     result = subprocess.run(
         [
             sys.executable,

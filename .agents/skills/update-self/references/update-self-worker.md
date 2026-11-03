@@ -115,10 +115,10 @@ entries), which has bricked a live workspace before. When `classify-merge`
 shows a lockfile changed on **both** sides relative to the base, discard the
 auto-merge and regenerate before committing, even with no conflict reported.
 
-**The launch rules end the merge as upstream's copy, conflict or not.** A
-count in `system/test_python_launch_rules.py` raised in this workspace (an
-earlier update's way past the workspace's own launches or import-path edits)
-is not kept, even when it merged cleanly:
+**The launch rules end the merge as upstream's copy, conflict or not.** An
+edit to `system/test_python_launch_rules.py` made in this workspace (a count
+an earlier update raised to get past the workspace's own launches or
+import-path edits) is not kept, even when it merged cleanly:
 `git checkout "$TARGET_REF" -- system/test_python_launch_rules.py && git add system/test_python_launch_rules.py`.
 The sites it covered are fixed in the workspace's own code in 4b.
 
@@ -347,11 +347,12 @@ in your report.
   error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
   The launch rules (`system/test_python_launch_rules.py`) hold the
-  workspace's own code to the template's counts. A count that fails on the
-  workspace's own launches or import-path edits is fixed by restructuring that
-  code, as the test's message and the migration reference's "Launches and
-  import-path edits in the user's code" describe -- never by raising the count
-  (Step 2 put upstream's copy in place). That restructuring is part of this
+  workspace's own code to the template's rule: a launch of its own code or an
+  import-path edit passes only with a marker naming why it has to stay. A
+  failure on the workspace's own launches or import-path edits is fixed by
+  restructuring that code, as the test's message and the migration reference's
+  "Launches and import-path edits in the user's code" describe -- never by
+  editing the test (Step 2 put upstream's copy in place). That restructuring is part of this
   update's work even though it reaches past the merged set, and it runs that
   code's own suites.
   Separately, before any suite or boot below runs, sync the venv

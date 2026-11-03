@@ -136,11 +136,11 @@ A deadline is a reason only for work that can hang where no timeout reaches.
 Work made of network or subprocess calls that each carry a timeout of their own
 takes the deadline as an argument and checks it between calls.
 
-A test counts the places that name one of the workspace's own programs to
-run, and the count only goes down; another counts the files that edit the
-import path (`sys.path`, `PYTHONPATH` in Python or a shell script, a pytest
-`pythonpath` setting). Both are in `system/test_python_launch_rules.py`, and
-their failure messages say how each kind of site becomes an import.
+A test fails on any place that names one of the workspace's own programs to
+run, and another on any edit to the import path (`sys.path`, `PYTHONPATH` in
+Python or a shell script, a pytest `pythonpath` setting), unless a marker
+below keeps it. Both are in `system/test_python_launch_rules.py`, and their
+failure messages say how each kind of site becomes an import.
 
 ## When a launch or an import-path edit has to stay
 
@@ -167,12 +167,12 @@ the same way, with `no-venv` (the code runs with no venv to install what it
 imports: the bare tier, or `uv run --no-project`) or `other-tree` (it loads
 code from a tree known only at run time).
 
-A marked site is not counted, and a marked `sys.path` edit may add a directory
+A marked site passes, and a marked `sys.path` edit may add a directory
 outside the bare search paths, except in code the system `python3` runs, where
 only an `other-tree` edit may. A marker with another reason, with no why, or
 with no site of its kind below it fails the test. Each marker is a claim
 someone will check, so an agent that adds one names it in its report; and a
-marker is never the way past a count when the site can become an import --
+marker is never the way past the test when the site can become an import --
 restructuring the caller and the code it reaches for is the expected fix, even
 when they are not the code the agent came to change.
 
