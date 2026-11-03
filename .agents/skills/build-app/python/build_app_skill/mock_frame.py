@@ -308,7 +308,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Frame the app's live program as a mock (re-run after each restart)."
+        "up",
+        help="Frame the app's live program as a mock, or re-frame it with a new note or "
+        "page.",
     )
     up_parser.add_argument("--app", required=True, help="The app's registered name.")
     up_parser.add_argument(
