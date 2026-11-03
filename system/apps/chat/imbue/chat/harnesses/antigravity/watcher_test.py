@@ -6,6 +6,7 @@ thread, so the scan/cursor/two-phase logic is tested without timing flakiness.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 _STATUS_RUNNING = 2
 _STATUS_DONE = 3
@@ -242,7 +244,7 @@ def _flushing_watcher(
             next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: is_alive)
+    watcher.set_flush_hooks(_send, lambda: is_alive, lambda text, sent_after: None)
     return watcher
 
 
@@ -334,7 +336,7 @@ def test_a_partial_commit_resolves_ENTRIES_not_lines(tmp_path: Path) -> None:
         append_step(_conv_db_path(tmp_path, conv), (2, _TYPE_USER, _STATUS_DONE, _user_payload("foo\nbar")))
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher._collect_new_events()
     watcher._publish_turn_state()
     watcher._queue.enqueue("foo\nbar", "t0")
@@ -448,7 +450,7 @@ def test_the_queue_entry_departs_before_its_turn_arrives(tmp_path: Path) -> None
         next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = lambda _agent_id, events: order.append("transcript")
 
@@ -510,7 +512,7 @@ def test_the_poll_loop_cannot_emit_the_turn_before_its_chip_departs(tmp_path: Pa
         order.append("transcript")
         emitted.extend(events)
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = _on_events
 
@@ -737,7 +739,52 @@ def _repick_while_typing(tmp_path: Path, watcher: AntigravitySessionWatcher) -> 
             _pick(tmp_path, "gemini-3.8-flash", "low")
         return send(text)
 
-    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True)
+    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True, lambda text, sent_after: None)
+
+
+def _parked_then_committed_watcher(
+    tmp_path: Path, conv: str, sent: list[str], resent: list[tuple[str, float]]
+) -> AntigravitySessionWatcher:
+    """A watcher whose first send of a block parks and whose later ones commit, recording what it notes as resent."""
+    watcher = _flushing_watcher(tmp_path, conv, sent, does_commit=False)
+    watcher._delivery_witness_seconds = 0.1
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+
+    def _send(text: str) -> bool:
+        sent.append(text)
+        if len(sent) > 1:
+            append_step(_conv_db_path(tmp_path, conv), (100, _TYPE_USER, _STATUS_DONE, _user_payload(text)))
+        return True
+
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
+    return watcher
+
+
+def test_a_block_that_lands_on_a_later_pass_is_noted_as_sent_again(tmp_path: Path) -> None:
+    sent: list[str] = []
+    resent: list[tuple[str, float]] = []
+    watcher = _parked_then_committed_watcher(tmp_path, "conv-repeat", sent, resent)
+    watcher._queue.enqueue("hello", "t0")
+
+    watcher._attempt_flush()
+    first_pass_ended_at = time.time()
+    assert (sent, resent) == (["hello"], [])
+
+    watcher._attempt_flush()
+    assert sent == ["hello", "hello"]
+    ((text, sent_after),) = resent
+    assert text == "hello"
+    # A first copy that landed during the first pass still counts as this message.
+    assert sent_after < first_pass_ended_at - TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 
 def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]) -> None:
@@ -751,7 +798,7 @@ def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]
             raise SendFailedError("the agent could not be found")
         return send(text)
 
-    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True)
+    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True, lambda text, sent_after: None)
 
 
 def _close_turn(tmp_path: Path, conv: str, watcher: AntigravitySessionWatcher) -> None:
