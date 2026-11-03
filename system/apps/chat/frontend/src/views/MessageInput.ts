@@ -342,10 +342,12 @@ export function prependToComposer(chatId: string, block: string): void {
  *  scroll position to fit it: a tall composer would pull the transcript off its bottom on every
  *  redraw.
  *
- *  Once the text outgrows the cap the textarea scrolls. Typing (``isTyping``) with the caret at the
- *  end of the draft scrolls it all the way down, since the browser scrolls the caret into view
- *  without the padding under the last line. */
+ *  Once the text outgrows the cap the textarea scrolls. It keeps its scroll position across the
+ *  collapse, which not every browser preserves. Typing (``isTyping``) with the caret at the end of the
+ *  draft scrolls it all the way down instead, since the browser scrolls the caret into view without
+ *  the padding under the last line. */
 function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
+  const scrollTopPx = textarea.scrollTop;
   const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
   row.style.height = `${row.getBoundingClientRect().height}px`;
   row.removeAttribute("data-stacked");
@@ -358,9 +360,7 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: 
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
   const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
   textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
-  if (isOverflowing && isTypingAtEnd) {
-    textarea.scrollTop = textarea.scrollHeight;
-  }
+  textarea.scrollTop = isOverflowing && isTypingAtEnd ? textarea.scrollHeight : scrollTopPx;
   row.style.height = "";
 }
 
@@ -481,6 +481,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Whether the composer was disabled at the last render, so it takes focus the moment a provider makes it usable.
   let wasComposerDisabled = false;
   let messageRowElement: HTMLElement | null = null;
+  // An edit refits the composer as typing, and so does the redraw that follows it: the browser scrolls the caret
+  // into view after the input event, which can undo the edit's own scroll to the bottom.
+  let isTypingUntilRedraw = false;
   // Refits the composer when its width changes, since that changes where the text wraps.
   let messageRowResizeObserver: ResizeObserver | null = null;
   let messageRowWidthPx = 0;
@@ -588,7 +591,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
     localStorage.setItem(messageTextKey(currentChatId), messageText);
     mentionDraft = null;
-    refitComposer(true);
+    refitAfterEdit();
     focusMessageTextarea();
     m.redraw();
   }
@@ -622,6 +625,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (messageRowElement !== null && messageTextareaElement !== null) {
       fitComposer(messageRowElement, messageTextareaElement, isTyping);
     }
+  }
+
+  function refitAfterEdit(): void {
+    isTypingUntilRedraw = true;
+    refitComposer(true);
   }
 
   function attachMessageRow(rowVnode: m.VnodeDOM): void {
@@ -1811,7 +1819,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                     mountedComposerTextarea = messageTextareaElement;
-                    refitComposer();
+                    refitComposer(isTypingUntilRedraw);
+                    isTypingUntilRedraw = false;
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
@@ -1824,7 +1833,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
                     updateMentionDraft(textarea);
-                    refitComposer(true);
+                    refitAfterEdit();
                     if (messageText.trim() !== "") warmUpStoppedChat(chatId);
                   },
                   onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),

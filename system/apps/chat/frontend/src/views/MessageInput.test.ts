@@ -716,16 +716,27 @@ describe("MessageInput draft scroll position", () => {
 
   /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
    *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The caret sits at
-   *  `caretPosition`, or at the end. */
-  function makeOverflowingDraftTextarea(caretPosition?: number, draftSuffix = "") {
+   *  `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing it to "auto" resets its scrollTop,
+   *  as some browsers do. */
+  function makeOverflowingDraftTextarea(caretPosition?: number, draftSuffix = "", isScrollLostOnCollapse = false) {
     let storedScrollTopPx = 0;
+    let heightStyle = "";
     const value = "a long draft ".repeat(40) + draftSuffix;
     const caret = caretPosition ?? value.length;
     return {
       value,
       selectionStart: caret,
       selectionEnd: caret,
-      style: { height: "", overflowY: "" },
+      style: {
+        overflowY: "",
+        get height(): string {
+          return heightStyle;
+        },
+        set height(next: string) {
+          heightStyle = next;
+          if (next === "auto" && isScrollLostOnCollapse) storedScrollTopPx = 0;
+        },
+      },
       focus: () => undefined,
       setSelectionRange(start: number, end: number): void {
         this.selectionStart = start;
@@ -773,6 +784,31 @@ describe("MessageInput draft scroll position", () => {
 
     composer.redraw();
 
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("keeps an overflowing draft's scroll position across a redraw where collapsing it to measure loses it", () => {
+    const textarea = makeOverflowingDraftTextarea(undefined, "", true);
+    const composer = mountComposer(textarea);
+    textarea.scrollTop = 40;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("keeps a draft typed at its end scrolled down through the redraw after the browser reveals the caret", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    composer.type();
+    // After the input event the browser scrolls the caret into view, short of the padding under it.
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    textarea.scrollTop = 40;
+    composer.redraw();
     expect(textarea.scrollTop).toBe(40);
   });
 

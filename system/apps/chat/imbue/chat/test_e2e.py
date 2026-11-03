@@ -909,11 +909,14 @@ _START_RESIZE_GAP_RECORDER_JS = """
 _STOP_RESIZE_GAP_RECORDER_JS = "() => { window.__resizeGapObserver.disconnect(); return window.__resizeGaps; }"
 
 # Whether the draft is scrolled all the way down: the line holding a caret at its end, and the padding under it,
-# in view.
-_DRAFT_AT_BOTTOM_JS = (
-    "() => { const ta = document.querySelector('.message-input-textbox'); "
-    "return ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 1; }"
-)
+# in view, once the edit's redraw has run (two animation frames later).
+_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS = """
+async () => {
+  for (let frame = 0; frame < 2; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+  const ta = document.querySelector('.message-input-textbox');
+  return ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 1;
+}
+"""
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -937,7 +940,9 @@ def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path
             # One edit per line, not one key event per character: typing the draft key by key outran the test's
             # timeout in the workspace image's browser.
             page.keyboard.insert_text(f"typed line {line} " + "lorem ipsum " * 3 + "\n")
-            assert frame.evaluate(_DRAFT_AT_BOTTOM_JS), f"the line being typed is cut off after line {line}"
+            assert frame.evaluate(_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS), (
+                f"the line being typed is cut off after line {line}"
+            )
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
         resize_gaps = frame.evaluate(_STOP_RESIZE_GAP_RECORDER_JS)
         assert len(resize_gaps) >= 5, f"the composer grew the transcript's viewport only {len(resize_gaps)} times"
