@@ -929,7 +929,7 @@ def up(
     registry: Registry,
     http: HttpClient,
     spawner: Spawner,
-    venv_linker: VenvLinker = VenvLinker(),
+    venv_linker: VenvLinker,
     sleeper: Callable[[float], None] = time.sleep,
     free_space: Callable[[Path], int] = free_bytes,
 ) -> int:
@@ -1252,7 +1252,7 @@ def refresh(
     runner: Runner,
     http: HttpClient,
     spawner: Spawner,
-    venv_linker: VenvLinker = VenvLinker(),
+    venv_linker: VenvLinker,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
     """Re-boot the inner server of instance ``name`` on its existing port.
@@ -1559,6 +1559,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             registry=Registry(),
             http=HttpClient(),
             spawner=Spawner(),
+            venv_linker=VenvLinker(),
         )
     if args.command == "down":
         return down(args.name, repo_root, runner=Runner(), registry=Registry())
@@ -1569,6 +1570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner=Runner(),
             http=HttpClient(),
             spawner=Spawner(),
+            venv_linker=VenvLinker(),
         )
     parser.error(f"unknown command: {args.command}")
     return 1

@@ -187,6 +187,7 @@ def _up(
     registry: _RecordingRegistry | None = None,
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
+    venv_linker: _RecordingVenvLinker | None = None,
     cwd: Path | None = None,
     **kwargs,
 ) -> int:
@@ -202,6 +203,7 @@ def _up(
         registry=registry or _RecordingRegistry(),
         http=http or _FakeHttp(_all_healthy),
         spawner=spawner or _FakeSpawner(),
+        venv_linker=venv_linker or _RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
         **kwargs,
     )
@@ -1004,6 +1006,7 @@ def test_named_ports_reach_the_env_and_the_argv(tmp_path: Path) -> None:
         registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
+        venv_linker=_RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
     )
 
@@ -1052,6 +1055,7 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
         registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
+        venv_linker=_RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
         free_space=_plenty_of_disk,
     )
@@ -1173,6 +1177,7 @@ def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
         registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
+        venv_linker=_RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
     )
 
@@ -1197,6 +1202,7 @@ def test_a_placeholder_naming_nothing_the_instance_was_given_fails_the_boot(
         registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
+        venv_linker=_RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
     )
 
@@ -1232,6 +1238,7 @@ def test_refresh_replays_the_named_ports_and_copies(tmp_path: Path) -> None:
             registry=_RecordingRegistry(),
             http=_FakeHttp(_all_healthy),
             spawner=_FakeSpawner(),
+            venv_linker=_RecordingVenvLinker(),
             sleeper=lambda _seconds: None,
             free_space=_plenty_of_disk,
         )

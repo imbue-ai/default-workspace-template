@@ -114,6 +114,7 @@ class Instances:
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
             spawner=serve_isolated_instance.Spawner(),
+            venv_linker=serve_isolated_instance.VenvLinker(),
         )
 
     def refresh(self, name: str, repo_root: Path) -> int:
@@ -123,6 +124,7 @@ class Instances:
             runner=serve_isolated_instance.Runner(),
             http=serve_isolated_instance.HttpClient(),
             spawner=serve_isolated_instance.Spawner(),
+            venv_linker=serve_isolated_instance.VenvLinker(),
         )
 
     def down(self, name: str, repo_root: Path) -> int:
