@@ -92,7 +92,9 @@ A phone shows one window at a time, filling the screen, or the app's own
 link opened directly in its browser; either way the app's page gets a
 phone-sized viewport and a finger instead of a mouse. Drive the isolated
 instance (`web-frontend-testing.md`) in a browser context at 393x852 and at
-852x393 with `has_touch=True`, and check:
+852x393 with `has_touch=True` and `is_mobile=True` (without `is_mobile`,
+Chromium ignores the page's viewport tag and does not draw what a phone
+does), and check:
 
 - The page carries `<meta name="viewport" content="width=device-width,
   initial-scale=1">`, without which a phone draws the desktop layout shrunk
