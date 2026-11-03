@@ -265,7 +265,9 @@ async function forgetDevice(deviceId) {
       if (subscription) await subscription.unsubscribe();
     }
   } catch (error) {
+    await render();
     showStatus(`Could not remove the device: ${error.message}`, "bad");
+    return;
   }
   await render();
 }
