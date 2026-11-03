@@ -93,12 +93,15 @@ class WorkspaceAICredentials:
 
 
 # Where a keyed integration's snapshot of the workspace API key lives, written
-# at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
-# the repo root, which is every service's working directory (supervisord runs
-# them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
-# subscription oauth token cannot authenticate direct API calls, so it is
-# never written here.
-ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
+# at integration-setup time by ``write_anthropic_env_snapshot``. Absolute, so
+# the file lands in the gitignored ``data/.secrets/`` whatever directory the
+# writer or a reader runs from: a relative path resolved against a skill or
+# app directory puts the key in a file git sees, and Claude Code records a
+# diff of every git-visible file a Bash command changes -- the key's full value
+# included -- in the agent's session transcript. Holds ONLY ANTHROPIC_API_KEY
+# (+ ANTHROPIC_BASE_URL): the subscription oauth token cannot authenticate
+# direct API calls, so it is never written here.
+ANTHROPIC_ENV_SNAPSHOT_PATH = "/home/user/workspace/data/.secrets/anthropic.env"
 
 
 def _default_account_dir() -> str:
@@ -161,7 +164,9 @@ def _read_env_file(path: str) -> dict[str, str]:
     return values
 
 
-def read_workspace_ai_credentials() -> WorkspaceAICredentials:
+def read_workspace_ai_credentials(
+    snapshot_path: str = ANTHROPIC_ENV_SNAPSHOT_PATH,
+) -> WorkspaceAICredentials:
     """Resolve current credentials: the snapshot file, then account settings, then env.
 
     ``data/.secrets/anthropic.env`` -- the key snapshot a keyed integration
@@ -173,7 +178,7 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     a workspace (e.g. local development with an exported key). The oauth token
     never comes from the snapshot (it is never written there).
     """
-    snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    snapshot_env = _read_env_file(snapshot_path)
     settings_env: dict[str, object] = {}
     config_dir = _account_config_dir() or os.path.expanduser("~/.claude")
     settings_path = os.path.join(config_dir, "settings.json")
@@ -205,7 +210,9 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     )
 
 
-def write_anthropic_env_snapshot() -> str:
+def write_anthropic_env_snapshot(
+    snapshot_path: str = ANTHROPIC_ENV_SNAPSHOT_PATH,
+) -> str:
     """Snapshot the workspace's current API key (+ base URL) for a keyed integration.
 
     Run once at integration-setup time (and again only to deliberately
@@ -217,7 +224,7 @@ def write_anthropic_env_snapshot() -> str:
     configured (the integration should use the keyless ``claude -p`` path
     instead). Returns the path written.
     """
-    creds = read_workspace_ai_credentials()
+    creds = read_workspace_ai_credentials(snapshot_path)
     if not creds.api_key:
         raise ClaudeCLIError(
             "No ANTHROPIC_API_KEY is configured for this workspace; there is nothing to snapshot. "
@@ -226,14 +233,11 @@ def write_anthropic_env_snapshot() -> str:
     lines = [f"ANTHROPIC_API_KEY={creds.api_key}"]
     if creds.base_url:
         lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
-    directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
-    os.makedirs(directory, exist_ok=True)
-    fd = os.open(
-        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-    )
+    os.makedirs(os.path.dirname(snapshot_path), exist_ok=True)
+    fd = os.open(snapshot_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    return ANTHROPIC_ENV_SNAPSHOT_PATH
+    return snapshot_path
 
 
 @dataclass(frozen=True)
