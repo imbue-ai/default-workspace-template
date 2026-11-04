@@ -94,8 +94,9 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  Claude message still queued when the reply landed)
  *  renders identically to the optimistic outgoing bubble (see OutgoingMessageView), so a
  *  re-sent message stays continuously visible through the resend rather than blinking out
- *  (contract A1a); the backend drives the transition to the committed turn. */
-/** `isContinued`: the bubble carries on a run of the viewer's own bubbles (or sits in the queued group, whose header
+ *  (contract A1a); the backend drives the transition to the committed turn.
+ *
+ *  `isContinued`: the bubble carries on a run of the viewer's own bubbles (or sits in the queued group, whose header
  *  names them), so it wears no "You" over it. */
 function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, isContinued: boolean): m.Vnode {
   const cls = classifyDecidedMessage(queued.content, queued);
