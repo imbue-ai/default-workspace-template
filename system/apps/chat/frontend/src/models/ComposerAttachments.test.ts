@@ -220,4 +220,20 @@ describe("while uploading", () => {
     removeComposerAttachment(chatId, getComposerAttachments(chatId)[0].localId);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-3");
   });
+
+  it("does not keep the pixels of a chip removed before its upload finished for a message", async () => {
+    vi.stubGlobal(
+      "URL",
+      Object.assign(class extends URL {}, { createObjectURL: () => "blob:preview-4", revokeObjectURL: vi.fn() }),
+    );
+    uploadAnswers.push(() =>
+      Promise.resolve(new Response(JSON.stringify({ path: "/w/data/uploads/x/removed.png", size: 6 }), { status: 201 })),
+    );
+    uploadFilesToComposer(chatId, [new File(["pixels"], "removed.png", { type: "image/png" })]);
+    const [staged] = getComposerAttachments(chatId);
+    // Removed while the upload is still on its way back.
+    removeComposerAttachment(chatId, staged.localId);
+    await staged.uploadSettled;
+    expect(localImageUrl("/w/data/uploads/x/removed.png")).toBeUndefined();
+  });
 });
