@@ -26,6 +26,8 @@ from watchdog.observers.api import BaseObserver
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.identity import visiting_user_id
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import requester_spelling
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
@@ -432,6 +434,7 @@ class ShellState(MutableModel):
         repoint: AbstractSet[WindowPage],
         is_every_desktop_searched: bool,
         is_minimized: bool,
+        requester: OpRequester | None,
     ) -> ShownWindow:
         """Put ``path`` of ``app`` on the client's screen by the ``show`` op's rule (desktop contracts.md section 8,
         ``choose_show_target``): a window already at the path raised (on the given desktop, or on any desktop when
@@ -451,7 +454,7 @@ class ShellState(MutableModel):
             request = WindowOpenRequest(
                 app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
             )
-            window_id = self.open_window(shown_on.id, request).window.id
+            window_id = self.open_window(shown_on.id, request, requester).window.id
         else:
             window_id = choice.window.id
             if choice.outcome is not ShowOutcome.RAISED:
@@ -491,6 +494,7 @@ class ShellState(MutableModel):
                         if_present=if_present,
                         minimized=request.minimized,
                     ),
+                    None,
                 )
                 return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
             case LaunchTargetKind.WINDOW:
@@ -519,6 +523,7 @@ class ShellState(MutableModel):
                     repoint=set(),
                     is_every_desktop_searched=False,
                     is_minimized=request.minimized,
+                    requester=None,
                 )
                 # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
                 # to lay out beside.
@@ -650,11 +655,14 @@ class ShellState(MutableModel):
             )
         return saved
 
-    def open_window(self, desktop_id: str, request: WindowOpenRequest) -> WindowOpenOutcome:
+    def open_window(
+        self, desktop_id: str, request: WindowOpenRequest, requester: OpRequester | None
+    ) -> WindowOpenOutcome:
         """Open a window of ``request.app`` at ``request.path`` on the desktop for everyone, placed at once in the
         requesting client's layout (shown, or minimized when ``request.minimized``); with ``if_present`` focus, a
         window of the app already at that exact path is answered instead, restored and raised there unless the open
-        asked for minimized, in which case it is left as placed (desktop plan section 4.1)."""
+        asked for minimized, in which case it is left as placed (desktop plan section 4.1). Every answer is recorded
+        in the client-activity log as a ``window_opened``, with ``requester`` (an op's, None for a client's own)."""
         desktop = self.get_desktop(desktop_id)
         self.require_app_entry(str(request.app))
         is_minimized = request.minimized
@@ -665,6 +673,7 @@ class ShellState(MutableModel):
                     self.edit_desktop_layout(
                         desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
                     )
+                self._record_window_opened(request.client_id, desktop.id, existing, is_new=False, requester=requester)
                 return WindowOpenOutcome(window=existing, is_new=False)
         opened_on, window = self._append_window(desktop, request.app, request.path)
         placed = self._edit_placements(
@@ -677,26 +686,45 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         self._announce_placements_edit(opened_on, request.client_id, placed)
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
+        self._record_window_opened(request.client_id, desktop.id, window, is_new=True, requester=requester)
         self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
 
     def open_window_unplaced(
-        self, desktop_id: str, app: AppName, path: WindowPath, if_present: IfPresent
+        self, desktop_id: str, app: AppName, path: WindowPath, if_present: IfPresent, requester: OpRequester | None
     ) -> WindowOpenOutcome:
         """An open with no client to place it for (an agent's, with nobody connected): the window exists on the
         desktop for everyone and reads as minimized in every layout; with ``if_present`` focus, a window of the app
-        already at the path is answered as it stands."""
+        already at the path is answered as it stands. Recorded as a ``window_opened`` with no client."""
         desktop = self.get_desktop(desktop_id)
         self.require_app_entry(str(app))
         if if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, app, path)
             if existing is not None:
+                self._record_window_opened("", desktop.id, existing, is_new=False, requester=requester)
                 return WindowOpenOutcome(window=existing, is_new=False)
         _, window = self._append_window(desktop, app, path)
         self.broadcast_desktops_updated()
         logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
+        self._record_window_opened("", desktop.id, window, is_new=True, requester=requester)
         self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
+
+    def _record_window_opened(
+        self, client_id: str, desktop_id: str, window: Window, is_new: bool, requester: OpRequester | None
+    ) -> None:
+        """Append the open to the client-activity log; a failed append is logged and never fails the open."""
+        try:
+            self.activity.append_window_opened(
+                client_id=client_id,
+                desktop_id=desktop_id,
+                app=str(window.app),
+                window_id=str(window.id),
+                is_new=is_new,
+                requester=requester_spelling(requester),
+            )
+        except OSError as e:
+            logger.opt(exception=e).warning("Failed to record the open of window {} of {}", window.id, window.app)
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
         """Mint a window and write it onto the desktop."""

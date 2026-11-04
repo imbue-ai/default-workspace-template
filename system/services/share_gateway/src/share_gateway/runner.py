@@ -48,7 +48,6 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.access_log import QueryOmittingRequestHandler
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
@@ -81,6 +80,10 @@ from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
 from share_gateway.materials import record_share_domain
+from share_gateway.request_counts import RequestCountFlusher
+from share_gateway.request_counts import RequestCounter
+from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
+from share_gateway.request_handler import SilentRequestHandler
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
@@ -193,6 +196,7 @@ class ShareStack:
         self.assignment = assignment
         self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
+        self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
         self.frpc_config_text_by_relay_id: dict[str, str] = {}
@@ -213,6 +217,7 @@ class ShareStack:
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
             chrome_origin=self.materials.chrome_origin,
+            access_log_path=materials_module.ACCESS_LOG_PATH.resolve(),
         )
 
     def admin_port_for(self, relay_id: str) -> int:
@@ -309,6 +314,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     agent_access = _build_agent_access_context(materials.workspace_domain)
+    request_counter = RequestCounter(request_counts_events_path(os.environ))
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
@@ -320,7 +326,10 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
         get_connect_info=stack.connect_info,
         admit_agent=build_agent_admitter(agent_access, lambda: read_registered_apps(APPS_TOML_PATH)),
+        request_counter=request_counter,
     )
+    stack.request_count_flusher = RequestCountFlusher(request_counter)
+    stack.request_count_flusher.start()
     register_agent_routes(
         app,
         context=agent_access,
@@ -331,7 +340,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
     stack.gateway_server = make_server(
-        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=QueryOmittingRequestHandler
+        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
     )
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
 
@@ -394,6 +403,8 @@ def _stop_stack(stack: ShareStack | None) -> None:
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
+    if stack.request_count_flusher is not None:
+        stack.request_count_flusher.stop()
     _log("Share stack stopped")
 
 
