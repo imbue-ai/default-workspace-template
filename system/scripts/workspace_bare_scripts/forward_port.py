@@ -22,8 +22,7 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
-``launch_paths`` (id, label, path,
-the names of the params, and ``method``, ``presets``, ``text_param``,
+``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
 ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
