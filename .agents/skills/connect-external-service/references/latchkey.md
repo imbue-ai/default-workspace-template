@@ -226,7 +226,7 @@ performance.getEntriesByType('resource').map(e => e.name)"`).
   fetches from an endpoint of its own (`tokenUrl`, with the token at
   `tokenField`). The token expires and cannot be refreshed, so the user signs
   in again now and then; say so.
-- **`remote-mcp`** when the service's own hosted MCP server is the thing to
+- **`mcp`** when the service's own hosted MCP server is the thing to
   connect (row 3, not this row): latchkey registers an OAuth client with the
   server, sends the user through its consent page, and refreshes the token
   itself. `references/mcp.md` has the request and how to call the server.
@@ -245,7 +245,7 @@ the next one when `latchkey curl` actually comes back refused.
 `latchkey services register --help` (run it to see each flow's parameters), but
 use this API rather than the `latchkey services register` CLI directly. All three
 are required inside `login`: a flow needs a login URL and its parameters (for
-`remote-mcp`, the login URL is the authorization endpoint). The parameters are
+`mcp`, the login URL is the OAuth authorization endpoint). The parameters are
 checked against the flow's schema, so an unknown key is refused, and every URL
 in them (`url`, `cookieUrl`, `tokenUrl`, the MCP and OAuth endpoints) must be
 on `domain` or a subdomain of it.

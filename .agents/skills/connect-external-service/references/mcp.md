@@ -23,7 +23,7 @@ called as "Calling a hosted server" below says.
 ## Where the connection lives
 
 **A hosted server (a URL) is a latchkey custom service.** Its sign-in (the
-server's own OAuth, through the `remote-mcp` login flow) or its key (a header)
+server's own OAuth, through the `mcp` login flow) or its key (a header)
 stays in Imbue Studio's credential store; the gateway attaches it to every
 request and refreshes an OAuth token itself; and the connection is there at
 once for every chat on every harness, for an app, and for a scheduled job.
@@ -61,7 +61,7 @@ curl -sS https://mcp.example.com/.well-known/oauth-authorization-server
 What you find decides the request:
 
 - **`401` and metadata with `authorization_endpoint`, `token_endpoint` and
-  `registration_endpoint`**: the `remote-mcp` login flow, below. Note
+  `registration_endpoint`**: the `mcp` login flow, below. Note
   `scopes_supported`; request only the scopes the task needs, none when the
   server lists none.
 - **`401` and no `registration_endpoint`**: the server wants a client someone
@@ -72,21 +72,21 @@ What you find decides the request:
 - **No `401`, no key**: nothing to connect. Call the endpoint directly, with
   plain `curl` as below or an `mcpc` entry with only a `url`.
 
-### The `remote-mcp` login flow
+### The `mcp` login flow
 
 Send a `custom-service` permission request (`references/latchkey.md`, "Custom
 services") whose `domain` is the MCP endpoint's host and whose `login` is the
-flow. `login.url` is the authorization endpoint, which is where the flow sends
-the user anyway; `login.flow_params` carries the endpoints, the `scopes`, and
-`issuesRefreshTokens: false` only when the server's docs say it issues access
-tokens alone. The URLs in the parameters have to be on `domain` or a subdomain
-of it, as for the other flows.
+flow. `login.url` is the OAuth authorization endpoint; `login.flow_params`
+carries the MCP endpoint, the token and registration endpoints, the `scopes`,
+and `issuesRefreshTokens: false` only when the server's docs say it issues
+access tokens alone. The URLs in the parameters have to be on `domain` or a
+subdomain of it, as for the other flows.
 
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "remote-mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "authorizationEndpoint": "https://mcp.example.com/authorize", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
 ```
 
 Approving opens latchkey's own browser on the user's computer at the server's
