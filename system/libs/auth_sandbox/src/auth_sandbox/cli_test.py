@@ -10,6 +10,7 @@ from auth_sandbox.cli import (
     EXIT_MISSING_MATERIAL,
     EXIT_REFUSED,
     _finish,
+    _print_stored_accounts,
     prepare_command,
     render_config_command,
     set_credentials_command,
@@ -113,6 +114,50 @@ def test_a_credential_latchkey_did_not_store_is_a_refusal_with_its_reason(
 
     _finish(SignInOutcome(is_stored=True, detail=""))
     assert capsys.readouterr().err == ""
+
+
+def _fake_latchkey(tmp_path: Path, body: str) -> Path:
+    """A stand-in ``latchkey`` that records its arguments and then runs ``body``."""
+    executable = tmp_path / "latchkey"
+    executable.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$*" > "{tmp_path / "argv.log"}"\n{body}\n'
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def test_a_stored_credential_prints_the_services_accounts_as_the_last_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The chrome parses the last stdout line to name the account it transfers.
+    listing = {
+        "slack": {"me@example.com": {"credentialType": "browser"}},
+        "linear": {"": {"credentialType": "rawCurl"}},
+    }
+    latchkey = _fake_latchkey(tmp_path, f"echo '{json.dumps(listing)}'")
+    _print_stored_accounts(str(latchkey), "slack")
+    captured = capsys.readouterr()
+    assert json.loads(captured.out.splitlines()[-1]) == {
+        "accounts": {"me@example.com": {"credentialType": "browser"}}
+    }
+    assert captured.err == ""
+    assert (tmp_path / "argv.log").read_text().strip() == "auth list --offline"
+
+
+def test_a_failed_listing_after_a_stored_credential_is_a_refusal_with_its_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exit 1 is what the chrome retries in the same sandbox, where the credential is already stored.
+    latchkey = _fake_latchkey(tmp_path, "echo 'Error: Failed to decrypt.' >&2\nexit 1")
+    with pytest.raises(SystemExit) as refused:
+        _print_stored_accounts(str(latchkey), "slack")
+    assert refused.value.code == EXIT_REFUSED
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        captured.err.strip()
+        == "listing the stored accounts failed: Error: Failed to decrypt."
+    )
 
 
 def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> None:
