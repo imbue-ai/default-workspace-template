@@ -1054,13 +1054,13 @@ stretch, through the chip icons, step bullets and notice ticks, stopping short o
 piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
 line (the working dot, the harness's caption, and how long the turn has run); a call in a
 step's work is said by the status line instead, which is the stretch's last piece on the
-line whenever it shows; the done mark sits just under
-the stretch. A command a person runs in bash mode (`!ls`) and its output are theirs, not
-the agent's: they stand on the person's side and end the stretch (display `person_chip`).
-The reply the agent is still writing, and a switch the transcript does not show yet, end
-the last stretch while it is open, and open a stretch of their own after a person's turn
-or a switch to another agent. A run of one person's turns names them once, over its first
-bubble ("You" for the viewer's own); pictures are 24px.
+line whenever it shows; the done mark sits just under the stretch. A command a person
+runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
+person's side and end the stretch (display `person_chip`). The reply the agent is still
+writing, and a switch the transcript does not show yet, end the last stretch while it is
+open, and open a stretch of their own after a person's turn or a switch to another agent.
+A run of one person's turns names them once, over its first bubble ("You" for the
+viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 
