@@ -378,7 +378,7 @@ class QueuedMessageState(DisplayDecisionFields, MessageAuthorFields):
     """
 
     queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
-    content: str = Field(description="Verbatim text the user queued")
+    content: str = Field(description="The text as the agent was handed it: a non-owner's carries their author prefix")
     timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
     is_sending: bool = Field(
         default=False,
