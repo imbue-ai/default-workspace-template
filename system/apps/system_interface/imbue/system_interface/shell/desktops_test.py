@@ -256,7 +256,10 @@ def test_a_registry_with_no_rows_drops_no_shortcut(tmp_path: Path) -> None:
     assert offered_targets_recorded(tmp_path / "state") == recorded
 
 
-@pytest.mark.parametrize("offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"])
+@pytest.mark.parametrize(
+    "offered_record_text",
+    [None, '{"version": 3, "targets": []}', '{"version": 2, "apps": []}', '{"version": 1}', "not json"],
+)
 def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_offered(
     tmp_path: Path, offered_record_text: str | None
 ) -> None:
