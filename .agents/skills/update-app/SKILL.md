@@ -110,7 +110,9 @@ starting one returns at once. They work under your service lease (below) and do
 not take their own. Keep each brief short: the user's request word for word and
 the app's location; leave the design to the subagent. Building subagents only
 build their change and send back a short report; they do not test it in a
-browser or wait for each other. Start one verification subagent that checks the
+browser. Subagents don't sleep to wait for other work. A subagent that needs
+something not yet ready reports and stops; message it when it's ready. Start one
+verification subagent that checks the
 changes as they land, grouping its checks however is fastest, and sends you a
 short report. This is separate from `launch-task`, which starts a background
 worker on its own branch.
