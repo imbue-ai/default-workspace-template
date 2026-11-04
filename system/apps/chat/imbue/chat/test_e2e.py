@@ -862,7 +862,8 @@ def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
 
 def _visible_user_messages(page: Page) -> list[str]:
     return _chat_frame(page).evaluate(
-        "() => Array.from(document.querySelectorAll('.message-user')).map((e) => (e.textContent || '').trim())"
+        "() => Array.from(document.querySelectorAll('.message-user .message-user-bubble'))"
+        ".map((e) => (e.textContent || '').trim())"
     )
 
 
