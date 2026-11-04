@@ -84,6 +84,16 @@ export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
  *  asking the desktop app and signs in without it. */
 export const MAX_SIGN_IN_PORT_DRAWS = 3;
 
+/** The loopback port a sign-in page's `redirect_uri` calls back to, or null when it names none. */
+function callbackPort(relayUrl: string): string | null {
+  try {
+    const redirect = new URL(relayUrl).searchParams.get("redirect_uri");
+    return redirect === null ? null : new URL(redirect).port;
+  } catch {
+    return null;
+  }
+}
+
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
 let savedScroll = 0;
@@ -234,6 +244,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     try {
       // Claude's CLI draws its callback port at random, so a port something on the user's machine
       // already answers on is drawn again by starting the sign-in again, a few times at most.
+      const takenPorts = new Set<string>();
       for (let portDraw = 1; ; portDraw += 1) {
         await startFlow(chosen.id, chosenMethod.id, options.accountId);
         if (attempt !== generation) return;
@@ -245,12 +256,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         }
         const started = getFlow();
         if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped) break;
+        const port = callbackPort(started.relay_url);
+        // A CLI that listens on a fixed port (codex) lands on the taken one again; asking again is futile.
+        if (port !== null && takenPorts.has(port)) {
+          isRelayUnavailable = true;
+          break;
+        }
         isOpeningBrowser = true;
         m.redraw();
         const answer = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
         isOpeningBrowser = false;
         if (lane !== chosen) return;
+        if (answer === "port_taken" && port !== null) takenPorts.add(port);
         if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
         if (answer === "relaying") mode = "relay";
         if (answer === "port_taken") isRelayUnavailable = true;

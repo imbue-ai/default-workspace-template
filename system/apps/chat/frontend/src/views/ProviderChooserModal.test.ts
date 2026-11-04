@@ -548,9 +548,22 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "device", "device"]);
   });
 
+  function claudeRelayUrl(port: number): string {
+    return `https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A${port}%2Fcallback`;
+  }
+
+  /** The next sign-ins started draw these callback ports, one each, as Claude's CLI does. */
+  function drawClaudePorts(...ports: number[]): void {
+    for (const port of ports) {
+      startFlow.mockImplementationOnce(async () => {
+        state.flow = startedFlow("url_then_code", claudeRelayUrl(port));
+      });
+    }
+  }
+
   it("starts the sign-in again when its callback port is taken, and waits on the browser once a port is free", async () => {
     requestProviderRelay.mockResolvedValueOnce("port_taken");
-    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    drawClaudePorts(41907, 52318);
 
     const root = await clickLane("anthropic");
 
@@ -613,7 +626,7 @@ describe("a sign-in finished in the browser", () => {
 
   it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
     requestProviderRelay.mockResolvedValue("port_taken");
-    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    drawClaudePorts(41907, 52318, 60733);
 
     const root = await clickLane("anthropic");
 
@@ -622,17 +635,18 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain(PASTE_STEP_LABEL);
   });
 
-  it("falls back to ChatGPT's one-time code once every port it draws is taken", async () => {
+  it("falls back to ChatGPT's one-time code once a fresh sign-in lands on the port found taken", async () => {
     requestProviderRelay.mockResolvedValue("port_taken");
     state.lanes = [CHATGPT];
-    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    state.flow = startedFlow(
+      "browser",
+      "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=s",
+    );
 
     await clickLane("openai");
 
-    expect(startFlow.mock.calls.map((call) => call[1])).toEqual([
-      ...Array<string>(MAX_SIGN_IN_PORT_DRAWS).fill("chatgpt"),
-      "device",
-    ]);
+    expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "chatgpt", "device"]);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
   });
 
   it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {

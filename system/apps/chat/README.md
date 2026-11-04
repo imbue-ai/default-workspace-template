@@ -893,8 +893,9 @@ Claude's CLI draws its callback port at random, so the desktop app may find
 something on the user's machine already answering there (a Docker container's
 published SSH port, say). It then answers `reason: "port_taken"`, and the
 chooser starts the same sign-in again for a fresh port, trying up to three
-ports in all before it falls back as below. ChatGPT's CLI (codex) listens on a
-fixed port, so a ChatGPT sign-in whose port is taken usually still falls back.
+ports in all before it falls back as below. A fresh sign-in that lands on a
+port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
+fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
