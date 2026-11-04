@@ -44,7 +44,7 @@ export interface EngineWorkerClient {
   /** Have the worker load the engine (a download the first time); resolves with the device it runs on. */
   load(preferredDevice: Device | null, onProgress: (loadedBytes: number, totalBytes: number) => void): Promise<Device>;
   transcribe(audio: Float32Array): Promise<TranscriptionResult>;
-  /** Called when the worker released the engine after sitting idle. */
+  /** Called when the worker let the engine go. */
   onUnloaded(listener: () => void): void;
   /** Stop listening to the worker; pending jobs fail as lost. */
   dispose(): void;

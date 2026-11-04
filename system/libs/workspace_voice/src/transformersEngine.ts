@@ -1,7 +1,8 @@
 /**
- * The transformers.js runtime adapter: loads an engine from the bytes the worker downloaded and checked, with the
- * library's own caches off, so the page keeps no copy of a model file (the workspace-voice-input spec, D6), and
- * runs it on the device the worker picked. Imported by the worker alone: it carries the speech runtime.
+ * The transformers.js runtime adapter: loads an engine from the bytes the worker got and checked, with the
+ * library's own caches off, so the one copy the page keeps is the checked one in its own store (the
+ * workspace-voice-input spec, D6), and runs it on the device the worker picked. Imported by the worker alone:
+ * it carries the speech runtime.
  */
 
 import { env, pipeline } from "@huggingface/transformers";

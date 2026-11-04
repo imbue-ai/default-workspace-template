@@ -966,9 +966,12 @@ The composer dictates (the workspace-voice-input spec in the mngr repository):
 a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
 the chat page, turn speech into text on the user's own device. The speech model
 (Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
-a pinned commit, checked against its size and SHA-256, and run in a SharedWorker
-every chat page of the workspace shares, released after two minutes idle; the
-page keeps no copy of it, and the workspace stores and runs nothing for voice.
+a pinned commit, checked against its size and SHA-256, kept in the browser's
+Cache Storage for the workspace's origin (one checked copy, which the browser
+evicts under storage pressure like any site's and which is checked again on
+every read), and run in a SharedWorker every chat page of the workspace shares
+for as long as any of them is open; the workspace stores and runs nothing for
+voice.
 Silero VAD splits speech into utterances, and a bounded streaming window keeps
 every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten
