@@ -4,8 +4,10 @@ An uploaded image's size rides its stored path (see ``attachments.store_uploaded
 chat bubble can hold exactly the space the image will take before it loads. Only the header is
 read, for the formats a chat bubble draws inline: PNG, GIF, BMP, WebP, JPEG and SVG. A JPEG whose
 orientation tag turns it on its side reports its size turned, since that is how a browser draws it.
-An SVG reports the size its root element declares, or its viewBox's when it declares none: an SVG
-with only a viewBox has no size of its own, and draws at nothing in a bubble that shrinks to fit.
+An SVG reports the size its root element declares (an absolute length such as ``pt`` or ``mm`` in
+CSS pixels), or its viewBox's when it declares none: an SVG with only a viewBox has no size of its
+own, and draws at nothing in a bubble that shrinks to fit. A size in a font-relative unit is not
+read, since it depends on a font the file does not fix.
 """
 
 import math
@@ -44,11 +46,23 @@ _TURNED_ORIENTATIONS = frozenset({5, 6, 7, 8})
 # An SVG's root element sits after at most a prolog, a doctype and comments.
 _SVG_SCAN_BYTES = 64 * 1024
 _SVG_ROOT_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
-# A length in user units or pixels; a percentage or another unit says nothing about the drawn size.
-# The lookbehind keeps ``stroke-width`` from reading as ``width``.
-_SVG_LENGTH_RE_TEMPLATE = r"(?<![\w-]){name}\s*=\s*[\"']\s*([0-9]*\.?[0-9]+)\s*(?:px)?\s*[\"']"
+# A length and its unit. The lookbehind keeps ``stroke-width`` from reading as ``width``.
+_SVG_LENGTH_RE_TEMPLATE = r"(?<![\w-]){name}\s*=\s*[\"']\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z]*|%)\s*[\"']"
 _SVG_WIDTH_RE = re.compile(_SVG_LENGTH_RE_TEMPLATE.format(name="width"))
 _SVG_HEIGHT_RE = re.compile(_SVG_LENGTH_RE_TEMPLATE.format(name="height"))
+# CSS pixels per absolute unit (a unitless length is in user units, drawn as pixels). A percentage
+# is relative to where the image is placed, so it declares no size, as if the side were absent.
+_SVG_PIXELS_PER_UNIT = {
+    "": 1.0,
+    "px": 1.0,
+    "pt": 96 / 72,
+    "pc": 16.0,
+    "in": 96.0,
+    "cm": 96 / 2.54,
+    "mm": 96 / 25.4,
+    "q": 96 / 101.6,
+}
+_SVG_PERCENT_UNIT = "%"
 _SVG_VIEWBOX_RE = re.compile(
     r"(?<![\w-])viewBox\s*=\s*[\"']\s*-?[0-9.]+[\s,]+-?[0-9.]+[\s,]+([0-9]*\.?[0-9]+)[\s,]+([0-9]*\.?[0-9]+)\s*[\"']"
 )
@@ -185,8 +199,10 @@ def _svg_size(text: str) -> ImageSize | None:
     width_match = _SVG_WIDTH_RE.search(tag)
     height_match = _SVG_HEIGHT_RE.search(tag)
     viewbox_match = _SVG_VIEWBOX_RE.search(tag)
-    width = float(width_match.group(1)) if width_match else None
-    height = float(height_match.group(1)) if height_match else None
+    if _is_relative_length(width_match) or _is_relative_length(height_match):
+        return None
+    width = _length_in_pixels(width_match)
+    height = _length_in_pixels(height_match)
     if width is not None and height is not None:
         return _rounded_size(width, height)
     if viewbox_match is None:
@@ -199,6 +215,23 @@ def _svg_size(text: str) -> ImageSize | None:
     if height is not None:
         return _rounded_size(height * viewbox_width / viewbox_height, height)
     return _rounded_size(viewbox_width, viewbox_height)
+
+
+@pure
+def _is_relative_length(length_match: re.Match[str] | None) -> bool:
+    """Whether a declared SVG length is in a unit (``em``, ``ex``, ...) whose size depends on a font."""
+    if length_match is None:
+        return False
+    unit = length_match.group(2).lower()
+    return unit != _SVG_PERCENT_UNIT and unit not in _SVG_PIXELS_PER_UNIT
+
+
+@pure
+def _length_in_pixels(length_match: re.Match[str] | None) -> float | None:
+    """A declared SVG length in CSS pixels, or None when the side is absent or a percentage."""
+    if length_match is None or length_match.group(2) == _SVG_PERCENT_UNIT:
+        return None
+    return float(length_match.group(1)) * _SVG_PIXELS_PER_UNIT[length_match.group(2).lower()]
 
 
 @pure

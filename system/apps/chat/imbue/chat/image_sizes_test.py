@@ -105,6 +105,10 @@ def test_reads_the_size_from_each_inline_format(
         ('<svg height="100" viewBox="0 0 300 200"></svg>', (150, 100)),
         ('<svg width="100%" height="100%" viewBox="0 0 40 30"></svg>', (40, 30)),
         ('<?xml version="1.0"?>\n<!-- drawn by hand -->\n<svg viewBox="0 0 50 50"></svg>', (50, 50)),
+        # A matplotlib figure and an Inkscape page draw at their absolute size, not their viewBox's.
+        ('<svg width="460.8pt" height="345.6pt" viewBox="0 0 460.8 345.6"></svg>', (614, 461)),
+        ('<svg width="210mm" height="297mm" viewBox="0 0 210 297"></svg>', (794, 1123)),
+        ('<svg width="2IN" viewBox="0 0 10 5"></svg>', (192, 96)),
     ],
 )
 def test_reads_the_size_an_svg_declares_or_its_viewbox_shape(
@@ -126,6 +130,7 @@ def test_a_stroke_width_is_not_read_as_an_svg_width(tmp_path: Path) -> None:
     [
         '<svg width="100%" height="100%"></svg>',
         '<svg width="10em" height="5em"></svg>',
+        '<svg width="10em" height="5em" viewBox="0 0 40 20"></svg>',
         "<html>not an svg</html>",
         f'<svg width="{"9" * 400}" height="10"></svg>',
         f'<svg width="1{"0" * 300}" viewBox="0 0 1 1{"0" * 300}"></svg>',
