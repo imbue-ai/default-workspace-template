@@ -580,6 +580,37 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain("Preparing your sign-in.");
   });
 
+  it("draws no fresh port once the user has gone back while the desktop app answered", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let answer: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (answer = resolve)));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    answer("port_taken");
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledOnce();
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+  });
+
+  it("hands the desktop app no fresh draw once the user has gone back while it started", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let started: () => void = () => undefined;
+    startFlow
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise<undefined>((resolve) => (started = () => resolve(undefined))));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    started();
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+  });
+
   it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
     requestProviderRelay.mockResolvedValue("port_taken");
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);

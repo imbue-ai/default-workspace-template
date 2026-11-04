@@ -237,6 +237,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       for (let portDraw = 1; ; portDraw += 1) {
         await startFlow(chosen.id, chosenMethod.id, options.accountId);
         if (attempt !== generation) return;
+        // Back and Close clear the lane without superseding this attempt, and the sign-in just
+        // started is then nobody's.
+        if (lane !== chosen) {
+          abortFlow();
+          return;
+        }
         const started = getFlow();
         if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped) break;
         isOpeningBrowser = true;
@@ -244,6 +250,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         const answer = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
         isOpeningBrowser = false;
+        if (lane !== chosen) return;
         if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
         if (answer === "relaying") mode = "relay";
         if (answer === "port_taken") isRelayUnavailable = true;
