@@ -276,7 +276,7 @@ Outbound (shell to browser):
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`, stoppable `false` (the app-level Stop and Start are its verbs).
 
 The shell's socket carries nothing about chats.
-The chat pages read `/api/ws` on the chat's origin, which sends `chats_updated` (one `ChatSnapshot` per chat, its agent-level facts under `active_agent`), `provisional_chat_created` (a provisional chat's whole record, sent again when its phase changes) and `provisional_chat_completed` (`{"chat_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched).
+The chat pages read `/api/ws` on the chat's origin, which sends `chats_updated` (one `ChatSnapshot` per chat, its agent-level facts under `active_agent`), `provisional_chat_created` (a provisional chat's record, its held sends as the page draws them -- the words without the author prefix, and who sent them -- sent again when its phase changes) and `provisional_chat_completed` (`{"chat_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched).
 The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel on the socket: the shell applies them to the layout file and the file's `layout_updated` is what the windows see.
 
 ## 9. The inventory document
