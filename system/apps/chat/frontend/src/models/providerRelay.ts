@@ -35,7 +35,7 @@ function answerFromAck(message: Record<string, unknown>): RelayAnswer {
   return message.reason === "port_taken" ? "port_taken" : "unavailable";
 }
 
-/** Ask the desktop app to relay this sign-in and open its page; whether it will. */
+/** Ask the desktop app to relay this sign-in and open its page; its answer. */
 export function requestProviderRelay(url: string, flowId: string): Promise<RelayAnswer> {
   // A page with no embedder at all has nobody to ask.
   if (typeof window !== "undefined" && window.parent === window) return Promise.resolve("unavailable");

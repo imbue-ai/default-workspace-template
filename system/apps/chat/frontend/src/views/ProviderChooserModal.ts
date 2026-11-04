@@ -125,7 +125,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
   // Bumped by every ask to the desktop app. The ack has one slot, so a newer ask settles an older
-  // one as false, which is not the desktop app's answer.
+  // one as unavailable, which is not the desktop app's answer.
   let relayAsk = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
