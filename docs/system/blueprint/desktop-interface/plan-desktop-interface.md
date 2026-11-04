@@ -169,7 +169,7 @@ Visitors granted a single app never load the shell and are not concerned.
 
 Every open goes through one route, `POST /api/desktops/<id>/windows` with `{app, path, client_id, if_present, launch?}`, whatever asked for it: a shortcut, a launcher tile, a page's `shell:open`, an agent's `layout.py open`, a deep link, or the chat app's auto-open of a chat started outside the workspace.
 `if_present` is `focus` (the default) or `new`: with `focus`, a window of that app at that exact path already on the desktop is answered instead of opened, and the shell restores and raises it in the requesting client's layout, so the rule holds for an agent op with no browser connected just as it does for a click.
-A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none.
+A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none, except one of a one-window app's POST launch path, which always runs (3.6).
 
 The shell mints the id, appends the window to the desktop, writes the **requesting client's** placement at once (state `NORMAL`, not minimized, frame from the cascade rule, on top of that client's stack), and broadcasts `desktops_updated` and `placements_updated` for that client.
 Every other client has no placement and shows the window minimized in its taskbar.

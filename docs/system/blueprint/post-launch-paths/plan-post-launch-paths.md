@@ -231,7 +231,7 @@ The op route's `open` resolves the launch path through the same code as the laun
 ### 4.5 Deep links and shortcuts
 
 The shell root's `?launch=<app>:<id>` runs the launch path with target `new` through the launch route once the apps are known, and the param is stripped from the URL as today.
-A shortcut in `new` mode launches with target `new`; in `focus` mode it raises the app's most recently focused window first, as today, and launches only when there is none.
+A shortcut in `new` mode launches with target `new`; in `focus` mode it raises the app's most recently focused window first, as today, and launches only when there is none, except that a focus shortcut of a one-window app's POST launch path always launches, with target `focus` (the desktop plan's section 3.6).
 
 ### 4.6 No account signed in
 
