@@ -243,8 +243,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         m.redraw();
         const answer = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
-        if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
         isOpeningBrowser = false;
+        if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
         if (answer === "relaying") mode = "relay";
         if (answer === "port_taken") isRelayUnavailable = true;
         break;

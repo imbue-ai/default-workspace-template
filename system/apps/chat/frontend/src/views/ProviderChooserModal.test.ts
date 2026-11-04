@@ -562,6 +562,24 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
   });
 
+  it("says it is preparing the sign-in, not opening the browser, while it draws a fresh port", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    startFlow.mockResolvedValueOnce(undefined).mockImplementationOnce(() => new Promise(() => undefined));
+
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    // Let the chooser's own load settle first, since its end clears the busy flag.
+    await settled();
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(root.textContent).toContain("Preparing your sign-in.");
+  });
+
   it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
     requestProviderRelay.mockResolvedValue("port_taken");
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
