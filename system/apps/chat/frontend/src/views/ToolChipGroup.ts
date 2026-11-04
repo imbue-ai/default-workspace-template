@@ -13,10 +13,12 @@
  * rather than a call it made (a compaction of its context). They wear the same
  * chrome and open the same panel, filled with what the page composes for them.
  *
- * The call the agent is running right now is its chip, running: the working dot
- * in its icon's place, the harness's caption for it, and how long the turn has
- * run once that is worth saying. It stands in for the status row (see
- * ActivityIndicator) and settles into an ordinary chip when its result lands.
+ * On a stretch's line, the call the agent is running right now is its chip,
+ * running: the working dot in its icon's place, the harness's caption for it, and
+ * how long the turn has run once that is worth saying. It stands in for the status
+ * row (see ActivityIndicator) and settles into an ordinary chip when its result
+ * lands. A row off the line (a step's opened work) leaves the call to the status
+ * row, so only one of the two ever says it.
  */
 
 import m from "mithril";
@@ -530,13 +532,15 @@ interface ToolChipGroupAttrs {
   chips: ChipEntry[];
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
+  /** The row stands on a stretch's line, where the running call's chip shows it running. */
+  isOnLine?: boolean;
 }
 
 export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
   view(vnode) {
     const { chips, toolResults, chatId } = vnode.attrs;
     const open = chips.find((chip) => isBlockExpanded(chipKey(chip))) ?? null;
-    const running = runningToolCall(chatId);
+    const running = vnode.attrs.isOnLine === true ? runningToolCall(chatId) : null;
 
     // The panel goes INSIDE the row, immediately after the chip that opened it,
     // because a long run wraps and a panel hung below the whole row would sit

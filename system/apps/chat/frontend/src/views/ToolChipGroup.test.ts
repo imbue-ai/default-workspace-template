@@ -45,9 +45,9 @@ function result(over: Partial<ToolResultEvent> & Pick<ToolResultEvent, "tool_cal
 
 let root: HTMLElement;
 
-function mount(chips: ChipEntry[], results: ToolResultEvent[] = []): void {
+function mount(chips: ChipEntry[], results: ToolResultEvent[] = [], isOnLine = false): void {
   const toolResults = new Map(results.map((r) => [r.tool_call_id, r]));
-  m.render(root, m(ToolChipGroup, { chips, toolResults, chatId: "agent-x" }));
+  m.render(root, m(ToolChipGroup, { chips, toolResults, chatId: "agent-x", isOnLine }));
 }
 
 function chipButtons(): HTMLButtonElement[] {
@@ -257,7 +257,7 @@ describe("the call the agent is running", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the call running in its chip, with how long the turn has run, then settles into an ordinary chip", () => {
+  it("shows the call running in its chip on the stretch's line, with how long the turn has run, then settles", () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     agent.activityState = "TOOL_RUNNING";
     agent.events = [
@@ -288,7 +288,7 @@ describe("the call the agent is running", () => {
     ];
     const chips = [chip(read), chip(tests)];
 
-    mount(chips, [result({ tool_call_id: "c1" })]);
+    mount(chips, [result({ tool_call_id: "c1" })], true);
     const [done, running] = chipButtons();
     expect(done.classList.contains("tool-chip--running")).toBe(false);
     expect(running.classList.contains("tool-chip--running")).toBe(true);
@@ -298,8 +298,15 @@ describe("the call the agent is running", () => {
     expect(running.querySelector(".tool-chip-label")?.textContent).toBe("Running npm test");
     expect(running.querySelector(".tool-chip-elapsed")?.textContent).toBe("\u00b7 1m 15s");
 
+    // Off the line (a step's opened work), the status row says the call, so its chip stays an ordinary chip.
+    mount(chips, [result({ tool_call_id: "c1" })], false);
+    const offLine = chipButtons()[1];
+    expect(offLine.classList.contains("tool-chip--running")).toBe(false);
+    expect(offLine.querySelector(".tool-chip-icon")).not.toBeNull();
+    expect(offLine.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
+
     agent.activityState = "THINKING";
-    mount(chips, [result({ tool_call_id: "c1" }), result({ tool_call_id: "c2" })]);
+    mount(chips, [result({ tool_call_id: "c1" }), result({ tool_call_id: "c2" })], true);
     const settled = chipButtons()[1];
     expect(settled.classList.contains("tool-chip--running")).toBe(false);
     expect(settled.querySelector(".tool-chip-icon")).not.toBeNull();

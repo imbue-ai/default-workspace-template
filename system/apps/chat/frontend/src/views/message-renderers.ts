@@ -656,7 +656,7 @@ export function renderAssistantRun(
   // land above whatever interrupted it, in transcript order.
   const flushChips = (): void => {
     if (pendingChips.length === 0) return;
-    const row = m(ToolChipGroup, { chips: pendingChips.splice(0), toolResults, chatId });
+    const row = m(ToolChipGroup, { chips: pendingChips.splice(0), toolResults, chatId, isOnLine });
     children.push(isOnLine ? m("div", { class: STRETCH_CHIPS_CLASS, ...railNodeAttrs("chips") }, row) : row);
     if (isNoticeUnderRow) {
       children.push(

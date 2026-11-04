@@ -1051,9 +1051,10 @@ first piece. Each message's prose is a grey bubble of its own. Its tool chips, s
 timeline and the system notices among them sit on the chat between the bubbles, on the
 bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
 stretch, through the chip icons, step bullets and notice ticks, stopping short of each
-piece; the pieces sit 12px apart. The call the agent is running shows in its chip (the
-working dot, the harness's caption, and how long the turn has run), and the status line,
-when there is one, is the stretch's last piece on the line; the done mark sits just under
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
+line (the working dot, the harness's caption, and how long the turn has run); a call in a
+step's work is said by the status line instead, which is the stretch's last piece on the
+line whenever it shows; the done mark sits just under
 the stretch. A command a person runs in bash mode (`!ls`) and its output are theirs, not
 the agent's: they stand on the person's side and end the stretch (display `person_chip`).
 The reply the agent is still writing, and a switch the transcript does not show yet, end
