@@ -12,6 +12,7 @@ import math
 import re
 import struct
 from pathlib import Path
+
 from loguru import logger
 from pydantic import Field
 
@@ -24,6 +25,9 @@ _HEAD_BYTES = 64
 # block and an embedded preview; a frame header past this is not looked for.
 _JPEG_SCAN_BYTES = 1024 * 1024
 
+# An OS/2 bitmap's core header stores 16-bit sides; the info header and its successors 32-bit ones.
+_BMP_CORE_HEADER_SIZE = 12
+_BMP_INFO_HEADER_SIZE = 40
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _GIF_SIGNATURES = (b"GIF87a", b"GIF89a")
 
@@ -82,12 +86,24 @@ def _header_size(head: bytes) -> ImageSize | None:
         width, height = struct.unpack("<HH", head[6:10])
         return _positive(width, height)
     if head.startswith(b"BM") and len(head) >= 26:
-        width, height = struct.unpack("<ii", head[18:26])
-        # A negative height marks a top-down bitmap, the same size.
-        return _positive(width, abs(height))
+        return _bmp_size(head)
     if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
         return _webp_size(head)
     return None
+
+
+@pure
+def _bmp_size(head: bytes) -> ImageSize | None:
+    """The size from a bitmap's DIB header, whose own length at offset 14 says how its sides are stored."""
+    (dib_header_size,) = struct.unpack("<I", head[14:18])
+    if dib_header_size == _BMP_CORE_HEADER_SIZE:
+        width, height = struct.unpack("<HH", head[18:22])
+        return _positive(width, height)
+    if dib_header_size < _BMP_INFO_HEADER_SIZE:
+        return None
+    width, height = struct.unpack("<ii", head[18:26])
+    # A negative height marks a top-down bitmap, the same size.
+    return _positive(width, abs(height))
 
 
 @pure

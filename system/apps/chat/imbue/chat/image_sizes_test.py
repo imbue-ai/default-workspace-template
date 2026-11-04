@@ -24,7 +24,11 @@ def _gif(width: int, height: int) -> bytes:
 
 
 def _bmp(width: int, height: int) -> bytes:
-    return b"BM" + b"\x00" * 16 + struct.pack("<ii", width, height) + b"\x00" * 28
+    return b"BM" + b"\x00" * 12 + struct.pack("<Iii", 40, width, height) + b"\x00" * 28
+
+
+def _os2_bmp(width: int, height: int) -> bytes:
+    return b"BM" + b"\x00" * 12 + struct.pack("<IHH", 12, width, height) + b"\x00" * 32
 
 
 def _webp(chunk: bytes, payload: bytes) -> bytes:
@@ -68,6 +72,7 @@ def _write(tmp_path: Path, name: str, content: bytes) -> Path:
         ("a.gif", _gif(320, 240), (320, 240)),
         ("a.bmp", _bmp(64, 48), (64, 48)),
         ("top-down.bmp", _bmp(64, -48), (64, 48)),
+        ("os2.bmp", _os2_bmp(64, 48), (64, 48)),
         ("lossy.webp", _webp(b"VP8 ", b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", 800, 600)), (800, 600)),
         (
             "lossless.webp",
