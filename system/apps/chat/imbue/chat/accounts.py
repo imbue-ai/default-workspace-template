@@ -30,9 +30,10 @@ import os
 import shutil
 import threading
 import uuid
-from collections.abc import Iterator
-from collections.abc import Mapping
+from collections.abc import Generator
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 
@@ -48,6 +49,7 @@ from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.file_utils import atomic_write
 
 logger = _loguru_logger
 
@@ -58,6 +60,9 @@ logger = _loguru_logger
 INDEX_VERSION: Final = 2
 
 _INDEX_FILENAME: Final = "index.json"
+# When the account last finished a sign-in, kept in the account's folder rather than the index so
+# the index's shape (and an older build's reading of it) is unchanged.
+SIGNED_IN_AT_FILENAME: Final = ".signed_in_at"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
@@ -67,12 +72,11 @@ _LOCK_FILENAME: Final = "index.lock"
 
 
 @contextlib.contextmanager
-def _index_lock(home: Path | None = None) -> Iterator[None]:
+def _index_lock(home: Path | None = None) -> Generator[None, None, None]:
     """Hold the index across the whole read-modify-write, against every writer.
 
-    A thread lock alone is not enough: the server is not the only process that mints
-    accounts -- `migrate_claude_auth.py` runs standalone and commits one, and boot's
-    `reconcile` removes every folder the index does not name. Two processes interleaving a
+    A thread lock alone is not enough: the server is not the only process that touches
+    the index -- boot's `reconcile` removes every folder the index does not name. Two processes interleaving a
     read-modify-write lose an account; one racing the sweep has its brand-new folder deleted
     out from under it.
     """
@@ -90,6 +94,14 @@ def _index_lock(home: Path | None = None) -> Iterator[None]:
 
 class AccountError(RuntimeError):
     """An account could not be created, resolved, or removed."""
+
+
+class NoAccountsError(AccountError):
+    """No provider account is signed in, so there is nothing to bind an agent to."""
+
+
+class UnknownAccountError(AccountError):
+    """An id names no account in the index: it was signed out (deleted), or never existed."""
 
 
 class Account(FrozenModel):
@@ -146,6 +158,19 @@ def accounts_root(home: Path | None = None) -> Path:
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
+
+
+def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
+    """When the account last finished a sign-in (ISO 8601, UTC), or None for one never stamped."""
+    try:
+        return (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def stamp_signed_in(account_id: str, home: Path | None = None) -> None:
+    """Record that the account finished a sign-in now."""
+    atomic_write(account_dir(account_id, home) / SIGNED_IN_AT_FILENAME, datetime.now(timezone.utc).isoformat())
 
 
 def index_path(home: Path | None = None) -> Path:
@@ -299,6 +324,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 
     This is the commit point of a sign-in. Everything before it is provisional.
     Idempotent: committing an id that is already indexed returns the existing row.
+    Every commit, a re-authentication included, stamps the folder with when it signed in.
     """
     path = account_dir(account_id, home)
     if not path.is_dir():
@@ -311,15 +337,17 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
         # bring-your-own-key lane may name a different provider, and leaving the old noun
         # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
+        # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+        # stored value and ignoring the argument would let a re-auth on the WRONG lane
+        # commit: the row still says anthropic while codex's config sits in its folder, and
+        # every chat bound there resolves a claude harness against codex credentials.
+        if existing is not None and existing.lane != lane:
+            raise AccountError(
+                f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
+            )
+        # Before the index write, so the account list that write announces to every chat page carries it.
+        stamp_signed_in(account_id, home)
         if existing is not None:
-            # `Account.lane` is immutable, and this is where that is enforced. Keeping the
-            # stored value and ignoring the argument would let a re-auth on the WRONG lane
-            # commit: the row still says anthropic while codex's config sits in its folder, and
-            # every chat bound there resolves a claude harness against codex credentials.
-            if existing.lane != lane:
-                raise AccountError(
-                    f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
-                )
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
             rows = tuple(existing if a.id == account_id else a for a in index.accounts)
@@ -351,19 +379,36 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 # is not.
 KEPT_ON_DISCARD: Final = ("projects",)
 
-# Where a re-auth parks the credential it is about to replace.
-#
-# A re-auth has to delete the working credential before driving the CLI -- three of the four
-# promote probes are presence checks, so a flow judged against the file already there reports
-# success without anything having changed. That leaves a window in which the only copy of a
-# working credential is in process memory, and a stop, a snapshot, an OOM kill or a supervisord
-# restart in that window destroys it with no trace on disk: the row still points at a folder
-# that exists, so nothing notices, and every chat bound there fails on its next turn looking
-# signed in. Parking it here instead makes the window survivable -- `reconcile` puts it back at
-# boot -- and it is inside the account folder so deleting the account takes the backup with it.
-REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
-# Marks a backed-up file that did not exist before the flow, so restoring it means deleting it.
-_ABSENT_SUFFIX: Final = ".absent"
+# CLEANUP: where a re-auth used to park the credential it replaced, and the marker for a file that
+# did not exist before it. `reconcile` restores and removes any left behind; remove these and
+# `_restore_legacy_reauth_backup` once every workspace has booted a build without parking.
+_LEGACY_REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
+_LEGACY_ABSENT_SUFFIX: Final = ".absent"
+
+
+def _restore_legacy_reauth_backup(account_id: str, home: Path | None) -> int:
+    """Put back a credential an older build parked mid-re-auth, and remove the parking spot.
+
+    A re-auth on that build moved the working credential aside before signing in, so one that
+    died part way left the only copy here. Returns how many files it covered.
+    """
+    folder = account_dir(account_id, home)
+    backup = folder / _LEGACY_REAUTH_BACKUP_DIRNAME
+    if not backup.is_dir():
+        return 0
+    restored = 0
+    for child in sorted(backup.iterdir()):
+        if child.name.endswith(_LEGACY_ABSENT_SUFFIX):
+            continue
+        target = folder / child.name
+        if (backup / f"{child.name}{_LEGACY_ABSENT_SUFFIX}").exists():
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(child.read_bytes())
+            target.chmod(0o600)
+        restored += 1
+    shutil.rmtree(backup, ignore_errors=True)
+    return restored
 
 
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
@@ -537,7 +582,7 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     """
     index = read_index(home)
     if not index.accounts:
-        raise AccountError("no provider accounts exist yet")
+        raise NoAccountsError("no provider accounts exist yet")
     for account in index.accounts:
         if account.id == account_id:
             # A row whose folder is gone would bind an agent to a directory that is not
@@ -546,67 +591,7 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
             if not account_dir(account.id, home).is_dir():
                 raise AccountError(f"account {account_id} has no folder on disk; sign in to it again")
             return account
-    raise AccountError(f"no such account: {account_id}")
-
-
-def _reauth_backup_dir(account_id: str, home: Path | None = None) -> Path:
-    return account_dir(account_id, home) / REAUTH_BACKUP_DIRNAME
-
-
-def save_reauth_backup(account_id: str, files: Mapping[Path, bytes | None], home: Path | None = None) -> None:
-    """Park the credential a re-auth is about to delete, so it outlives this process.
-
-    Keyed by file NAME rather than by path: every credential a harness reads sits directly in
-    the account folder, and a name is what survives being written to disk and read back by a
-    later process that has no memory of the flow. A file that did not exist is recorded as an
-    empty marker, so the restore knows to remove rather than to write.
-    """
-    backup = _reauth_backup_dir(account_id, home)
-    shutil.rmtree(backup, ignore_errors=True)
-    backup.mkdir(parents=True, exist_ok=True)
-    backup.chmod(0o700)
-    for path, content in files.items():
-        target = backup / path.name
-        if content is None:
-            target.write_bytes(b"")
-            (backup / f"{path.name}{_ABSENT_SUFFIX}").write_bytes(b"")
-        else:
-            target.write_bytes(content)
-        target.chmod(0o600)
-
-
-def clear_reauth_backup(account_id: str, home: Path | None = None) -> None:
-    """Drop the parked copy. Called once the new credential is committed."""
-    shutil.rmtree(_reauth_backup_dir(account_id, home), ignore_errors=True)
-
-
-def restore_reauth_backup(account_id: str, home: Path | None = None) -> int:
-    """Put a parked credential back, returning how many files it covered.
-
-    Zero when there is nothing parked, which is the ordinary case. Only ever called with the
-    index lock held, so it cannot race a flow that is mid-commit.
-    """
-    backup = _reauth_backup_dir(account_id, home)
-    if not backup.is_dir():
-        return 0
-    folder = account_dir(account_id, home)
-    if not folder.is_dir():
-        shutil.rmtree(backup, ignore_errors=True)
-        return 0
-    restored = 0
-    for child in sorted(backup.iterdir()):
-        if child.name.endswith(_ABSENT_SUFFIX):
-            continue
-        target = folder / child.name
-        if (backup / f"{child.name}{_ABSENT_SUFFIX}").exists():
-            # It did not exist before the flow, so putting it "back" means removing it.
-            target.unlink(missing_ok=True)
-        else:
-            target.write_bytes(child.read_bytes())
-            target.chmod(0o600)
-        restored += 1
-    shutil.rmtree(backup, ignore_errors=True)
-    return restored
+    raise UnknownAccountError(f"no such account: {account_id}")
 
 
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -632,16 +617,11 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
     with _index_lock(home):
         index = read_index(home)
         known = {a.id for a in index.accounts}
-        # Before anything else: a re-auth that died mid-flight left the only copy of a working
-        # credential parked in the account folder. Put it back, so the account this boot
-        # inherits is the one the user had rather than a signed-out husk that still looks fine.
         for account in index.accounts:
-            restored = restore_reauth_backup(account.id, home)
+            restored = _restore_legacy_reauth_backup(account.id, home)
             if restored:
                 logger.warning(
-                    "Restored {} credential file(s) for account {} from an interrupted re-auth",
-                    restored,
-                    account.id,
+                    "Restored {} credential file(s) for account {} from an interrupted re-auth", restored, account.id
                 )
         removed = []
         for child in sorted(root.iterdir()):

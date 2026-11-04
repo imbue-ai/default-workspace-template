@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from pytest_workspace_env.plugin import REQUIRE_WORKSPACE_ENV_VAR
@@ -25,12 +26,58 @@ def test_a_test_that_runs() -> None:
 
 _INNER_INI = "[pytest]\n"
 
+_AGENT_ENV = {
+    "MNGR_AGENT_ID": "agent-0000000000000000000000000000leak",
+    "MINDS_CHAT_ID": "agent-0000000000000000000000000000chat",
+    "CLAUDE_CONFIG_DIR": "/agent/claude-config",
+    "CLAUDECODE": "1",
+    "CLAUDE_CODE_ENTRYPOINT": "cli",
+    "MAIN_CLAUDE_SESSION_ID": "agent-session-0000",
+    "TMUX": "/tmp/tmux-0/default,7,0",
+    "TMUX_PANE": "%3",
+}
+
+_UNRELATED_VAR = "PYTEST_WORKSPACE_ENV_UNRELATED"
+
+# Fails the whole session if the agent environment is still there when a conftest is imported.
+_INNER_CONFTEST = f"""
+import os
+
+leaked = [name for name in {sorted(_AGENT_ENV)!r} if name in os.environ]
+assert not leaked, leaked
+"""
+
+_INNER_AGENT_ENV_TEST = f"""
+import os
+import subprocess
+import sys
+
+
+def test_a_test_does_not_see_the_agent_environment() -> None:
+    assert not [name for name in {sorted(_AGENT_ENV)!r} if name in os.environ]
+
+
+def test_a_subprocess_does_not_see_the_agent_environment() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", "import os; print(sorted(name for name in os.environ if name in {sorted(_AGENT_ENV)!r}))"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert completed.stdout.strip() == "[]"
+
+
+def test_other_variables_are_kept() -> None:
+    assert os.environ[{_UNRELATED_VAR!r}] == "kept 40213"
+"""
+
 
 def _run_inner_session(
-    project: Path, env_overrides: dict[str, str]
+    project: Path, env_overrides: dict[str, str], files: Mapping[str, str]
 ) -> subprocess.CompletedProcess[str]:
     project.mkdir()
-    (project / "test_inner.py").write_text(_INNER_TEST)
+    for name, content in files.items():
+        (project / name).write_text(content)
     # A minimal ini keeps the workspace's own pytest config (addopts, ignores) out of the inner run.
     (project / "pytest.ini").write_text(_INNER_INI)
     inherited = {
@@ -48,7 +95,6 @@ def _run_inner_session(
             "-p",
             "no:cacheprovider",
             "-rfs",
-            "test_inner.py",
         ],
         cwd=project,
         env={**inherited, **env_overrides},
@@ -63,7 +109,9 @@ def test_skips_fail_when_the_workspace_env_is_required(
     tmp_path: Path,
 ) -> None:
     completed = _run_inner_session(
-        tmp_path / "project", {REQUIRE_WORKSPACE_ENV_VAR: "1"}
+        tmp_path / "project",
+        {REQUIRE_WORKSPACE_ENV_VAR: "1"},
+        {"test_inner.py": _INNER_TEST},
     )
 
     assert completed.returncode != 0, completed.stdout
@@ -79,8 +127,23 @@ def test_skips_fail_when_the_workspace_env_is_required(
 def test_every_skip_stays_a_skip_when_the_workspace_env_is_not_required(
     tmp_path: Path,
 ) -> None:
-    completed = _run_inner_session(tmp_path / "project", {})
+    completed = _run_inner_session(
+        tmp_path / "project", {}, {"test_inner.py": _INNER_TEST}
+    )
 
     assert completed.returncode == 0, completed.stdout
     assert "1 passed, 2 skipped" in completed.stdout, completed.stdout
     assert "pytest-workspace-env" not in completed.stdout
+
+
+def test_the_agent_environment_is_cleared_before_any_test_code_runs(
+    tmp_path: Path,
+) -> None:
+    completed = _run_inner_session(
+        tmp_path / "project",
+        {**_AGENT_ENV, _UNRELATED_VAR: "kept 40213"},
+        {"conftest.py": _INNER_CONFTEST, "test_inner.py": _INNER_AGENT_ENV_TEST},
+    )
+
+    assert completed.returncode == 0, completed.stdout
+    assert "3 passed" in completed.stdout, completed.stdout

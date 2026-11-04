@@ -67,8 +67,14 @@ beforeEach(() => {
     onAvatarStatus: vi.fn(),
     onAvatarSelectionChanged: vi.fn(),
     onUpdateNoticeChanged: vi.fn(),
+    onThemesChanged: vi.fn(),
+    onKeybindingsChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
+    onRosterUpdated: vi.fn(),
+    onClientsUpdated: vi.fn(),
+    onChatsActivity: vi.fn(),
+    onBubble: vi.fn(),
     onConnected: vi.fn(),
   };
   socket = new ShellSocket("client-1");
@@ -84,13 +90,54 @@ afterEach(() => {
 describe("ShellSocket", () => {
   it("opens the shell's socket, says so once open, and reports the client state only while open", () => {
     expect(current().url).toMatch(/^ws:\/\/.+\/api\/ws$/);
-    socket.reportClientState("home", "");
+    socket.reportClientState({
+      activeDesktop: "home",
+      previousDesktop: "",
+      reportId: "report-1",
+      isFollowing: false,
+      pageId: "page-00000000000000aa",
+      revision: 0,
+    });
     expect(current().sent).toEqual([]);
     current().open();
     expect(handlers.onConnected).toHaveBeenCalledTimes(1);
-    socket.reportClientState("home", "work");
+    socket.reportClientState({
+      activeDesktop: "home",
+      previousDesktop: "work",
+      reportId: "report-2",
+      isFollowing: false,
+      pageId: "page-00000000000000aa",
+      revision: 3,
+    });
+    socket.reportClientState({
+      activeDesktop: "work",
+      previousDesktop: "",
+      reportId: null,
+      isFollowing: true,
+      pageId: "page-00000000000000aa",
+      revision: null,
+    });
     expect(current().sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
-      { type: "client_state", client_id: "client-1", active_desktop: "home", previous_desktop: "work" },
+      {
+        type: "client_state",
+        client_id: "client-1",
+        active_desktop: "home",
+        previous_desktop: "work",
+        report_id: "report-2",
+        is_following: false,
+        page_id: "page-00000000000000aa",
+        revision: 3,
+      },
+      {
+        type: "client_state",
+        client_id: "client-1",
+        active_desktop: "work",
+        previous_desktop: "",
+        report_id: null,
+        is_following: true,
+        page_id: "page-00000000000000aa",
+        revision: null,
+      },
     ]);
   });
 
@@ -101,25 +148,45 @@ describe("ShellSocket", () => {
     current().receive({ type: "placements_updated", desktop_id: "home", client_id: "client-1", save_id: "s-1" });
     current().receive({ type: "active_desktop_changed", client_id: "client-1" });
     current().receive({
+      type: "active_desktop_changed",
+      client_id: "client-1",
+      desktop_id: "work",
+      revision: 7,
+      report_id: "report-9",
+    });
+    current().receive({
       type: "client_entries_changed",
       client_id: "client-1",
       entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
     });
     expect(handlers.onClientEntriesChanged).toHaveBeenCalledWith({
       clientId: "client-1",
-      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 }, is_window_shown: true } },
     });
     const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
     current().receive({ type: "presence_updated", users: [bob] });
+    current().receive({ type: "clients_updated" });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onPresenceUpdated).toHaveBeenCalledWith([bob]);
+    expect(handlers.onClientsUpdated).toHaveBeenCalledTimes(1);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({
       desktopId: "home",
       clientId: "client-1",
       saveId: "s-1",
     });
-    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({ clientId: "client-1", desktopId: "" });
+    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      desktopId: "",
+      revision: 0,
+      reportId: null,
+    });
+    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      desktopId: "work",
+      revision: 7,
+      reportId: "report-9",
+    });
     current().receive({ type: "avatar_status", mood: "working", is_stale: false });
     expect(handlers.onAvatarStatus).toHaveBeenCalledWith({ mood: "working", is_stale: false });
     current().receive({ type: "avatar_selection_changed", design: "jelly-cat" });
@@ -150,6 +217,22 @@ describe("ShellSocket", () => {
       WireShapeError,
     );
     expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("delivers the theme catalog the shell pushes, leaving out a malformed theme", () => {
+    current().open();
+    current().receive({
+      type: "themes_changed",
+      catalog: {
+        default: "mac-classic",
+        themes: [{ id: "mac-classic", name: "Classic Mac", available: true, revision: "r1" }, { name: "no id" }],
+      },
+    });
+    const [catalog] = vi.mocked(handlers.onThemesChanged).mock.calls[0];
+    expect(catalog.default).toBe("mac-classic");
+    expect(catalog.themes.map((theme) => [theme.id, theme.name, theme.available, theme.revision])).toEqual([
+      ["mac-classic", "Classic Mac", true, "r1"],
+    ]);
   });
 
   it("delivers a layout op for this client or for everyone, and drops another client's or an unknown op", () => {

@@ -1,0 +1,1 @@
+The permission card for a request to act on the user's other workspaces is now titled "Other workspaces" instead of "Other machines", matching the minds app's return to calling the user's unit a "workspace" (a "machine" is only the compute it runs on).

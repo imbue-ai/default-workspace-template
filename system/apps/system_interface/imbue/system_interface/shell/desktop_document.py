@@ -25,33 +25,34 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ShowOutcome
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowState
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopLayout
+from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import Frame
+from workspace_layout.records import GridCell
+from workspace_layout.records import ShortcutTarget
+from workspace_layout.records import Window
+from workspace_layout.records import WindowPlacement
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientDesktopView
-from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
-from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import DesktopShortcut
-from imbue.system_interface.shell.data_types import Frame
-from imbue.system_interface.shell.data_types import GridCell
-from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import ShowChoice
-from imbue.system_interface.shell.data_types import Window
-from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import ShowOutcome
-from imbue.system_interface.shell.primitives import WindowId
-from imbue.system_interface.shell.primitives import WindowPage
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowState
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_window_id
 
 # The cascade rule (fixed, in fractions): window ``n`` of a client's desktop steps from the origin, cycling.
@@ -63,14 +64,23 @@ CASCADE_WIDTH: Final[float] = 0.6
 CASCADE_HEIGHT: Final[float] = 0.7
 CASCADE_CYCLE: Final[int] = 6
 
-# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): the right half of the backdrop, a
-# margin in, above the corner its floating entry rests in; roughly where the first users put it by hand.
-PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.46, y=0.05, width=0.5, height=0.9)
+# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): most of the backdrop, a margin in on
+# every side, so the welcome chat is what a new workspace opens on; the tour's resize card snaps it to the right half.
+PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.05, y=0.05, width=0.9, height=0.9)
 
 # The snap frames (fixed).
 SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
 MAXIMIZED_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=1.0, height=1.0)
+
+
+class Viewport(FrozenModel):
+    """The whole viewport, the backdrop plus the taskbar's band below it: what a FULLSCREEN window renders at (the
+    Screen spec, section 12). No frame in fractions of the backdrop reaches past the backdrop, so the viewport is its
+    own value rather than a frame."""
+
+
+VIEWPORT: Final[Viewport] = Viewport()
 
 # How wide a window opened beside another is, and the width its anchor has to be under for the two to
 # fit side by side at all.
@@ -113,6 +123,9 @@ class FitMetrics(FrozenModel):
     window_min_height: float = Field(description="Pixels a window is never rendered shorter than")
     title_min_visible: float = Field(description="Pixels of the title bar that stay inside horizontally")
     title_bar_height: float = Field(description="Pixels; the whole title bar stays inside vertically")
+    taskbar_height: float = Field(
+        description="Pixels of the taskbar's band below the backdrop, which the viewport adds"
+    )
 
 
 class GridMetrics(FrozenModel):
@@ -163,8 +176,9 @@ def cascade_frame(placed_count: int) -> Frame:
 
 
 @pure
-def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
-    """The frame a window renders at: its own when normal, the fixed half or whole otherwise."""
+def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame | Viewport:
+    """The frame a window renders at: its own when normal, the fixed half or whole of the backdrop when snapped or
+    maximized, and the whole viewport when fullscreen."""
     match state:
         case WindowState.NORMAL:
             return placement_frame
@@ -174,8 +188,19 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
             return SNAPPED_RIGHT_FRAME
         case WindowState.MAXIMIZED:
             return MAXIMIZED_FRAME
+        case WindowState.FULLSCREEN:
+            return VIEWPORT
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def backdrop_frame_of(state_frame: Frame | Viewport) -> Frame:
+    """The part of the backdrop a rendered frame covers: a fullscreen window covers all of it (and the taskbar too,
+    which the backdrop's fractions cannot say); what a rule over backdrop frames, such as pairing, reads a window as."""
+    if isinstance(state_frame, Viewport):
+        return MAXIMIZED_FRAME
+    return state_frame
 
 
 @pure
@@ -230,6 +255,20 @@ def fit_frame_to_backdrop(frame: Frame, backdrop: BackdropSize, metrics: FitMetr
     # Vertically the whole title bar stays inside, and the top edge is never above the backdrop's.
     y = max(min(scaled_y, backdrop.height - metrics.title_bar_height), 0.0)
     return PixelRect(x=x, y=y, width=width, height=height)
+
+
+@pure
+def viewport_rect(backdrop: BackdropSize, taskbar_height: float) -> PixelRect:
+    """The viewport in backdrop pixels: the backdrop from its top-left corner, plus the taskbar's band below it."""
+    return PixelRect(x=0.0, y=0.0, width=backdrop.width, height=backdrop.height + taskbar_height)
+
+
+@pure
+def fit_state_frame(state_frame: Frame | Viewport, backdrop: BackdropSize, metrics: FitMetrics) -> PixelRect:
+    """The rectangle a rendered frame takes: the fit rule for a frame, the viewport as it is for the viewport."""
+    if isinstance(state_frame, Viewport):
+        return viewport_rect(backdrop, metrics.taskbar_height)
+    return fit_frame_to_backdrop(state_frame, backdrop, metrics)
 
 
 @pure
@@ -300,7 +339,9 @@ def _nearness_key(cell: GridCell, target: GridCell) -> tuple[float, int, int]:
 @pure
 def _nearest_of(candidates: Sequence[GridCell], target: GridCell) -> GridCell | None:
     """The candidate at the least Euclidean distance from the target, ties by lower column then lower row."""
-    return min(candidates, key=lambda cell: _nearness_key(cell, target), default=None)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda cell: _nearness_key(cell, target))
 
 
 @pure
@@ -608,6 +649,8 @@ def desktop_seeded_from(
     # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
+    # Whose desktop it is: the visitor it is seeded for (the multiplayer spec, section 8.1).
+    owner: ParticipantKey | None,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
     plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
@@ -622,6 +665,7 @@ def desktop_seeded_from(
         glyph=glyph,
         wallpaper=source.wallpaper,
         shortcuts=source.shortcuts,
+        owner=owner,
         windows=tuple(
             Window(
                 id=window_id,
@@ -651,17 +695,23 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text(launch_path: RegistryLaunchPath) -> bool:
-    return launch_path.text_param is not None or launch_path.draft_param is not None
+def _takes_text_mention_or_app(launch_path: RegistryLaunchPath) -> bool:
+    """Whether the launch path needs something filled in: typed or drafted text, a mention of a person, or an app."""
+    return (
+        launch_path.text_param is not None
+        or launch_path.draft_param is not None
+        or launch_path.mention_param is not None
+        or launch_path.app_params is not None
+    )
 
 
 @pure
 def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
-    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
-    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app."""
+    first launch path that takes no typed or drafted text, no mention, and no app, or its first launch path when
+    every one takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none,
+    and neither does an internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
@@ -670,7 +720,7 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    first = next((path for path in offered if not _takes_text_mention_or_app(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
@@ -944,6 +994,20 @@ def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> Desktop
 
 
 @pure
+def with_window_minimized_on_desktop(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
+    """Minimize onto the desktop: out of sight where it stands in the stack, and no longer pulled out, so a pulled-out
+    window goes out of sight with its own desktop window rather than keeping it and hiding only the ghost."""
+    current = placement_of(layout, window_id)
+    return _with_placement_in_place(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, True),
+            to_update(current.field_ref().is_detached, False),
+        ),
+    )
+
+
+@pure
 def with_window_restored(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Restore: the window shown at its own frame, normal, on top of the stack."""
     current = placement_of(layout, window_id)
@@ -969,6 +1033,19 @@ def with_window_state(layout: DesktopLayout, window_id: WindowId, state: WindowS
             to_update(current.field_ref().state, state),
         ),
     )
+
+
+@pure
+def with_windows_side_by_side(layout: DesktopLayout, shown_id: WindowId, beside_id: WindowId) -> DesktopLayout:
+    """The two windows snapped to the backdrop's halves, the shown one on top (the multiplayer spec, section 9.2):
+    the shown window takes the half its frame's centre is already on (the right when it is minimized or has never
+    been placed), and the window it is laid out beside takes the other."""
+    is_placed = any(placement.window_id == shown_id for placement in layout.placements)
+    shown = placement_of(layout, shown_id)
+    is_shown_right = not is_placed or shown.is_minimized or shown.frame.x + shown.frame.width / 2 >= 0.5
+    shown_state = WindowState.SNAPPED_RIGHT if is_shown_right else WindowState.SNAPPED_LEFT
+    beside_state = WindowState.SNAPPED_LEFT if is_shown_right else WindowState.SNAPPED_RIGHT
+    return with_window_state(with_window_state(layout, beside_id, beside_state), shown_id, shown_state)
 
 
 @pure

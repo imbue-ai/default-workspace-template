@@ -1,0 +1,1 @@
+The composer's buttons (attach, stop, send) now sit at its bottom right once the message runs past one line, and the text above them uses the composer's full width. Previously they stayed beside the text, centered vertically, so a long message wrapped in a narrower column with empty space above and below the buttons. A message that fits on one line looks as before.

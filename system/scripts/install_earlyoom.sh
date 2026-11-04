@@ -8,11 +8,6 @@
 #
 # To bump: tag a new v1.9.0-imbue.N release on imbue-ai/earlyoom, then set
 # EARLYOOM_VERSION and both sha256s below from its published .sha256 assets.
-# The monorepo's `minds-admin hotpatch-earlyoom` pins the same version and
-# x86_64 sha256 (apps/minds_admin/imbue/minds_admin/slices/earlyoom_hotpatch.py)
-# and must move with it while that command still exists: it writes the same
-# version stamp, so a hotpatched workspace whose stamp matches this pin
-# downloads nothing here.
 set -euo pipefail
 
 EARLYOOM_VERSION="v1.9.0-imbue.3"

@@ -6,11 +6,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AvatarChooserDialog, NO_DRAFT_TARGET_REASON } from "./AvatarChooserDialog";
 import type { AvatarChooserDialogAttrs } from "./AvatarChooserDialog";
 
-afterEach(unmountViews);
+afterEach(() => {
+  unmountViews();
+  vi.unstubAllGlobals();
+  document.querySelectorAll("iframe").forEach((frame) => frame.remove());
+});
 
 function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement {
+  // jsdom has no matchMedia, which the workspace character asks about reduced motion.
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  );
   const attrs: AvatarChooserDialogAttrs = {
     designs: [
+      { id: "imbue-character", label: "Imbue", source_path: null },
       { id: "gummy-seal", label: "Gummy seal", source_path: null },
       { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
     ],
@@ -19,6 +29,7 @@ function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement 
     onSelect: vi.fn(),
     onDesignOwn: vi.fn(),
     onClose: vi.fn(),
+    onDownloadFailed: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(AvatarChooserDialog, attrs));
@@ -30,18 +41,33 @@ describe("AvatarChooserDialog", () => {
     const onSelect = vi.fn();
     const dialog = render({ onSelect });
     const cells = dialog.querySelectorAll<HTMLElement>("[data-avatar-design]");
-    expect([...cells].map((cell) => cell.getAttribute("data-avatar-design"))).toEqual(["gummy-seal", "mine"]);
-    expect(cells[0].getAttribute("aria-pressed")).toBe("false");
-    expect(cells[1].getAttribute("aria-pressed")).toBe("true");
-    expect(cells[0].querySelector("img")?.getAttribute("src")).toBe(
+    expect([...cells].map((cell) => cell.getAttribute("data-avatar-design"))).toEqual([
+      "imbue-character",
+      "gummy-seal",
+      "mine",
+    ]);
+    expect([...cells].map((cell) => cell.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+    expect(cells[1].querySelector("img")?.getAttribute("src")).toBe(
       "/api/avatars/gummy-seal/image.svg?mood=idle&preview=1",
     );
-    cells[0].click();
+    // Each choice is a tile and its picture the avatar part, which a theme dresses as it does the taskbar's: the
+    // workspace's own character drawn live, in the theme's avatar colour, and every other design as its image.
+    expect([...cells].map((cell) => cell.getAttribute("data-part"))).toEqual(["tile", "tile", "tile"]);
+    const pictures = [...cells].map((cell) => cell.querySelector('[data-part="avatar"]')!);
+    expect(pictures.map((picture) => picture.tagName.toLowerCase())).toEqual(["svg", "img", "img"]);
+    expect(pictures.map((picture) => picture.getAttribute("data-avatar-kind"))).toEqual([
+      "character",
+      "image",
+      "image",
+    ]);
+    expect(cells[0].querySelector("img")).toBeNull();
+    cells[1].click();
     expect(onSelect).toHaveBeenCalledWith("gummy-seal");
     const source = dialog.querySelector("[data-avatar-source]") as HTMLAnchorElement;
     expect(source.getAttribute("href")).toBe("/api/avatars/mine/source.svg");
-    expect(source.getAttribute("download")).toBe("");
     expect(source.getAttribute("data-hover-tooltip")).toBe("/tmp/mine.svg");
+    source.click();
+    expect(document.querySelector("iframe[hidden]")?.getAttribute("src")).toBe("/api/avatars/mine/source.svg");
   });
 
   it("starts the design chat, or says why it cannot", () => {

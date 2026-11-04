@@ -1,7 +1,7 @@
 """Register an avatar design drawn inside the workspace through the running shell, optionally selecting it.
 
 Usage (from the workspace root):
-    uv run python -m imbue.system_interface.avatar.register_avatar --source data/avatar-designs/my-design.svg --id my-design --label "My design" [--select]
+    uv run --no-sync python -m imbue.system_interface.avatar.register_avatar --source data/avatar-designs/my-design.svg --id my-design --label "My design" [--select]
 
 The shell's loopback-only registration route validates the drawing (docs/system/avatar-designs.md) and keeps the
 original under the app data directory; ``--select`` then makes it the workspace's design.
@@ -14,10 +14,10 @@ from typing import Final
 
 import httpx
 from app_manifest.manifest import describe_validation_error
-from app_manifest.shell_windows import shell_base_url
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.shell_url import shell_base_url
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.avatar.catalog import DesignRegistration

@@ -8,7 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -124,7 +124,18 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // traffic, framework injections). Read by the backend's own activity derivation;
   // carried on the wire for completeness.
   non_turn_tail?: boolean;
+  // status (a compaction) only: who started it -- the chat's idle sweep, the user's /compact, or
+  // the harness itself. Null or absent when the chat app could not tell.
+  compaction_cause?: CompactionCause | null;
+  // Who wrote the message when it was not the owner (the multiplayer spec, section 5.2): their
+  // participant key, joined from the chat's author annotations, and the name they were called at
+  // the time. Absent for the owner's turns and for every turn from before authors were kept.
+  author?: string;
+  author_name?: string;
 }
+
+/** Who started a compaction (the backend's ``CompactionCause``). */
+export type CompactionCause = "idle" | "manual" | "native";
 
 /**
  * A model turn: prose text and/or tool calls. Every field below is always
@@ -216,7 +227,7 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
 }
 
 /** The ``source`` of the events of a seeded chat's seed segment (the backend's ``SEED_SOURCE``):
- *  the turns the Imbue Studio app wrote before the workspace had any agent. */
+ *  turns written before any agent joined the chat. */
 export const SEED_SOURCE = "seed";
 
 /** The pseudo-harness a seed segment reads as (the backend's ``HarnessType.SEED``). */
@@ -274,7 +285,7 @@ export interface ResponseItem {
   output_tokens: number | null;
 }
 
-interface EventsResponse {
+export interface EventsResponse {
   events: TranscriptEvent[];
   // Global index of the first returned event within the full transcript, and the
   // transcript's total length. Together they place the loaded window in the whole
@@ -589,6 +600,9 @@ const loadStateByChat = new Map<string, TranscriptLoadState>();
 let loadAttemptCounter = 0;
 const newestLoadAttemptByChat = new Map<string, number>();
 
+// When the newest snapshot attempt settles, once its outcome is recorded; never rejects.
+const newestLoadByChat = new Map<string, Promise<void>>();
+
 /** Whether this attempt is still the chat's newest, i.e. whether its outcome still counts. */
 function isNewestLoadAttempt(chatId: string, attempt: number): boolean {
   return newestLoadAttemptByChat.get(chatId) === attempt;
@@ -701,14 +715,79 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
  *  Not a successor's handoff prompt (the chat app's own message; the message it folds in is the
  *  switch marker's to show), and not a seed segment's turns (written before any page existed). */
 function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
-  return events
-    .filter((event) => event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event))
-    .map((event) => event.event_id);
+  return events.filter(isSentUserTurn).map((event) => event.event_id);
+}
+
+function isSentUserTurn(event: TranscriptEvent): event is UserMessageEvent {
+  return event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event);
+}
+
+/** The user turns the chat's loaded transcript holds now, so a turn that lands later can be told apart. */
+export function sentUserTurnIds(chatId: string): ReadonlySet<string> {
+  return new Set(arrivedUserEventIds(getEventsForChat(chatId)));
+}
+
+/**
+ * Whether a user turn holding exactly ``text`` has reached the chat's transcript since ``priorTurnIds``
+ * were read. Matched on the text, not by position: another turn landing meanwhile (a queued message, a
+ * send from another window) is not this one.
+ */
+export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnIds: ReadonlySet<string>): boolean {
+  return userTurnIdsLandedSince(getEventsForChat(chatId), text, priorTurnIds).length > 0;
+}
+
+/** The user turns among ``events`` holding exactly ``text``, oldest first. */
+export function userTurnsHolding(events: readonly TranscriptEvent[], text: string): UserMessageEvent[] {
+  const wanted = text.trim();
+  return events.filter(isSentUserTurn).filter((event) => event.content.trim() === wanted);
+}
+
+/** The ids of the user turns among ``events`` holding exactly ``text`` that are not among ``priorTurnIds`` and
+ *  came after all of them, oldest first (see ``hasUserTurnLandedSince``). */
+export function userTurnIdsLandedSince(
+  events: readonly TranscriptEvent[],
+  text: string,
+  priorTurnIds: ReadonlySet<string>,
+): string[] {
+  const wanted = text.trim();
+  const landed: string[] = [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (!isSentUserTurn(event)) {
+      continue;
+    }
+    // Everything before a turn that was already there was already there too.
+    if (priorTurnIds.has(event.event_id)) {
+      break;
+    }
+    if (event.content.trim() === wanted) {
+      landed.unshift(event.event_id);
+    }
+  }
+  return landed;
+}
+
+// Per chat, the agent's latest work (a reply, a tool call or its result) the live stream brought this
+// page, and when: when the user saw it land, on this page's clock.
+const liveAgentWorkByChat = new Map<string, { eventId: string; at: number }>();
+
+/** When the live stream brought this page the agent's work `eventId`, or null when that is not the
+ *  latest such event it brought (or it brought none). */
+export function liveArrivalOfAgentWork(chatId: string, eventId: string): number | null {
+  const latest = liveAgentWorkByChat.get(chatId);
+  return latest !== undefined && latest.eventId === eventId ? latest.at : null;
 }
 
 export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(chatId).append(newEvents)) {
     m.redraw();
+  }
+  for (let i = newEvents.length - 1; i >= 0; i--) {
+    const event = newEvents[i];
+    if (event.type === "assistant_message" || event.type === "tool_result") {
+      liveAgentWorkByChat.set(chatId, { eventId: event.event_id, at: Date.now() });
+      break;
+    }
   }
   // Route live user-message arrivals through the optimistic-send layer so a
   // "Sending…" bubble drops the instant its real message lands in the transcript
@@ -769,7 +848,32 @@ function placeWindow(chatId: string, result: EventsResponse): void {
   store.reset(result.events, offset, total);
 }
 
-export async function fetchEvents(chatId: string): Promise<TranscriptEvent[]> {
+export function fetchEvents(chatId: string): Promise<TranscriptEvent[]> {
+  const load = loadSnapshot(chatId);
+  newestLoadByChat.set(
+    chatId,
+    load.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return load;
+}
+
+/** Wait out the chat's transcript snapshot loads, including any a newer attempt starts meanwhile:
+ *  true once one has landed, false when the newest failed or none was ever made. */
+export async function whenTranscriptLoadSettles(chatId: string): Promise<boolean> {
+  let awaited: Promise<void> | undefined;
+  while (!isTranscriptLoaded(chatId)) {
+    const newest = newestLoadByChat.get(chatId);
+    if (newest === undefined || newest === awaited) return false;
+    awaited = newest;
+    await newest;
+  }
+  return true;
+}
+
+async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
   notFoundChatIds.delete(chatId);
   // Moved on the attempt, not on its outcome: whoever is about to learn the
   // outcome must not be shown the previous one. Only the snapshot tracks this --
@@ -907,6 +1011,16 @@ export async function fetchForwardEvents(chatId: string, limit: number): Promise
   }
 }
 
+/** The events after `afterEventId` in the chat's transcript, with where they sit in it; nothing is applied. */
+export function requestEventsAfter(chatId: string, afterEventId: string, limit: number): Promise<EventsResponse> {
+  return m.request<EventsResponse>({
+    method: "GET",
+    url: apiUrl("/api/chats/:chatId/events"),
+    params: { chatId, after: afterEventId, limit: String(limit) },
+    config: applyEventsRequestTimeout,
+  });
+}
+
 /** The full deferred payloads of one event, fetched on demand from the detail endpoint. */
 export interface EventDetail {
   inputs_by_tool_call_id: Record<string, string>;
@@ -1019,31 +1133,58 @@ export function announceMessageSent(chatId: string): void {
   }
 }
 
-export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<string> {
+/** How the message route took a send: delivered ("ok"), delivered by a second send because the first could
+ *  not be confirmed and may have landed too ("resent"), held while the chat switches agents ("held"),
+ *  run as a compaction instead of being sent ("compaction_requested", a `/compact` no transcript
+ *  turn will echo), or taken back by Stop before it landed ("withdrawn", nothing delivered). */
+export type SendStatus = "ok" | "resent" | "held" | "compaction_requested" | "withdrawn";
+
+/** Send a message to a chat; resolves with how the route took it, or null when there was nothing to send. */
+export async function sendMessage(
+  chatId: string,
+  message: string,
+  messageId?: string,
+  isSingleSend = false,
+): Promise<SendStatus | null> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
-    return id;
+    return null;
   }
   announceMessageSent(chatId);
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
-  // attribute a request to a client via `layout.py context`. The message_id is
-  // the stable send-time id the backend reconciles delivery against (A4).
-  await m.request({
-    method: "POST",
-    url: apiUrl("/api/chats/:chatId/message"),
-    params: { chatId },
-    body: {
-      message: trimmed,
-      message_id: id,
-      client_id: getClientId(),
-      desktop_id: getActiveDesktopId(),
-    },
-  });
-  return id;
+  // attribute a request to a client via `workspace-layout context`. The message_id is
+  // the stable send-time id the backend reconciles delivery against (A4), and answers a
+  // repeat under it as it answered the first, so a send that got no answer is sent again.
+  // A repeat says it is one, so it gets the first send's refusal too rather than a send of its own.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await m.request<{ status: SendStatus }>({
+        method: "POST",
+        url: apiUrl("/api/chats/:chatId/message"),
+        params: { chatId },
+        body: {
+          message: trimmed,
+          message_id: id,
+          is_single_send: isSingleSend,
+          client_id: getClientId(),
+          desktop_id: getActiveDesktopId(),
+          is_repeat: attempt > 0,
+        },
+      });
+      return response.status;
+    } catch (error) {
+      const delayMs = UNANSWERED_SEND_RETRY_DELAYS_MS[attempt];
+      if (!isUnansweredRequest(error) || delayMs === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
+
+/** How long a send that got no answer waits before each repeat under its id: about half a minute in all. */
+const UNANSWERED_SEND_RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 8000, 15000];
 
 export async function interruptAgent(chatId: string): Promise<void> {
   await m.request({

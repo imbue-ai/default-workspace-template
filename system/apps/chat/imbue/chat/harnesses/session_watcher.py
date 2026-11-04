@@ -21,16 +21,28 @@ from abc import abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from typing import Final
+
+from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
+from imbue.imbue_common.frozen_model import FrozenModel
 
 # Called with (agent_id, newly parsed events) each time the watcher reads new lines.
 # Fanned out to the event queues (and so to the browser) and to the activity tracker.
 OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
 
+# How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
+TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
+
 # Sends one message to the harness, returning whether it was accepted. Bound by the
 # composition root to the manager's send path (which resolves the agent's location).
 FlushSendCallback = Callable[[str], bool]
+
+# Record a block that landed on a later pass after an earlier one was not seen to, with the time a first copy of it
+# could have been stamped from at the earliest (``ResentSendSnapshot.sent_after``).
+FlushResentCallback = Callable[[str, float], None]
 
 # Whether the agent's process is currently alive -- see ``set_flush_hooks``.
 IsAliveCallback = Callable[[], bool]
@@ -40,6 +52,43 @@ IsAliveCallback = Callable[[], bool]
 # only harness-specific code is the populator that produces it (see
 # ``harnesses.claude.queue_tracker``).
 QueueSnapshotCallback = Callable[[list[dict[str, Any]]], None]
+
+# Called with the ids of the agent's own background tasks its harness has reported as over.
+FinishedTasksCallback = Callable[[tuple[str, ...]], None]
+
+# Captures the agent's terminal pane (with its colour codes), or None when it cannot be read.
+CapturePaneCallback = Callable[[], str | None]
+
+
+class ReplyDraft(FrozenModel):
+    """The reply an agent is writing that its transcript does not hold yet."""
+
+    after_event_id: str = Field(
+        description="The id of the transcript's last main-session event when the draft was read ('' for none): "
+        "the draft follows it, and a page whose transcript has moved past it drops the draft"
+    )
+    text: str = Field(description="The draft's markdown; '' when there is no draft to show")
+
+
+class StreamedReply(FrozenModel):
+    """A reply as the agent's live connection has streamed it so far."""
+
+    message_id: str = Field(description="The harness's own id for the message, which its transcript records too")
+    text: str = Field(description="The message's text so far")
+
+
+# The reply the agent's live connection is streaming (its harness session's ``read_streamed_reply``),
+# or None when it streams none.
+ReadStreamedReplyCallback = Callable[[], StreamedReply | None]
+
+
+class ReplyDraftSources(FrozenModel):
+    """Where a watcher can read a reply that its transcript does not hold yet; each read is the watcher's to make."""
+
+    capture_pane: CapturePaneCallback = Field(description="Captures the agent's terminal pane")
+    read_streamed_reply: ReadStreamedReplyCallback = Field(
+        description="Reads the reply the agent's live connection has streamed so far"
+    )
 
 
 class TranscriptReader(ABC):
@@ -141,12 +190,34 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     # without a queued-message populator needs no changes. Everything downstream
     # (the WS snapshot field and the two common actions) is harness-agnostic.
 
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        """Watch the transcript's files through ``watch_observer``, the app's one observer, rather than one of the
+        watcher's own. Set before ``start``. No-op by default, for a harness that watches no files."""
+
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         """Register the sink that receives each new queued-message snapshot. No-op by default."""
+
+    def set_finished_tasks_callback(self, callback: FinishedTasksCallback) -> None:
+        """Register the sink that receives the ids of harness-native background tasks as they end.
+
+        No-op by default: only a harness whose transcript records the end of its own background
+        tasks (Claude's ``<task-notification>``) calls it.
+        """
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         """The current queued-message snapshot; empty for a harness with no populator."""
         return []
+
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
+        """The reply the agent is writing now, which its transcript does not hold yet.
+
+        For a harness that records a reply only once it is finished, while its terminal or its live
+        connection shows it as it streams. Called by one poller at a time, and only while a page
+        streams the chat and shows it focused.
+        None by default: the harness has no drafts to offer (its transcript already streams, or
+        nothing it shows can be read back).
+        """
+        return None
 
     def get_latest_main_session_file(self) -> Path | None:
         """The live process's (latest main) session file, for the native tap's byte baseline.
@@ -206,8 +277,10 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
         """Hand a tap's claim back unsettled, without charging a delivery attempt. No-op by default."""
 
-    def set_flush_hooks(self, send: "FlushSendCallback", is_alive: "IsAliveCallback") -> None:
-        """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
+    def set_flush_hooks(
+        self, send: "FlushSendCallback", is_alive: "IsAliveCallback", note_resent: "FlushResentCallback"
+    ) -> None:
+        """Give a watcher the capabilities it needs to DELIVER its own queue. No-op by default.
 
         Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
         whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
@@ -218,4 +291,7 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         flush that skipped this check would resurrect a stopped agent and deliver its queue,
         which the contract forbids outright ("NEVER auto-sent on resume"; "the queue is empty
         whenever the agent is stopped").
+
+        ``note_resent`` records a block that landed on a later pass, whose first copy may have
+        landed too, for the chat's "Sent again" line.
         """

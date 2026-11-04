@@ -96,12 +96,17 @@ Soft on purpose: a block here would fight the agent over a judgement call (wheth
 action is substantive), and the cost of being wrong is a missing timeline node, not a broken
 repo.
 
-### P6. A `tk start` or `tk close` must be the only thing in its tool call
+### P6. A `tk start` or `tk close` shares its tool call only with other tk commands
 `agent_tk_standalone.sh` -> `agent_tk_standalone_check.py` -- **hard block.**
 
-Chaining (`cd x && tk start s1`) or redirecting a step transition drops it out of the progress
-view, so the timeline silently disagrees with what happened. `tk create` is exempt -- it may
-be batched, because creating the plan up front is the intended usage.
+A `cd` prefix (`cd x && tk start s1`), real work in the same command, or a redirect drops a
+step transition out of the progress view, so the timeline silently disagrees with what
+happened. A sequence of tk lifecycle commands (`tk close s1 "done"; tk start s2`, or a batch
+of creates followed by the first start) is allowed: the view applies the `Updated` lines of
+one output in transcript order, so a step boundary costs one tool call. `tk create` on its
+own is exempt -- it may be batched, because creating the plan up front is the intended usage.
+Capturing a create's id to start it in the same call (`S1=$(tk create ...); tk start "$S1"`)
+is blocked as a command before the start: the assignment swallows the `Created` line.
 
 Tokenising again lives in the `.py`, single-sourced with P3.
 

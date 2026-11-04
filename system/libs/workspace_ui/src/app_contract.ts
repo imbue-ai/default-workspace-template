@@ -18,6 +18,26 @@
  * `frame-ancestors` policy means only a workspace-family document can frame this page at all.
  * Unknown types are ignored and shipped types never change meaning; the contract evolves by
  * adding types.
+ *
+ * A page knows a shell frames it once a handshake arrives from its parent (``hasShell``); a page
+ * framed by anything else, such as the chat root opened on its own, has no shell to ask, so its
+ * links and popups stay the browser's.
+ *
+ * Once a shell frames a page, its link clicks follow one rule, so no app carries link code of its own
+ * (``followLinkClick``): a link to the page's own origin navigates the page, or opens a window
+ * of its app for a new-window click; any other link (a local URL, another app's address, a
+ * ``file:`` URL, an external web, ``mailto:``, ``tel:`` or custom-scheme link) goes to the shell,
+ * which opens it where it belongs: an external one in the app registered for it, else outside the
+ * workspace.
+ *
+ * Its script popups (``window.open``) follow the same rule for what the workspace
+ * opens itself (``popupHandedOn``): a page of its own app opens a window of the app, and a local
+ * URL, another app's address (on the page's own share domain too) or a ``file:`` URL goes to the
+ * shell; the call answers null, as a blocked popup does. A popup to any other site, a blank window,
+ * and other schemes stay the browser's, since a script that opened one may need the window back.
+ * A call that names a frame of the page stays the browser's, and one that names ``_self`` follows
+ * the rule for a plain click: the page's own origin navigates the page, any other link goes to the
+ * shell.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -28,12 +48,23 @@ export const SHELL_SHOWN = "shell:shown";
 export const SHELL_HIDDEN = "shell:hidden";
 /** Shell to app: the close chord fired while this window was focused. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
+/** Shell to app: the theme the shell wears, the desktop on screen's (or one Desktop settings is previewing), its
+ *  revision, and whether it is such a preview (docs/system/blueprint/workspace-themes/, section 5.3), sent after the
+ *  handshake and on every change; the page wears it, and remembers it unless it is a preview
+ *  (`themes/themeClient.ts`). */
+export const SHELL_THEME = "shell:theme";
+/** Shell to app: somebody changed a keybinding; the page re-fetches its own backend's
+ *  `/api/keybindings/me` (no payload: each app resolves for its own actions and identity). */
+export const SHELL_KEYBINDINGS_CHANGED = "shell:keybindings-changed";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
 export const SHELL_CAPABILITIES = "shell:capabilities";
 /** App to shell: the page received focus; the shell raises its window. */
 export const SHELL_FOCUSED = "shell:focused";
+/** App to shell: a person touched the page (a pointer press or a key), throttled. The shell's presence heartbeat
+ *  reads activity off it, since input inside an app's frame never bubbles to the shell's own window. */
+export const SHELL_INPUT = "shell:input";
 /** App to shell: the page reports where it is and what it is called. */
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
@@ -44,11 +75,88 @@ export const SHELL_START_WITH_TEXT = "shell:start-with-text";
 /** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
  *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
 export const SHELL_DRAFT_TEXT = "shell:draft-text";
+/** App to shell: a message for whichever apps registered its type (``open:file``, ...; desktop-interface
+ *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
+export const SHELL_MESSAGE = "shell:message";
+/** App to shell: open a link that is not the page's own -- a local URL, one of the workspace's app addresses (another
+ *  app's page) or another workspace's, a ``file:`` URL, an external web, ``mailto:``, ``tel:`` or custom-scheme link
+ *  -- which only the shell can put where it belongs: it opens the app's window there (for a local URL, the app on whose
+ *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
+ *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
+export const SHELL_OPEN_LINK = "shell:open-link";
+
+/** The bare host names of this machine (a ``*.localhost`` host is local too). */
+export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Whether ``url`` leaves this machine (a ``mailto:`` or ``tel:`` link included): exactly the rule Imbue Studio's
+ *  ``isExternalUrl`` applies to a popup (``link-externality-vectors.json`` keeps the two in step). */
+export function isExternalUrl(url: URL): boolean {
+  if (url.protocol === "mailto:" || url.protocol === "tel:") return true;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return !LOCAL_HOSTNAMES.has(host) && !host.endsWith(".localhost");
+}
+
+/** Schemes a browser loads, or refuses, itself. */
+const IN_BROWSER_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "ws:",
+  "wss:",
+  "file:",
+  "data:",
+  "blob:",
+  "about:",
+  "javascript:",
+  "filesystem:",
+  "chrome:",
+  "chrome-untrusted:",
+  "chrome-extension:",
+  "devtools:",
+  "view-source:",
+]);
+
+/** Whether ``url`` is a custom-scheme link (``slack:``, ``vscode:``), which the app it belongs to opens unless an app
+ *  of the workspace takes it: exactly Imbue Studio's ``isCustomSchemeUrl`` (``link-externality-vectors.json`` keeps
+ *  the two in step). */
+export function isCustomSchemeUrl(url: URL): boolean {
+  return !IN_BROWSER_SCHEMES.has(url.protocol) && url.protocol !== "mailto:" && url.protocol !== "tel:";
+}
+
+/** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
+ *  the legacy spelling of the same coordinate), or a bare 32-hex label -- the
+ *  share label leading a workspace-keyed share domain
+ *  (``<share-label>.<user-hash>.<region>.<domain>``). App labels can never
+ *  match either form: ``host-``/``agent-`` prefixes are reserved in
+ *  forward_port.py, and a minted label is always ``<name>-<rand>`` (the hyphen
+ *  plus non-hex name keeps it out of the bare 32-hex shape). */
+const WORKSPACE_COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i;
+
+/** The workspace coordinate within ``host``: the first coordinate label and
+ *  everything after it (``host-<hex>.localhost:8421`` locally,
+ *  ``host-<hex>.<user>.<region>.<domain>`` on a legacy share,
+ *  ``<share-label>.<user-hash>.<region>.<domain>`` on a workspace-keyed
+ *  share), with any leading app label(s) stripped. Returns ``host``
+ *  unchanged when it carries no coordinate label (a non-workspace host), so
+ *  the derivation degrades safely. */
+export function workspaceHostCoordinate(host: string): string {
+  const labels = host.split(".");
+  const coordinateIndex = labels.findIndex((label) => WORKSPACE_COORDINATE_LABEL.test(label));
+  return coordinateIndex < 0 ? host : labels.slice(coordinateIndex).join(".");
+}
+
+/** Whether ``host`` is a workspace's: some hostname label of it starts a workspace coordinate. */
+export function hasWorkspaceCoordinate(host: string): boolean {
+  return host.split(".").some((label) => WORKSPACE_COORDINATE_LABEL.test(label));
+}
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, and the path the window is at (desktop-interface contracts.md section
- * 7). The client id is required; a field the shell does not send, a page reads as "".
+ * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
+ * shell opens its settings for the files shared from the user's computer (desktop-interface
+ * contracts.md section 7), and whether the window is being viewed on somebody else's desktop. The
+ * client id is required; a text field the shell does not send, a page reads as "", and a flag it
+ * does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -56,6 +164,10 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
+  opensLocalFiles: boolean;
+  /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
+   *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
+  isViewing: boolean;
 }
 
 /**
@@ -79,12 +191,18 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
+  /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
+  onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
+  /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
+  onKeybindingsChanged?: () => void;
   capabilities?: ShellCapabilities;
 }
 
 export interface ShellConnection {
-  /** Whether a shell frames this page at all; a top-level visit has no shell to talk to. */
+  /** Whether anything frames this page; a top-level visit has no shell to talk to. */
   readonly isFramed: boolean;
+  /** Whether a shell frames this page: its handshake has arrived. */
+  hasShell(): boolean;
   /** Tell the shell this page received focus. */
   focused(): void;
   /** Report where this page is now (a path under the app's origin) and what it is called. */
@@ -95,6 +213,13 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
+  /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
+  sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
+  /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
+   *  in the workspace's browser), an address of the workspace's apps (or another workspace's) as a window, a ``file:``
+   *  URL in Files, or an external web, ``mailto:``, ``tel:`` or custom-scheme link in the app registered for it, else
+   *  outside the workspace. */
+  openLink(url: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -109,7 +234,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path } = data;
+  const { clientId, windowId, desktopId, app, path, opensLocalFiles, isViewing } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -117,6 +242,8 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    opensLocalFiles: opensLocalFiles === true,
+    isViewing: isViewing === true,
   };
 }
 
@@ -134,14 +261,155 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
+function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
+  if (typeof message.theme !== "string") return null;
+  return {
+    theme: message.theme,
+    revision: typeof message.revision === "string" ? message.revision : "",
+    isPreview: message.isPreview === true,
+  };
+}
+
+/**
+ * Follow the shell's `shell:theme` without connecting to it: for the page kit, which runs beside whatever
+ * `connectToShell` the page makes itself. Answers a function that stops following.
+ */
+export function followShellTheme(onTheme: (theme: string, revision: string, isPreview: boolean) => void): () => void {
+  const boundWindow = window;
+  if (boundWindow.parent === boundWindow) return () => undefined;
+
+  function onMessage(event: MessageEvent): void {
+    if (event.source !== boundWindow.parent) return;
+    const data: unknown = event.data;
+    if (data === null || typeof data !== "object") return;
+    const message = data as Record<string, unknown>;
+    if (message.type !== SHELL_THEME) return;
+    const theme = readTheme(message);
+    if (theme !== null) onTheme(theme.theme, theme.revision, theme.isPreview);
+  }
+
+  boundWindow.addEventListener("message", onMessage);
+  return () => boundWindow.removeEventListener("message", onMessage);
+}
+
+/** The browser's own schemes a framed page hands on when a link to them is clicked, as it does every custom-scheme
+ *  link; any other (``javascript:``, ``blob:``, ``data:``) is left to the page. */
+const HANDED_ON_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:", "file:", "mailto:", "tel:"]);
+
+function isHandedOn(url: URL): boolean {
+  return HANDED_ON_SCHEMES.has(url.protocol) || isCustomSchemeUrl(url);
+}
+const PRIMARY_BUTTON = 0;
+const MIDDLE_BUTTON = 1;
+
+/** How often at most the page reports input (``shell:input``): activity is measured in minutes, so a report every
+ *  20 seconds loses nothing and keeps the message traffic negligible. */
+const INPUT_REPORT_INTERVAL_MS = 20_000;
+
+/** The link a click landed in, if any (through shadow roots too). */
+function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | null {
+  for (const target of event.composedPath()) {
+    if ((target instanceof HTMLAnchorElement || target instanceof HTMLAreaElement) && target.hasAttribute("href")) {
+      return target;
+    }
+  }
+  return null;
+}
+
+function isModifiedClick(event: MouseEvent): boolean {
+  return event.button === MIDDLE_BUTTON || event.metaKey || event.ctrlKey || event.shiftKey;
+}
+
+/** Whether a click asks for another window rather than this page: a middle or modified click, or a link that names
+ *  another browsing context (``_top`` and ``_parent`` included, which would take the shell's page). */
+function isNewWindowClick(event: MouseEvent, link: HTMLAnchorElement | HTMLAreaElement): boolean {
+  const target = link.target.toLowerCase();
+  return isModifiedClick(event) || (target !== "" && target !== "_self");
+}
+
+/** Whether ``name`` (a link's ``target``, or a ``window.open`` call's) names a frame of the page itself (an
+ *  ``<iframe name>``), which a plain click or the call loads the URL into. */
+function namesFrameOfPage(name: string, view: Window): boolean {
+  if (name === "" || name.startsWith("_")) return false;
+  return Array.from(view.document.querySelectorAll("iframe[name], frame[name]")).some(
+    (frame) => frame.getAttribute("name") === name,
+  );
+}
+
+/** Follow a framed page's link click by the contract's rule (see the module docs); a click the page already handled
+ *  (``defaultPrevented``), a download link, a plain click on a link into a frame of the page, or a link to a scheme
+ *  the rule does not hand on is left alone. */
+function followLinkClick(
+  event: MouseEvent,
+  view: Window,
+  send: (type: string, payload: Record<string, unknown>) => void,
+): void {
+  if (event.defaultPrevented) return;
+  if (event.button !== (event.type === "auxclick" ? MIDDLE_BUTTON : PRIMARY_BUTTON)) return;
+  const link = clickedLink(event);
+  if (link === null || link.hasAttribute("download")) return;
+  if (!isModifiedClick(event) && namesFrameOfPage(link.target, view)) return;
+  let url: URL;
+  try {
+    url = new URL(link.href);
+  } catch {
+    return;
+  }
+  if (!isHandedOn(url)) return;
+  const isNewWindow = isNewWindowClick(event, link);
+  if (url.origin === view.location.origin) {
+    if (!isNewWindow) return;
+    event.preventDefault();
+    send(SHELL_OPEN, { path: `${url.pathname}${url.search}`, ifPresent: "focus" });
+    return;
+  }
+  event.preventDefault();
+  send(SHELL_OPEN_LINK, { url: url.href });
+}
+
+/** What the shell is sent for a ``window.open(url, windowName)`` a framed page's script calls (see the module docs),
+ *  or null for one the browser's own ``window.open`` opens. */
+function popupHandedOn(
+  url: unknown,
+  windowName: unknown,
+  view: Window,
+): { readonly type: string; readonly payload: Record<string, unknown> } | null {
+  if (url === undefined || url === null || String(url) === "") return null;
+  const name = windowName === undefined || windowName === null ? "" : String(windowName);
+  if (namesFrameOfPage(name, view)) return null;
+  let target: URL;
+  try {
+    target = new URL(String(url), view.location.href);
+  } catch {
+    return null;
+  }
+  const openLink = { type: SHELL_OPEN_LINK, payload: { url: target.href } };
+  if (name.toLowerCase() === "_self") {
+    return isHandedOn(target) && target.origin !== view.location.origin ? openLink : null;
+  }
+  if (target.protocol === "file:") return openLink;
+  if (target.protocol !== "http:" && target.protocol !== "https:") return null;
+  if (target.origin === view.location.origin) {
+    return { type: SHELL_OPEN, payload: { path: `${target.pathname}${target.search}`, ifPresent: "focus" } };
+  }
+  const host = target.host.toLowerCase();
+  const isOnPageCoordinate =
+    hasWorkspaceCoordinate(host) &&
+    workspaceHostCoordinate(host) === workspaceHostCoordinate(view.location.host.toLowerCase());
+  return !isExternalUrl(target) || isOnPageCoordinate ? openLink : null;
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
- * arrives, and every send is a no-op, so an app behaves the same visited directly.
+ * arrives, and every send is a no-op, so an app behaves the same visited directly. Once a
+ * shell's handshake arrives, the page's link clicks and script popups follow the contract's rule
+ * (see the module docs).
  */
 export function connectToShell(handlers: ShellConnectionHandlers): ShellConnection {
   const capabilities = checkedCapabilities(handlers);
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
+  let hasShell = false;
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -151,7 +419,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     switch (message.type) {
       case SHELL_HANDSHAKE: {
         const handshake = readHandshake(message);
-        if (handshake !== null) handlers.onHandshake?.(handshake);
+        if (handshake === null) return;
+        hasShell = true;
+        handlers.onHandshake?.(handshake);
         return;
       }
       case SHELL_SHOWN:
@@ -162,6 +432,14 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         return;
       case SHELL_CLOSE_REQUEST:
         handlers.onCloseRequest?.();
+        return;
+      case SHELL_THEME: {
+        const theme = readTheme(message);
+        if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
+        return;
+      }
+      case SHELL_KEYBINDINGS_CHANGED:
+        handlers.onKeybindingsChanged?.();
         return;
       case SHELL_NAVIGATE: {
         const path = message.path;
@@ -178,15 +456,59 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     boundWindow.parent.postMessage({ type, ...payload }, "*");
   }
 
+  // Input inside the page never bubbles to the shell's window, so the page reports it (the multiplayer spec,
+  // section 4.3): at most one message per interval, which is plenty for an active/idle call measured in minutes.
+  let lastInputReportAt = 0;
+  const onInput = (): void => {
+    const now = Date.now();
+    if (now - lastInputReportAt < INPUT_REPORT_INTERVAL_MS) return;
+    lastInputReportAt = now;
+    send(SHELL_INPUT, {});
+  };
+
+  // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
+  const onLinkClick = (event: MouseEvent): void => {
+    if (hasShell) followLinkClick(event, boundWindow, send);
+  };
+  const nativeOpen = boundWindow.open;
+  const routedOpen: typeof boundWindow.open = new Proxy(nativeOpen, {
+    apply(target, thisArg, args: unknown[]) {
+      const handedOn = hasShell ? popupHandedOn(args[0], args[1], boundWindow) : null;
+      if (handedOn === null) return Reflect.apply(target, thisArg, args);
+      send(handedOn.type, handedOn.payload);
+      return null;
+    },
+  });
+
   boundWindow.addEventListener("message", onMessage);
+  if (isFramed) {
+    boundWindow.addEventListener("click", onLinkClick);
+    boundWindow.addEventListener("auxclick", onLinkClick);
+    for (const type of ["pointerdown", "keydown"]) {
+      boundWindow.addEventListener(type, onInput, { capture: true, passive: true });
+    }
+    boundWindow.open = routedOpen;
+  }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
+    hasShell: () => hasShell,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
-    disconnect: () => boundWindow.removeEventListener("message", onMessage),
+    sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
+      send(SHELL_MESSAGE, { message: { ...fields, type } }),
+    openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
+    disconnect: () => {
+      boundWindow.removeEventListener("message", onMessage);
+      boundWindow.removeEventListener("click", onLinkClick);
+      boundWindow.removeEventListener("auxclick", onLinkClick);
+      for (const type of ["pointerdown", "keydown"]) {
+        boundWindow.removeEventListener(type, onInput, { capture: true });
+      }
+      if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
+    },
   };
 }

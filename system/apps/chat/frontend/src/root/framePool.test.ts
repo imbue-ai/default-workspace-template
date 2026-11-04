@@ -2,11 +2,11 @@
 /**
  * The chat root's inner frame pool: one frame per chat shown, the selected one visible and
  * the rest hidden, the frame shown longest ago destroyed past the bound (never the shown one),
- * and the pages driven through their embed API with the shell's handshake and their shown and
- * hidden states.
+ * and the pages handed the shell's handshake and driven through their embed API with their shown
+ * and hidden states.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { SHELL_HANDSHAKE, type ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatPageEmbedApi } from "../embedApi";
 import { InnerFramePool, MAX_HELD_FRAMES } from "./framePool";
 
@@ -16,6 +16,8 @@ const HANDSHAKE: ShellHandshake = {
   desktopId: "home",
   app: "chat",
   path: "/",
+  opensLocalFiles: false,
+  isViewing: false,
 };
 
 let container: HTMLElement;
@@ -38,16 +40,28 @@ function visibleChatIds(): string[] {
     .map((frame) => frame.dataset.chatId ?? "");
 }
 
-/** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. */
-function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi]: ReturnType<typeof vi.fn> } {
-  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn() };
+/** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. ``posted`` is
+ *  what the root posts to the page. */
+function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi | "posted"]: ReturnType<typeof vi.fn> } {
+  const api = {
+    shown: vi.fn(),
+    hidden: vi.fn(),
+    prependDraft: vi.fn(),
+    hintComposer: vi.fn(),
+    setCompact: vi.fn(),
+    focus: vi.fn(),
+  };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);
   contentWindow.chatPageEmbed = api;
+  const posted = vi.fn();
+  vi.spyOn(contentWindow, "postMessage").mockImplementation(posted);
   frame.dispatchEvent(new Event("load"));
-  return api;
+  return { ...api, posted };
 }
+
+const HANDSHAKE_MESSAGE = { type: SHELL_HANDSHAKE, ...HANDSHAKE };
 
 beforeEach(() => {
   now = 1_000;
@@ -93,6 +107,35 @@ describe("InnerFramePool", () => {
     expect(visibleChatIds()).toEqual(["agent-fresh"]);
   });
 
+  it("hands the keyboard to a page it switches back to, not to one it already shows or one still loading", () => {
+    pool.setRootShown(true);
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    pool.show("agent-b");
+    const pageB = loadPage("agent-b");
+    // New pages take the keyboard themselves as they load.
+    expect(pageA.focus).not.toHaveBeenCalled();
+    expect(pageB.focus).not.toHaveBeenCalled();
+
+    pool.show("agent-a");
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+
+    // Showing the shown chat again (a list refresh) leaves the keyboard where it is, a rename box say.
+    pool.show("agent-a");
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands no keyboard while the root itself is off screen", () => {
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    pool.show("agent-b");
+    loadPage("agent-b");
+
+    pool.show("agent-a");
+
+    expect(pageA.focus).not.toHaveBeenCalled();
+  });
+
   it("drops a destroyed chat's frame and knows its frames' windows", () => {
     pool.show("agent-a");
     pool.show("agent-b");
@@ -112,16 +155,16 @@ describe("InnerFramePool", () => {
     pool.setRootShown(true);
     pool.show("agent-a");
     const pageA = loadPage("agent-a");
-    expect(pageA.handshake).not.toHaveBeenCalled();
+    expect(pageA.posted).not.toHaveBeenCalled();
     expect(pageA.shown).toHaveBeenCalledTimes(1);
 
     pool.setHandshake(HANDSHAKE);
-    expect(pageA.handshake).toHaveBeenCalledWith(HANDSHAKE);
+    expect(pageA.posted.mock.calls).toEqual([[HANDSHAKE_MESSAGE, "*"]]);
 
     pool.show("agent-b");
     expect(pageA.hidden).toHaveBeenCalledTimes(1);
     const pageB = loadPage("agent-b");
-    expect(pageB.handshake).toHaveBeenCalledWith(HANDSHAKE);
+    expect(pageB.posted.mock.calls).toEqual([[HANDSHAKE_MESSAGE, "*"]]);
     expect(pageB.shown).toHaveBeenCalledTimes(1);
 
     // The shell hiding the root hides the shown page; showing it again shows the page.

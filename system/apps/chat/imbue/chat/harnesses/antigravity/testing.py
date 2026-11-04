@@ -13,6 +13,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from imbue.chat.agent_discovery import AgentInfo
+
 
 def encode_varint(value: int) -> bytes:
     out = bytearray()
@@ -129,3 +131,23 @@ def load_captured_step(name: str) -> tuple[int, int, bytes]:
     captured = json.loads((Path(__file__).parent / "fixtures" / "agy_steps.json").read_text())
     row = captured[name]
     return row["step_type"], row["status"], base64.b64decode(row["payload_b64"])
+
+
+def build_agent_info(state_dir: Path) -> AgentInfo:
+    """An agy agent whose state dir is ``state_dir``.
+
+    The id is unique per test directory: the tracker and turn-state registries are keyed by agent
+    id and live for the agent's life, so a shared id leaks one test's queue into the next.
+    """
+    return AgentInfo(
+        id=f"agent-{state_dir.name}",
+        name="agy-test",
+        state="RUNNING",
+        agent_state_dir=state_dir,
+        claude_config_dir=state_dir,
+    )
+
+
+def refuse_to_type(text: str) -> bool:
+    """A send callback for a model switch, which must leave the typing to the flush worker."""
+    raise AssertionError(f"the switch typed {text!r} itself instead of leaving it to the worker")

@@ -17,17 +17,30 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+const agentState: {
+  agent: ChatSnapshot | null;
+  provisional: { account_id: string; phase?: string; model_pick?: unknown } | undefined;
+  mainChatId: string | null;
+} = {
   agent: null,
   provisional: undefined,
+  mainChatId: null,
 };
+// Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
+const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
+  getMainChatId: () => agentState.mainChatId,
   getProvisionalChat: () => agentState.provisional,
+  setLaunchChoice: (chatId: string, accountId: string, pick: unknown) => {
+    launchChoices.push([chatId, accountId, pick]);
+    return Promise.resolve();
+  },
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));
@@ -35,15 +48,22 @@ vi.mock("../models/HarnessCatalog", () => ({
 const settingsState: { choice: unknown } = { choice: null };
 const picks: unknown[] = [];
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: () => undefined,
   effectiveChoice: () => settingsState.choice,
   changedAxes: () => ["model"],
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
 
 // The workspace's chat settings as the page has them (null before the load), and every write
-// the fast-limit row asked for.
+// the fast-limit row and the "New chats start with" segments asked for.
 const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
-  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false };
+  const defaults = {
+    fast_mode_default: "auto",
+    fast_mode_turn_limit: 2,
+    is_fast_mode_notice_shown: false,
+    autocompact_default: true,
+    is_autocompact_notice_shown: false,
+  };
   return {
     DEFAULT_CHAT_SETTINGS: defaults,
     chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
@@ -65,10 +85,11 @@ vi.mock("../models/ChatSettings", () => ({
 
 // The chat's fast mode as the page has it (null before the load), the loads asked for, and every
 // mode the chooser picked.
-const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
+const { fastModeState, fastModeLoads, fastModeChoices, fastModeForgets } = vi.hoisted(() => ({
   fastModeState: { state: null as { mode: string; is_switched: boolean } | null },
   fastModeLoads: [] as string[],
   fastModeChoices: [] as [string, string][],
+  fastModeForgets: { count: 0 },
 }));
 // Only the backend-backed half is faked; the words the rows read are the real ones, so what
 // this asserts on is what the menu really says.
@@ -79,6 +100,9 @@ vi.mock("../models/FastMode", async (importOriginal) => ({
     fastModeLoads.push(chatId);
     return Promise.resolve(fastModeState.state);
   },
+  forgetAllFastModeStates: () => {
+    fastModeForgets.count += 1;
+  },
 }));
 vi.mock("./fast-mode-limit", () => ({
   chooseFastMode: (chatId: string, mode: string) => {
@@ -87,13 +111,39 @@ vi.mock("./fast-mode-limit", () => ({
 }));
 vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
 
+// The chat's auto-compact setting as the page has it (null before the load), the loads asked for,
+// and every write the submenu made.
+const { autocompactState, autocompactLoads, autocompactWrites, autocompactForgets } = vi.hoisted(() => ({
+  autocompactState: { state: null as { is_enabled: boolean } | null },
+  autocompactLoads: [] as string[],
+  autocompactWrites: [] as [string, { is_enabled: boolean }][],
+  autocompactForgets: { count: 0 },
+}));
+vi.mock("../models/Autocompact", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Autocompact")>()),
+  getAutocompactState: () => autocompactState.state,
+  ensureAutocompactState: (chatId: string) => {
+    autocompactLoads.push(chatId);
+    return Promise.resolve(autocompactState.state);
+  },
+  setAutocompactState: (chatId: string, next: { is_enabled: boolean }) => {
+    autocompactWrites.push([chatId, next]);
+    return Promise.resolve(next);
+  },
+  forgetAllAutocompactStates: () => {
+    autocompactForgets.count += 1;
+  },
+}));
+
 const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean } = {
   accounts: [],
   defaultId: null,
   isLoaded: true,
 };
-// Every time something opened the provider chooser, with whether it asked to hear of the sign-in.
-const chooserOpens: { hasOnSignedIn: boolean }[] = [];
+// Every time something opened the provider chooser, with whether it asked to hear of the sign-in and whether it
+// offered a room; the last intent is kept so a test can pick the room.
+const chooserOpens: { hasOnSignedIn: boolean; hasOnRoomChosen: boolean }[] = [];
+let lastChooserIntent: { onRoomChosen?: () => void } = {};
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
 vi.mock("../models/Providers", () => ({
@@ -107,8 +157,15 @@ vi.mock("../models/Providers", () => ({
   accountForFirstSend: (id: string) =>
     providerState.accounts.find((a) => (a as { id: string }).id === id) ?? providerState.accounts[0] ?? null,
   areAccountsLoaded: () => providerState.isLoaded,
-  openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
-    chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
+  isAccountSignedOut: (id?: string | null) =>
+    !!id && providerState.isLoaded && !providerState.accounts.some((a) => (a as { id: string }).id === id),
+  openProviderChooser: (intent: { onSignedIn?: unknown; onRoomChosen?: () => void } = {}) => {
+    lastChooserIntent = intent;
+    chooserOpens.push({
+      hasOnSignedIn: intent.onSignedIn !== undefined,
+      hasOnRoomChosen: intent.onRoomChosen !== undefined,
+    });
+  },
   deleteAccount: () => Promise.resolve(),
   renameAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
@@ -125,18 +182,22 @@ vi.mock("../shell", () => ({
 // armed card's Model row reopens it. Both recorded by account id.
 const begun: string[] = [];
 const reopened: string[] = [];
-vi.mock("./SwitchDialog", () => ({
+const roomSwitches: string[] = [];
+// The chats awaiting their first send that were launched as rooms, by chat id.
+const roomLaunches: string[] = [];
+vi.mock("./SwitchDialog", async (importOriginal) => ({
+  takeBackSwitch: (await importOriginal<typeof import("./SwitchDialog")>()).takeBackSwitch,
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
+  switchToRoom: (chatId: string) => Promise.resolve(roomSwitches.push(chatId)),
+  launchAwaitingChatAsRoom: (chatId: string) => Promise.resolve(roomLaunches.push(chatId)),
 }));
 
 import m from "mithril";
 
-import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
-
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
-import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
+import { getPendingAccountId, setPendingAccount, setPendingSwitch, setSwitchSending } from "../models/PendingLane";
 import { ModelProviderMenu } from "./ModelProviderMenu";
 import * as css from "./modelProviderMenuStyles";
 
@@ -158,6 +219,15 @@ function click(selector: string): void {
   render();
 }
 
+function clickSubmenuRow(label: string): void {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (row === undefined) throw new Error(`no ${label} row in the submenu`);
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
 /** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
  *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
@@ -175,7 +245,13 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
+const LOW_MEDIUM_HIGH = [
+  { level: "low", in_picker: true },
+  { level: "medium", in_picker: true },
+  { level: "high", in_picker: true },
+];
 const ACCOUNT = {
   id: "acct-1",
   lane: "anthropic",
@@ -193,12 +269,14 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
     picker_mode: "list",
     options: [OPUS],
     native_atomic_shoulder_tap_possible: true,
+    supports_compaction: false,
+    can_interrupt_compaction: false,
     popups: [],
     ...overrides,
   };
 }
 
-/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. */
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast mode row. */
 function withFastModel(): void {
   const model = { ...OPUS, supports_fast: true };
   catalogState.catalog = catalogOf({ options: [model] });
@@ -214,6 +292,11 @@ beforeEach(() => {
   fastModeState.state = { mode: "auto", is_switched: false };
   fastModeLoads.length = 0;
   fastModeChoices.length = 0;
+  fastModeForgets.count = 0;
+  autocompactState.state = { is_enabled: true };
+  autocompactLoads.length = 0;
+  autocompactWrites.length = 0;
+  autocompactForgets.count = 0;
   picks.length = 0;
   started.length = 0;
   begun.length = 0;
@@ -225,12 +308,21 @@ beforeEach(() => {
   providerState.defaultId = null;
   providerState.isLoaded = true;
   chooserOpens.length = 0;
+  lastChooserIntent = {};
+  roomLaunches.length = 0;
   agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
+  agentState.mainChatId = null;
+  roomSwitches.length = 0;
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
   setPendingAccount("a1", null);
+  setSwitchSending("a1", false);
+  // Opening the menu on a dynamic or searchable picker loads the chat's offerable models. Answered
+  // here, so the load settles in the test that opened the menu: unanswered, it goes out to jsdom's
+  // localhost and its failure is logged after the file's environment has been torn down.
+  vi.spyOn(m, "request").mockResolvedValue({ models: null, options: null });
 });
 
 describe("the combo card", () => {
@@ -240,12 +332,35 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
-  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+  it("names the account a chat with no agent yet starts on, and lets its model be chosen before it runs", () => {
     agentState.agent = null;
-    agentState.provisional = { account_id: "" };
+    agentState.provisional = { account_id: "", phase: "creating", model_pick: null };
+    catalogState.catalog = catalogOf({
+      options: [OPUS, { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" }],
+    });
+    launchChoices.length = 0;
+    render();
+    expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
+
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+
+    // At the model's own starting effort: a harness refuses a model that has efforts picked without one.
+    expect(launchChoices).toEqual([["a1", "acct-1", { model_id: "sonnet", effort: "medium", fast: false }]]);
+  });
+
+  it("keeps the plain chip for a chat whose create failed", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "", phase: "failed", model_pick: null };
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    // With an account signed in the first send launches on it, so this press is the one way to the room row.
+    click(".model-selector-provisional");
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
+    lastChooserIntent.onRoomChosen?.();
+    expect(roomLaunches).toEqual(["a1"]);
   });
 
   it("says a chat with no agent yet is not connected when no provider is signed in, and opens the chooser", () => {
@@ -255,7 +370,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: false }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
   });
 
   it("does not call a chat not connected before the account list has loaded", () => {
@@ -280,7 +395,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: true, hasOnRoomChosen: false }]);
   });
 
   it("keeps a chip under a running chat that names no account while providers are signed in", () => {
@@ -314,51 +429,20 @@ describe("the combo card", () => {
     expect(text).not.toContain("Model");
   });
 
-  it("says a chat whose account is gone has no account, not that nobody is signed in", () => {
+  it("shows no chip for a chat whose account was signed out, rather than the model it last ran", () => {
+    // The composer's notice stands in its place, with the way to choose a provider.
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
     render();
-    click(".model-selector-trigger");
-    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
-    expect(providerRow).toContain("No account");
-    expect(providerRow).toContain("Pick one to move this chat to it");
-    expect(screenText()).not.toContain("Not signed in");
+    expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    expect(screenText()).not.toContain("Opus");
   });
 
-  it("renders a read-only harness without an effort control", () => {
-    // agy: its `/model` is an interactive TUI with no scriptable form, so a picker there
-    // offers a switch that cannot work.
-    const withEffort = {
-      ...OPUS,
-      efforts: [
-        { level: "low", in_picker: true },
-        { level: "high", in_picker: true },
-      ],
-    };
-    catalogState.catalog = catalogOf({ switch_mode: "read_only", options: [withEffort] });
-    settingsState.choice = {
-      identity: { model_id: "opus", effort: "low", fast: false },
-      matched: withEffort,
-      pending: null,
-    };
+  it("brings the chip back for a signed-out chat once a provider is chosen for it", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    setPendingAccount("a1", "acct-1");
     render();
-    click(".model-selector-trigger");
-    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
-  });
-
-  it("stops explaining a read-only harness once its catalog says the model can be switched", () => {
-    vi.useFakeTimers();
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    render();
-    click(".model-selector-trigger");
-    const modelRow = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
-
-    catalogState.catalog = catalogOf();
-    render();
-    // The read-only value row gives way to the interactive submenu row; whatever element
-    // stands in the slot now must explain nothing.
-    const switched = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(switched)).toBeNull();
+    expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("next");
+    setPendingAccount("a1", null);
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
@@ -402,12 +486,7 @@ describe("the combo card", () => {
   it("commits an effort on release, not on every notch of the drag", () => {
     // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
     // rather than debounces -- a low-to-max drag would queue one per stop.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -433,12 +512,7 @@ describe("the combo card", () => {
     // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
     // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
     // that is still what the agent is running on until release.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -511,6 +585,55 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("shows the model's default effort for a chat that never picked one", () => {
+    // codex records no effort until one is picked, while the thread runs at the model's default.
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
+    settingsState.choice = {
+      identity: { model_id: "gpt-6-sol", effort: null, fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Medium");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Medium");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("1");
+  });
+
+  it("carries the default effort in effect onto a newly picked model", () => {
+    const current = { ...OPUS, efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: null, fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
+  });
+
+  it("lands a newly picked model on its default when it does not offer the current effort", () => {
+    const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "xhigh", fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {
@@ -590,6 +713,21 @@ describe("the combo card", () => {
     expect(started).toEqual([]);
   });
 
+  it("offers to make the chat a room from the Provider submenu, the main chat included", () => {
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    clickSubmenuRow("Chat room");
+    expect(roomSwitches).toEqual(["a1"]);
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
+
+    agentState.mainChatId = "a1";
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    expect(document.querySelector(".model-provider-menu-room")).not.toBeNull();
+  });
+
   it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {
     providerState.accounts = [
       ACCOUNT,
@@ -649,7 +787,7 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Gemini · High");
     // The current agent's effort and fast rows are not the target's: they are not offered.
     expect(document.querySelector('[data-menu-row="effort"]')).toBeNull();
-    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast Mode");
+    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast mode");
     click('[data-menu-row="model"] button');
     expect(reopened).toEqual(["acct-2"]);
     expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
@@ -688,7 +826,76 @@ describe("the combo card", () => {
     });
     render();
     expect(ROOT().textContent).toContain("Opus · High");
-    expect(ROOT().textContent).toContain("next");
+    // Its message has gone: the switch is being carried out, not waiting on the next one.
+    expect(ROOT().textContent).not.toContain("next");
+  });
+
+  describe("once the armed switch's message has gone", () => {
+    const CODEX_ACCOUNT = {
+      ...ACCOUNT,
+      id: "acct-2",
+      provider: "OpenAI",
+      harness: "codex",
+      harness_label: "Codex",
+      label: "OpenAI (Codex)",
+    };
+    const ASTRA_PICK = {
+      identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
+      label: "GPT-6 Astra · High",
+      option: { ...OPUS, id: "gpt-6-astra", label: "GPT-6 Astra" },
+    };
+
+    beforeEach(() => {
+      providerState.accounts = [ACCOUNT, CODEX_ACCOUNT];
+    });
+
+    it("names the pick without the next mark while the request is out", () => {
+      setPendingSwitch("a1", "acct-2", ASTRA_PICK);
+      setSwitchSending("a1", true);
+      render();
+      expect(ROOT().textContent).toContain("GPT-6 Astra · High");
+      expect(ROOT().textContent).not.toContain("next");
+    });
+
+    it("names the target, not next, while the switch runs, with rows that state it rather than offer it", () => {
+      setPendingAccount("a1", "acct-2");
+      agentState.agent = chatSnapshotFixture("a1", {
+        active_agent: { harness: "claude", account_id: "acct-1" },
+        handoff: handoffStateFixture({ phase: "summarizing", target_account_id: "acct-2" }),
+      });
+      render();
+      // No pick: the harness has not said what its default is yet, so the chip names the harness.
+      expect(ROOT().textContent).toContain("Codex");
+      expect(ROOT().textContent).not.toContain("next");
+      click(".model-selector-trigger");
+      expect(document.querySelector('[data-menu-row="providers"]')?.textContent).toContain("switching");
+      expect(document.querySelector('[data-menu-row="providers"]')?.textContent).not.toContain("next message");
+      expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Default model");
+      expect(document.querySelector('[data-menu-row="model"] button')).toBeNull();
+    });
+
+    it("reads the live choice, with no next mark anywhere, after the switch failed", () => {
+      setPendingAccount("a1", "acct-2");
+      agentState.agent = chatSnapshotFixture("a1", {
+        active_agent: { harness: "claude", account_id: "acct-1" },
+        handoff: handoffStateFixture({ phase: "failed", error: "boom", failed_step: "start" }),
+      });
+      render();
+      expect(ROOT().textContent).toContain("Opus");
+      expect(ROOT().textContent).not.toContain("next");
+      click(".model-selector-trigger");
+      click('[data-menu-row="providers"]');
+      expect(document.querySelector('[data-menu-part="submenu"]')?.textContent).not.toContain("next");
+
+      // Unmarked, its row is an ordinary one: pressing it begins a switch, not a silent take-back.
+      const failedRow = [...document.querySelectorAll('[data-menu-part="submenu"] button')].find((b) =>
+        (b.textContent ?? "").includes("OpenAI"),
+      );
+      if (failedRow === undefined) throw new Error("no row for the failed switch's account");
+      failedRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(begun).toEqual(["acct-2"]);
+      expect(getPendingAccountId("a1")).toBe("acct-2");
+    });
   });
 
   it("drops a failed switch's pick, which the chat keeps for the retry but never applied", () => {
@@ -790,7 +997,7 @@ describe("the combo card", () => {
     // limit lives.
     withFastModel();
     chatSettingsState.settings = {
-      fast_mode_default: "auto",
+      ...DEFAULT_CHAT_SETTINGS,
       fast_mode_turn_limit: 3,
       is_fast_mode_notice_shown: true,
     };
@@ -799,8 +1006,11 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     const row = document.querySelector<HTMLElement>('[data-menu-row="fast"]');
     if (row === null) throw new Error("no fast row");
-    expect(row.textContent).toContain("Fast Mode");
+    expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(
+      "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to run, so turn it on when speed matters and leave it off otherwise.",
+    );
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
     click('[data-menu-row="fast"]');
@@ -836,9 +1046,7 @@ describe("the combo card", () => {
     // The field keeps what is being typed across the redraws every keystroke causes.
     expect(limit.value).toBe("3");
     limit.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "auto", fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false },
-    ]);
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_turn_limit: 3 }]);
 
     // An emptied field or a zero is not a limit.
     limit.value = "";
@@ -890,36 +1098,62 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
-  it("makes the chat's mode the one new chats start in, and says when it already is", () => {
+  it("names the mode new chats start in, and sets it to any mode whatever the chat's own", () => {
     withFastModel();
     fastModeState.state = { mode: "on", is_switched: false };
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="fast"]');
     const row = document.querySelector<HTMLElement>(".fast-mode-default");
-    expect(row?.textContent).toContain("Use On for new chats");
-    const toggle = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (toggle === null) throw new Error("no default toggle");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.disabled).toBe(false);
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "on", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
-    ]);
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Fast mode for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-fast-mode-default"))).toEqual(["off", "auto", "on"]);
+    expect(options.map((option) => option.textContent)).toEqual(["Off", "Auto", "On"]);
+    // The workspace's setting is the one lit, not the chat's own mode.
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(options.every((option) => !option.disabled)).toBe(true);
 
-    // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
-    // NOT natively disabled, which would fade the setting out at the moment it reads as set.
-    fastModeState.state = { mode: "auto", is_switched: false };
+    // Away from the chat's mode...
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" };
     render();
-    expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
-    const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (already === null) throw new Error("no default toggle");
-    expect(already.getAttribute("aria-checked")).toBe("true");
-    expect(already.getAttribute("aria-disabled")).toBe("true");
-    expect(already.disabled).toBe(false);
-    expect(already.className).not.toContain("cursor-pointer");
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toHaveLength(1);
+    expect(
+      document.querySelector('[data-fast-mode-default][aria-checked="true"]')?.getAttribute("data-fast-mode-default"),
+    ).toBe("off");
+    // ...back again, and to the chat's mode.
+    click('[data-fast-mode-default="auto"]');
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites.slice(1)).toEqual([
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "auto" },
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "on" },
+    ]);
+    // The mode already set is not a change.
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toHaveLength(3);
+    // None of it touches the chat's own mode.
+    expect(fastModeChoices).toEqual([]);
+  });
+
+  it("leaves the new-chats modes unlit and unpressable until the settings load", () => {
+    withFastModel();
+    chatSettingsState.settings = null;
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const options = [...document.querySelectorAll<HTMLButtonElement>("[data-fast-mode-default]")];
+    expect(options).toHaveLength(3);
+    expect(options.every((option) => option.disabled)).toBe(true);
+    expect(options.every((option) => option.getAttribute("aria-checked") === "false")).toBe(true);
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites).toEqual([]);
+    expect(chatSettingsState.loads).toBeGreaterThan(0);
+
+    chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+    render();
+    expect(document.querySelector<HTMLButtonElement>('[data-fast-mode-default="on"]')?.disabled).toBe(false);
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
@@ -933,15 +1167,127 @@ describe("the combo card", () => {
     expect(fastModeLoads).toContain("a1");
   });
 
-  it("gives a read-only harness no model list to open", () => {
-    // agy's `/model` is an interactive TUI with no scriptable form. A chevron on that row
-    // would be a promise the card cannot keep.
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
+  it("offers Auto-compact after the fast row for a harness that can be compacted, and not for one that cannot", () => {
+    withFastModel();
     render();
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-menu-row="model"]')?.querySelector("svg")).toBeNull();
-    click('[data-menu-row="model"]');
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="autocompact"]')).toBeNull();
+
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    render();
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("Auto-compact");
+    expect(row.textContent).toContain("On");
+    const rowKeys = [...document.querySelectorAll("[data-menu-row]")].map((each) =>
+      each.getAttribute("data-menu-row"),
+    );
+    expect(rowKeys.indexOf("autocompact")).toBe(rowKeys.indexOf("fast") + 1);
+
+    // It belongs to the harness, not the model: a model with no fast mode still has it.
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
+    render();
+    expect(document.querySelector('[data-menu-row="fast"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="autocompact"]')).not.toBeNull();
+  });
+
+  it("turns auto-compact off for the chat from its submenu, which stays up", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+    if (submenu === null) throw new Error("no auto-compact submenu");
+    expect(submenu.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact");
+    expect(submenu.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(submenu.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
+      "Saves ~50% by compacting right before the cache expires.",
+    );
+    // The rule above "New chats start with" is the menu's own separator part, which themes dress.
+    expect(submenu.querySelector('[role="separator"]')?.getAttribute("data-part")).toBe("menu-separator");
+
+    click('[data-autocompact="on"]');
+    expect(autocompactWrites).toEqual([]);
+    click('[data-autocompact="off"]');
+    expect(autocompactWrites).toEqual([["a1", { is_enabled: false }]]);
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
+  });
+
+  it("names what new chats start with for auto-compact, and sets it either way whatever the chat's own", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = { is_enabled: true };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    const row = document.querySelector<HTMLElement>(".autocompact-default");
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-autocompact-default"))).toEqual(["on", "off"]);
+    expect(options.map((option) => option.textContent)).toEqual(["On", "Off"]);
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+
+    // Off for new chats while this chat stays on...
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
+    render();
+    expect(document.querySelector('[data-autocompact-default="off"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    // ...and back to on, with the chat turned off.
+    autocompactState.state = { is_enabled: false };
+    render();
+    click('[data-autocompact-default="on"]');
+    expect(settingsWrites[1]).toEqual({ ...DEFAULT_CHAT_SETTINGS, autocompact_default: true });
+    // The setting already in place is not a change, and none of it touches the chat's own.
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toHaveLength(2);
+    expect(autocompactWrites).toEqual([]);
+  });
+
+  it("reloads the chats' auto-compact settings once the new-chats default is saved", async () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    click('[data-autocompact-default="off"]');
+    await Promise.resolve();
+
+    expect(autocompactForgets.count).toBe(1);
+    expect(fastModeForgets.count).toBe(0);
+  });
+
+  it("reloads the chats' fast modes once the new-chats default is saved", async () => {
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    click('[data-fast-mode-default="off"]');
+    await Promise.resolve();
+
+    expect(fastModeForgets.count).toBe(1);
+    expect(autocompactForgets.count).toBe(0);
+  });
+
+  it("asks for the chat's auto-compact setting and shows the row unresolved until it is known", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = null;
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("...");
+    expect(autocompactLoads).toContain("a1");
+
+    // The submenu reads the workspace default until the chat's own setting arrives.
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("survives a dynamic harness with no static options", () => {
@@ -1007,6 +1353,16 @@ describe("the phone layout's card", () => {
     expect(screenText()).toContain("Stop agent");
   });
 
+  it("keeps the settings button for a chat whose account was signed out, with a Provider row to move it on", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    renderPhone();
+    tap("[data-composer-settings]");
+    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
+    expect(providerRow).toContain("No account");
+    expect(providerRow).toContain("Pick one to move this chat to it");
+    expect(screenText()).not.toContain("Not signed in");
+  });
+
   it("offers the picker's effort levels as segments, and a press sets the chat's effort at once", () => {
     renderPhone();
     tap("[data-composer-settings]");
@@ -1059,6 +1415,17 @@ describe("the phone layout's card", () => {
     } finally {
       delete (HTMLElement.prototype as { inert?: boolean }).inert;
     }
+  });
+
+  it("sets what new chats start with from a submenu slid in over the card", () => {
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    renderPhone();
+    tap("[data-composer-settings]");
+    tap('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("true");
+    tap('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
   });
 
   it("carries the Source view switch as a row, whose press turns the card over and closes the menu", () => {

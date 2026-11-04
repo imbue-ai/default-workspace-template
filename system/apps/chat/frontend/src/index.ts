@@ -6,9 +6,10 @@
 import m from "mithril";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
-import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import { addActiveAgentChangedListener, addMentionsUpdatedListener, initChats } from "./models/Chats";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
+import { ensureParticipants } from "./models/Participants";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
@@ -45,8 +46,8 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
         sessionId === ""
           ? m(ChatPanel, { chatId, isVisible: isFrameRendered(), isCompact: isCompactLayout() })
           : m(SubagentView, { chatId, agentId, subagentSessionId: sessionId }),
-        // The provider chooser: the chat root offers it when nothing is signed in, and the model
-        // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
+        // The provider chooser: a chat with no provider to start on opens it from its composer, and
+        // the model bar's "+ Add a provider" and a provider-fault notice open it too.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ]);
     },
@@ -66,8 +67,8 @@ async function bootstrap(): Promise<void> {
   addActiveAgentChangedListener((chatId) => forgetPendingChoice(chatId));
   initShellPermissionResolutions();
   const isChatPage = sessionId === "";
-  // Only the chat's own page reports the chat's presence: a subagent view is a second page
-  // of the same chat in the same client, and its reports would overwrite the chat page's.
+  // Only the chat's own page reports the chat's presence: a subagent view on screen is not the
+  // chat being read.
   const connection = connectChatToShell(chatId, {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
@@ -85,6 +86,10 @@ async function bootstrap(): Promise<void> {
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
+  // Who this page is and who everyone else is, so a turn is drawn as the viewer's own or as another person's;
+  // read again when someone's mentions change, which is the one push that follows a sender joining.
+  void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");

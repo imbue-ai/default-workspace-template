@@ -1,0 +1,1 @@
+Getting Started no longer opens its own window on a workspace's first visit: a new workspace opens on the welcome chat alone, and the desktop's show-around tour introduces the apps. The first-visit opener and its ledger are gone from the app; a ledger an older workspace wrote is left alone.

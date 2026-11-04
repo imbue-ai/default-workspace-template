@@ -1,0 +1,1 @@
+Added the `system` manifest key (bool, default `false`) to `AppManifest` and `RegistryRow`: the app is part of the workspace itself rather than an app built on it, so the minds Share tab lists it under its System group instead of offering it up front. The chat, terminal, browser, and Getting Started declare it.

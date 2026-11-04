@@ -14,7 +14,7 @@ import os
 import shutil
 from abc import ABC
 from abc import abstractmethod
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -251,7 +251,7 @@ def is_seed_entry(entry: ChatAgentEntry) -> bool:
 class ChatRecord(FrozenModel):
     """A multi-agent chat: its agents in order, and its handoff or rebind state.
 
-    A chat the Imbue Studio app seeded (``chat_seed.py``) has the seed as its first member, under the
+    A seeded chat (``chat_seed.py``) has the seed as its first member, under the
     chat's own id and already ended, so the record is well-formed before any real agent exists
     and the seed reads as the first segment once one does.
     """
@@ -264,6 +264,16 @@ class ChatRecord(FrozenModel):
     seed_title: str | None = Field(
         default=None,
         description="The display name a seeded chat was minted with, shown until its first agent carries one; None otherwise",
+    )
+    chosen_name: str | None = Field(
+        default=None,
+        description="The name the user gave a seeded chat before its first agent existed, which that agent is created "
+        "with; None while it wears its seed title",
+    )
+    is_seed_pending: bool = Field(
+        default=False,
+        description="Whether the seeded conversation has yet to reach the chat's first agent: it was launched with no "
+        "message as the user signed in, so the first send carries the conversation ahead of the user's words",
     )
 
     @model_validator(mode="after")
@@ -452,7 +462,7 @@ class FileChatRecordStore(ChatRecordStore):
         return self.root / chat_id
 
     @contextlib.contextmanager
-    def _chat_lock(self, chat_id: ChatId) -> Iterator[None]:
+    def _chat_lock(self, chat_id: ChatId) -> Generator[None, None, None]:
         chat_dir = self._chat_dir(chat_id)
         chat_dir.mkdir(parents=True, exist_ok=True)
         with (chat_dir / _LOCK_FILENAME).open("w") as handle:

@@ -1,0 +1,1 @@
+The scaling design's memory-lifetime section now says that a chat whose agent stops is dropped by the release that runs after every observe event, which spares a chat someone is streaming, rather than evicted at the stop itself; destroying an agent, or an archived member stopping, still evicts directly.

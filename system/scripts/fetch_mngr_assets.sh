@@ -7,8 +7,16 @@
 #   apps/minds/imbue/minds/desktop_client/static/   the embed contract and the
 #                                                   service icons the frontends
 #                                                   bundle at build time
+#   apps/minds/electron/link-externality-vectors.json
+#                                                   the URLs the desktop app calls
+#                                                   external, which workspace_ui's
+#                                                   link classifier is tested against
 #   style_guide.md                                  the base code style guide,
 #                                                   docs/system/style_guide.md
+#   apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
+#                                                   the workspace profile snapshot's
+#                                                   format and keys, which
+#                                                   workspace_profile is tested against
 #
 # A sparse, blob-filtered fetch pulls only those paths and the result carries a
 # .commit marker naming the pin and the asset list, so re-running with both
@@ -24,10 +32,12 @@ ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
 . "$REPO_ROOT/system/scripts/_mngr_git_auth.sh"
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
+    apps/minds/electron/link-externality-vectors.json
     style_guide.md
+    apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
 )
 
-read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
+read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
 asset_list_hash="$(printf '%s\n' "${ASSET_PATHS[@]}" | shasum | cut -c1-12)"
 
 marker="$REV $asset_list_hash"

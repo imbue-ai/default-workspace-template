@@ -35,7 +35,7 @@ describe("isImagePath", () => {
   });
 
   it("rejects image formats browsers cannot decode inline", () => {
-    // These render as a broken <img>, so they must fall through to a download link.
+    // These render as a broken <img>, so they must fall through to a file link.
     expect(isImagePath("photo.heic")).toBe(false);
     expect(isImagePath("photo.heif")).toBe(false);
     expect(isImagePath("scan.tiff")).toBe(false);
@@ -65,7 +65,7 @@ describe("attachmentMarkdown", () => {
     expect(attachmentMarkdown(IMAGE_PATH)).toBe(`![${IMAGE_PATH}](${IMAGE_PATH})`);
   });
 
-  it("renders a non-image as a plain download link", () => {
+  it("renders a non-image as a plain file link", () => {
     expect(attachmentMarkdown(FILE_PATH)).toBe(`[${FILE_PATH}](${FILE_PATH})`);
   });
 });
@@ -81,7 +81,7 @@ describe("buildMessageWithAttachments", () => {
     );
   });
 
-  it("appends a plural block with one attachment per line, mixing images and download links", () => {
+  it("appends a plural block with one attachment per line, mixing images and file links", () => {
     expect(buildMessageWithAttachments("look", [IMAGE_PATH, FILE_PATH])).toBe(
       `look\n\nSee attachments here: ![${IMAGE_PATH}](${IMAGE_PATH})\n[${FILE_PATH}](${FILE_PATH})`,
     );

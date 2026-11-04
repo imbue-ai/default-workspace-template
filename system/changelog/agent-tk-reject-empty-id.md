@@ -1,0 +1,1 @@
+`tk` rejects an empty or whitespace-only ticket id with `Error: empty ticket ID`. It used to partial-match every ticket, so `tk close "$UNSET_VAR"` closed the only regular ticket among the step records -- in a workspace, often another chat's editing lease -- and exited 0. The `tk edit` plugin, which carries its own copy of the lookup, gets the same check.

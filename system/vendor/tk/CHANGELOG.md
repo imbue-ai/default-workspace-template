@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- An empty or whitespace-only ticket ID is now rejected with `Error: empty ticket ID`. It used to partial-match every ticket, so `tk close "$UNSET_VAR"` closed the only ticket, or the only regular ticket among step records, and exited 0.
+
 ### Changed
 - Step lifecycle commands now echo their decoration on stdout so a downstream progress view can read titles and summaries straight from the transcript (no side-channel file watching). `tk create --step` prints `Created <id>: <title>` (regular creates still print the bare id, so `ID=$(tk create ...)` captures are unaffected); `tk start <step>` prints `tk-step <id> title: <title>`; `tk close <step> "summary"` prints `tk-step <id> title: <title>` and `tk-step <id> summary: <summary>`.
 - Removed step auto-nesting under an in_progress ticket (and the `--no-parent` flag that disabled it). `--parent` still works for explicitly nesting any ticket or step.
@@ -21,6 +24,7 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
+- ticket-edit 1.0.1: Reject an empty or whitespace-only ticket ID
 - ticket-edit 1.0.0: Open ticket in $EDITOR (extracted from core)
 - ticket-ls 1.0.0: List tickets with optional filters (extracted from core); `ticket-list` symlink for alias
 - ticket-query 1.0.0: Output tickets as JSON, optionally filtered with jq (extracted from core)

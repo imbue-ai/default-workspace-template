@@ -1,0 +1,11 @@
+A background pass whose base moved before it could land is now caught up instead of thrown away. Before, any commit from another chat while an update-self, update, heal or critical-app worker ran discarded the finished pass and started over; for update-self that meant redoing a ~40-minute validation.
+
+- **Catch-up.** The lead keeps the worker and asks it to merge the current `HEAD` into its branch (worker guide §7). The worker resolves conflicts (regenerating lockfiles rather than picking a side), hardens what came in that touches the pass, and re-runs its test gate over only what the catch-up changed for the pass, from a scope file written for the catch-up (`pass-scope --diff-base <pre-merge tip> --lead-ref <lead HEAD>`, then `select-tests --scope-file`). A note naming a creation outside the pass also makes it stale: the catch-up adds that creation, and the lead records it in its task file and ticket title. A fresh pass replaces a stale one only when its worker is gone, or no chat is left to lead it.
+
+- **update-self.** Before the apply, the lead waits for other chats' in-progress edits to settle instead of refusing, then catches the worker up if its branch no longer fast-forwards, messaging it in a way that starts a stopped worker rather than replacing it. The exit-1 guidance in SKILL.md, `apply-outcomes.md` and the apply's refusal now says to catch the worker up and never to destroy it.
+
+- **Orphaned passes are taken over.** A pass whose holder chat stopped while its worker is still there is adopted by the next chat as lead: it reassigns the ticket, relabels the worker, acts on the last report the gone holder read, and drives the pass to the end.
+
+- **Abandoned work is kept.** `create_worker.py destroy --delete-branches` refuses while a branch it would delete holds commits no other local branch has, and prints a `git branch superseded/<name> <branch>` command to keep each (`--discard-unmerged` overrides). The lead keeps those branches and lists them in the new pass's task under `## Carried work`, and the new worker merges and hardens them.
+
+- A milestone the lead provisionally merged and then reverted is brought back by the worker on its own branch, rather than re-applied by the lead on the served tree.

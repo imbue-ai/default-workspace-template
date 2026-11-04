@@ -1,0 +1,1 @@
+A chat whose create fails is retried once before the user sees the failure: the chat app runs `uv sync --all-packages`, destroys anything the failed create left under the chat's id, and runs the create again. Only if that fails too does the chat show "This chat could not be started", with the second attempt's reason.

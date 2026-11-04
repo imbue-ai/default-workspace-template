@@ -84,7 +84,7 @@ describe("user message bubble with attachments", () => {
     expect(markdownContents[0]).toContain(`![${IMAGE_PATH}](${IMAGE_PATH})`);
   });
 
-  it("renders a non-image attachment as a download link, not an inline image", () => {
+  it("renders a non-image attachment as a file link, not an inline image", () => {
     const { markdownContents } = renderBubble(buildMessageWithAttachments("", [FILE_PATH]));
 
     expect(markdownContents).toHaveLength(1);

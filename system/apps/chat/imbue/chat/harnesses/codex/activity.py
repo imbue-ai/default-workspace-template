@@ -34,6 +34,9 @@ class CodexActivityTracker(HarnessActivityTracker):
     # daemon and its rollout turn markers are the turn authority.
     active_marker_filename: ClassVar[str | None] = None
 
+    # ``thread/compact/start`` runs the compaction as a turn (task_started .. task_complete).
+    is_compaction_run_as_turn: ClassVar[bool] = True
+
     # The turn latch, folded from turn markers as they stream in: whether the newest marker
     # opened a turn, guarded by the marker's timestamp so a re-delivered old marker cannot
     # regress it.

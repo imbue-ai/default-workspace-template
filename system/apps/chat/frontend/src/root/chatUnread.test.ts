@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The chat root's unread marks: a chat that finished a turn while the root showed another chat
- * wears one until the root shows it, the shown chat never does, a new turn or leaving the list
- * clears it, and the marks live in storage so every root of this browser agrees.
+ * wears one until the root shows it, the shown chat never does, a turn that ends to wait on a
+ * background task is not finished, a new turn, a new wait or leaving the list clears it, and the
+ * marks live in storage so every root of this browser agrees.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +75,32 @@ describe("noteStatuses", () => {
 
     expect(isUnread("agent-a")).toBe(false);
     expect(isUnread("agent-b")).toBe(false);
+  });
+
+  it("marks a chat only once the wait on its background tasks ends, not when its turn ends to wait", async () => {
+    const { noteStatuses, isUnread } = await loadChatUnread();
+
+    noteStatuses(statuses({ "agent-a": "working" }), null);
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+    expect(isUnread("agent-a")).toBe(false);
+
+    // The report's turn runs, and ends with nothing left pending.
+    noteStatuses(statuses({ "agent-a": "working" }), null);
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+    expect(isUnread("agent-a")).toBe(false);
+    noteStatuses(statuses({ "agent-a": "idle" }), null);
+    expect(isUnread("agent-a")).toBe(true);
+  });
+
+  it("drops the mark when a chat starts waiting on a background task again", async () => {
+    const { noteStatuses, isUnread } = await loadChatUnread();
+    noteStatuses(statuses({ "agent-a": "working" }), null);
+    noteStatuses(statuses({ "agent-a": "idle" }), null);
+    expect(isUnread("agent-a")).toBe(true);
+
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+
+    expect(isUnread("agent-a")).toBe(false);
   });
 
   it("keeps the marks in storage, so a reload reads them back and another root's write is followed", async () => {

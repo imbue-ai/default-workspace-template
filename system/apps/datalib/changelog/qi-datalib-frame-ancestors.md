@@ -1,0 +1,1 @@
+Datalib can be shown in Studio's windows: its launcher sets `DATALIB_FRAME_ANCESTORS` to the places Studio frames it from, the desktop app's local origins and, for a shared workspace, Imbue's content domains and hosted chrome origins. It takes effect with a datalib that reads the variable (imbue-ai/datalib#1318); an older one ignores it.

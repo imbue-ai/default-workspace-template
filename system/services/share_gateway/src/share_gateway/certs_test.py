@@ -7,7 +7,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import ExtensionOID
 from cryptography.x509.oid import NameOID
 
 from share_gateway.certs import build_share_csr
@@ -52,7 +51,7 @@ def test_build_share_csr_claims_domain_and_wildcard_only(tmp_path: Path) -> None
 
     csr = x509.load_pem_x509_csr(csr_pem.encode())
     assert csr.is_signature_valid
-    sans = csr.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+    sans = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
     assert set(sans.get_values_for_type(x509.DNSName)) == {_DOMAIN, f"*.{_DOMAIN}"}
     assert list(csr.subject) == []
 

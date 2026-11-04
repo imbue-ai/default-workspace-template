@@ -15,20 +15,24 @@ from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.answers import ClientView
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WindowId
+from workspace_layout.records import ClientRecord
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -57,11 +61,26 @@ class _StoredClient(FrozenModel):
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: datetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
+    participant: ParticipantKey | None = Field(
+        default=None, description="Who the client last arrived as; None for a record from before the key was kept"
+    )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
     shown_history: tuple[str, ...] = Field(
         default=(), description="What the client has shown on the phone layout, most recent last"
+    )
+    desktop_revision: int = Field(
+        default=0,
+        ge=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop",
+    )
+    desktop_moved_by: PageId | None = Field(
+        default=None,
+        description="The page whose report wrote the current desktop revision; None when an op or an arrival did",
+    )
+    viewport: Viewport | None = Field(
+        default=None, description="The backdrop size the client's desktop layout last reported; None until it has"
     )
 
 
@@ -79,17 +98,9 @@ def entries_wire_json(entries: Mapping[str, EntryPresentation]) -> dict[str, Any
 
 
 @pure
-def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]:
+def client_view(record: ClientRecord, is_connected: bool) -> ClientView:
     """The ``client`` object of desktop contracts.md section 5.5."""
-    return {
-        "id": str(record.id),
-        "active_desktop": str(record.active_desktop) if record.active_desktop is not None else None,
-        "last_seen": record.last_seen.isoformat(),
-        "is_connected": is_connected,
-        "user_id": str(record.user_id) if record.user_id is not None else None,
-        "entries": entries_wire_json(record.entries),
-        "shown_history": list(record.shown_history),
-    }
+    return ClientView.model_validate({**dict(record), "is_connected": is_connected})
 
 
 @pure
@@ -99,8 +110,11 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         active_desktop=stored.active_desktop,
         last_seen=stored.last_seen,
         user_id=stored.user_id,
+        participant=stored.participant,
         entries=stored.entries,
         shown_history=stored.shown_history,
+        desktop_revision=stored.desktop_revision,
+        viewport=stored.viewport,
     )
 
 
@@ -131,6 +145,17 @@ def _folded_if_legacy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "version": CLIENTS_FILE_VERSION,
         "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
     }
+
+
+@pure
+def _is_superseded(report: ClientStateReport, stored: _StoredClient) -> bool:
+    """Whether a moving report was made before a move its page had not heard of: the stored desktop has moved since
+    the revision the report was made at, and not by the page's own reports, which it makes faster than it hears them
+    back. Only the latest move's page is kept: a page's report is accepted only past moves it heard or made itself,
+    so a page that made the latest move made every move since the revision it reports."""
+    if report.revision is None or report.revision >= stored.desktop_revision:
+        return False
+    return report.page_id != stored.desktop_moved_by
 
 
 @pure
@@ -180,31 +205,63 @@ class ClientStore(MutableModel):
                 return record
         return None
 
-    def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
+    def record_report(self, report: ClientStateReport, now: datetime, is_redirected: bool) -> ClientReportOutcome:
         """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
-        arrived as stays."""
+        arrived as stays. A report the shell redirected off a deleted desktop (``is_redirected``) bumps the desktop
+        revision even when the stored desktop stays, so the window that made it takes the news of where it landed.
+        A report made before a move its page had not heard of records nothing and answers superseded: the page
+        follows that move once its news arrives."""
         stamped = now.astimezone(timezone.utc)
-        return self._store_client(
-            report.client_id,
-            lambda previous: _StoredClient(
-                active_desktop=report.active_desktop,
-                last_seen=stamped,
-                user_id=previous.user_id if previous is not None else None,
-                entries=previous.entries if previous is not None else {},
-                shown_history=previous.shown_history if previous is not None else (),
-            ),
+        with STATE_FILES_LOCK:
+            previous = self._read_unlocked().clients.get(str(report.client_id))
+            if previous is not None and _is_superseded(report, previous):
+                return ClientReportOutcome(
+                    record=_record_of(report.client_id, previous), is_active_desktop_changed=False, is_superseded=True
+                )
+            return self._store_client(
+                report.client_id,
+                lambda previous: _StoredClient(
+                    active_desktop=report.active_desktop,
+                    last_seen=stamped,
+                    user_id=previous.user_id if previous is not None else None,
+                    participant=previous.participant if previous is not None else None,
+                    entries=previous.entries if previous is not None else {},
+                    shown_history=previous.shown_history if previous is not None else (),
+                    viewport=previous.viewport if previous is not None else None,
+                ),
+                is_revised_regardless=is_redirected,
+                mover=report.page_id,
+            )
+
+    def record_seen(self, client_id: ClientId, now: datetime) -> ClientRecord:
+        """Stamp a recorded client's last-seen time, leaving its desktop where it is (a following report); raises
+        ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id, lambda previous: previous.model_copy_update(to_update(previous.field_ref().last_seen, stamped))
         )
 
     def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        return self._store_client(client_id, lambda previous: _moved_client(client_id, previous, desktop_id, stamped))
+        return self._store_client(
+            client_id,
+            lambda previous: _moved_client(client_id, previous, desktop_id, stamped),
+            is_revised_regardless=False,
+            mover=None,
+        )
 
     def record_arrival(
-        self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
+        self,
+        client_id: ClientId,
+        user_id: UserId | None,
+        participant: ParticipantKey,
+        desktop_id: DesktopId,
+        now: datetime,
     ) -> ClientReportOutcome:
-        """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
+        """Record a client's arrival (the shell page loading): the user it arrived as, the participant key it
+        arrived under, and the desktop it lands on."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
             client_id,
@@ -212,26 +269,44 @@ class ClientStore(MutableModel):
                 active_desktop=desktop_id,
                 last_seen=stamped,
                 user_id=user_id,
+                participant=participant,
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
+                viewport=previous.viewport if previous is not None else None,
             ),
+            is_revised_regardless=False,
+            mover=None,
         )
 
     def _store_client(
-        self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
+        self,
+        client_id: ClientId,
+        build: Callable[[_StoredClient | None], _StoredClient],
+        is_revised_regardless: bool,
+        mover: PageId | None,
     ) -> ClientReportOutcome:
         """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
-        answer whether the stored desktop moved."""
+        answer whether the stored desktop moved. A move (or any write when ``is_revised_regardless``) bumps the
+        desktop revision under the same lock as the write, so the revisions order the moves as they were written,
+        whatever order their broadcasts go out in, and records ``mover`` as the page that wrote it."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(client_id))
-            stored = build(previous)
+            built = build(previous)
+            previous_desktop = previous.active_desktop if previous is not None else None
+            previous_revision = previous.desktop_revision if previous is not None else 0
+            previous_mover = previous.desktop_moved_by if previous is not None else None
+            is_moved = previous_desktop != built.active_desktop
+            is_revised = is_moved or is_revised_regardless
+            stored = built.model_copy_update(
+                to_update(
+                    built.field_ref().desktop_revision, previous_revision + 1 if is_revised else previous_revision
+                ),
+                to_update(built.field_ref().desktop_moved_by, mover if is_revised else previous_mover),
+            )
             clients = {**document.clients, str(client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        previous_desktop = previous.active_desktop if previous is not None else None
-        return ClientReportOutcome(
-            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
-        )
+        return ClientReportOutcome(record=_record_of(client_id, stored), is_active_desktop_changed=is_moved)
 
     def _update_recorded_client(
         self, client_id: ClientId, update: Callable[[_StoredClient], _StoredClient]
@@ -269,6 +344,17 @@ class ClientStore(MutableModel):
             client_id,
             lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
+                to_update(previous.field_ref().last_seen, stamped),
+            ),
+        )
+
+    def set_viewport(self, client_id: ClientId, viewport: Viewport, now: datetime) -> ClientRecord:
+        """Store the backdrop size a recorded client's desktop layout reported; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
+                to_update(previous.field_ref().viewport, viewport),
                 to_update(previous.field_ref().last_seen, stamped),
             ),
         )

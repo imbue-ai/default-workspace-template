@@ -7,7 +7,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import type { HandoffPhase, TransitionKind } from "./Chats";
+import type { ChatKind, HandoffPhase, TransitionKind } from "./Chats";
 import type { ModelIdentity } from "./ModelSettings";
 import { announceMessageSent } from "./Response";
 
@@ -19,16 +19,17 @@ export interface SwitchChatResult {
   returned_block: string;
 }
 
-/** Move the chat to ``accountId`` with ``message`` as the new agent's first message ("" for a switch
- *  made with nothing to say yet) and, for a handoff, ``pick`` as the model it runs on (null for the
- *  harness's default). The client fields ride along as on a send, so the activity report names this
- *  browser. */
+/** Move the chat to ``accountId``, or make it a room (``kind``), with ``message`` as the new agent's first
+ *  message ("" for a switch made with nothing to say yet) and, for a handoff, ``pick`` as the model it runs
+ *  on (null for the harness's default). The client fields ride along as on a send, so the activity report
+ *  names this browser. */
 export async function switchChat(
   chatId: string,
   accountId: string,
   message: string,
   messageId: string,
   pick: ModelIdentity | null = null,
+  kind: ChatKind = "agent",
 ): Promise<SwitchChatResult> {
   announceMessageSent(chatId);
   return await m.request<SwitchChatResult>({
@@ -37,6 +38,7 @@ export async function switchChat(
     params: { chatId },
     body: {
       account_id: accountId,
+      kind,
       message,
       message_id: messageId,
       model: pick,

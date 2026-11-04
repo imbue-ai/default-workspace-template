@@ -43,7 +43,7 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
 
     chosen = choose_default_account(accounts.read_index(home))
     if chosen is None:
-        raise accounts.AccountError("no provider accounts exist yet")
+        raise accounts.NoAccountsError("no provider accounts exist yet")
     # Back through `resolve_account` for the folder check. The explicit-id path above has
     # always had it; this one did not, so a row whose folder had gone bound an agent to a
     # directory that is not there -- which surfaces as an empty model bar, not as an error.

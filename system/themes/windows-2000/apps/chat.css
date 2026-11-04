@@ -1,0 +1,15 @@
+/* The chat on Windows 2000: the user's words on a tooltip, the composer a sunken field, and tool calls in a
+   sunken well. */
+[data-part="chat.user-message"] {
+  border: 1px solid #000000;
+  border-radius: 0;
+}
+[data-part="chat.composer"] {
+  border: none;
+  box-shadow: var(--theme-sunken);
+}
+[data-part="chat.tool-call"] {
+  border: none;
+  background: #d4d0c8;
+  box-shadow: var(--theme-sunken);
+}

@@ -1,0 +1,1 @@
+- The parser reads an unquoted backslash-newline as the shell does, a line continuation that joins the two lines, instead of a word at the head of the next command; `tk close <id> "<summary>" && \` followed by `tk start <next>` on the next line is one step boundary to the standalone-tk hook, and a `tail` after `| \` is seen by the pipe guard.

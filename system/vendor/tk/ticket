@@ -142,6 +142,12 @@ ticket_path() {
     local id="$1"
     # Trim leading/trailing whitespace (handles Claude/agent quirks)
     read -r id <<< "$id"
+    # An empty id would partial-match every ticket and resolve to whichever one is
+    # the sole (non-step) match -- an unset "$VAR" must fail, not pick a ticket.
+    if [[ -z "$id" ]]; then
+        echo "Error: empty ticket ID" >&2
+        return 1
+    fi
     local exact="$TICKETS_DIR/${id}.md"
 
     if [[ -f "$exact" ]]; then

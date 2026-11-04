@@ -3,7 +3,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from imbue.chat.harnesses.model import EffortChoice
+from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import match_option
@@ -11,6 +14,7 @@ from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import to_options
+from imbue.chat.harnesses.model import validate_model_pick
 
 # opus reports a suffix-free API id that differs from its switch id (the [1m] alias).
 _OPUS = ModelOption(
@@ -182,3 +186,14 @@ def test_to_options_tag_is_id_and_label_efforts_verbatim_and_dedup() -> None:
     assert opus.harness_reported_model_id is None
     # A model with no effort axis.
     assert options[1].efforts == ()
+
+
+def test_a_pick_may_leave_the_effort_unnamed_only_on_a_model_with_a_default() -> None:
+    # A codex chat whose effort was never picked records none and runs at the model's default, so
+    # a pick that changes only another axis carries no effort. A model with no default still needs one.
+    with_default = ModelOption(
+        id="gpt-5.6-sol", label="GPT-5.6-Sol", efforts=_GPT.efforts, default_effort="high", supports_fast=True
+    )
+    assert validate_model_pick((with_default,), "gpt-5.6-sol", None, True) == with_default
+    with pytest.raises(InvalidModelPickError):
+        validate_model_pick((_GPT,), "gpt-5.6-sol", None, True)

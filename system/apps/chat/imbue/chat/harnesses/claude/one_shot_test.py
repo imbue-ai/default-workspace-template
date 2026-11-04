@@ -59,7 +59,8 @@ def test_complete_moves_down_the_preference_list_to_the_accounts_default(
 
     assert answer == "Rome trip: plan"
     calls = log_path.read_text().splitlines()
-    assert ["--model haiku" in calls[0], "--model sonnet" in calls[1], "--model" in calls[2]] == [True, True, False]
+    assert ["--model haiku" in calls[0], "--model" in calls[1]] == [True, False]
+    assert len(calls) == 2
 
 
 def test_complete_raises_with_every_models_failure_when_none_answers(
@@ -67,7 +68,7 @@ def test_complete_raises_with_every_models_failure_when_none_answers(
 ) -> None:
     put_stand_in_cli_on_path(tmp_path, "claude", "echo 'Not logged in' >&2; exit 1", monkeypatch)
 
-    with pytest.raises(OneShotCompletionError, match="haiku: .*sonnet: .*default model: .*Not logged in"):
+    with pytest.raises(OneShotCompletionError, match="haiku: .*default model: .*Not logged in"):
         ClaudeOneShotCompletion().complete(tmp_path / "account", "Name this chat.", "Plan Rome")
 
 

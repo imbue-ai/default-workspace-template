@@ -647,6 +647,70 @@ def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
     _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
 
 
+def _granted_docs_manager(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    share_grants: FakeShareGrants,
+    is_internal: bool = False,
+    is_system: bool = False,
+) -> AppLifecycleManager:
+    """A visited manager over one running ``docs`` app that a per-app share grant names."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{closed_port}",
+            program="docs",
+            is_internal=is_internal,
+            is_system=is_system,
+            stop_when_no_windows=True,
+        ),
+    )
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    share_grants.granted = {"docs"}
+    granted = _manager_over(
+        build_inventory(registry_path, broadcaster), supervisor, granted_app_names=share_grants.get_granted
+    )
+    granted.mark_visited()
+    return granted
+
+
+def test_a_per_app_share_grant_on_an_internal_app_keeps_nothing_running(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    share_grants: FakeShareGrants,
+) -> None:
+    """The gateway admits nobody through a grant on an internal app, so the grant stands in for no window."""
+    internal = _granted_docs_manager(tmp_path, broadcaster, closed_port, supervisor, share_grants, is_internal=True)
+    try:
+        internal.sweep_once()
+        _assert_docs_stops_only_once_the_grace_elapses(internal, supervisor)
+    finally:
+        internal.stop()
+
+
+def test_a_per_app_share_grant_keeps_a_system_app_running(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    share_grants: FakeShareGrants,
+) -> None:
+    """A system app is only listed apart on the Share tab; the gateway admits its per-app grants like any app's."""
+    system = _granted_docs_manager(tmp_path, broadcaster, closed_port, supervisor, share_grants, is_system=True)
+    try:
+        system.sweep_once()
+        _clock_of(system).now += NO_WINDOWS_GRACE_SECONDS * 2
+        system.sweep_once()
+        assert supervisor.stopped == []
+    finally:
+        system.stop()
+
+
 def test_a_pass_reads_the_share_grants_at_most_once_and_only_for_an_app_with_no_window(
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,

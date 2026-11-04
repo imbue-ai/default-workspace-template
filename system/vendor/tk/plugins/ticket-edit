@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tk-plugin: Open ticket in $EDITOR
-# tk-plugin-version: 1.0.0
+# tk-plugin-version: 1.0.1
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -10,6 +10,11 @@ fi
 
 id="$1"
 read -r id <<< "$id"
+# An empty id would partial-match every ticket; see ticket_path() in the core script.
+if [[ -z "$id" ]]; then
+    echo "Error: empty ticket ID" >&2
+    exit 1
+fi
 
 # Resolve ticket file (exact or partial match)
 file="$TICKETS_DIR/${id}.md"

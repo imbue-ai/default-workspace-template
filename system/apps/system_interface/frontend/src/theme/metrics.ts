@@ -1,28 +1,22 @@
 /**
  * The theme's metrics as behaviour reads them (desktop-interface plan section 6.6): every pixel
- * value the geometry and the gestures need is a token in ``theme/default.css``, read from the
- * root element's computed style once at boot and again whenever the render mode changes, and
+ * value the geometry and the gestures need is a token in ``theme/default.css`` (a workspace theme may
+ * redeclare one), read from the root element's computed style once at boot and again whenever the
+ * render mode or the desktop's theme changes, and
  * handed on as one frozen record. No metric is a literal in TypeScript (``test_project_ratchets``
  * holds that for the views and the reducers); the phone breakpoint is the one exception in the
- * other direction, a TypeScript constant applied as a media query that sets ``data-phone``.
+ * other direction, a media query shared with the other apps (workspace-ui ``device_queries``) that
+ * sets ``data-phone``.
  */
 
-/** The viewport the shell renders its phone layout in (plan-phone-interface.md), whichever way round: a short side
- *  at most PHONE_MAX_SHORT_SIDE_PX and a long side at most PHONE_MAX_LONG_SIDE_PX. Rotating a phone keeps the layout;
- *  no tablet gets it, and neither does a desktop window that is short but wide. */
-export const PHONE_MAX_SHORT_SIDE_PX = 500;
-export const PHONE_MAX_LONG_SIDE_PX = 1000;
-
-export const PHONE_MEDIA_QUERY =
-  `(max-width: ${PHONE_MAX_SHORT_SIDE_PX}px) and (max-height: ${PHONE_MAX_LONG_SIDE_PX}px), ` +
-  `(max-height: ${PHONE_MAX_SHORT_SIDE_PX}px) and (max-width: ${PHONE_MAX_LONG_SIDE_PX}px)`;
-export const TOUCH_MEDIA_QUERY = "(pointer: coarse)";
+import { PHONE_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 
 export const PHONE_ATTRIBUTE = "data-phone";
 export const TOUCH_ATTRIBUTE = "data-touch";
 
 export interface ThemeMetrics {
   readonly titleBarHeight: number;
+  readonly windowRadius: number;
   readonly taskbarHeight: number;
   readonly cellWidth: number;
   readonly cellHeight: number;
@@ -37,10 +31,16 @@ export interface ThemeMetrics {
   readonly floatingEntrySize: number;
   readonly floatingEntryInsetX: number;
   readonly floatingEntryInsetY: number;
+  /** The overview (the multiplayer spec, section 8.2): the gap between its tiles, the strip a tile's title takes
+   *  above the page, and the widest a desktop thumbnail is drawn. */
+  readonly overviewGap: number;
+  readonly overviewTileTitle: number;
+  readonly overviewThumbnailWidth: number;
 }
 
 const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   titleBarHeight: "--desk-title-bar-height",
+  windowRadius: "--desk-window-radius",
   taskbarHeight: "--desk-taskbar-height",
   cellWidth: "--desk-cell-width",
   cellHeight: "--desk-cell-height",
@@ -55,6 +55,9 @@ const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   floatingEntrySize: "--desk-floating-entry-size",
   floatingEntryInsetX: "--desk-floating-entry-inset-x",
   floatingEntryInsetY: "--desk-floating-entry-inset-y",
+  overviewGap: "--desk-overview-gap",
+  overviewTileTitle: "--desk-overview-tile-title",
+  overviewThumbnailWidth: "--desk-overview-thumbnail-width",
 };
 
 /** Raised when a token the metrics need is missing from the computed style or is not a pixel length. */
@@ -93,6 +96,11 @@ export interface MediaQueryLike {
 }
 
 export type MatchMedia = (query: string) => MediaQueryLike;
+
+/** The render modes the root element carries now (as ``applyRenderModes`` last stamped them). */
+export function currentRenderModes(root: Element): RenderModes {
+  return { isPhone: root.hasAttribute(PHONE_ATTRIBUTE), isTouch: root.hasAttribute(TOUCH_ATTRIBUTE) };
+}
 
 /** Stamp the render modes onto the root element, which every style keys off. */
 export function applyRenderModes(root: Element, modes: RenderModes): void {

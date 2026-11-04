@@ -1,0 +1,1 @@
+The build-app scaffolder makes every new app type-checked: its `pyproject.toml` gets an empty `[tool.ty]` table and a `ty==0.0.24` dev dependency, and its ratchets get `test_no_type_errors`. The scaffolder's tests hold a scaffolded app's ratchets to the same set of tests every committed project's ratchets define, and check that a scaffolded app passes `ty`.

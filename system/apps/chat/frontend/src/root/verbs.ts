@@ -15,6 +15,11 @@ export async function renameChat(chatId: string, title: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "rename"), { title });
 }
 
+/** Star the chat as the workspace's main chat, where a text with no chat of its own goes. */
+export async function makeMainChat(chatId: string): Promise<void> {
+  await postJson<unknown>(chatRoute(chatId, "make-main"), {});
+}
+
 export async function stopChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "stop"), {});
 }

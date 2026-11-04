@@ -1,0 +1,3 @@
+A workspace updated from a version that had no main chat now gets a new chat named "Main" as its main chat, opened on a short message that explains what the main chat is. Before, the main chat went to the chat messaged last, which was usually the update chat itself, so "Update to v0.9.0" ended up pinned at the top of the chat list. The new chat also takes priority over an older app's "Welcome" chat. Fresh workspaces are unchanged.
+
+The note a seeded chat's first agent receives no longer says the conversation happened before the workspace existed. It now says the conversation was written before any agent joined the chat.

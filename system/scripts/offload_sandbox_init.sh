@@ -10,8 +10,18 @@ set -euo pipefail
 # Keep in lockstep with the version ci.yml installs on the runner: the two talk
 # to each other (offload applies each run's source diff inside the image with
 # this binary).
-readonly OFFLOAD_VERSION="0.9.14"
+readonly OFFLOAD_VERSION="0.10.0"
 readonly REPO_ROOT="/home/user/workspace"
+
+# An imbue_cloud workspace's /home/user is a symlink onto the host volume's home
+# (mngr_vps's container setup), not the directory the image ships, so the kernel
+# and claude report its paths resolved. Give the tests that layout too.
+readonly VOLUME_HOME="/mngr-vol/home"
+if [ ! -L /home/user ]; then
+    mkdir -p "$(dirname "$VOLUME_HOME")"
+    mv /home/user "$VOLUME_HOME"
+    ln -s "$VOLUME_HOME" /home/user
+fi
 
 cd "$REPO_ROOT"
 
@@ -23,8 +33,8 @@ git ls-files -s | awk -F'\t' '$1 ~ /^120000/ { print $2 }' > /tmp/offload-symlin
 git checkout-index -f --stdin < /tmp/offload-symlinks
 rm /tmp/offload-symlinks
 
-# The browser stack, which a workspace installs on first boot rather than in the image.
-ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/1000-playwright-fortress.sh"
+# The Screen's stack (Fortress included), which a workspace installs on first boot rather than in the image.
+ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/2000-screen.sh"
 
 # offload has no prebuilt binary, so build it with a toolchain that is removed again afterwards.
 readonly BUILD_HOME="/opt/offload-build"

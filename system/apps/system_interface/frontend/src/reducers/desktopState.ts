@@ -412,6 +412,14 @@ export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord |
   return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
 }
 
+/** The pinned window the avatar stands for, on the active desktop: the one whose pin declares the avatar style,
+ *  else the first pinned window there; null with none. The shell names no app: whichever app declares the style
+ *  is the avatar's. */
+export function avatarPinnedWindow(state: DesktopState): WindowRecord | null {
+  const pinned = taskbarEntries(state).filter((entry) => entry.isPinned);
+  return pinned.find((entry) => entry.look?.declaredStyle === "avatar")?.window ?? pinned[0]?.window ?? null;
+}
+
 /** A window of any desktop, with the desktop it is on. */
 export function findWindow(state: DesktopState, windowId: string): { desktop: Desktop; window: WindowRecord } | null {
   for (const desktop of state.desktops) {
@@ -508,6 +516,8 @@ export interface EntryLook {
   /** The style the pin declares, which the client may choose over plain; ``plain`` when it declares none. */
   readonly declaredStyle: PinStyle;
   readonly position: FloatingPosition | null;
+  /** Whether this client lists the pinned window in its taskbar; false after the client closed it. */
+  readonly isWindowShown: boolean;
 }
 
 /** One entry of the taskbar: a window of the active desktop, in opening order. */
@@ -519,7 +529,8 @@ export interface TaskbarEntry {
   /** Pulled out into a desktop window of the chrome's own; the entry shows that window rather than restoring. */
   readonly isDetached: boolean;
   readonly isFocused: boolean;
-  /** The app's pinned window: its entry is always there, and its Close minimizes it rather than closing it. */
+  /** The app's pinned window: its entry is a plain bar entry, absent while this client closed the window, and
+   *  its Close closes the window for this client alone rather than for everyone. */
   readonly isPinned: boolean;
   /** How this client shows the entry; null for an ordinary window's entry. */
   readonly look: EntryLook | null;
@@ -538,6 +549,7 @@ export function entryLook(state: DesktopState, window: WindowRecord, app: AppRec
     style: ownStyle ?? declaredStyle,
     declaredStyle,
     position: own?.position ?? null,
+    isWindowShown: own?.is_window_shown ?? true,
   };
 }
 
@@ -561,17 +573,50 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
   });
 }
 
-/** Whether an entry is drawn floating: its mode says so. */
+/** Whether an entry's app also draws its floating creature: its mode says so. */
 export function isEntryFloating(entry: TaskbarEntry): boolean {
   return entry.look !== null && entry.look.mode === "floating";
 }
 
-/** The entries the bar draws, in opening order. */
+/** The entries the bar draws, in opening order: every window of the active desktop, the pinned ones as plain
+ *  entries whatever their mode (the floating creature is the avatar, not the window's entry) -- except a pinned
+ *  window this client closed, which stays out of the bar while it is minimized (showing it lists it back). */
 export function barEntries(state: DesktopState): TaskbarEntry[] {
-  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry));
+  return taskbarEntries(state).filter(
+    (entry) => entry.look === null || entry.look.isWindowShown || !entry.isMinimized,
+  );
 }
 
 /** The entries drawn floating above the windows. */
 export function floatingEntries(state: DesktopState): TaskbarEntry[] {
   return taskbarEntries(state).filter((entry) => isEntryFloating(entry));
+}
+
+/** The pinned entry drawn as the workspace's avatar (the chat's), whose window the agent attends to while it is
+ *  focused (the multiplayer spec, section 6.4); null when no pinned app declares the avatar style. */
+export function avatarPinnedEntryOf(state: DesktopState): TaskbarEntry | null {
+  return taskbarEntries(state).find((entry) => entry.isPinned && entry.look?.declaredStyle === "avatar") ?? null;
+}
+
+/** The values of a window path's query ("/?chat=abc" gives ["abc"]); none with no query. */
+function pathQueryValues(path: string): string[] {
+  const queryStart = path.indexOf("?");
+  if (queryStart === -1) return [];
+  return Array.from(new URLSearchParams(path.slice(queryStart + 1)).values());
+}
+
+/** Whether this client is looking at the chat (the multiplayer spec, section 6.5): a window of the active desktop
+ *  whose path carries the chat's id among its query values, and which is the focused (topmost shown) window or is
+ *  pulled out into a desktop window of the chrome's own (on the user's screen whatever the stack says). A
+ *  minimized window, and a window on another desktop, is not being looked at. The shell names no app: the id is
+ *  matched against every query value, never a key of the chat app's own. */
+export function isChatOnScreen(state: DesktopState, chatId: string): boolean {
+  if (chatId === "") return false;
+  const placements = activePlacements(state);
+  const focused = focusedWindowId(placements);
+  return (activeDesktop(state)?.windows ?? []).some(
+    (window) =>
+      (window.id === focused || isWindowDetached(placements, window.id)) &&
+      pathQueryValues(effectiveWindow(state, window).path).includes(chatId),
+  );
 }

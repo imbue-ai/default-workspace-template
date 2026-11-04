@@ -1,0 +1,3 @@
+- Bump the Antigravity CLI (`agy`) baked into the image from 1.1.22 to 1.4.7, pinned to the 1.4.7 release URLs and sha512 checksums from Google's release manifest. The installer is renamed from `system/scripts/agy_install-1.1.22.sh` to `system/scripts/agy_install.sh`, so future bumps change only the values inside it. A fresh agent now starts on Gemini 3.8 Flash (High) by default; there is still no model pin of our own.
+
+- Pin mngr to the branch that records agy's reasoning effort in `model_state.json` and confirms agy slash commands as soon as agy handles them, which the chat app's Antigravity model picker relies on.

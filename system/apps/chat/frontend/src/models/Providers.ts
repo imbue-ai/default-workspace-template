@@ -5,12 +5,16 @@
  * provider. Several lanes can share a harness (Opencode Go and a raw API key both run on
  * Pi), so the chooser lists lanes, not harnesses.
  *
- * A sign-in has three possible shapes and the server tells us which, per method, so nothing
+ * A sign-in takes one of these shapes and the server tells us which, per method, so nothing
  * here has to know what a harness is:
  *
  *   url_then_code   here is a link; approve in the browser and paste the code back
  *   code_then_wait  here is a link and a one-time code; type it there and we wait
  *   paste           paste a key; no terminal involved
+ *   browser         here is a link; finish in the browser and it completes by itself
+ *
+ * A browser sign-in whose page the server offers as `relay_url` can be handed to the minds
+ * desktop app, which opens it and relays its callback (see `providerRelay.ts`).
  *
  * Flows are single-flight on the server -- it holds one live sign-in at a time -- so this
  * keeps one flow's state and starting another abandons the first.
@@ -19,8 +23,9 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
+import { endProviderRelay } from "./providerRelay";
 
-export type FlowShape = "url_then_code" | "code_then_wait" | "paste";
+export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
 export type FlowState = "pending" | "ok" | "failed";
 
 export interface LaneMethod {
@@ -29,6 +34,8 @@ export interface LaneMethod {
   description: string;
   /** Empty unless the provider has to be signed up for before a key exists. */
   signup_url: string;
+  /** Markdown shown while the sign-in waits on the browser; empty when it needs no account setting. */
+  note: string;
   shape: FlowShape;
   is_primary: boolean;
 }
@@ -67,6 +74,10 @@ export interface ProviderAccount {
   name: string;
   /** Already composed server-side ("Anthropic 2 (Claude Code)") -- see accounts_endpoints. */
   label: string;
+  /** The lane method "Sign in again" runs: a key account is given a key again, not a browser sign-in. */
+  reauth_method: string;
+  /** When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept. */
+  signed_in_at: string | null;
 }
 
 interface FlowStart {
@@ -74,6 +85,8 @@ interface FlowStart {
   shape: FlowShape;
   url: string | null;
   code: string | null;
+  /** The page the desktop app can open for this sign-in and relay the callback of. */
+  relay_url: string | null;
 }
 
 interface FlowStatus {
@@ -141,12 +154,11 @@ export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
 
-/** Settles once the account list can choose a new chat's account, so a list not read yet or read stale is never taken
- *  for "nothing signed in": after its first read, and after a fresh read when it names no account, since a sign-in
- *  made on another page (the chat list, another chat) does not reach this page's copy. */
+/** Settles once the account list can choose a new chat's account: after its first read, and after a fresh read, since a
+ *  sign-in or a sign-out made on another page (the chat list, another chat) does not reach this page's copy, and a
+ *  launch on an account the workspace no longer has is refused. */
 export async function whenAccountsReadyToChoose(): Promise<void> {
   await firstAccountsLoad;
-  if (getSelectedAccount() !== null) return;
   try {
     await loadAccounts();
   } catch (error) {
@@ -166,7 +178,11 @@ export async function loadLanes(): Promise<void> {
 }
 
 export async function loadAccounts(): Promise<void> {
-  const body = await m.request<{ accounts: ProviderAccount[]; mru: string | null; default: string | null }>({
+  const body = await m.request<{
+    accounts: ProviderAccount[];
+    mru: string | null;
+    default: string | null;
+  }>({
     method: "GET",
     url: apiUrl("/api/accounts"),
   });
@@ -177,23 +193,47 @@ export async function loadAccounts(): Promise<void> {
   markAccountsLoaded();
 }
 
-/** Load the account list, retrying a failed fetch with backoff until it succeeds.
- *
- * The boot-time caller races the backend coming up: the page can be served before the API
- * answers, and a decision made off one silently failed fetch (the provider chooser the chat
- * root offers foremost) would be wrong for the whole page load. Never rejects.
- */
-export async function loadAccountsWithRetry(): Promise<void> {
+/** Run `load` until it succeeds, waiting out a backoff delay after each failure. With
+ *  `maxAttempts` it gives up after that many tries and rejects with the last failure; without
+ *  it, it never rejects. */
+async function retryWithBackoff(load: () => Promise<void>, maxAttempts?: number): Promise<void> {
   const backoff = new ReconnectBackoff();
-  let isLoaded = false;
-  while (!isLoaded) {
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      await loadAccounts();
-      isLoaded = true;
-    } catch {
+      await load();
+      return;
+    } catch (error) {
+      if (maxAttempts !== undefined && attempt >= maxAttempts) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
     }
   }
+}
+
+/** Load the account list, retrying a failed fetch with backoff until it succeeds.
+ *
+ * The boot-time caller races the backend coming up: the page can be served before the API
+ * answers, and a decision made off one silently failed fetch (whether the composer asks for a
+ * provider) would be wrong for the whole page load. Never rejects.
+ */
+export function loadAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(loadAccounts);
+}
+
+/** Enough attempts to outlast the desktop app remaking its connection to the workspace, so that
+ *  only a failure that persists reaches the user. */
+const LANES_AND_ACCOUNTS_ATTEMPTS = 5;
+
+/** Load the lanes and the accounts the chooser lists, retrying a failure with backoff.
+ *
+ * The chooser opens the moment a fresh workspace's welcome chat finds no account, which is also
+ * when the desktop app's connection to the workspace is youngest. Rejects with the last failure
+ * once the attempts run out.
+ */
+export function loadLanesAndAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(async () => {
+    await loadLanes();
+    await loadAccounts();
+  }, LANES_AND_ACCOUNTS_ATTEMPTS);
 }
 
 /** Name an account, or pass "" to go back to the provider's own name.
@@ -234,7 +274,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   startGeneration += 1;
   const attempt = startGeneration;
   // Clear stale sign-in state on client before server replaces it.
-  flow = null;
+  releaseFlow();
   m.redraw();
   const started = await m.request<FlowStart>({
     method: "POST",
@@ -286,6 +326,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
   if (flow.status.state === "ok" || flow.status.state === "failed") return;
   flow = { ...flow, status };
   if (status.state === "ok") {
+    releaseRelay(flow);
     stopPolling();
     // The account the user just created is the one their next chat should use. Without
     // this, someone who picked an account earlier and then added a provider gets the old
@@ -299,7 +340,10 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
       chooserOnDismissed = null;
       run(status.account_id);
     }
+    // Nothing left to say, so the chooser goes by itself; a success with a detail stays up to show it.
+    if (status.detail === null) closeProviderChooser();
   } else if (status.state === "failed") {
+    releaseRelay(flow);
     stopPolling();
   }
   m.redraw();
@@ -320,7 +364,7 @@ function startPolling(): void {
         // leaves this screen spinning forever.
         if (error.code === 404 && flow !== null && flow.flow_id === flowId) {
           void settle(
-            { state: "failed", detail: "That sign-in was replaced by a newer one.", account_id: null },
+            { state: "failed", detail: "That sign-in stopped before it finished. Start it again.", account_id: null },
             flowId,
           );
           return;
@@ -342,14 +386,24 @@ export function abortFlow(): void {
   stopPolling();
   if (flow !== null) {
     const id = flow.flow_id;
-    flow = null;
+    releaseFlow();
     m.request({ method: "DELETE", url: apiUrl(`/api/accounts/flow/${id}`) }).catch(() => undefined);
   }
 }
 
 export function clearFlow(): void {
   stopPolling();
+  releaseFlow();
+}
+
+/** Forget the live flow, telling the desktop app to stop relaying it if it might be. */
+function releaseFlow(): void {
+  if (flow !== null) releaseRelay(flow);
   flow = null;
+}
+
+function releaseRelay(ended: FlowStart): void {
+  if (ended.relay_url !== null) endProviderRelay(ended.flow_id);
 }
 
 /**
@@ -358,14 +412,14 @@ export function clearFlow(): void {
  * The account the user pinned as the default wins; otherwise the one just signed in to;
  * otherwise the most recently used, which the server bumps on every launch -- so "start
  * another one like the last" needs no click. Null means there is nothing to launch on yet: the
- * chat root then offers the chooser before it creates anything. The server's
+ * chat then asks for a provider before anything is typed. The server's
  * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
  * the server land on the same account.
  */
 let selectedAccountId: string | null = null;
 
 /** The account a chat with no agent yet starts on: the one it was minted for, else the selected
- *  one. Null when neither exists, and its first send has to ask for a sign-in. */
+ *  one. Null when neither exists: the composer then offers the provider chooser in its place. */
 export function accountForFirstSend(accountId: string | undefined): ProviderAccount | null {
   return accountForAgent(accountId) ?? getSelectedAccount();
 }
@@ -397,6 +451,7 @@ let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
 let chooserUnpickable: UnpickableAccount | null = null;
+let chooserOnRoomChosen: (() => void) | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -421,6 +476,9 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
+  /** Run when "Chat room (no provider)" is picked instead of an account: the chat awaiting its first send becomes a
+   *  room (the multiplayer spec, section 7.3). Its presence puts that row last, under the providers. */
+  onRoomChosen?: () => void;
   /** A signed-in account to list but refuse, and the reason its row reads. */
   unpickable?: UnpickableAccount;
 }
@@ -433,7 +491,23 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
+  chooserOnRoomChosen = intent.onRoomChosen ?? null;
   m.redraw();
+}
+
+/** Whether the chooser offers a room in place of a provider. */
+export function isRoomChoiceOffered(): boolean {
+  return chooserOnRoomChosen !== null;
+}
+
+/** Pick a room instead of a provider: what a finished sign-in does, with the room hook in place of the account's. */
+export function pickRoom(): void {
+  const run = chooserOnRoomChosen;
+  chooserOnSignedIn = null;
+  chooserOnDismissed = null;
+  chooserOnRoomChosen = null;
+  closeProviderChooser();
+  run?.();
 }
 
 /** Whether the chooser was opened to pick an account, so a signed-in one can be used as is. */
@@ -473,6 +547,7 @@ export function closeProviderChooser(): void {
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
   chooserUnpickable = null;
+  chooserOnRoomChosen = null;
   dismissed?.();
   m.redraw();
 }

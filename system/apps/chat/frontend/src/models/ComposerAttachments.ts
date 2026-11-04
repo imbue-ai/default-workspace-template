@@ -32,8 +32,14 @@ export interface ComposerAttachment {
   isImage: boolean;
   status: ComposerAttachmentStatus;
   /** One line saying what the file stands for, when it is not the user's own file: an element
-   *  reference's chip shows it in place of the size, and as its tooltip. */
+   *  reference's chip shows it in place of the size. */
   summary?: string;
+  /** The picked file's size, shown on the chip while it uploads. */
+  localSize?: number;
+  /** An image's own pixels, read locally so its thumbnail shows while it uploads. Lives only in this
+   *  document (a blob URL), so it is never persisted, and is revoked once the upload settles or the chip is
+   *  removed. */
+  previewUrl?: string;
   /** Present once the upload succeeds. */
   uploaded?: UploadedAttachment;
   /** Present when the upload failed. */
@@ -184,25 +190,44 @@ if (typeof window !== "undefined") {
   });
 }
 
+function _localPreviewUrl(file: File, isImage: boolean): string | undefined {
+  return isImage && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+}
+
 function _startUpload(chatId: string, file: File, summary: string | undefined): void {
   const localId = _mintLocalId();
+  const isImage = file.type.startsWith("image/") || isImagePath(file.name);
   const item: ComposerAttachment = {
     localId,
     fileName: file.name,
-    isImage: file.type.startsWith("image/") || isImagePath(file.name),
+    isImage,
     status: "uploading",
     summary,
+    localSize: file.size,
+    previewUrl: _localPreviewUrl(file, isImage),
   };
   _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
+  // The preview only stands in until the upload settles: a ready chip shows the uploaded copy and a
+  // failed one shows no thumbnail, and a sent or cleared chip would otherwise hold the blob for the
+  // life of the document.
+  const releasePreview = (): void => {
+    if (item.previewUrl !== undefined) URL.revokeObjectURL(item.previewUrl);
+  };
   item.uploadSettled = uploadAttachment(file)
     .then((uploaded) => {
-      _patchAttachment(chatId, localId, { status: "ready", uploaded });
+      _patchAttachment(chatId, localId, { status: "ready", uploaded, previewUrl: undefined });
+      releasePreview();
     })
     .catch((error: unknown) => {
       // Logged as well as marked: a document that stages for another (the root, for a page not
       // loaded yet) never renders the chip, and a failed item is not persisted for the page to see.
       console.warn(`The upload of ${file.name} for chat ${chatId} failed`, error);
-      _patchAttachment(chatId, localId, { status: "error", error: describeRequestError(error) });
+      _patchAttachment(chatId, localId, {
+        status: "error",
+        error: describeRequestError(error),
+        previewUrl: undefined,
+      });
+      releasePreview();
     });
 }
 
@@ -242,6 +267,9 @@ export function removeComposerAttachment(chatId: string, localId: string): void 
     list.filter((attachment) => attachment.localId !== localId),
   );
   m.redraw();
+  if (item?.previewUrl !== undefined) {
+    URL.revokeObjectURL(item.previewUrl);
+  }
   if (item?.uploaded) {
     void deleteAttachment(item.uploaded.path);
   }

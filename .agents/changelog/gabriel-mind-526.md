@@ -1,0 +1,1 @@
+A new `use-from-phone` skill walks the user through using the workspace from a phone: turning on sharing, getting the link onto the phone (the Share panel's "Email me a Mobile Access Link" button, or a copied link), and adding the workspace or an app to the home screen on iPhone/iPad and Android.

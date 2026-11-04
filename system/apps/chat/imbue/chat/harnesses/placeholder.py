@@ -127,9 +127,7 @@ class PlaceholderModelResolver(HarnessModelResolver):
         return SwitchResult(ok=False, detail="Model switching is not available for this harness yet.")
 
 
-# An empty catalog. ``registry.get_catalog`` deliberately does NOT cache an empty result, so
-# swapping a harness onto a real ``catalog_factory`` needs no cache invalidation.
-# ``switch_mode`` is inert with no options to click; LIST is the honest presentation of an
+# An empty catalog. ``switch_mode`` is inert with no options to click; LIST is the honest presentation of an
 # empty set (SEARCH would render a search box over nothing).
 EMPTY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     options=(),

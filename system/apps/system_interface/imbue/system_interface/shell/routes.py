@@ -2,34 +2,58 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
-from typing import Any
 from typing import Final
 from typing import assert_never
 
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
-from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
+from workspace_layout.answers import ClientsListing
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import parse_op_body
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
+from workspace_layout.shell_url import BUBBLES_ROUTE
+from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
+from workspace_layout.shell_url import CLIENTS_ROUTE
+from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
+from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.client_activity import summarize_client_activity
-from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.presence import utc_now
+from imbue.system_interface.shell.api_models import AppRunningState
+from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
+from imbue.system_interface.shell.api_models import PendingUpdateResponse
+from imbue.system_interface.shell.api_models import UpdateRollbackStarted
+from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import ClientShownRequest
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
-from imbue.system_interface.shell.desktop_routes import inventory_document_json
+from imbue.system_interface.shell.desktop_routes import inventory_clients
+from imbue.system_interface.shell.desktop_routes import inventory_document
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
-from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
+from imbue.system_interface.shell.desktop_routes import show_page_for_client
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.embedder_messages import MessageDelivery
+from imbue.system_interface.shell.embedder_messages import ShownPage
 from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
-from imbue.system_interface.shell.embedder_messages import message_delivery_wire_json
+from imbue.system_interface.shell.embedder_messages import message_delivery_view
+from imbue.system_interface.shell.embedder_messages import shown_pages
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -51,14 +75,9 @@ from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.layout_ops import CONTEXT_OP
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.layout_ops import is_known_op
-from imbue.system_interface.shell.layout_ops import parse_op_requester
+from imbue.system_interface.shell.errors import WindowPoppedOutError
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
-from imbue.system_interface.shell.primitives import ClientActivityKind
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -70,9 +89,12 @@ from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
-from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.theme_routes import register_theme_routes
+from imbue.system_interface.shell.tour import TOUR_ROUTE
+from imbue.system_interface.shell.tour import TourProgress
+from imbue.system_interface.shell.tray_feed import speakers_client_ids
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
@@ -109,9 +131,16 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             return detail_response(str(error), HTTP_BAD_GATEWAY)
         case NoTargetClientError():
             return detail_response(str(error), HTTP_PRECONDITION_FAILED)
+        case WindowPoppedOutError():
+            return detail_response(str(error), POPPED_OUT_REFUSAL_STATUS)
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
             return detail_response(str(error), HTTP_INTERNAL_ERROR)
+
+
+def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
+    """A value off the layout wire's rule (an id, a requester) in a request: the caller's to fix."""
+    return detail_response(str(error), HTTP_BAD_REQUEST)
 
 
 def _shell() -> ShellState:
@@ -144,6 +173,7 @@ def _entry_or_raise(name: str) -> AppInventoryEntry:
 
 
 def client_activity_route() -> ResponseReturnValue:
+    """Record what a client did (a message sent from a chat page), for the shell's activity log; loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
@@ -151,11 +181,39 @@ def client_activity_route() -> ResponseReturnValue:
     shell = _shell()
     match report.kind:
         case ClientActivityKind.MESSAGE:
-            shell.activity.append_message(
-                str(report.client_id), str(report.desktop_id), report.app, report.key, report.text
-            )
+            shell.activity.append_message(report)
         case _ as unreachable:
             assert_never(unreachable)
+    return "", HTTP_NO_CONTENT
+
+
+# The tray's feed (the multiplayer spec, sections 6.4 and 6.5)
+
+
+def bubbles_route() -> ResponseReturnValue:
+    """A message somebody just said, for the speech bubble over their tray entry: broadcast to every window but the
+    speaker's own clients; loopback only."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    bubble = parse_request_body(BubblePost)
+    shell = _shell()
+    owner_key = get_state().roster.owner_key(utc_now())
+    excluded = speakers_client_ids(bubble.speaker, owner_key, shell.clients.list_clients())
+    shell.broadcaster.broadcast_bubble(bubble.model_dump(mode="json"), excluded)
+    return "", HTTP_NO_CONTENT
+
+
+def chats_activity_route() -> ResponseReturnValue:
+    """What every chat is doing, as the chat app lists them: kept for the windows that connect later, and broadcast
+    to the ones connected now; loopback only."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    report = parse_request_body(ChatsActivityReport)
+    shell = _shell()
+    shell.chats_activity.replace(report)
+    shell.broadcaster.broadcast_chats_activity(report.model_dump(mode="json"))
     return "", HTTP_NO_CONTENT
 
 
@@ -183,11 +241,8 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
     except SupervisorProgramActionError as e:
         return detail_response(str(e), HTTP_BAD_GATEWAY)
     refreshed = shell.inventory.entry(name)
-    return jsonify(
-        {
-            "name": name,
-            "is_running": refreshed.is_running if refreshed is not None else False,
-        }
+    return model_response(
+        AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)
     )
 
 
@@ -208,6 +263,7 @@ def _stoppable_program_or_raise(shell: ShellState, entry: AppInventoryEntry) -> 
 
 
 def stop_app(name: str) -> ResponseReturnValue:
+    """Stop an app's program; refused for a critical app or one with no supervised program, and in a preview."""
     return _lifecycle(name, AppLifecycleAction.STOP)
 
 
@@ -224,10 +280,13 @@ def quit_app(name: str) -> ResponseReturnValue:
     except SupervisorProgramActionError as e:
         return detail_response(str(e), HTTP_BAD_GATEWAY)
     refreshed = shell.inventory.entry(name)
-    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+    return model_response(
+        AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)
+    )
 
 
 def start_app(name: str) -> ResponseReturnValue:
+    """Start a stopped app's program and answer whether it is running; refused as a stop is."""
     return _lifecycle(name, AppLifecycleAction.START)
 
 
@@ -235,21 +294,15 @@ def start_app(name: str) -> ResponseReturnValue:
 
 
 def list_clients() -> ResponseReturnValue:
+    """Every client known to the workspace (a browser or desktop that opened it), with whether it is connected now,
+    who it arrived as, and the windows it shows: the inventory's client objects."""
     shell = _shell()
-    desktops = shell.list_desktops()
-    connected = shell.broadcaster.connected_client_ids()
-    return jsonify(
-        {
-            "clients": [
-                resolved_client_wire_json(record, str(record.id) in connected, desktops)
-                for record in shell.clients.list_clients()
-            ]
-        }
-    )
+    return model_response(ClientsListing(clients=tuple(inventory_clients(shell, shell.list_desktops()))))
 
 
-def inventory_document() -> ResponseReturnValue:
-    return jsonify(inventory_document_json(_shell()))
+def inventory_route() -> ResponseReturnValue:
+    """The one document of everything the workspace shows: its name, its desktops, its apps, and its clients."""
+    return model_response(inventory_document(_shell()))
 
 
 def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
@@ -266,7 +319,7 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
     record = shell.set_client_entry_presentation(ClientId(client_id), AppName(app), body)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
 def record_client_shown(client_id: str) -> ResponseReturnValue:
@@ -275,49 +328,83 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
     body = parse_request_body(ClientShownRequest)
     shell = _shell()
     record = shell.record_client_shown(ClientId(client_id), body.window_id)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+
+
+def record_client_viewport(client_id: str) -> ResponseReturnValue:
+    """The backdrop size a client's desktop layout reports (the multiplayer spec, section 8.3): what a window
+    viewing one of the client's desktops draws its layout at; answers the client record."""
+    body = parse_request_body(Viewport)
+    shell = _shell()
+    record = shell.record_client_viewport(ClientId(client_id), body)
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
 # Section 5.6: the embedder-message relay
 
 
 def relay_embedder_message() -> ResponseReturnValue:
-    """Post a message the Imbue Studio chrome sent this client's page to every app registered for its type; 200 when
-    every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no app
-    handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
+    """Deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame, to every
+    app registered for its type: posted to a ``path`` handler's route, or shown as the page a ``show`` handler builds.
+    200 when every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no
+    app handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
     previewed."""
     refusal = _refuse_if_preview()
     if refusal is not None:
         return refusal
     relayed = parse_request_body(EmbedderMessageRelayRequest)
-    forwarded = forwarded_messages([entry.row for entry in _shell().inventory.entries()], relayed)
-    if not forwarded:
-        raise NoMessageHandlerError(f"No registered app handles {str(relayed.type)!r}")
+    rows = [entry.row for entry in _shell().inventory.entries()]
+    forwarded = forwarded_messages(rows, relayed)
+    pages = shown_pages(rows, relayed)
+    if not forwarded and not pages:
+        raise NoMessageHandlerError(f"Nothing in this workspace handles {str(relayed.type)!r}")
     deliveries = [deliver_forwarded_message(message) for message in forwarded]
+    deliveries += [_show_relayed_page(page, relayed) for page in pages]
     logger.info(
-        "Relayed {} from client {} to {}",
+        "Relayed {} from {} for client {} to {}",
         relayed.type,
+        relayed.sender,
         relayed.client_id,
         ", ".join(f"{delivery.app} ({delivery.status})" for delivery in deliveries),
     )
-    answer: dict[str, Any] = {
-        "type": str(relayed.type),
-        "deliveries": [message_delivery_wire_json(delivery) for delivery in deliveries],
-    }
+    views = tuple(message_delivery_view(delivery) for delivery in deliveries)
     undelivered = [delivery for delivery in deliveries if not delivery.is_delivered]
     if not undelivered:
-        return jsonify(answer), HTTP_OK
+        return model_response(EmbedderMessageRelayResponse(type=str(relayed.type), deliveries=views, detail=None))
     detail = "; ".join(f"{delivery.app} did not take it: {delivery.detail}" for delivery in undelivered)
-    return jsonify({**answer, "detail": detail}), HTTP_BAD_GATEWAY
+    return model_response(
+        EmbedderMessageRelayResponse(type=str(relayed.type), deliveries=views, detail=detail), HTTP_BAD_GATEWAY
+    )
+
+
+def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -> MessageDelivery:
+    """Run the ``show`` op for one ``show`` handler's page, as the declaring app, for the client whose page received
+    the message; a page that cannot be built or shown is that app's failed delivery, reported with the op's reason."""
+    if shown.page is None:
+        return MessageDelivery(app=shown.app, status=None, detail=shown.refusal, is_delivered=False)
+    requester = OpRequester(app=shown.app, marker="")
+    try:
+        result = show_page_for_client(_shell(), shown.app, shown.page, shown.showing, relayed.client_id, requester)
+    except ShellError as e:
+        logger.warning("Could not show {} of {} for {}: {}", shown.page, shown.app, relayed.type, e)
+        return MessageDelivery(app=shown.app, status=None, detail=str(e), is_delivered=False)
+    return MessageDelivery(
+        app=shown.app,
+        status=HTTP_OK,
+        detail="",
+        is_delivered=True,
+        shown=result.outcome,
+        window_id=result.window_id,
+        has_no_desktop_window=result.has_no_desktop_window,
+    )
 
 
 # The update notice: the rollback point the update-app careful flow's apply kept
 
 
 def pending_update() -> ResponseReturnValue:
-    """The kept rollback point of the last careful-flow apply, or ``null`` when there is none."""
-    notice = _shell().update_notice.current()
-    return jsonify(notice.wire_json() if notice is not None else None)
+    """The kept rollback point of the last careful-flow apply as ``notice``, which is ``null`` when there is none."""
+    return model_response(PendingUpdateResponse(notice=_shell().update_notice.current()))
 
 
 def confirm_pending_update() -> ResponseReturnValue:
@@ -337,13 +424,14 @@ def rollback_pending_update() -> ResponseReturnValue:
     if refusal is not None:
         return refusal
     _shell().update_notice.launch_rollback()
-    return detail_response("The rollback has started.", HTTP_ACCEPTED)
+    return model_response(UpdateRollbackStarted(detail="The rollback has started."), HTTP_ACCEPTED)
 
 
 # Section 8: the agent-facing op route
 
 
 def layout_broadcast() -> ResponseReturnValue:
+    """Run one layout verb for an agent inside the workspace (open, show, place, close, refresh, ...); loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
@@ -352,35 +440,35 @@ def layout_broadcast() -> ResponseReturnValue:
     except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
-    if not isinstance(body, dict):
-        return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
-    op = body.get("op")
-    args_raw = body.get("args", {})
-    requester = parse_op_requester(body.get("requester"))
-    if not isinstance(op, str) or not is_known_op(op):
-        return detail_response(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
-    if not isinstance(args_raw, dict):
-        return detail_response("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-    if op == CONTEXT_OP:
-        return _op_context(_shell(), requester)
-    return dispatch_desktop_op(_shell(), op, args_raw, requester)
+    return dispatch_desktop_op(_shell(), parse_op_body(body))
 
 
-def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
-    clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
-    logger.info("layout op=context requester={} clients={}", requester, len(clients))
-    return jsonify({"ok": True, "clients": clients})
+def get_tour() -> ResponseReturnValue:
+    """Whether the show-around tour has run in this workspace, and the card it resumes at."""
+    return model_response(get_state().shell.tour.read())
+
+
+def set_tour() -> ResponseReturnValue:
+    """Record that the tour has run and where it resumes (or clear both, so a fresh visit offers it again)."""
+    get_state().shell.tour.write(parse_request_body(TourProgress))
+    return model_response(get_state().shell.tour.read())
 
 
 def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
+    application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
     register_desktop_routes(application)
+    register_theme_routes(application)
     application.add_url_rule(
-        "/api/client-activity",
+        CLIENT_ACTIVITY_ROUTE,
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
+    )
+    application.add_url_rule(BUBBLES_ROUTE, view_func=bubbles_route, methods=["POST"], endpoint="bubbles_route")
+    application.add_url_rule(
+        CHATS_ACTIVITY_ROUTE, view_func=chats_activity_route, methods=["POST"], endpoint="chats_activity_route"
     )
     application.add_url_rule(
         "/api/updates/pending",
@@ -400,6 +488,8 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="rollback_pending_update",
     )
+    application.add_url_rule(TOUR_ROUTE, view_func=get_tour, methods=["GET"], endpoint="get_tour")
+    application.add_url_rule(TOUR_ROUTE, view_func=set_tour, methods=["POST"], endpoint="set_tour")
     application.add_url_rule(
         "/api/apps/<name>/stop",
         view_func=stop_app,
@@ -418,7 +508,7 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="quit_app",
     )
-    application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
+    application.add_url_rule(CLIENTS_ROUTE, view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(
         "/api/clients/<client_id>/entries/<app>",
         view_func=set_client_entry,
@@ -432,8 +522,14 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="record_client_shown",
     )
     application.add_url_rule(
-        "/api/inventory",
-        view_func=inventory_document,
+        "/api/clients/<client_id>/viewport",
+        view_func=record_client_viewport,
+        methods=["POST"],
+        endpoint="record_client_viewport",
+    )
+    application.add_url_rule(
+        INVENTORY_ROUTE,
+        view_func=inventory_route,
         methods=["GET"],
         endpoint="inventory_document",
     )
@@ -444,7 +540,7 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="relay_embedder_message",
     )
     application.add_url_rule(
-        "/api/layout/broadcast",
+        LAYOUT_OP_ROUTE,
         view_func=layout_broadcast,
         methods=["POST"],
         endpoint="layout_broadcast",

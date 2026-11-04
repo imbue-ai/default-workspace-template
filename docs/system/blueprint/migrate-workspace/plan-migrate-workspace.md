@@ -45,7 +45,7 @@
 > * The material is split across `SKILL.md`, `references/pre-declutter-layout.md`, and `references/agent-recreation.md`.
 > * The reference doc carries the layout/path map, substrate deltas, the "capabilities that didn't exist then" tour, and a per-old-skill replacement table.
 > * Bump the four retired-terminology ratchet counts and document the deliberate exception for the pre-rename reference doc.
-> * Update the `minds-api` skill's headline workflow to point at this skill.
+> * Update the Imbue Studio API skill's migration note to point at this skill (today the vendored `imbue-studio` skill).
 > * Ship only once the repo gates pass and the script's pure logic has unit tests, and after an end-to-end rehearsal against a real pre-declutter workspace.
 
 ## Overview
@@ -120,7 +120,7 @@
 
 ### Existing files
 
-- `.agents/skills/minds-api/SKILL.md` — its "Headline workflow: migrate an old workspace into a fresh one" section points at this skill rather than carrying a thinner version of the same flow.
+- `.agents/skills/imbue-studio/SKILL.md` (vendored from the published skill) — its migration note says a migration is a workspace skill's job rather than carrying a thinner version of the same flow.
 - `docs/VERSION_HISTORY.md` — a `## Migrations` section is introduced (written by the skill at migration time; the starter heredoc that `update-self` owns gains the section so a recreated file has it).
 - `system/test_meta_ratchets.py` — the four retired-terminology counts (`creations/`, `artifact`, `web service`, `application`) are bumped for the reference doc's deliberate naming of retired terms, with a comment explaining that a pre-rename migration map must name them. Counts are re-recorded via `uv run pytest --inline-snapshot=trim system/test_meta_ratchets.py`.
 - `.agents/changelog/gabriel-lemon-polecat.md` and `system/changelog/gabriel-lemon-polecat.md` — the two per-project entries the changelog gate requires (the skill tree maps to the `agents` bucket; the ratchet file and this blueprint doc map to `dev`).

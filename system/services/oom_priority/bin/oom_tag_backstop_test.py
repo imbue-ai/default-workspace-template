@@ -84,24 +84,26 @@ def test_a_registered_apps_manifest_priority_is_what_the_backstop_raises_to() ->
         list_descendants=lambda pid: [],
         priority_by_program=registry,
     )
-    assert proc.writes == [(150, bands.SERVICE_BANDS["files"]), (151, bands.USER_SERVICE)]
+    assert proc.writes == [
+        (150, bands.SERVICE_BANDS["files"]),
+        (151, bands.USER_SERVICE),
+    ]
 
 
 def test_never_lowers_a_process_already_above_its_band() -> None:
-    # The browser program sits at its service band, but the Chromium processes
-    # under it were remapped into the shared-browser band by the browser
-    # service's own sweep, and the descendant walk reaches them here. A
-    # correctly-prefixed process is already at its band. None may be lowered
-    # (or re-written).
+    # The Screen service sits at its service band, but the Chromium processes
+    # under it were remapped into the shared-browser band by its own band sweep,
+    # and the descendant walk reaches them here. A correctly-prefixed process is
+    # already at its band. None may be lowered (or re-written).
     proc = _FakeProc(
         {
-            300: bands.SERVICE_BANDS["browser"],
+            300: bands.SERVICE_BANDS["screen"],
             310: bands.SHARED_BROWSER,
             301: bands.SERVICE_BANDS["host-backup"],
         }
     )
     oom_tag_backstop.handle_running_event(
-        _running_payload("browser", 300),
+        _running_payload("screen", 300),
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [310],
@@ -123,7 +125,13 @@ def test_protected_programs_are_never_touched() -> None:
     # _NON_SERVICE_PROGRAM_BANDS is not merely left alone but actively pushed to
     # USER_SERVICE (200), above every built-in.
     proc = _FakeProc({400: 0})
-    for program_name in ("earlyoom", "oom-tag-backstop", "env-converge", "vm-exec-register"):
+    for program_name in (
+        "earlyoom",
+        "oom-tag-backstop",
+        "publish_cgroup_meminfo",
+        "env-converge",
+        "vm-exec-register",
+    ):
         oom_tag_backstop.handle_running_event(
             _running_payload(program_name, 400),
             read_adj=proc.read,

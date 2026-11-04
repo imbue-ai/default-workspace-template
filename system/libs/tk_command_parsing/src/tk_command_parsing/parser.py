@@ -16,7 +16,7 @@ tokenizing -- that is the lexer's one blind spot here, and the only place the
 raw string is scanned char by char.
 
 This module is intentionally **stdlib-only**: the PreToolUse gate hooks in
-``system/scripts/`` -- ``agent_tk_standalone_check.py``,
+``system/scripts/workspace_bare_scripts/`` -- ``agent_tk_standalone_check.py``,
 ``agent_latchkey_request_check.py`` and ``agent_block_pipe_tail_head_check.py``
 -- import it under a bare ``python3`` with
 no virtualenv, so it must not pull in any third-party dependency. That is also
@@ -153,7 +153,8 @@ def _newlines_to_semicolons(cmd: str) -> str:
     """Replace unquoted newlines with `;` so they read as command separators.
 
     A newline inside quotes (e.g. a multi-line close summary) is preserved.
-    Backslash escapes the next char outside single quotes, matching the shell.
+    Backslash escapes the next char outside single quotes, matching the shell;
+    an unquoted backslash-newline is a line continuation and is dropped.
     A `#` that begins a word (at the start, or after whitespace or a shell
     metacharacter) starts a comment that the shell ends at the newline, so the
     comment body is dropped here too -- otherwise shlex (which has no newlines
@@ -178,8 +179,14 @@ def _newlines_to_semicolons(cmd: str) -> str:
                 prev = "\n"
             continue
         if escaped:
-            out.append(ch)
             escaped = False
+            if ch == "\n" and quote is None:
+                # A line continuation: the shell drops the backslash and the
+                # newline, joining the two lines into one.
+                out.pop()
+                prev = out[-1] if out else None
+                continue
+            out.append(ch)
             prev = ch
             continue
         if quote != "'" and ch == "\\":

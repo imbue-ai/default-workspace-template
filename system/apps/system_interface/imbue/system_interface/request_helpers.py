@@ -1,24 +1,12 @@
-"""The request and response helpers the shell's routes share."""
+"""The error handler the shell's routes share: an unhandled exception as a 500 ``ErrorResponse``."""
 
-import json
 import traceback
-from typing import Any
 
+from app_schema.routes import error_response
 from flask import Response
 from flask import request
 from loguru import logger
 from werkzeug.exceptions import HTTPException
-
-
-def json_response(content: Any, status_code: int = 200) -> Response:
-    """Build a compact JSON response, matching the wire format the frontend expects."""
-    body = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-    return Response(body, status=status_code, mimetype="application/json")
-
-
-def error_response(detail: str, status_code: int) -> Response:
-    """The ``{"detail"}`` error body every shell route answers with."""
-    return json_response({"detail": detail}, status_code=status_code)
 
 
 def handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
@@ -31,4 +19,4 @@ def handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
         return exc
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
-    return json_response({"detail": f"Internal server error: {exc}"}, status_code=500)
+    return error_response(f"Internal server error: {exc}", 500)

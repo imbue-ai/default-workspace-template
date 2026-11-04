@@ -8,8 +8,9 @@
  * "Switch this chat" applies nothing yet: it arms the pending switch (``PendingLane``), which the
  * composer's next send carries out. Only a switch that will write a summary asks when the account is
  * pressed (``beginSwitchTo``): a chat that has had no user turn has no context to hand over and
- * switches at once, and a rebind keeps the agent, its conversation, and by default its model, so it
- * is armed at once. The rebind's variant of the dialog is what "Change" opens for it: the same
+ * switches at once, a rebind keeps the agent, its conversation, and by default its model, so it is
+ * armed at once, and so is a switch off an account that was signed out, which leaves the chat no
+ * provider to stay on. The rebind's variant of the dialog is what "Change" opens for it: the same
  * picker, starting from "Keep the current model".
  */
 
@@ -18,10 +19,10 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
-import { getChatById } from "../models/Chats";
+import { getChatById, launchChat } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
-import { getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, startingEffort } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -33,14 +34,15 @@ import {
   switchKind,
 } from "../models/PendingLane";
 import type { PendingPick } from "../models/PendingLane";
-import { accountForAgent } from "../models/Providers";
+import { accountForAgent, isAccountSignedOut } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
-import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
+import { getEventsForChat, isTranscriptLoaded, mintMessageId, whenTranscriptLoadSettles } from "../models/Response";
 import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./harness-labels";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import { raiseFailureNotice, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The value of the model select's first row: no pick, so the target harness's default on a handoff and the
  *  agent's own model on a rebind. */
@@ -63,6 +65,9 @@ interface OpenDialog {
 
 let open: OpenDialog | null = null;
 
+// The account pressed for each chat whose transcript load the press is waiting out.
+const pressWaitingOnLoadByChat = new Map<string, ProviderAccount>();
+
 /**
  * Switch ``chatId`` to ``target``, arm the switch, or ask first; nothing, when the chat is not in
  * the chat list yet or ``target`` is the account it already runs on (a re-authenticated one, say).
@@ -70,9 +75,39 @@ let open: OpenDialog | null = null;
  * and no dialog; the draft, if any, stays in the composer and goes out normally once the chat
  * runs on the new account. A rebind is armed at once with no dialog, keeping the pick already
  * armed for that account, if any: the next send carries it out, so a turn in progress is not cut
- * short by the press. A handoff with context gets the dialog.
+ * short by the press. So is a switch off a signed-out account: the chat can no longer stay where
+ * it is, and choosing a provider for it is the answer the dialog would ask for. A handoff with
+ * context gets the dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
+  // A new chat's page asks for its transcript before the chat app knows the chat and asks again
+  // once it does, so a press right after the chat comes up can land before that load: wait it out
+  // rather than read the not-yet-loaded window.
+  if (isTranscriptLoaded(chatId)) {
+    pressWaitingOnLoadByChat.delete(chatId);
+    decideSwitchTo(chatId, target);
+    return;
+  }
+  // Only the latest press made during the wait is decided: the menu closes on a press and nothing
+  // shows until the load lands, so a second press is the user's newer choice, not another switch.
+  const isAlreadyWaiting = pressWaitingOnLoadByChat.has(chatId);
+  pressWaitingOnLoadByChat.set(chatId, target);
+  if (isAlreadyWaiting) return;
+  void whenTranscriptLoadSettles(chatId).then(() => {
+    const latest = pressWaitingOnLoadByChat.get(chatId);
+    pressWaitingOnLoadByChat.delete(chatId);
+    if (latest !== undefined) decideSwitchTo(chatId, latest);
+  });
+}
+
+/** Take back what ``chatId`` was about to switch to: the armed switch, and a press still waiting
+ *  out the transcript load. */
+export function takeBackSwitch(chatId: string): void {
+  pressWaitingOnLoadByChat.delete(chatId);
+  setPendingAccount(chatId, null);
+}
+
+function decideSwitchTo(chatId: string, target: ProviderAccount): void {
   const chat = getChatById(chatId);
   if (chat === undefined || !isSwitchTarget(chat, target)) return;
   // Only a loaded transcript can say there is no user turn: an unloaded (or failed) one reads as
@@ -81,7 +116,7 @@ export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
     void switchFreshChat(chatId, target);
     return;
   }
-  if (switchKind(chat, target) === "rebind") {
+  if (switchKind(chat, target) === "rebind" || isAccountSignedOut(chat.active_agent.account_id)) {
     setPendingSwitch(chatId, target.id, getPendingAccountId(chatId) === target.id ? getPendingPick(chatId) : null);
     m.redraw();
     return;
@@ -94,6 +129,29 @@ export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
 export function beginSwitchToAccountId(chatId: string, accountId: string): void {
   const account = accountForAgent(accountId);
   if (account !== null) beginSwitchTo(chatId, account);
+}
+
+/** Make the chat a room (the multiplayer spec, section 7.6): a switch with nothing to hand over, since the room
+ *  takes no prompt; the conversation so far stays as the chat's earlier segments. Nothing to pick, so no dialog. */
+export async function switchToRoom(chatId: string): Promise<void> {
+  setPendingAccount(chatId, null);
+  try {
+    await switchChat(chatId, "", "", mintMessageId(), null, "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make this chat a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
+}
+
+/** Launch a chat awaiting its first send as a room, with nothing said yet (section 7.3): what the provider
+ *  chooser's room row comes to when the awaiting chat's provider chip or its no-provider notice opened it. */
+export async function launchAwaitingChatAsRoom(chatId: string): Promise<void> {
+  try {
+    await launchChat(chatId, "", "", "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
 }
 
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {
@@ -149,13 +207,16 @@ export function closeSwitchDialog(): void {
   m.redraw();
 }
 
-/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown,
- *  and for a harness whose model the chat app cannot switch, where no pick could be applied. */
+/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown. */
 function currentModelIdentity(chat: ChatSnapshot | undefined): ModelIdentity | null {
-  if (chat === undefined || getHarnessCatalog(chat.active_agent.harness)?.switch_mode === "read_only") return null;
+  if (chat === undefined) return null;
   const choice = chat.active_agent.model_choice;
   if (choice === null || choice.matched === null) return null;
-  return { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
+  return {
+    model_id: choice.matched.id,
+    effort: effortInEffect(choice.identity.effort, choice.matched),
+    fast: choice.identity.fast,
+  };
 }
 
 /** The chosen option, or null for the default. */
@@ -174,12 +235,6 @@ function pickOf(dialog: OpenDialog): PendingPick | null {
     fast: option.supports_fast ? dialog.fast : false,
   };
   return { identity, label: modelPickLabel(option.label, identity.effort, identity.fast), option };
-}
-
-/** The effort to start from when a model is chosen: the first shown, else the first declared. */
-function firstEffort(option: CatalogModelOption): string | null {
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0])?.level ?? null;
 }
 
 function renderPicker(dialog: OpenDialog): m.Children {
@@ -203,15 +258,10 @@ function renderPicker(dialog: OpenDialog): m.Children {
     );
   }
   if (dialog.options.length === 0) {
-    // A harness whose model the chat app cannot switch lands here by having no options at all, so
-    // the usual "change it afterwards" is the one thing it must not say: the bar will refuse too.
-    const isModelReadOnly = getHarnessCatalog(dialog.target.harness)?.switch_mode === "read_only";
     return m(
       "p",
       { class: "switch-dialog-no-models text-(length:--font-size-helper) text-secondary" },
-      isModelReadOnly
-        ? `${whenNothingIsPicked}, which is changed from the agent's terminal, not from the chat.`
-        : `${whenNothingIsPicked}; you can change it once it is running.`,
+      `${whenNothingIsPicked}; you can change it once it is running.`,
     );
   }
   const option = chosenOption(dialog);
@@ -221,12 +271,13 @@ function renderPicker(dialog: OpenDialog): m.Children {
       "select",
       {
         class: inputClass({ extra: "switch-dialog-model" }),
+        ...partAttrs("select"),
         "aria-label": "Model",
         value: dialog.modelId,
         onchange: (event: Event) => {
           dialog.modelId = (event.target as HTMLSelectElement).value;
           const chosen = chosenOption(dialog);
-          dialog.effort = chosen === null ? null : firstEffort(chosen);
+          dialog.effort = chosen === null ? null : startingEffort(chosen);
           dialog.fast = false;
         },
       },
@@ -246,6 +297,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
           "select",
           {
             class: inputClass({ extra: "switch-dialog-effort" }),
+            ...partAttrs("select"),
             "aria-label": "Reasoning effort",
             value: dialog.effort ?? "",
             onchange: (event: Event) => {
@@ -308,6 +360,12 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
       const from = harnessLabel(chat?.active_agent.harness ?? "");
       const target = current.target;
       const isRebind = current.kind === "rebind";
+      const handoffBody = isAccountSignedOut(chat?.active_agent.account_id)
+        ? `This conversation moves to ${target.label}, starting with your next message.`
+        : chat?.status === "working"
+          ? `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
+            "starting with your next message."
+          : `${from} hands the conversation to ${target.label}, starting with your next message.`;
       return m(
         dialog,
         {
@@ -315,8 +373,7 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
           body: [
             isRebind
               ? `${from} restarts on ${target.label} and keeps this conversation, starting with your next message.`
-              : `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
-                "starting with your next message.",
+              : handoffBody,
           ],
           dismissLabel: "Cancel",
           isDismissable: !current.isBusy,

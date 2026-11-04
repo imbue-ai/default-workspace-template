@@ -12,16 +12,16 @@ in-process message API (``send_key_chord_to_agents`` -> ``press_key_chord``), wh
 the same per-agent ``message.lock`` as a text send, so the chord can never interleave with
 a half-delivered message. This module owns only the orchestration around that keypress:
 the refresh-first gate, the live-session byte baseline, the bounded verdict watch, and the
-one recovery message for the cancelled-follow-on race. The abort-and-capture pieces
-(``resolve_live_session_baseline`` / ``watch_for_flush_verdict``) and the pure verdict
-lattice are factored so the sibling plan-claude-interrupt path can reuse them.
+one recovery message for the cancelled-follow-on race. The live-session baseline and the raw
+tail reader (``resolve_live_session_baseline`` / ``read_raw_tail``) are shared with the stop
+button below.
 
 The watch is biased toward *never losing* a message: it fast-exits FLUSHED once the mirror has
 drained AND the flush is confirmed to have started a turn -- either the turn produced an answer OR
-a turn was seen alive at some poll since the chord (it started; a quick turn may start and finish
-inside the window). A drained mirror with a dangling interrupt sentinel where a turn was NEVER seen
-alive is NEEDS_RECOVERY (the flush committed the messages but nothing ran to answer them -- the
-cancelled follow-on). A mirror that never drains is NOT_FLUSHED -- so the accepted failure modes
+claude dequeued a parked prompt after the chord, which starts that prompt's own turn (it may still
+be thinking). A drained mirror with a dangling interrupt sentinel and neither is NEEDS_RECOVERY:
+the messages were committed into the turn the chord cancelled, and nothing ran to answer them --
+the cancelled follow-on. A mirror that never drains is NOT_FLUSHED -- so the accepted failure modes
 are a spurious recovery message or a spurious 500 (both visible), never a silently stranded queue.
 
 This module ALSO owns claude's stop button (Contract B) for the EMPTY-queue case
@@ -59,6 +59,7 @@ from imbue.chat.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.chat.harnesses.claude.session_parser import extract_text_content
 from imbue.chat.harnesses.claude.session_parser import is_interrupt_sentinel_text
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -98,6 +99,12 @@ RECOVERY_MESSAGE: str = (
 # Raw session-record type tags.
 _USER_RECORD_TYPE: str = "user"
 _ASSISTANT_RECORD_TYPE: str = "assistant"
+_QUEUE_OPERATION_RECORD_TYPE: str = "queue-operation"
+
+# The queue-ledger op that submits a parked prompt as a turn of its own. A message claude folds
+# into the turn already running leaves the queue as ``remove`` instead, alongside a
+# ``queued_command`` attachment, so it rides that turn and dies with it when the chord cancels it.
+_DEQUEUE_OPERATION: str = "dequeue"
 
 # Watch tuning: poll ~200ms up to 3s. The chord's effect (flush + answer, or a cancelled
 # follow-on) lands well inside this on the gate-observed trace.
@@ -154,11 +161,11 @@ class TapWatcher(Protocol):
 class TapVerdict(StrEnum):
     """The terminal reading of the post-chord watch.
 
-    - FLUSHED: mirror drained and the flush started a turn -- EITHER it produced an answer, OR a turn
-      was seen alive at some poll in the window (it started; it may have already finished).
-    - NEEDS_RECOVERY: mirror drained, a post-baseline interrupt sentinel has no answer after it, AND a
-      turn was never seen alive in the window -- the flush committed the messages but nothing ran to
-      answer them (the cancelled follow-on); the committed messages need a nudge.
+    - FLUSHED: mirror drained and the flush started a turn -- EITHER it produced an answer, OR claude
+      dequeued a parked prompt after the chord (its turn started; it may not have answered yet).
+    - NEEDS_RECOVERY: mirror drained, a post-baseline interrupt sentinel has no answer after it, AND
+      nothing was dequeued after the chord -- the messages joined the turn the chord cancelled and
+      nothing ran to answer them (the cancelled follow-on); the committed messages need a nudge.
     - NOT_FLUSHED: the deadline passed with the mirror still non-empty; the flush did not go through.
     """
 
@@ -219,8 +226,9 @@ class _TailFacts(FrozenModel):
 
     has_interrupt_sentinel: bool = Field(description="A post-baseline interrupt sentinel is present")
     has_assistant_answer: bool = Field(
-        description="An assistant record appears after the last sentinel (or after the baseline when none)"
+        description="An assistant record follows the last sentinel; before one lands, the cancelled turn is still writing"
     )
+    has_dequeued_prompt: bool = Field(description="A post-baseline ``dequeue`` started a parked prompt's own turn")
 
 
 def _load_json_object(line: str) -> dict[str, Any] | None:
@@ -243,8 +251,9 @@ def _is_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
 
     Matches the plain streaming-abort sentinel (``[Request interrupted by user]``). The
     mid-tool ``for tool use`` variant is a different string and is deliberately NOT matched
-    here (it is the sibling interrupt plan's concern). Mirrors the parser's own suppression
-    (``_parse_user_message``), which is why the raw tail -- not parsed events -- is scanned.
+    here (the stop button's :func:`_is_interrupt_abort_record` matches both). Mirrors the
+    parser's own suppression (``_parse_user_message``), which is why the raw tail -- not
+    parsed events -- is scanned.
     """
     if raw.get("type") != _USER_RECORD_TYPE:
         return False
@@ -276,55 +285,58 @@ def read_raw_tail(session_file: Path, baseline_size: int) -> list[str]:
 
 
 def compute_tail_facts(tail_lines: list[str]) -> _TailFacts:
-    """Reduce the raw post-baseline tail to the two facts the verdict lattice keys on."""
+    """Reduce the raw post-baseline tail to the facts the verdict lattice keys on."""
     last_sentinel_index = -1
     last_assistant_index = -1
+    has_dequeued_prompt = False
     for index, line in enumerate(tail_lines):
         raw = _load_json_object(line)
         if raw is None:
             continue
-        # A record is at most one of these (a sentinel is a ``user`` record), so two
-        # independent checks are equivalent to -- and clearer than -- an if/elif chain.
+        # A record is at most one of these (a sentinel is a ``user`` record), so independent
+        # checks are equivalent to -- and clearer than -- an if/elif chain.
         if _is_interrupt_sentinel_record(raw):
             last_sentinel_index = index
         if raw.get("type") == _ASSISTANT_RECORD_TYPE:
             last_assistant_index = index
+        if raw.get("type") == _QUEUE_OPERATION_RECORD_TYPE and raw.get("operation") == _DEQUEUE_OPERATION:
+            has_dequeued_prompt = True
     return _TailFacts(
         has_interrupt_sentinel=last_sentinel_index >= 0,
-        has_assistant_answer=last_assistant_index > last_sentinel_index,
+        has_assistant_answer=last_sentinel_index >= 0 and last_assistant_index > last_sentinel_index,
+        has_dequeued_prompt=has_dequeued_prompt,
     )
 
 
-def poll_verdict(mirror_is_empty: bool, facts: _TailFacts, turn_came_alive: bool) -> TapVerdict | None:
+def poll_verdict(mirror_is_empty: bool, facts: _TailFacts) -> TapVerdict | None:
     """The verdict on a single poll, or None to keep watching.
 
     A positive FLUSHED exits early on either signal that the flush started a turn: the flushed turn
-    produced an answer, OR a turn has been seen alive at some poll since the chord (it started --
-    it need not still be running now; a quick turn can start and finish inside the window). Both are
-    gated on the mirror having drained. A drained mirror with neither signal yet is held: one may
-    still land (FLUSHED), else the deadline resolves it as NEEDS_RECOVERY. A non-empty mirror is
-    only ever NOT_FLUSHED, and only at the deadline. Keying the drain on the MIRROR (not on leaves
-    in the tail) is deliberate: in the designed-for race claude's leaves land before the baseline,
-    so an in-tail-leaves requirement would misread it as failure.
+    produced an answer, OR claude dequeued a parked prompt after the chord (its turn started, however
+    long it takes to answer). Both are gated on the mirror having drained. A drained mirror with
+    neither signal yet is held: one may still land (FLUSHED), else the deadline resolves it as
+    NEEDS_RECOVERY. A non-empty mirror is only ever NOT_FLUSHED, and only at the deadline. Keying the
+    drain on the MIRROR (not on leaves in the tail) is deliberate: in the designed-for race claude's
+    leaves land before the baseline, so an in-tail-leaves requirement would misread it as failure.
     """
-    if mirror_is_empty and (facts.has_assistant_answer or turn_came_alive):
+    if mirror_is_empty and (facts.has_assistant_answer or facts.has_dequeued_prompt):
         return TapVerdict.FLUSHED
     return None
 
 
-def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts, turn_came_alive: bool) -> TapVerdict:
-    """The verdict once the watch window elapses, from the accumulated observations.
+def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts) -> TapVerdict:
+    """The verdict once the watch window elapses.
 
-    A drained mirror with a dangling interrupt sentinel and no answer is NEEDS_RECOVERY ONLY when a
-    turn was NEVER seen alive at any poll in the window -- the flush committed the messages but
-    nothing ran to answer them (the cancelled follow-on). If a turn WAS seen alive (even briefly --
-    it may have started and finished inside the window), the flush went through; that is FLUSHED,
-    not a cancelled follow-on. Keying on "a turn came alive" instead of "an answer arrived within
-    the window" is what keeps the recovery nudge from firing on a fast or slow but successful flush.
+    A drained mirror with a dangling interrupt sentinel and no answer is NEEDS_RECOVERY ONLY when
+    nothing was dequeued after the chord -- the messages joined the turn the chord cancelled, and
+    nothing ran to answer them (the cancelled follow-on). A post-chord dequeue means a turn started
+    for them, which is FLUSHED however slow its answer. Keying on the dequeue rather than on the
+    ``active`` marker matters because an interrupt fires no Stop hook: the marker the cancelled
+    turn ran under is still on disk after the chord, so it cannot say whether a turn followed.
     """
     if not mirror_is_empty:
         return TapVerdict.NOT_FLUSHED
-    if facts.has_interrupt_sentinel and not facts.has_assistant_answer and not turn_came_alive:
+    if facts.has_interrupt_sentinel and not facts.has_assistant_answer and not facts.has_dequeued_prompt:
         return TapVerdict.NEEDS_RECOVERY
     return TapVerdict.FLUSHED
 
@@ -332,8 +344,8 @@ def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts, turn_came_alive: 
 def resolve_live_session_baseline(watcher: TapWatcher) -> tuple[Path, int] | None:
     """Resolve the live session file and its current byte size, or None if there is none.
 
-    The baseline anchors the raw tail read after the chord. Shared with the sibling
-    interrupt path.
+    The baseline anchors the raw tail read after the chord. Shared with the stop button
+    (:func:`execute_claude_stop_to_composer`).
     """
     session_file = watcher.get_latest_main_session_file()
     if session_file is None:
@@ -344,54 +356,44 @@ def resolve_live_session_baseline(watcher: TapWatcher) -> tuple[Path, int] | Non
         return None
 
 
-def _poll_tap_state(
-    watcher: TapWatcher, session_file: Path, baseline_size: int, active_marker: Path
-) -> tuple[bool, _TailFacts, bool]:
-    """One observation: re-drive the mirror, classify the raw post-baseline tail, read liveness.
+def _poll_tap_state(watcher: TapWatcher, session_file: Path, baseline_size: int) -> tuple[bool, _TailFacts]:
+    """One observation: re-drive the mirror and classify the raw post-baseline tail.
 
     Re-driving via ``get_all_events`` is the single queue-feed point, so a queue already
-    flushed at natural turn end drains the mirror here. ``is_turn_active`` is the ``active``
-    marker's presence -- claude's RUNNING signal (a live turn keeps it; a turn that ended
-    clears it), read at the source mngr derives RUNNING/WAITING from. Returns
-    ``(mirror_is_empty, facts, is_turn_active)``.
+    flushed at natural turn end drains the mirror here. Returns ``(mirror_is_empty, facts)``.
     """
     watcher.get_all_events()
     mirror_is_empty = len(watcher.get_queued_messages()) == 0
     facts = compute_tail_facts(read_raw_tail(session_file, baseline_size))
-    is_turn_active = active_marker.exists()
-    return mirror_is_empty, facts, is_turn_active
+    return mirror_is_empty, facts
 
 
 def watch_for_flush_verdict(
     watcher: TapWatcher,
     session_file: Path,
     baseline_size: int,
-    active_marker: Path,
     *,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _WATCH_DEADLINE_SECONDS,
     poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
 ) -> TapVerdict:
-    """Poll the mirror + raw tail + turn liveness until a terminal verdict or the deadline.
+    """Poll the mirror + raw tail until a terminal verdict or the deadline.
 
-    ``turn_came_alive`` accumulates across polls (a turn seen alive at ANY poll stays remembered),
-    so a turn that starts and finishes inside the window still counts as a successful flush. Exits
-    early on a positive FLUSHED; otherwise polls to the deadline and finalizes from the accumulated
-    observations. Shared with the sibling interrupt path.
+    Every poll reads the whole tail since the baseline, so a dequeue or an answer seen once stays
+    seen. Exits early on a positive FLUSHED; otherwise polls to the deadline and finalizes from the
+    last observation.
     """
     deadline = now() + watch_deadline_seconds
-    mirror_is_empty, facts, is_turn_active = _poll_tap_state(watcher, session_file, baseline_size, active_marker)
-    turn_came_alive = is_turn_active
+    mirror_is_empty, facts = _poll_tap_state(watcher, session_file, baseline_size)
     while now() < deadline:
-        verdict = poll_verdict(mirror_is_empty, facts, turn_came_alive)
+        verdict = poll_verdict(mirror_is_empty, facts)
         if verdict is not None:
             return verdict
         sleep(poll_interval_seconds)
-        mirror_is_empty, facts, is_turn_active = _poll_tap_state(watcher, session_file, baseline_size, active_marker)
-        turn_came_alive = turn_came_alive or is_turn_active
-    verdict = poll_verdict(mirror_is_empty, facts, turn_came_alive)
-    return verdict if verdict is not None else deadline_verdict(mirror_is_empty, facts, turn_came_alive)
+        mirror_is_empty, facts = _poll_tap_state(watcher, session_file, baseline_size)
+    verdict = poll_verdict(mirror_is_empty, facts)
+    return verdict if verdict is not None else deadline_verdict(mirror_is_empty, facts)
 
 
 def execute_claude_shoulder_tap(
@@ -479,7 +481,6 @@ def execute_claude_shoulder_tap(
         watcher,
         session_file,
         baseline_size,
-        agent_state_dir / ACTIVE_MARKER_FILENAME,
         now=now,
         sleep=sleep,
         watch_deadline_seconds=watch_deadline_seconds,
@@ -493,12 +494,12 @@ def execute_claude_shoulder_tap(
             detail="The queue did not flush within the expected window; nothing was resent.",
         )
 
-    # NEEDS_RECOVERY: the flush committed the messages but no turn was ever seen alive to answer
-    # them (a turn seen alive at any poll would have resolved to FLUSHED). Nudge the agent to address
-    # the already-committed messages via the confirmed send path -- UNLESS a stop-button
-    # interrupt fired for this agent since the tap began. A stop delivers its own cancel chord,
-    # whose post-baseline sentinel is indistinguishable from the tap's own cancelled-follow-on
-    # signature; resending here would re-drive the very turn the user just stopped. Suppress it.
+    # NEEDS_RECOVERY: the messages were committed into the turn the chord cancelled, and no turn of
+    # their own started to answer them. Nudge the agent to address the already-committed messages
+    # via the confirmed send path -- UNLESS a stop-button interrupt fired for this agent since the
+    # tap began. A stop delivers its own cancel chord, whose post-baseline sentinel is
+    # indistinguishable from the tap's own cancelled-follow-on signature; resending here would
+    # re-drive the very turn the user just stopped. Suppress it.
     if _stop_ran_since(str(agent_state_dir), tap_started_at):
         logger.info("Suppressing claude shoulder-tap recovery: a stop interrupt ran during the tap watch")
         return ClaudeTapResult(status=ClaudeTapStatus.TAPPED)
@@ -511,9 +512,7 @@ def execute_claude_shoulder_tap(
     return ClaudeTapResult(status=ClaudeTapStatus.TAPPED)
 
 
-# =============================================================================
 # Stop button (Contract B), empty-queue case: the same chord, resolved as a pure interrupt.
-# =============================================================================
 
 
 class _AbortVerdict(StrEnum):
@@ -606,6 +605,11 @@ def _no_settle_activity() -> None:
     return None
 
 
+def _no_compaction_in_flight() -> bool:
+    """Default compaction check: nothing compacting."""
+    return False
+
+
 def _combine_return_block(queued_block: str, in_flight_block: str) -> str:
     """Concatenate the queued block and the in-flight (Sending) block, in send order.
 
@@ -648,6 +652,43 @@ def _drain_to_base_under_message_lock(
         return _combine_return_block(queued_block, get_in_flight_block())
 
 
+def _cancel_compaction_with_chord(
+    *,
+    agent_state_dir: Path,
+    keybindings_path: Path,
+    watcher: TapWatcher,
+    press_chord: Callable[[], bool],
+    restart_drain_to_base: Callable[[], str],
+    try_message_lock: Callable[[], AbstractContextManager[bool]],
+    get_in_flight_block: Callable[[], str],
+    is_compaction_in_flight: Callable[[], bool],
+    now: Callable[[], float],
+) -> str:
+    """Cancel a compaction running with no turn in flight and an empty mirror; return the block.
+
+    The same bounded under-lock re-check as the turn's chord path: a message that parked while we
+    waited routes to the base (a chord would flush it into a new turn), a lock held past the wait
+    takes the hammer with the in-flight send folded in, and a compaction that finished meanwhile
+    with no turn started is a no-op.
+    """
+    process_marker = agent_state_dir / CLAUDE_PROCESS_STARTED_MARKER_FILENAME
+    if not is_tap_binding_active(keybindings_path, process_marker):
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
+    with try_message_lock() as is_lock_held:
+        watcher.get_all_events()
+        if not is_lock_held:
+            logger.info("claude stop: message.lock still held past the bounded wait while compacting; restarting")
+            return _combine_return_block(restart_drain_to_base(), get_in_flight_block())
+        if len(watcher.get_queued_messages()) > 0:
+            return restart_drain_to_base()
+        if not is_compaction_in_flight() and not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
+            return ""
+    _record_stop(str(agent_state_dir), now=now)
+    if not press_chord():
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
+    return ""
+
+
 def execute_claude_stop_to_composer(
     *,
     agent_state_dir: Path,
@@ -659,6 +700,7 @@ def execute_claude_stop_to_composer(
     restart_drain_to_base: Callable[[], str],
     try_message_lock: Callable[[], AbstractContextManager[bool]],
     get_in_flight_block: Callable[[], str] = _no_in_flight_block,
+    is_compaction_in_flight: Callable[[], bool] = _no_compaction_in_flight,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _INTERRUPT_WATCH_DEADLINE_SECONDS,
@@ -673,7 +715,13 @@ def execute_claude_stop_to_composer(
       mirror refreshed and the block captured under the bounded ``message.lock`` -- so a message
       an in-flight send parked since the pre-lock read rides the block instead of dying with the
       SIGKILL (U1); a lock still held past the wait hammers on a fresh best-effort re-capture.
-    - Mirror EMPTY, no ``active`` marker -> ``""``: no turn, nothing queued; composer untouched.
+    - Mirror EMPTY, no ``active`` marker, compacting -> the chord, which cancels the compaction
+      (a sweep's or a composer's /compact fires no ``UserPromptSubmit``, so no ``active`` marker
+      exists while it runs). Nothing on disk confirms a cancelled compaction, so the chord is
+      not watched; an inactive binding or a failed press falls back to the base, which ends it,
+      and a compaction that ended while the stop waited for the lock is a no-op.
+    - Mirror EMPTY, no ``active`` marker, not compacting -> ``""``: no turn, nothing queued;
+      composer untouched.
     - Mirror EMPTY, a dialog / inactive binding / no live session -> the base (same bounded-lock
       capture): the Chat-only chord is inert or unobservable, but a blocked turn is still a turn.
     - Mirror EMPTY + open turn + bindable -> the chord: re-check under the bounded lock (a
@@ -709,7 +757,19 @@ def execute_claude_stop_to_composer(
 
     # Mirror is empty from here on.
     if not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
-        # No turn in flight and nothing queued: a pure no-op.
+        if is_compaction_in_flight():
+            return _cancel_compaction_with_chord(
+                agent_state_dir=agent_state_dir,
+                keybindings_path=keybindings_path,
+                watcher=watcher,
+                press_chord=press_chord,
+                restart_drain_to_base=restart_drain_to_base,
+                try_message_lock=try_message_lock,
+                get_in_flight_block=get_in_flight_block,
+                is_compaction_in_flight=is_compaction_in_flight,
+                now=now,
+            )
+        # No turn in flight, no compaction, and nothing queued: a pure no-op.
         return ""
 
     if (agent_state_dir / PERMISSIONS_WAITING_MARKER_FILENAME).exists():
@@ -830,6 +890,7 @@ class ClaudeInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         return execute_claude_stop_to_composer(
             agent_state_dir=self._agent_state_dir,
@@ -841,6 +902,7 @@ class ClaudeInterruptToComposer(InterruptToComposer):
             restart_drain_to_base=lambda: restart_drain(self._agent_info, watcher, restart_process, settle_activity),
             try_message_lock=lambda: try_hold_message_lock(self._agent_state_dir),
             get_in_flight_block=get_in_flight_block,
+            is_compaction_in_flight=is_compaction_in_flight,
         )
 
 

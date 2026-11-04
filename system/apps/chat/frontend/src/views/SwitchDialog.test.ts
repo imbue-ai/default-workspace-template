@@ -20,13 +20,23 @@ const state = vi.hoisted(() => {
     draftAttachments: [] as unknown[],
     isStartAccepted: true,
     isTranscriptLoaded: true,
+    // What a load in flight lands, when the transcript has not loaded: its events, or null for a
+    // load that fails (or none at all).
+    loadLands: null as unknown[] | null,
     restored: [] as unknown[],
+    // Every launch of a chat awaiting its first send, and why the next one is refused (null for none).
+    launches: [] as unknown[][],
+    launchRefusal: null as string | null,
   };
 });
 vi.mock("../models/Chats", () => ({
   getChatById: () => state.chat ?? undefined,
   addChatsUpdatedListener: () => undefined,
   addActiveAgentChangedListener: () => undefined,
+  launchChat: (...args: unknown[]) => {
+    state.launches.push(args);
+    return state.launchRefusal === null ? Promise.resolve({}) : Promise.reject(new Error(state.launchRefusal));
+  },
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
@@ -34,10 +44,18 @@ vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
 }));
 vi.mock("../models/Providers", () => ({
   accountForAgent: (id?: string) => state.accounts.find((account) => account.id === id) ?? null,
+  isAccountSignedOut: (id?: string | null) => !!id && !state.accounts.some((account) => account.id === id),
 }));
 vi.mock("../models/Response", () => ({
   getEventsForChat: () => state.events,
   isTranscriptLoaded: () => state.isTranscriptLoaded,
+  whenTranscriptLoadSettles: () => {
+    if (state.loadLands !== null) {
+      state.events = state.loadLands;
+      state.isTranscriptLoaded = true;
+    }
+    return Promise.resolve(state.isTranscriptLoaded);
+  },
   mintMessageId: () => "m-1",
 }));
 vi.mock("../models/Handoffs", () => ({
@@ -74,6 +92,7 @@ vi.mock("../models/AccountModelOptions", () => ({
 }));
 
 import m from "mithril";
+import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
@@ -82,7 +101,9 @@ import {
   beginSwitchTo,
   beginSwitchToAccountId,
   closeSwitchDialog,
+  launchAwaitingChatAsRoom,
   openSwitchDialog,
+  takeBackSwitch,
 } from "./SwitchDialog";
 
 const OWN = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
@@ -93,7 +114,6 @@ const OTHER_CLAUDE = {
   lane: "anthropic",
   label: "Anthropic 2 (Claude Code)",
 };
-// agy's model bar is read-only: its model is changed from the agent's terminal, not from the chat.
 const GOOGLE = { id: "acct-google", harness: "antigravity", lane: "google", label: "Google (Antigravity CLI)" };
 const OTHER_GOOGLE = { ...GOOGLE, id: "acct-google-2", label: "Google 2 (Antigravity CLI)" };
 const ASTRA = {
@@ -106,6 +126,7 @@ const ASTRA = {
   supports_fast: true,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const WELCOME = { type: "user_message", event_id: "u-w", content: "/welcome", display: "hidden", timestamp: "t1" };
 const TYPED = { type: "user_message", event_id: "u-1", content: "hello", timestamp: "t2" };
@@ -114,6 +135,14 @@ const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
   m.render(ROOT(), m(SwitchDialog as never, { chatId: "agent-1" }));
+}
+
+/** The chat on OWN with a turn in progress. */
+function workingChat(): ChatSnapshot {
+  return chatSnapshotFixture("agent-1", {
+    status: "working",
+    active_agent: { harness: "claude", account_id: OWN.id },
+  });
 }
 
 async function flush(): Promise<void> {
@@ -127,6 +156,13 @@ function choose(selectClass: string, value: string): void {
   select.value = value;
   select.dispatchEvent(new Event("change", { bubbles: true }));
   render();
+}
+
+/** Leave the transcript unloaded, with a load in flight that lands ``events``. */
+function loadInFlightLanding(events: unknown[]): void {
+  state.isTranscriptLoaded = false;
+  state.events = [];
+  state.loadLands = events;
 }
 
 function pressButton(label: string): void {
@@ -151,9 +187,24 @@ describe("the switch dialog", () => {
     state.draftAttachments = [];
     state.isStartAccepted = true;
     state.isTranscriptLoaded = true;
+    state.loadLands = null;
+    state.launches.length = 0;
+    state.launchRefusal = null;
     setPendingAccount("agent-1", null);
     // The dialog is module state: a test that leaves it up would render into the next one's root.
     closeSwitchDialog();
+  });
+
+  it("launches a chat awaiting its first send as a room, on no account and with nothing said", async () => {
+    await launchAwaitingChatAsRoom("agent-first");
+    expect(state.launches).toEqual([["agent-first", "", "", "room"]]);
+    expect(state.notices).toEqual([]);
+  });
+
+  it("raises the composer's failure notice when the room's launch is refused", async () => {
+    state.launchRefusal = "no room for you";
+    await launchAwaitingChatAsRoom("agent-first");
+    expect(state.notices).toEqual([{ title: "Couldn't make a room", detail: "no room for you" }]);
   });
 
   it("switches a chat with no user turn at once, with no dialog and nothing to say", async () => {
@@ -166,7 +217,48 @@ describe("the switch dialog", () => {
     expect(getPendingAccountId("agent-1")).toBeNull();
   });
 
-  it("asks rather than switching at once when the transcript has not loaded", async () => {
+  it("waits out a load in flight on a new chat, and switches it at once when it has no user turn", async () => {
+    // A new chat's page asks for its transcript again once the chat app lists it; a press right
+    // after lands before that load does. Nothing may be armed: there is nothing to hand over.
+    loadInFlightLanding([WELCOME]);
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    expect(state.switches).toEqual([["agent-1", "acct-openai", "", "m-1"]]);
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("decides only the latest of the presses made while a load is in flight", async () => {
+    loadInFlightLanding([WELCOME]);
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    beginSwitchTo("agent-1", OTHER_CLAUDE as ProviderAccount);
+    await flush();
+    expect(state.switches).toEqual([["agent-1", "acct-anthropic-2", "", "m-1"]]);
+    expect(state.notices).toEqual([]);
+  });
+
+  it("drops a press made while a load is in flight once the choice is taken back", async () => {
+    loadInFlightLanding([WELCOME]);
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    takeBackSwitch("agent-1");
+    await flush();
+    expect(state.switches).toEqual([]);
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("waits out a load in flight, and asks when the chat turns out to have a user turn", async () => {
+    loadInFlightLanding([WELCOME, TYPED]);
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    expect(state.switches).toEqual([]);
+    render();
+    expect(ROOT().textContent).toContain("Switch to Codex?");
+  });
+
+  it("asks rather than switching at once when the transcript does not load", async () => {
     // The window is empty because nothing landed, not because the chat is new: acting on it would
     // switch a chat of any length with no dialog, no summary and no message.
     state.isTranscriptLoaded = false;
@@ -212,6 +304,7 @@ describe("the switch dialog", () => {
   });
 
   it("asks a chat with context, and arms the switch with the model picked", async () => {
+    state.chat = workingChat();
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     expect(state.switches).toEqual([]);
     render();
@@ -246,6 +339,64 @@ describe("the switch dialog", () => {
     expect(state.switches).toEqual([]);
     render();
     expect(ROOT().textContent).toBe("");
+  });
+
+  it("starts a chosen model's effort at the model's default", async () => {
+    const sol = {
+      ...ASTRA,
+      id: "gpt-6-sol",
+      label: "GPT-6-Sol",
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "medium", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
+      default_effort: "medium",
+    };
+    state.options = [sol];
+    state.chat = workingChat();
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    render();
+    choose("switch-dialog-model", "gpt-6-sol");
+    expect(ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-effort")?.value).toBe("medium");
+  });
+
+  it("does not say an idle agent wraps up what it is doing", async () => {
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toContain(
+      "Claude Code hands the conversation to OpenAI (Codex), starting with your next message.",
+    );
+    expect(ROOT().textContent).not.toContain("wraps up");
+  });
+
+  it("arms the switch at once, with no dialog, for a chat whose account was signed out", () => {
+    // Signed out of the chat's own account (OWN is no longer listed), then into another from the chat.
+    state.accounts = [CODEX, OTHER_CLAUDE];
+    beginSwitchToAccountId("agent-1", OTHER_CLAUDE.id);
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(state.switches).toEqual([]);
+    expect(getPendingAccountId("agent-1")).toBe(OTHER_CLAUDE.id);
+    expect(getPendingPick("agent-1")).toBeNull();
+
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(getPendingAccountId("agent-1")).toBe(CODEX.id);
+  });
+
+  it("says a signed-out chat's conversation moves, not that its agent wraps up, when the switch is changed", () => {
+    state.accounts = [CODEX, OTHER_CLAUDE];
+    state.chat = workingChat();
+    // What the strip's "Change" opens for the switch the sign-in armed.
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toContain(
+      "This conversation moves to Anthropic 2 (Claude Code), starting with your next message.",
+    );
+    expect(ROOT().textContent).not.toContain("wraps up");
   });
 
   it("starts a new chat on the target with the draft and the pick, leaving this chat alone", async () => {
@@ -403,9 +554,33 @@ describe("the switch dialog", () => {
     ]);
   });
 
-  it("starts a rebind's new chat with no pick on a harness whose model the chat app cannot switch", async () => {
-    // agy's model is changed from the agent's terminal: carrying the chat's model over would be a pick the
-    // new chat could never apply.
+  it("starts a rebind's new chat on the default effort this chat runs at when it never picked one", async () => {
+    // codex records no effort until one is picked, and a pick for a model with efforts must name one.
+    const otherCodex = { ...CODEX, id: "acct-openai-2", label: "OpenAI 2 (Codex)" };
+    state.accounts = [CODEX, otherCodex];
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: {
+        harness: "codex",
+        account_id: CODEX.id,
+        model_choice: {
+          identity: { model_id: "gpt-6-astra", effort: null, fast: false },
+          matched: { ...ASTRA, default_effort: "high" },
+        },
+      },
+    });
+    state.draft = "a fresh start";
+    openSwitchDialog("agent-1", otherCodex as ProviderAccount);
+    render();
+    await flush();
+    render();
+    pressButton("Start a new chat");
+    await flush();
+    expect(state.started).toEqual([
+      ["acct-openai-2", "a fresh start", { model_id: "gpt-6-astra", effort: "high", fast: false }],
+    ]);
+  });
+
+  it("starts a rebind's new chat on the antigravity model the chat runs on", async () => {
     state.accounts = [GOOGLE, OTHER_GOOGLE];
     state.options = [];
     state.chat = chatSnapshotFixture("agent-1", {
@@ -413,8 +588,19 @@ describe("the switch dialog", () => {
         harness: "antigravity",
         account_id: GOOGLE.id,
         model_choice: {
-          identity: { model_id: "gemini-3-pro", effort: null, fast: false },
-          matched: { ...ASTRA, id: "gemini-3-pro", label: "Gemini 3 Pro", efforts: [], supports_fast: false },
+          identity: { model_id: "Gemini 3.8 Flash", effort: "medium", fast: false },
+          matched: {
+            ...ASTRA,
+            id: "gemini-3.8-flash",
+            label: "Gemini 3.8 Flash",
+            efforts: [
+              { level: "low", in_picker: true },
+              { level: "medium", in_picker: true },
+              { level: "high", in_picker: true },
+            ],
+            supports_fast: false,
+            default_effort: "high",
+          },
         },
       },
     });
@@ -426,23 +612,9 @@ describe("the switch dialog", () => {
     expect(ROOT().textContent).toContain("Switch to Google 2 (Antigravity CLI)?");
     pressButton("Start a new chat");
     await flush();
-    expect(state.started).toEqual([["acct-google-2", "a fresh start", null]]);
-  });
-
-  it("points a harness the chat app cannot switch at its terminal rather than at the model bar", async () => {
-    state.accounts = [GOOGLE, OTHER_GOOGLE];
-    state.options = [];
-    state.chat = chatSnapshotFixture("agent-1", {
-      active_agent: { harness: "antigravity", account_id: GOOGLE.id },
-    });
-    openSwitchDialog("agent-1", OTHER_GOOGLE as ProviderAccount);
-    render();
-    await flush();
-    render();
-    expect(ROOT().querySelector("select")).toBeNull();
-    expect(ROOT().textContent).toContain(
-      "Antigravity CLI keeps its current model, which is changed from the agent's terminal, not from the chat.",
-    );
+    expect(state.started).toEqual([
+      ["acct-google-2", "a fresh start", { model_id: "gemini-3.8-flash", effort: "medium", fast: false }],
+    ]);
   });
 
   it("says a rebind keeps its model when the account has none to offer", async () => {

@@ -1,0 +1,1 @@
+The bootstrap writes the routines tick cron entry (`/etc/cron.d/routines`, `routines tick` once a minute through the routines env wrapper) at every boot beside the recovery guard, and first runs `routines migrate-cron` so a workspace's cron entries from before routines existed become definitions; the `data/.state/cron.d` install still runs for whatever the migration leaves there.

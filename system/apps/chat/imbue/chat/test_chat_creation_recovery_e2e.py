@@ -45,6 +45,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -57,23 +58,13 @@ def _playwright_browsers_installed() -> bool:
     return is_e2e_browser_installed()
 
 
-def _frontend_built() -> bool:
-    """Check whether the chat frontend has been built (``static/chat.html`` exists).
-
-    Without a build the Flask server serves a "Frontend not built" placeholder, so
-    every e2e test would ``page.goto()`` and then burn its per-test timeout waiting
-    for selectors that can never appear. The path is resolved relative to this test
-    module (``imbue/chat/`` holds both this file and the build output)
-    so it holds regardless of the cwd.
-    """
-    return (Path(__file__).parent / "static" / "chat.html").is_file()
-
-
 pytestmark = [
     pytest.mark.browser,
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
+    # Without a build the Flask server serves a "Frontend not built" placeholder, so every e2e test
+    # would ``page.goto()`` and then burn its per-test timeout waiting for selectors that can never appear.
     pytest.mark.skipif(
-        not _frontend_built(),
+        not is_chat_frontend_built(),
         reason=("Chat frontend not built (run `cd system && npm run build`); skipping e2e."),
     ),
 ]

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
+from enum import auto
 from pathlib import Path
+from typing import Final
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -15,6 +18,7 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.api.find import AgentMatch
@@ -26,15 +30,24 @@ from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
+from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.config.data_types import MngrContext
-from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
+from imbue.mngr.errors import AgentNoLongerIdleError
+from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import MessageLockTimeoutError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.interfaces.agent import HasCompactionMixin
+from imbue.mngr.interfaces.agent import require_compaction_agent
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_autocompact.config import AutoCompactPluginConfig
+from imbue.mngr_autocompact.config import ContextCompactionMode
+from imbue.mngr_autocompact.manager import COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS
 
 logger = _loguru_logger
 
@@ -47,6 +60,11 @@ def get_host_dir() -> Path:
     and the activity-state tracker (``AgentManager``).
     """
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
+
+
+def agent_tmux_session_name(agent_name: str) -> str:
+    """The tmux session an agent runs in: mngr's ``prefix`` (``MNGR_PREFIX``, ``mngr-`` unset) and its name."""
+    return f"{os.environ.get('MNGR_PREFIX', 'mngr-')}{agent_name}"
 
 
 class AgentInfo(FrozenModel):
@@ -85,13 +103,27 @@ def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
     return mngr_ctx, cg
 
 
-def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginConfigT:
-    """A plugin's config as this workspace's mngr resolves it: its defaults when no config file sets it."""
+CompactByNameFn = Callable[[MngrContext, Sequence[AgentName]], Sequence[AgentName]]
+
+
+def compact_stale_agents_if_enabled(names: Sequence[str], compact_by_name: CompactByNameFn) -> list[str]:
+    """Compact whichever of the named agents are stale, when the workspace's mngr config has proactive compaction on.
+
+    Returns the names compacted. mngr caches provider instances per context, and this builds a
+    fresh context on every call, so the context's instances are closed before it is dropped.
+    """
     mngr_ctx, cg = _get_mngr_context()
     try:
-        return mngr_ctx.get_plugin_config(name, config_type)
+        config = mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
+        if config.mode != ContextCompactionMode.PROACTIVE_TIMER:
+            return []
+        compacted = compact_by_name(mngr_ctx, [AgentName(name) for name in names])
     finally:
-        cg.__exit__(None, None, None)
+        try:
+            close_provider_instances_for_context(mngr_ctx)
+        finally:
+            cg.__exit__(None, None, None)
+    return [str(name) for name in compacted]
 
 
 def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
@@ -206,6 +238,16 @@ SendFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
 # Press a tmux key token (e.g. "M-q") into a resolved set of agents' panes. Same shape as
 # SendFn -- the str is the key token rather than message text.
 PressFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
+# Ask mngr to compact the agent with this id now, with these compaction instructions (if any).
+CompactFn = Callable[[AgentId, str | None, MngrContext], None]
+
+# How long a send waits before each new try at an agent not accepting messages yet, or a host too loaded to answer.
+_WAIT_OUT_DELAYS_SECONDS: Final[tuple[float, ...]] = (1.0, 2.0, 4.0)
+
+
+def _is_never_taken_back() -> bool:
+    """For a send no stop can take back."""
+    return False
 
 
 def _discover_locations(agent_id: AgentId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
@@ -241,8 +283,8 @@ class SendFailedError(Exception):
     the returned reason instead, so this changes nothing for them.
 
     ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
-    Unknown when mngr did not classify it, which the chat treats as it always has.
+    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
+    Unknown when mngr did not classify it.
     """
 
     def __init__(self, detail: str, kind: str = "unknown") -> None:
@@ -251,17 +293,14 @@ class SendFailedError(Exception):
         super().__init__(detail)
 
 
-def delivered_or_raise(failure: SendFailure | None) -> bool:
-    """Turn a send's reason into an exception, or report delivery.
+class SendDelivery(UpperCaseStrEnum):
+    """How a send that reached its agent got there."""
 
-    ``SessionDeps.send_to_harness`` is typed as returning a bool and is shared with paths that
-    have no way to show a reason, so the chat path raises rather than widening that contract.
-    The session's send already treats an exception as an expected exit (it resolves its
-    in-flight record in a ``finally`` and lets the request fail with the draft kept).
-    """
-    if failure is not None:
-        raise SendFailedError(failure.reason, failure.kind)
-    return True
+    # mngr confirmed it, or settled it from the agent's screen.
+    DELIVERED = auto()
+    # mngr could not confirm the first send, so it was sent once more, and that one landed. The
+    # first may have landed too, so the agent may hold the message twice.
+    RESENT = auto()
 
 
 class SendFailure(FrozenModel):
@@ -269,6 +308,18 @@ class SendFailure(FrozenModel):
 
     reason: str
     kind: str
+
+
+def delivered_or_raise(result: SendDelivery | SendFailure) -> SendDelivery:
+    """Turn a send's reason into an exception, or report how it was delivered.
+
+    The chat path raises rather than returning the reason: the session's send already treats an
+    exception as an expected exit (it resolves its in-flight record in a ``finally`` and lets the
+    request fail with the draft kept), and the endpoint turns it into the failure the composer shows.
+    """
+    if isinstance(result, SendFailure):
+        raise SendFailedError(result.reason, result.kind)
+    return result
 
 
 def _first_failure(result: MessageResult) -> SendFailure:
@@ -309,6 +360,78 @@ def _without_send_prefix(message: str, agent_name: str) -> str:
     return message[len(prefix) :] if message.startswith(prefix) else message
 
 
+@pure
+def _is_location_miss(result: MessageResult) -> bool:
+    """Whether a send reached no agent only because the agent was not where it was looked for.
+
+    Only then was nothing typed, so only then may the message be sent again at a freshly
+    discovered location. Any other failure is the answer: an unconfirmed submission's text may
+    already be in the agent's input, and a blocked send was delivered, so sending either again
+    can deliver the message twice. A send that recorded nothing at all reached no agent either.
+    """
+    return not result.blocked_agents and all(
+        failure.kind == SendFailureKind.AGENT_NOT_FOUND for failure in result.failures
+    )
+
+
+@pure
+def _is_every_failure_of_kind(result: MessageResult, *kinds: SendFailureKind) -> bool:
+    """Whether the send failed for every agent it reached, each time for one of ``kinds``, and blocked none."""
+    return (
+        not result.blocked_agents
+        and len(result.failures) > 0
+        and all(failure.kind in kinds for failure in result.failures)
+    )
+
+
+@pure
+def _is_untaken(result: MessageResult) -> bool:
+    """Whether every agent the send reached left the message untaken, and cleared it from its input box.
+
+    Nothing was delivered and nothing is left to append to, so the message may be sent again at once.
+    """
+    return _is_every_failure_of_kind(result, SendFailureKind.NOT_SUBMITTED)
+
+
+@pure
+def _is_unstarted(result: MessageResult) -> bool:
+    """Whether every agent the send reached was down and would not start.
+
+    Nothing was typed, and a start can fail for a passing reason, so the message may be sent again at once.
+    """
+    return _is_every_failure_of_kind(result, SendFailureKind.AGENT_UNREACHABLE)
+
+
+@pure
+def _is_unsure(result: MessageResult) -> bool:
+    """Whether nothing shows if the send reached its agents: mngr could not confirm it, or failed in a way it
+    could not classify, after which the text may have been typed.
+
+    The message may have arrived or not. Not sending one that never arrived is worse than sending
+    one twice, so such a send is sent once more.
+    """
+    return _is_every_failure_of_kind(result, SendFailureKind.SUBMISSION_UNCONFIRMED, SendFailureKind.UNKNOWN)
+
+
+@pure
+def _is_worth_waiting_out(result: MessageResult) -> bool:
+    """Whether the send failed only because the agent is not accepting messages yet, or its host is too loaded to
+    say: nothing was typed, and trying again shortly can help."""
+    return _is_every_failure_of_kind(result, SendFailureKind.NOT_READY, SendFailureKind.STATE_UNKNOWN)
+
+
+class _SendAttempt(FrozenModel):
+    """What one send through ``MngrMessenger`` came to, its repeats included."""
+
+    result: MessageResult
+    is_resent: bool
+
+
+def _delivery_of(attempt: _SendAttempt) -> SendDelivery:
+    """How a send that reached its agent got there."""
+    return SendDelivery.RESENT if attempt.is_resent else SendDelivery.DELIVERED
+
+
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
     """Press ``key`` into a pre-resolved set of agents' panes (never auto-starting).
 
@@ -325,6 +448,41 @@ def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) ->
     )
 
 
+# The kind a /compact the chat cannot ask mngr for right now is declined with: the agent is mid-turn,
+# which a compaction would abort, or it is not running.
+COMPACT_UNAVAILABLE_SEND_FAILURE_KIND: Final[str] = "compact_unavailable"
+COMPACT_WHILE_BUSY_DETAIL: Final[str] = "The agent is busy. Send /compact again once it has finished."
+
+
+def request_idle_compaction(agent: HasCompactionMixin, instructions: str | None) -> None:
+    """Request a compaction of ``agent`` as the idle sweep does, only while mngr sees it idle.
+
+    mngr re-checks the idle period once it holds the agent's message lock, so a turn that started
+    meanwhile is not aborted by the compaction. Raises ``SendFailedError`` with
+    ``COMPACT_UNAVAILABLE_SEND_FAILURE_KIND`` when the agent is not idle.
+    """
+    idle_since = agent.get_idle_since()
+    if idle_since is None:
+        raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND)
+    try:
+        agent.request_compaction(
+            instructions=instructions,
+            message_lock_timeout_seconds=COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS,
+            expected_idle_since=idle_since,
+        )
+    except (MessageLockTimeoutError, AgentNoLongerIdleError) as e:
+        raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND) from e
+
+
+def _compact(agent_id: AgentId, instructions: str | None, mngr_ctx: MngrContext) -> None:
+    """Have mngr compact the running agent with ``agent_id`` now, if it sees it idle (``request_idle_compaction``)."""
+    host_ref, agent_ref = find_one_agent(AgentAddress(agent=agent_id), mngr_ctx)
+    agent, _host = resolve_to_started_host_and_running_agent(
+        host_ref=host_ref, agent_ref=agent_ref, allow_auto_start=False, mngr_ctx=mngr_ctx
+    )
+    request_idle_compaction(require_compaction_agent(agent), instructions)
+
+
 class MngrMessenger(FrozenModel):
     """Sends a message to (or presses a key chord into) an agent, preferring a known location.
 
@@ -336,45 +494,92 @@ class MngrMessenger(FrozenModel):
     discover: DiscoverFn = _discover_locations
     send: SendFn = _send_to
     press: PressFn = _press_to
+    compact: CompactFn = _compact
+    pause: Callable[[float], None] = time.sleep
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = _is_never_taken_back,
+    ) -> SendDelivery | SendFailure:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        Returns None when the message was delivered, or the reason it was not. The reason is
-        the harness's own words -- "the agent is in shell mode with an unsubmitted command",
-        say -- and it exists to be shown to the user, who can usually act on it. Reducing it to
-        a bool here would leave the UI with nothing to report but the fact of failure.
+        Returns how the message was delivered, or the reason it was not. The reason is the
+        harness's own words -- "the agent is in shell mode with an unsubmitted command", say --
+        and it exists to be shown to the user, who can usually act on it. Reducing it to a bool
+        here would leave the UI with nothing to report but the fact of failure.
 
         ``known_locations`` (the caller's already-resolved location, from the live
-        observe cache) is messaged directly -- no discovery. On a miss, or if that send
-        reaches no agent (the location just went stale: destroyed, recreated, or moved
-        hosts), it falls back to a full mngr discovery. The id is globally unique, so it
-        resolves to exactly the intended agent, never fanning out across same-named
-        agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
+        observe cache) is messaged directly -- no discovery. With no known location, or
+        when that send finds the agent is not there (the location went stale: destroyed,
+        recreated, or moved hosts), it falls back to a full mngr discovery. Any other
+        failure at the known location is returned as is (see ``_is_location_miss``), with these
+        exceptions, each repeated wherever it was sent. An agent not accepting messages yet, or a
+        host too loaded to say, is tried again with a short backoff (``_is_worth_waiting_out``). A
+        message the agent never took and cleared from its input box, or one for an agent that was
+        down and would not start, is sent once more (``_is_untaken``, ``_is_unstarted``). And unless
+        ``is_resent_when_unsure`` is off, one nothing shows reached the agent is sent once more
+        (``_is_unsure``), which is ``SendDelivery.RESENT`` when that second send lands; its failure
+        is returned, so such a message is never sent a third time. None of these sends goes out once
+        ``is_taken_back`` says a stop has handed the message back to the user, nor does the send at a
+        discovered location: the failure so far is returned. The id is globally unique, so discovery
+        resolves to exactly the intended agent, never fanning out across same-named agents on other
+        hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
             if known_locations:
-                result = self.send(known_locations, message, mngr_ctx)
-                if result.successful_agents:
-                    return None
+                attempt = self._send_with_repeats(
+                    known_locations, message, mngr_ctx, is_resent_when_unsure, is_taken_back
+                )
+                if attempt.result.successful_agents:
+                    return _delivery_of(attempt)
+                if attempt.is_resent or not _is_location_miss(attempt.result) or is_taken_back():
+                    return _first_failure(attempt.result)
             matches = self.discover(agent_id, mngr_ctx)
-            result = self.send(matches, message, mngr_ctx)
-            if result.successful_agents:
-                return None
-            return _first_failure(result)
+            attempt = self._send_with_repeats(matches, message, mngr_ctx, is_resent_when_unsure, is_taken_back)
+            if attempt.result.successful_agents:
+                return _delivery_of(attempt)
+            return _first_failure(attempt.result)
         finally:
             cg.__exit__(None, None, None)
+
+    def _send_with_repeats(
+        self,
+        matches: Sequence[AgentMatch],
+        message: str,
+        mngr_ctx: MngrContext,
+        is_resent_when_unsure: bool,
+        is_taken_back: Callable[[], bool],
+    ) -> _SendAttempt:
+        """Send to ``matches``, again while it is worth waiting (``_is_worth_waiting_out``), once more when the agent
+        never took the message or would not start (``_is_untaken``, ``_is_unstarted``), and once more when nothing
+        shows it arrived (``_is_unsure``, unless ``is_resent_when_unsure`` is off). No repeat goes out once
+        ``is_taken_back`` says so."""
+        result = self.send(matches, message, mngr_ctx)
+        for delay_seconds in _WAIT_OUT_DELAYS_SECONDS:
+            if not _is_worth_waiting_out(result):
+                break
+            self.pause(delay_seconds)
+            if is_taken_back():
+                return _SendAttempt(result=result, is_resent=False)
+            result = self.send(matches, message, mngr_ctx)
+        if (_is_untaken(result) or _is_unstarted(result)) and not is_taken_back():
+            result = self.send(matches, message, mngr_ctx)
+        if is_resent_when_unsure and _is_unsure(result) and not is_taken_back():
+            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent=True)
+        return _SendAttempt(result=result, is_resent=False)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
-        way (known location first, discovery on a miss), but delivers a keystroke rather than
-        text and never auto-starts a stopped agent. Returns True when the chord reached the
-        agent.
+        The key-chord sibling of ``send_to_agent``: it tries the known location first, but
+        falls back to discovery whenever the press there reached no agent, not only on a
+        location miss. It delivers a keystroke rather than text and never auto-starts a
+        stopped agent. Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
@@ -384,6 +589,26 @@ class MngrMessenger(FrozenModel):
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:
             cg.__exit__(None, None, None)
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        """Have mngr compact the agent with ``agent_id`` now, through the same request the idle sweep makes.
+
+        Raises ``SendFailedError``: with ``COMPACT_UNAVAILABLE_SEND_FAILURE_KIND`` when the agent is
+        not idle, else with mngr's own words when the request fails. Raises mngr's
+        ``AgentNotFoundError`` when mngr no longer lists the agent.
+        """
+        mngr_ctx, cg = _get_mngr_context()
+        try:
+            self.compact(agent_id, instructions, mngr_ctx)
+        except AgentNotFoundError:
+            raise
+        except (MngrError, OSError) as e:
+            raise SendFailedError(str(e)) from e
+        finally:
+            try:
+                close_provider_instances_for_context(mngr_ctx)
+            finally:
+                cg.__exit__(None, None, None)
 
 
 def start_agent(agent_name: str) -> None:

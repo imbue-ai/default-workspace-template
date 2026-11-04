@@ -4,7 +4,7 @@ import signal
 import socket
 import threading
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from types import FrameType
 from typing import Final
@@ -52,7 +52,9 @@ def _bind_listening_socket(host: str, port: int) -> socket.socket:
 
 
 @contextmanager
-def serve_in_background(host: str, port: int, app: Flask) -> Iterator[BaseWSGIServer]:
+def serve_in_background(
+    host: str, port: int, app: Flask
+) -> Generator[BaseWSGIServer, None, None]:
     """Serve ``app`` at ``host:port`` on a daemon thread for the block; the socket accepts connections once the
     block is entered and is closed when it ends."""
     with log_span("Starting a server at {}:{}", host, port):

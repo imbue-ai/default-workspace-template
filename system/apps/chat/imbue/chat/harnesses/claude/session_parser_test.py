@@ -5,9 +5,11 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.harnesses.claude.session_parser import _SYNTHETIC_MODEL
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import _MAX_ECHOED_REQUEST_PROBES
 
 
@@ -252,7 +254,6 @@ def test_slash_command_expansion_with_empty_args_drops_trailing_space() -> None:
     events = parse_lines(lines)
     assert len(events) == 1
     assert events[0]["content"] == "/clear"
-
 
 
 def test_queued_slash_command_expansion_normalized() -> None:
@@ -757,22 +758,31 @@ def test_compaction_summary_user_message_emitted_as_status() -> None:
     assert "is_meta" not in events[0] and "is_compact_summary" not in events[0]
 
 
-def test_compaction_command_and_output_dropped() -> None:
-    """The /compact command and <local-command-stdout> compaction output are dropped."""
-    cmd_line = _make_user_line(
-        "uuid-cmd",
+def test_typed_compact_is_a_shown_non_turn_tail_bubble_and_its_expansion_is_hidden() -> None:
+    """Claude Code records one /compact twice: the typed command as it is submitted, then its expansion once the
+    compaction ends. The typed one is the user's bubble, and the page counts its arrival as the /compact's own; the
+    expansion repeats it and renders nowhere. Neither is a turn tail, and the <local-command-stdout> output is
+    dropped."""
+    typed_line = _make_user_line("uuid-typed", "2026-01-01T00:00:00Z", "/compact")
+    expansion_line = _make_user_line(
+        "uuid-expansion",
         "2026-01-01T00:00:00Z",
         "<command-name>/compact</command-name>\n<command-message>compact</command-message>",
     )
-    plain_cmd_line = _make_user_line("uuid-cmd2", "2026-01-01T00:00:01Z", "/compact")
     out_line = _make_user_line(
         "uuid-out",
         "2026-01-01T00:00:02Z",
         "<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m</local-command-stdout>",
     )
-    events = parse_lines([cmd_line, plain_cmd_line, out_line])
-    assert len(events) == 0
-
+    typed, expansion = parse_lines([typed_line, expansion_line, out_line])
+    assert (typed["event_id"], typed["type"], typed["content"]) == ("uuid-typed-user", "user_message", "/compact")
+    assert "display" not in typed
+    assert typed["non_turn_tail"] is True
+    assert is_genuine_user_turn(typed)
+    assert (expansion["event_id"], expansion["content"]) == ("uuid-expansion-user", "/compact")
+    assert expansion["display"] == DisplayKind.HIDDEN
+    assert expansion["non_turn_tail"] is True
+    assert not is_genuine_user_turn(expansion)
 
 
 def test_synthetic_model_assistant_message_not_emitted() -> None:

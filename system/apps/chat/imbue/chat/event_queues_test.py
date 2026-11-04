@@ -86,3 +86,12 @@ def test_register_after_shutdown_returns_closed_queue() -> None:
     queues.shutdown()
     q = queues.register("agent-1")
     assert q.get_nowait() is None
+
+
+def test_streamed_chat_ids_are_the_chats_with_a_stream_open() -> None:
+    queues = AgentEventQueues()
+    assert queues.streamed_chat_ids() == frozenset()
+    first = queues.register("chat-1")
+    queues.register("chat-2")
+    queues.unregister("chat-1", first)
+    assert queues.streamed_chat_ids() == frozenset({"chat-2"})

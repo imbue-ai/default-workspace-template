@@ -35,6 +35,7 @@ from loguru import logger
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import start_agent
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -177,8 +178,13 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
     )
 
 
+# Parsed catalogs by the provider data dir they were read from, so each pi on PATH is served its own models.
+# An empty catalog is not stored, so a pi installed later is still read.
+_CATALOG_BY_DATA_DIR: dict[Path, HarnessCatalog] = {}
+
+
 def get_catalog() -> HarnessCatalog:
-    """pi's master catalog, or an empty one when pi's data is absent (invariant: never raise)."""
+    """The master catalog of the ``pi`` on PATH, or an empty one when pi's data is absent (invariant: never raise)."""
     executable = shutil.which("pi")
     data_dir = find_provider_data_dir(Path(executable)) if executable else None
     if data_dir is None:
@@ -191,7 +197,13 @@ def get_catalog() -> HarnessCatalog:
             # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
             native_atomic_shoulder_tap_possible=True,
         )
-    return build_catalog(data_dir)
+    cached = _CATALOG_BY_DATA_DIR.get(data_dir)
+    if cached is not None:
+        return cached
+    catalog = build_catalog(data_dir)
+    if catalog.options:
+        _CATALOG_BY_DATA_DIR[data_dir] = catalog
+    return catalog
 
 
 class PiModelResolver(HarnessModelResolver):
@@ -360,6 +372,7 @@ class PiInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         with try_hold_message_lock(self._agent_state_dir) as held:
             if not held:

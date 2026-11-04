@@ -1,0 +1,1 @@
+An update's run record (`data/.state/update-apply/run.json`) now carries `applied_at`, the time the apply went live, until the next run starts. Imbue Studio reads it to say the update is finishing while the run wraps up its checks, instead of going back to "Preparing an update" between the landing and the verdict.

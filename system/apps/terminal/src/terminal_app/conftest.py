@@ -1,10 +1,13 @@
 import os
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from app_manifest.testing import ShellStub
 from flask.testing import FlaskClient
+from workspace_layout.testing import LoopbackShell
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.primitives import TmuxSessionName
@@ -76,11 +79,25 @@ def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_close
 
 
 @pytest.fixture
-def shell_stub() -> Iterator[ShellStub]:
+def private_tmux_socket(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """A tmux server of the test's own: ``TMUX_TMPDIR`` points a script under test at it (with ``TMUX`` unset, so
+    the one this process runs in is never reached), and the socket path it resolves to is what the test's own
+    calls pass with ``-S``. Under ``/tmp`` directly, since a socket path is held to about 100 bytes."""
+    tmux_tmpdir = Path(tempfile.mkdtemp(prefix="dwt-tmux-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_tmpdir))
+    monkeypatch.delenv("TMUX", raising=False)
+    socket_path = tmux_tmpdir / f"tmux-{os.getuid()}" / "default"
+    # tmux makes the per-user directory itself only when it resolves the socket from the environment; a call that
+    # names the socket with ``-S`` needs it there already.
+    socket_path.parent.mkdir(mode=0o700)
+    yield socket_path
+    assert str(tmux_tmpdir).startswith("/tmp/dwt-tmux-")
+    subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], capture_output=True, timeout=15.0)
+    shutil.rmtree(tmux_tmpdir, ignore_errors=True)
+
+
+@pytest.fixture
+def loopback_shell() -> Iterator[LoopbackShell]:
     """A loopback stand-in for the shell, answering what a test sets."""
-    stub = ShellStub()
-    stub.start()
-    try:
-        yield stub
-    finally:
-        stub.close()
+    with LoopbackShell() as shell:
+        yield shell

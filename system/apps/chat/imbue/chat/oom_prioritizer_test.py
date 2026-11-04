@@ -9,6 +9,7 @@ clock, a dict of process-start times, and a capturing ``set_adj`` so the exact
 from oom_priority import bands
 
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.presence import PresenceTracker
 from imbue.chat.primitives import ChatId
@@ -20,7 +21,9 @@ _HOUR = 3600.0
 class _Harness:
     """Wires a prioritizer to in-memory fakes and records every band write."""
 
-    def __init__(self, chat_ids: list[str], pids: dict[str, int], sweep_interval_seconds: float = 3600.0) -> None:
+    def __init__(
+        self, chat_ids: list[str], pids: dict[str, int | list[int]], sweep_interval_seconds: float = 3600.0
+    ) -> None:
         self.chat_ids = [ChatId(chat_id) for chat_id in chat_ids]
         self.pids = pids
         self.writes: list[tuple[int, int]] = []
@@ -28,9 +31,10 @@ class _Harness:
         # plausible epoch rather than 0 so idle arithmetic never goes negative.
         self.now = 1_700_000_000.0
         self.process_started_at: dict[ChatId, float] = {}
+        self.reports_sent = 0
         self.prioritizer = ChatOomPrioritizer(
             list_chat_ids=lambda: list(self.chat_ids),
-            resolve_pid=lambda cid: self.pids.get(cid),
+            resolve_pids=self._resolve_pids,
             set_adj=self._set_adj,
             resolve_process_started_at=self.process_started_at.get,
             clock=lambda: self.now,
@@ -38,8 +42,22 @@ class _Harness:
             presence=PresenceTracker(clock=lambda: self.now),
         )
 
-    def report(self, chat_id: str, state: PresenceState, client_id: str = "client-1") -> None:
-        self.prioritizer.record_presence(ChatId(chat_id), client_id, state)
+    def report(self, chat_id: str, state: PresenceState, instance_id: str = "page-1") -> None:
+        self.reports_sent += 1
+        self.prioritizer.record_presence(
+            ChatId(chat_id),
+            PresenceReport(
+                instance_id=instance_id,
+                client_id="client-1",
+                state=state,
+                is_focused=False,
+                sequence=self.reports_sent,
+            ),
+        )
+
+    def _resolve_pids(self, chat_id: ChatId) -> list[int]:
+        pids = self.pids.get(chat_id, [])
+        return [pids] if isinstance(pids, int) else pids
 
     def _set_adj(self, pid: int, adj: int) -> bool:
         self.writes.append((pid, adj))
@@ -96,11 +114,11 @@ def test_a_hidden_page_counts_as_open_but_not_visible() -> None:
 
 def test_visible_in_any_client_makes_the_chat_visible() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.report("a", PresenceState.HIDDEN, client_id="desktop")
-    h.report("a", PresenceState.VISIBLE, client_id="phone")
+    h.report("a", PresenceState.HIDDEN, instance_id="desktop")
+    h.report("a", PresenceState.VISIBLE, instance_id="phone")
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
     # The phone puts it away; the desktop still has it open.
-    h.report("a", PresenceState.CLOSED, client_id="phone")
+    h.report("a", PresenceState.CLOSED, instance_id="phone")
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=False, recency_rank=None)
 
 
@@ -122,6 +140,16 @@ def test_a_heartbeat_keeps_the_report_alive() -> None:
         h.report("a", PresenceState.VISIBLE)
     h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
+
+
+def test_every_process_of_a_chat_gets_its_band() -> None:
+    # A codex chat runs a TUI and an app-server daemon; a shed picks either, so both must
+    # carry the chat's current band rather than one keeping its launch band.
+    h = _Harness(chat_ids=["a", "b"], pids={"a": [10, 11], "b": 20})
+    h.report("a", PresenceState.VISIBLE)
+    latest = h.latest_adj_by_pid()
+    assert latest[10] == latest[11] == _fresh(is_open=True, is_visible=True, recency_rank=None)
+    assert latest[20] == _fresh(is_open=False, is_visible=False, recency_rank=None)
 
 
 def test_dormant_chat_without_a_live_pid_is_skipped() -> None:
@@ -160,8 +188,8 @@ def test_a_closed_report_releases_the_chat() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.report("a", PresenceState.VISIBLE)
     protected = h.latest_adj_by_pid()[10]
-    # The tab is closed; the page's closed report drops the client's presence and ``a``
-    # becomes the most-expendable (base) chat again.
+    # The tab is closed; after the page's closed report ``a`` is neither open nor visible
+    # and becomes the most-expendable (base) chat again.
     h.report("a", PresenceState.CLOSED)
     reverted = h.latest_adj_by_pid()[10]
     assert reverted > protected
@@ -339,9 +367,9 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
     consulted: list[ChatId] = []
     chat_id = ChatId("a")
 
-    def resolve_pid(cid: ChatId) -> int:
+    def resolve_pids(cid: ChatId) -> list[int]:
         consulted.append(cid)
-        return 10
+        return [10]
 
     def resolve_process_started_at(cid: ChatId) -> float:
         consulted.append(cid)
@@ -349,13 +377,18 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
 
     prioritizer = ChatOomPrioritizer(
         list_chat_ids=lambda: [chat_id],
-        resolve_pid=resolve_pid,
+        resolve_pids=resolve_pids,
         set_adj=None,
         resolve_process_started_at=resolve_process_started_at,
         sweep_interval_seconds=0.01,
     )
     prioritizer.seed_last_message_times({chat_id: 1_700_000_000.0})
-    prioritizer.record_presence(chat_id, "client-1", PresenceState.VISIBLE)
+    prioritizer.record_presence(
+        chat_id,
+        PresenceReport(
+            instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False, sequence=1
+        ),
+    )
     prioritizer.record_message(chat_id)
     prioritizer.record_running_chats([chat_id])
     prioritizer.reapply()

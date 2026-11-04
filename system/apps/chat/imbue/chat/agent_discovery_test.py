@@ -1,24 +1,43 @@
 """Tests for agent_discovery module."""
 
+from collections.abc import Callable
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
+from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
+from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
+from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import _first_failure
+from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.agent_discovery import request_idle_compaction
+from imbue.chat.mock_compaction_agent_test import RecordingCompactionAgent
+from imbue.chat.testing import use_mngr_settings
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import AgentNoLongerIdleError
+from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import MessageLockTimeoutError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.errors import SendMessageError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_autocompact.manager import COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS
+from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
 
 
 def test_reads_claude_config_dir_from_env_file(tmp_path: Path) -> None:
@@ -154,7 +173,7 @@ def test_known_location_is_messaged_without_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,)) is None
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,)) is SendDelivery.DELIVERED
     assert discover_calls == []
     assert send_calls == [(match,)]
 
@@ -174,13 +193,32 @@ def test_empty_known_locations_falls_back_to_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is None
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is SendDelivery.DELIVERED
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(discovered,)]
 
 
+def _not_found_on_host() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha", reason="Agent not found on host host-a", kind=SendFailureKind.AGENT_NOT_FOUND
+            )
+        ]
+    )
+
+
 @pytest.mark.usefixtures("isolated_mngr_env")
-def test_stale_known_location_falls_back_to_discovery() -> None:
+@pytest.mark.parametrize(
+    "stale_result",
+    [_not_found_on_host, MessageResult],
+    ids=["agent-not-found", "matched-nothing"],
+)
+def test_stale_known_location_falls_back_to_discovery(stale_result: Callable[[], MessageResult]) -> None:
+    """A known location that does not lead to the agent is looked up afresh and sent to once more.
+
+    Nothing was typed at the stale location, so the one resend cannot deliver the message twice.
+    """
     stale = _make_match(host="host-a")
     fresh = _make_match(host="host-b")
     discover_calls: list[AgentId] = []
@@ -193,13 +231,328 @@ def test_stale_known_location_falls_back_to_discovery() -> None:
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         send_calls.append(tuple(matches))
         # The stale location reaches no agent; the freshly discovered one does.
-        reached = [str(m.agent_id) for m in matches if str(m.host_name) == "host-b"]
-        return MessageResult(successful_agents=reached)
+        if all(str(m.host_name) == "host-a" for m in matches):
+            return stale_result()
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,)) is None
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,)) is SendDelivery.DELIVERED
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(stale,), (fresh,)]
+
+
+def _submission_unconfirmed() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="Timeout waiting for message submission evidence: no evidence within 90s",
+                kind=SendFailureKind.SUBMISSION_UNCONFIRMED,
+            )
+        ]
+    )
+
+
+def _unclassified_failure() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="tmux send-keys failed", kind=SendFailureKind.UNKNOWN)]
+    )
+
+
+def _would_not_start() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(agent_name="alpha", reason="start timed out", kind=SendFailureKind.AGENT_UNREACHABLE)
+        ]
+    )
+
+
+def _not_ready() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="still starting", kind=SendFailureKind.NOT_READY)]
+    )
+
+
+def _state_unknown() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="host too loaded", kind=SendFailureKind.STATE_UNKNOWN)]
+    )
+
+
+def _delivered_but_blocked() -> MessageResult:
+    return MessageResult(blocked_agents=[("alpha", "Claude is waiting for you to confirm a model switch.")])
+
+
+def _not_found_beside_unconfirmed() -> MessageResult:
+    result = _submission_unconfirmed()
+    result.failures.extend(_not_found_on_host().failures)
+    return result
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("known_location_result", "expected_kind"),
+    [
+        (_delivered_but_blocked, "input_blocked"),
+        (_not_found_beside_unconfirmed, "submission_unconfirmed"),
+    ],
+    ids=["delivered-but-blocked", "not-found-beside-unconfirmed"],
+)
+def test_a_failure_another_send_cannot_help_is_returned_as_it_is(
+    known_location_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
+    """A blocked send was delivered, so sending again could only deliver it twice. A send that was unconfirmed at one
+    agent and missed another is not the plain ambiguity a resend answers.
+    """
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    known = _make_match()
+    failure = _scripted_messenger([known_location_result()], send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
+    assert isinstance(failure, SendFailure)
+    assert failure.kind == expected_kind
+    assert send_calls == [(known,)]
+
+
+def _not_submitted() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="the message never left the agent's input box, so it was cleared from there",
+                kind=SendFailureKind.NOT_SUBMITTED,
+            )
+        ]
+    )
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("later_results", "expected_kind"),
+    [((), None), ((_not_submitted,), "not_submitted")],
+    ids=["taken-the-second-time", "untaken-again"],
+)
+def test_a_message_the_agent_never_took_is_sent_there_once_more(
+    later_results: tuple[Callable[[], MessageResult], ...], expected_kind: str | None
+) -> None:
+    """The agent cleared the untaken message from its input box, so one more send delivers it once."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [_not_submitted(), *(result() for result in later_results)]
+    failure = _scripted_messenger(results, send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
+    assert (failure.kind if isinstance(failure, SendFailure) else None) == expected_kind
+    assert send_calls == [(known,), (known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_message_the_agent_never_took_at_a_discovered_location_is_sent_there_once_more() -> None:
+    """With no known location the agent is looked up, and an untaken send there gets its one more send too."""
+    discovered = _make_match(host="host-b")
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([_not_submitted()], send_calls, discovered=discovered)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is SendDelivery.DELIVERED
+    assert send_calls == [(discovered,), (discovered,)]
+
+
+def _delivered_to(matches: Sequence[AgentMatch]) -> MessageResult:
+    return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+
+def _scripted_messenger(
+    results: Sequence[MessageResult],
+    send_calls: list[tuple[AgentMatch, ...]],
+    discovered: AgentMatch | None = None,
+    pause: Callable[[float], None] = lambda _seconds: None,
+) -> MngrMessenger:
+    """A messenger whose sends answer with ``results`` in order and then deliver, each recorded in ``send_calls``.
+
+    The agent is found at ``discovered``; with none given, looking it up fails the test.
+    """
+    remaining = list(results)
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        if discovered is None:
+            raise AssertionError("the agent was looked up, and it should have been sent to where it is")
+        return (discovered,)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return remaining.pop(0) if remaining else _delivered_to(matches)
+
+    return MngrMessenger(discover=_discover, send=_send, pause=pause)
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "unsure_result", [_submission_unconfirmed, _unclassified_failure], ids=["unconfirmed", "unclassified"]
+)
+def test_a_message_that_may_not_have_arrived_is_sent_there_once_more_and_reported_as_resent(
+    unsure_result: Callable[[], MessageResult],
+) -> None:
+    """Nothing shows whether the agent took it, so it is sent again where it was sent, and the chat says so."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([unsure_result()], send_calls)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
+    assert send_calls == [(known,), (known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "unsure_result", [_submission_unconfirmed, _unclassified_failure], ids=["unconfirmed", "unclassified"]
+)
+@pytest.mark.parametrize(
+    ("second_result", "expected_kind"),
+    [
+        (_submission_unconfirmed, "submission_unconfirmed"),
+        (_unclassified_failure, "unknown"),
+        (_not_found_on_host, "agent_not_found"),
+        (_not_submitted, "not_submitted"),
+    ],
+    ids=["unconfirmed-again", "unclassified-the-second-time", "not-found-the-second-time", "untaken-the-second-time"],
+)
+def test_a_message_that_may_not_have_arrived_is_never_sent_a_third_time(
+    unsure_result: Callable[[], MessageResult], second_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
+    """The second send's failure is the answer: no further send, and no lookup that would lead to one."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([unsure_result(), second_result()], send_calls)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    assert isinstance(failure, SendFailure)
+    assert failure.kind == expected_kind
+    assert send_calls == [(known,), (known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_an_unconfirmed_message_at_a_discovered_location_is_sent_there_once_more() -> None:
+    discovered = _make_match(host="host-b")
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([_submission_unconfirmed()], send_calls, discovered=discovered)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is SendDelivery.RESENT
+    assert send_calls == [(discovered,), (discovered,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_message_untaken_and_then_unconfirmed_is_sent_once_more_after_each() -> None:
+    """The untaken first send delivered nothing, so the unconfirmed second is the only copy that may have landed."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([_not_submitted(), _submission_unconfirmed()], send_calls)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
+    assert send_calls == [(known,), (known,), (known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("unsure_result", "expected_kind"),
+    [(_submission_unconfirmed, "submission_unconfirmed"), (_unclassified_failure, "unknown")],
+    ids=["unconfirmed", "unclassified"],
+)
+def test_a_message_that_may_not_have_arrived_is_returned_as_is_when_its_caller_sends_it_again_itself(
+    unsure_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([unsure_result()], send_calls)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_resent_when_unsure=False)
+    assert isinstance(failure, SendFailure)
+    assert failure.kind == expected_kind
+    assert send_calls == [(known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "first_result",
+    [_not_ready, _state_unknown, _not_submitted, _would_not_start, _submission_unconfirmed, _unclassified_failure],
+    ids=["not-ready", "state-unknown", "not-submitted", "would-not-start", "unconfirmed", "unclassified"],
+)
+def test_a_send_a_stop_took_back_is_not_tried_again(first_result: Callable[[], MessageResult]) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([first_result()], send_calls)
+    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_taken_back=lambda: True)
+    assert isinstance(outcome, SendFailure)
+    assert outcome.kind == first_result().failures[0].kind
+    assert send_calls == [(known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_send_a_stop_took_back_after_it_missed_the_agent_is_not_looked_up_again() -> None:
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the message was handed back, so the agent is not looked up")
+
+    messenger = MngrMessenger(
+        discover=_discover,
+        send=lambda matches, message, ctx: _not_found_on_host(),
+        pause=lambda _seconds: None,
+    )
+    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),), is_taken_back=lambda: True)
+    assert isinstance(outcome, SendFailure)
+    assert outcome.kind == SendFailureKind.AGENT_NOT_FOUND
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize("waiting_result", [_not_ready, _state_unknown], ids=["not-ready", "state-unknown"])
+def test_a_send_nothing_could_type_yet_is_tried_again_after_a_growing_wait(
+    waiting_result: Callable[[], MessageResult],
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    waits: list[float] = []
+    messenger = _scripted_messenger([waiting_result(), waiting_result()], send_calls, pause=waits.append)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.DELIVERED
+    assert send_calls == [(known,)] * 3
+    assert waits == [1.0, 2.0]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("waiting_result", "expected_kind"),
+    [(_not_ready, "not_ready"), (_state_unknown, "state_unknown")],
+    ids=["not-ready", "state-unknown"],
+)
+def test_a_send_that_stays_impossible_is_returned_as_the_failure_after_the_last_wait(
+    waiting_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    waits: list[float] = []
+    messenger = _scripted_messenger([waiting_result()] * 4, send_calls, pause=waits.append)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    assert isinstance(failure, SendFailure)
+    assert failure.kind == expected_kind
+    assert send_calls == [(known,)] * 4
+    assert waits == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("later_results", "expected_kind"),
+    [((), None), ((_would_not_start,), "agent_unreachable")],
+    ids=["started-the-second-time", "would-not-start-again"],
+)
+def test_a_send_to_an_agent_that_would_not_start_is_tried_once_more(
+    later_results: tuple[Callable[[], MessageResult], ...], expected_kind: str | None
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [_would_not_start(), *(result() for result in later_results)]
+    outcome = _scripted_messenger(results, send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
+    if expected_kind is None:
+        assert outcome is SendDelivery.DELIVERED
+    else:
+        assert isinstance(outcome, SendFailure)
+        assert outcome.kind == expected_kind
+    assert send_calls == [(known,), (known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> None:
+    """The waits typed nothing, so the unconfirmed send is the only copy that may have landed."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _scripted_messenger([_not_ready(), _submission_unconfirmed()], send_calls)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
+    assert send_calls == [(known,)] * 3
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -214,7 +567,7 @@ def test_returns_a_reason_when_nothing_reachable() -> None:
 
     messenger = MngrMessenger(discover=_discover, send=_send)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
-    assert failure is not None
+    assert isinstance(failure, SendFailure)
     assert failure.reason == "The agent could not be reached."
     # Nothing matched the id, and trying again will not change that.
     assert failure.kind == "agent_unreachable"
@@ -241,7 +594,7 @@ def test_reports_the_harness_reason_for_a_refused_send() -> None:
 
     messenger = MngrMessenger(discover=_discover, send=_send)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
-    assert failure is not None
+    assert isinstance(failure, SendFailure)
     assert failure.reason == refusal
     # mngr classified it, and that classification comes through beside the words.
     assert failure.kind == "input_blocked"
@@ -312,3 +665,106 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def test_compacting_agents_that_no_longer_exist_compacts_nothing_and_raises_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The sweep lists its chats a moment before this call, so a name may already be gone."""
+    use_mngr_settings('[plugins.autocompact]\nmode = "proactive_timer"\n', tmp_path, monkeypatch)
+
+    assert compact_stale_agents_if_enabled(["chat-that-was-destroyed"], compact_stale_agents_by_name) == []
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_batches", "expected_compacted"),
+    [
+        ("", [], []),
+        ('[plugins.autocompact]\nmode = "on_next_prompt"\n', [], []),
+        ('[plugins.autocompact]\nmode = "proactive_timer"\n', [["chat-alpha", "chat-beta"]], ["chat-alpha"]),
+    ],
+)
+def test_the_plugin_is_called_only_when_the_workspace_mngr_config_has_proactive_compaction_on(
+    settings: str,
+    expected_batches: list[list[str]],
+    expected_compacted: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mode is loaded through mngr's own loader, so the sweep acts exactly when the plugin would."""
+    use_mngr_settings(settings, tmp_path, monkeypatch)
+    recorded_batches: list[list[str]] = []
+
+    def compact_by_name(mngr_ctx: MngrContext, names: Sequence[AgentName]) -> Sequence[AgentName]:
+        recorded_batches.append([str(name) for name in names])
+        return names[:1]
+
+    compacted = compact_stale_agents_if_enabled(["chat-alpha", "chat-beta"], compact_by_name)
+
+    assert recorded_batches == expected_batches
+    assert compacted == expected_compacted
+
+
+_IDLE_SINCE = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
+
+
+def test_an_idle_agent_is_compacted_with_its_idle_start_rechecked_under_a_bounded_lock() -> None:
+    agent = RecordingCompactionAgent(idle_since=_IDLE_SINCE)
+
+    request_idle_compaction(agent, "keep the test plan")
+
+    assert agent.requests == [("keep the test plan", COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS, _IDLE_SINCE)]
+
+
+@pytest.mark.parametrize(
+    ("idle_since", "error"),
+    [
+        pytest.param(None, None, id="mid_turn"),
+        pytest.param(
+            _IDLE_SINCE, AgentNoLongerIdleError("agent", _IDLE_SINCE, None), id="started_a_turn_before_the_lock"
+        ),
+        pytest.param(_IDLE_SINCE, MessageLockTimeoutError("agent", 5.0), id="another_send_holds_the_lock"),
+    ],
+)
+def test_an_agent_that_is_not_idle_is_declined_rather_than_compacted(
+    idle_since: datetime | None, error: MngrError | None
+) -> None:
+    agent = RecordingCompactionAgent(idle_since=idle_since, error=error)
+
+    with pytest.raises(SendFailedError) as raised:
+        request_idle_compaction(agent, None)
+
+    assert (raised.value.detail, raised.value.kind) == (
+        COMPACT_WHILE_BUSY_DETAIL,
+        COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
+    )
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_compaction_request_reaches_mngr_with_its_instructions() -> None:
+    calls: list[tuple[AgentId, str | None]] = []
+
+    def _compact(agent_id: AgentId, instructions: str | None, ctx: MngrContext) -> None:
+        calls.append((agent_id, instructions))
+
+    MngrMessenger(compact=_compact).request_compaction(_AGENT_ID, "keep the test plan")
+
+    assert calls == [(_AGENT_ID, "keep the test plan")]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_failed_compaction_request_is_a_send_failure_in_mngrs_words() -> None:
+    def _compact(agent_id: AgentId, instructions: str | None, ctx: MngrContext) -> None:
+        raise SendMessageError(str(agent_id), "failed to request context compaction: the daemon hung up")
+
+    with pytest.raises(SendFailedError) as raised:
+        MngrMessenger(compact=_compact).request_compaction(_AGENT_ID, None)
+
+    assert "the daemon hung up" in raised.value.detail
+    assert raised.value.kind == "unknown"
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_compaction_request_for_an_agent_mngr_no_longer_lists_raises_not_found() -> None:
+    with pytest.raises(AgentNotFoundError):
+        MngrMessenger().request_compaction(AgentId("agent-0000000000000000000000000000dead"), None)

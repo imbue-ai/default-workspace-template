@@ -32,13 +32,13 @@ import { renderNotYetRealBubble } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
-  NOTICE_FALLBACK_LABEL,
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
+  USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
-  renderNotice,
+  renderNoticeRow,
 } from "./user-message-display";
-import { classifyUserMessage } from "./message-classification";
+import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
@@ -96,12 +96,7 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  re-sent message stays continuously visible through the resend rather than blinking out
  *  (contract A1a); the backend drives the transition to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode {
-  const cls = classifyUserMessage({
-    content: queued.content,
-    display: queued.display ?? undefined,
-    display_label: queued.display_label ?? undefined,
-    display_body: queued.display_body ?? undefined,
-  });
+  const cls = classifyDecidedMessage(queued.content, queued);
   if (cls.kind === UserMessageKind.Notice) {
     // A notice being sent is drawn like the transcript row it becomes, as a sending bubble is.
     const rowClass = [
@@ -111,9 +106,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
     ]
       .filter((part) => part !== null)
       .join(" ");
-    return m("div", { class: rowClass, key: `queued-${queued.queued_id}` }, [
-      renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body),
-    ]);
+    return renderNoticeRow(`queued-${queued.queued_id}`, rowClass, cls);
   }
   if (queued.is_sending === true) {
     return renderNotYetRealBubble({
@@ -125,7 +118,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
   return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85` }, [
+    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
   ]);

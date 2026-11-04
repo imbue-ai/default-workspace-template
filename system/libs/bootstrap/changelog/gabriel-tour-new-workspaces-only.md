@@ -1,0 +1,1 @@
+A workspace's first boot now writes `data/.state/system_interface/offer_tour`, the mark that lets the system interface's show-around tour start by itself. A workspace that already carries a first-boot signal (`workspace_main_branch_initialized`, or the older `initial_chat_created`) never gets it, so updating an existing workspace does not start the tour.

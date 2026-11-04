@@ -1,0 +1,14 @@
+/* The chat on Classic Mac: the user's words in a rounded box with a hard shadow, the composer a plain
+   field, tool calls in a dotted box. */
+[data-part="chat.user-message"] {
+  border: 1px solid #000000;
+  border-radius: 8px;
+  box-shadow: 1px 1px 0 #000000;
+}
+[data-part="chat.composer"] {
+  border: 1px solid #000000;
+  box-shadow: 1px 1px 0 #000000;
+}
+[data-part="chat.tool-call"] {
+  border: 1px dotted #000000;
+}

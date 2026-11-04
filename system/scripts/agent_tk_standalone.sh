@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook: HARD-BLOCK a `tk`/`ticket` start or close that is not run as
-# the ONLY command in the tool call.
+# PreToolUse hook: HARD-BLOCK a `tk`/`ticket` start or close that shares its
+# tool call with anything but other tk lifecycle commands run in sequence.
 #
 # Why: the chat progress view reconstructs each step's structure and grouping
 # from two things in the transcript -- the tk command's visible OUTPUT (the
@@ -20,12 +20,14 @@
 #
 # Scope: ONLY `start` and `close`. `create` is exempt -- agents legitimately
 # batch several `tk create --step ...` up front when declaring the plan, and a
-# create carries no positional transition the view must group around.
+# create carries no positional transition the view must group around. A close
+# followed by the next start in one call is the normal step boundary: the view
+# applies the `Updated` lines of one output in order (see turn-grouping.ts).
 #
 # Blocks via exit 2 with a stderr message the agent sees (mirrors
 # agent_prevent_commit_rewrite.sh). Skipped for subagents (they manage their
 # own progress view). The command parsing lives in the sibling
-# agent_tk_standalone_check.py -- it shell-tokenizes the command with `shlex`
+# workspace_bare_scripts/agent_tk_standalone_check.py -- it shell-tokenizes the command with `shlex`
 # (so a close summary, or a string that merely mentions "tk close", stays
 # inside one quoted token and cannot trip the checks), which bash regex cannot
 # do reliably.
@@ -42,4 +44,4 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ -n "$command" ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-exec python3 "$script_dir/agent_tk_standalone_check.py" "$command"
+exec python3 "$script_dir/agent_hook_check.py" tk_standalone "$command"

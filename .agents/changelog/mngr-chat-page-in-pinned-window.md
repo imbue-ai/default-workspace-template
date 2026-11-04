@@ -1,0 +1,1 @@
+The caretaker and `manage-desktop` now surface a chat with `workspace-layout show chat --path "/?chat=<id>" --showing "/<id>" --repoint /`, which shows it in the pinned chat window. The `open chat --path "/?chat=<id>"` they used before never matched the pinned window, so each run added another chat window.

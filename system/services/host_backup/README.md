@@ -26,7 +26,7 @@ downloads, extracted archives, clones.
    (`total_files_processed`, `files_new`, `files_changed`, `files_unmodified`).
    A long duration with nearly every file unmodified means the tree is too big,
    not that too much changed.
-2. Find the tree. `uv run host-backup-heavy-dirs` (from `/home/user/workspace`)
+2. Find the tree. `uv run --no-sync host-backup-heavy-dirs` (from `/home/user/workspace`)
    lists the latest snapshot and prints the directories holding at least 2% of
    its entries, nested under their parents. On a large snapshot it takes a
    minute or two, so run it in the background and read its output afterwards.
@@ -98,7 +98,7 @@ is rewritten out of history by its path pattern.
   set in `restic.env`. Backend credentials are not gated by host_backup --
   restic reports its own error if the chosen backend needs one that is
   missing.
-- Before the snapshot is taken, the tick runs `uv run env-converge capture`
+- Before the snapshot is taken, the tick runs `uv run --no-sync env-converge capture`
   (best-effort, bounded at 120s) so the environment record
   (`~/.mngr/plugin/env-converge/`) inside the backup describes the packages
   installed at backup time. apt is already event-fresh via its
@@ -133,6 +133,10 @@ is rewritten out of history by its path pattern.
     naming what the snapshot does hold.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
+- `backup.toml` also carries `verification_disabled` (default `false`): the
+  Imbue Studio app's per-workspace switch for its own exec-based verification of
+  this service. The app writes and reads it; the service itself ignores it and
+  keeps backing up either way.
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
   its `extra_excludes` list (default empty; for adding patterns without
@@ -200,7 +204,7 @@ during the run.
 
 ## Manual trigger
 
-`uv run host-backup-now` waits for any in-progress backup to finish (so
+`uv run --no-sync host-backup-now` waits for any in-progress backup to finish (so
 your latest changes are guaranteed to be captured), bumps `backup.toml`'s
 mtime, then tails `events/backup/events.jsonl` for the triggered tick's
 terminal event and prints it. Terminal means *any* event that ends a tick, not
@@ -215,7 +219,24 @@ outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 no restore point), `1` for any other tick outcome, and `2` when no outcome was
 observed at all -- either no terminal event arrived before the timeout, or the
 events log could not be located in the first place (see below), in which case
-nothing was triggered either.
+nothing was triggered either. Nothing is triggered when the in-flight backup is
+still running at the timeout, either.
+
+Only the newest tick to start counts as in flight: the service runs one tick at a
+time, so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
+services restart) and will never finish. The service records such a tick as
+`tick_abandoned` when it starts again, and the wait for a triggered tick skips that
+record and reports the restarted service's first tick instead, which backs up again.
+
+`uv run --no-sync host-backup-now --check` triggers nothing and waits for nothing: it reads
+the newest tick outcomes back from the log (from the last rotated file too, while
+the current one holds no success yet), prints them as JSON (`newest_outcome`,
+`newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
+exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
+service's newest success is at most one interval plus one run old), `3` when the
+newest tick ended for missing secrets, `1` otherwise (the service is down, or its
+ticks fail), and `2` when the events log cannot be located. The update-self skill
+runs it before an update, as the check that a restore point exists.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started
@@ -242,6 +263,7 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `forget_completed`, `prune_completed`, `prune_skipped`
 - `config_reloaded`
 - `tick_skipped_due_to_missing_secrets`, `tick_error`
+- `tick_abandoned` (at startup, for a tick the previous run was killed in)
 
 Each restic command's stdout / stderr is captured into the matching
 `*_succeeded` / `*_failed` event for forensic debugging, capped at 16 KB per
@@ -289,7 +311,7 @@ library alone:
 
 - the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
-- the `uv run host-backup` / `uv run host-backup-now` entry points.
+- the `host-backup` / `host-backup-now` entry points.
 
 Dependency changes are absorbed by regenerating `uv.lock` on the workspace
 with a plain `uv sync`. `host_backup/config.py` additionally keeps no-op

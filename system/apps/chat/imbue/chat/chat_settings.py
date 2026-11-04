@@ -1,4 +1,4 @@
-"""The chat app's workspace-wide settings: the fast mode a new chat starts in, and whether the user has been told.
+"""The chat app's workspace-wide settings: the fast mode and idle compaction a new chat starts with, and the notices shown.
 
 One small JSON file beside the chat app's other state (``data/.apps/chat/settings.json``),
 read on every use so an edit from another process lands without a restart, and written whole.
@@ -44,7 +44,7 @@ class ChatSettings(FrozenModel):
     """What the settings file holds. Every field has a default, so an older file reads whole."""
 
     fast_mode_default: FastModeMode = Field(
-        default=FastModeMode.AUTO,
+        default=FastModeMode.OFF,
         description="The fast mode a new chat starts in",
     )
     fast_mode_turn_limit: int = Field(
@@ -55,6 +55,14 @@ class ChatSettings(FrozenModel):
     is_fast_mode_notice_shown: bool = Field(
         default=False,
         description="Whether the one-time notice explaining the first automatic switch to standard speed has been shown",
+    )
+    autocompact_default: bool = Field(
+        default=True,
+        description="Whether a new chat starts with idle compaction on",
+    )
+    is_autocompact_notice_shown: bool = Field(
+        default=False,
+        description="Whether the one-time notice explaining idle compaction has been shown",
     )
 
 

@@ -1,0 +1,1 @@
+- Pin mngr to the public mirror of the minds 0.9.0 release commit, so workspaces built from the `minds-v0.9.0` tag run the mngr the 0.9.0 desktop app ships with.

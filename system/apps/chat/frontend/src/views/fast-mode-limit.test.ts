@@ -40,7 +40,13 @@ const getFastModeStateMock = vi.mocked(getFastModeState);
 const ensureFastModeStateMock = vi.mocked(ensureFastModeState);
 const updateFastModeStateMock = vi.mocked(updateFastModeState);
 
-const SETTINGS = { fast_mode_default: "auto" as const, fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false };
+const SETTINGS = {
+  fast_mode_default: "auto" as const,
+  fast_mode_turn_limit: 3,
+  is_fast_mode_notice_shown: false,
+  autocompact_default: true,
+  is_autocompact_notice_shown: false,
+};
 
 function userMsg(content: string, id: string, extra: Partial<UserMessageEvent> = {}): UserMessageEvent {
   return {
@@ -107,6 +113,19 @@ describe("countUserTurns", () => {
       }),
     ];
     expect(countUserTurns(events)).toBe(2);
+  });
+
+  it("counts a typed /compact but not the one the idle sweep sent, nor one nothing has followed yet", () => {
+    const compact = userMsg("/compact", "compact", { non_turn_tail: true });
+    const compactThen = (cause: "idle" | "manual"): TranscriptEvent[] => [
+      ...conversation(1),
+      compact,
+      userMsg("Context was compacted", `status-${cause}`, { display: "status", compaction_cause: cause }),
+    ];
+    expect(countUserTurns(compactThen("idle"))).toBe(1);
+    expect(countUserTurns(compactThen("manual"))).toBe(2);
+    expect(countUserTurns([...conversation(1), compact])).toBe(1);
+    expect(countUserTurns([...conversation(1), compact, userMsg("never mind", "after")])).toBe(3);
   });
 });
 

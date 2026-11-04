@@ -4,11 +4,16 @@
  * app, less the free-text ones), the window rows (every window of every desktop, only while
  * typing), and the free-text rows (the primary always, the rest only with text to send; the first
  * two bound to Enter and Ctrl+Enter), each section kept in its order and narrowed by the text; a
- * text with a line break is a message, not a query, and keeps the free-text rows alone. Then the
- * highlight rule, with the arrow keys' step through the enabled rows.
+ * text with a line break is a message, not a query, and keeps the free-text rows alone. A window
+ * row on a desktop that is not the viewer's names its owner. While the window is viewing somebody else's
+ * desktop (the multiplayer spec, section 8.3) the launch-path, window, and free-text rows stand down, each
+ * saying why, since every one of them would open something on the viewed desktop. Then the highlight rule,
+ * with the arrow keys' step through the enabled rows.
  */
 
-import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
+import type { OwnIdentity } from "../model/Presence";
+import { isOwnDesktop, ownerEntryOf } from "../model/Ownership";
+import type { AppRecord, LaunchPath, RosterParticipant, WindowRecord } from "../model/records";
 import {
   appLaunchesOf,
   freeTextRowsOf,
@@ -17,6 +22,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
+import { TOUR_LAUNCHER_LABEL, TOUR_LAUNCHER_SEARCH_WORDS } from "../model/tourCards";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -31,6 +37,8 @@ export interface LaunchRow {
   readonly label: string;
   /** The app's display name, when the label does not already say it. */
   readonly caption: string | null;
+  /** Why the row stands down (the window is viewing somebody else's desktop), or null while it can run. */
+  readonly disabledReason: string | null;
 }
 
 /** A row that shows an existing window, on this or another desktop. */
@@ -40,11 +48,38 @@ export interface WindowRow {
   readonly window: WindowRecord;
   readonly desktopId: string;
   readonly desktopName: string;
+  /** The name of the desktop's owner, for a desktop that is not the viewer's (the multiplayer spec, section
+   *  8.2); null for the viewer's own, and for one whose owner has left the roster. */
+  readonly ownerName: string | null;
   readonly app: AppRecord | undefined;
   readonly title: string;
   readonly isMinimized: boolean;
   readonly isOnActiveDesktop: boolean;
+  /** Why the row stands down (the window is viewing somebody else's desktop), or null while it can run. */
+  readonly disabledReason: string | null;
 }
+
+/** The row that runs the show-around tour from its first card (the new-onboarding spec, section 2.6): the last of
+ *  the launch-path rows, offered with no query and for a query matching its words. */
+export interface TourRow {
+  readonly kind: "tour";
+  readonly key: typeof TOUR_ROW_KEY;
+  readonly label: string;
+}
+
+export const TOUR_ROW_KEY = "tour";
+
+/** Why every row that opens something stands down while the window views somebody else's desktop. */
+export const VIEWING_ROW_DISABLED_REASON = "Stop viewing to open things here";
+
+/** Who the viewer is and who may be here, which say whose desktop each window row is on. */
+export interface DesktopOwnership {
+  readonly roster: readonly RosterParticipant[];
+  readonly identity: OwnIdentity | null;
+}
+
+/** Nobody known: every keyless desktop reads as the viewer's own, and no row names an owner. */
+export const NO_OWNERSHIP: DesktopOwnership = Object.freeze({ roster: Object.freeze([]), identity: null });
 
 /** The first two free-text rows: Enter's fallthrough, and Ctrl+Enter's target. */
 export type TextAction = "primary" | "secondary";
@@ -63,11 +98,13 @@ export interface TextRow {
   readonly disabledReason: string | null;
 }
 
-export type LauncherRow = LaunchRow | WindowRow | TextRow;
+export type LauncherRow = LaunchRow | WindowRow | TextRow | TourRow;
 
 /** The menu's rows by section, and flat in the order the menu draws them. */
 export interface LauncherMenuRows {
   readonly launchRows: readonly LaunchRow[];
+  /** The tour's row, drawn after the launch-path rows; empty when the query rules it out. */
+  readonly tourRows: readonly TourRow[];
   readonly windowRows: readonly WindowRow[];
   readonly textRows: readonly TextRow[];
   readonly rows: readonly LauncherRow[];
@@ -85,7 +122,14 @@ export function windowRowKey(windowId: string): string {
   return `window:${windowId}`;
 }
 
-function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
+/** The tour's row: offered once the workspace has apps to show around, with no query and for its words. */
+function tourRowsOf(apps: readonly AppRecord[], query: string): TourRow[] {
+  if (apps.length === 0) return [];
+  if (!matchesQuery(query, TOUR_LAUNCHER_LABEL, ...TOUR_LAUNCHER_SEARCH_WORDS)) return [];
+  return [{ kind: "tour", key: TOUR_ROW_KEY, label: TOUR_LAUNCHER_LABEL }];
+}
+
+function launchRowsOf(apps: readonly AppRecord[], query: string, viewingReason: string | null): LaunchRow[] {
   const rows: LaunchRow[] = [];
   for (const { app, launchPath } of orderAppLaunches(appLaunchesOf(apps))) {
     // A free-text launch path is listed once, at the foot, never as a launch-path row.
@@ -98,13 +142,19 @@ function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
       launchPath,
       label: launchPath.label,
       caption: launchPath.label === app.display_name ? null : app.display_name,
+      disabledReason: viewingReason,
     });
   }
   return rows;
 }
 
 /** Every window of every desktop, the active desktop's first and in opening order, narrowed by the query. */
-function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
+function windowRowsOf(
+  state: DesktopState,
+  query: string,
+  ownership: DesktopOwnership,
+  viewingReason: string | null,
+): WindowRow[] {
   const placements = activePlacements(state);
   const ordered = [...state.desktops].sort(
     (left, right) => Number(right.id === state.activeDesktopId) - Number(left.id === state.activeDesktopId),
@@ -112,6 +162,9 @@ function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
   const rows: WindowRow[] = [];
   for (const desktop of ordered) {
     const isOnActiveDesktop = desktop.id === state.activeDesktopId;
+    const ownerName = isOwnDesktop(desktop, ownership.identity)
+      ? null
+      : (ownerEntryOf(desktop, ownership.roster)?.display_name ?? null);
     for (const window of desktop.windows) {
       const app = appByName(state, window.app);
       const title = effectiveWindowTitle(state, window, app);
@@ -122,17 +175,19 @@ function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
         window,
         desktopId: desktop.id,
         desktopName: desktop.name,
+        ownerName,
         app,
         title,
         isMinimized: isOnActiveDesktop ? isWindowMinimized(placements, window.id) : false,
         isOnActiveDesktop,
+        disabledReason: viewingReason,
       });
     }
   }
   return rows;
 }
 
-function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
+function textRowsOf(apps: readonly AppRecord[], text: string, viewingReason: string | null): TextRow[] {
   // Empty text runs the primary action with no text param at all; every other row has nothing to send, so it is
   // not offered.
   const offered = text === "" ? freeTextRowsOf(apps).slice(0, 1) : freeTextRowsOf(apps);
@@ -146,7 +201,7 @@ function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
       textAction,
       label: launchPath.label,
       text,
-      disabledReason: textRowDisabledReason(launchPath, text),
+      disabledReason: viewingReason ?? textRowDisabledReason(launchPath, text),
     };
   });
 }
@@ -156,33 +211,54 @@ export function isMessageText(text: string): boolean {
   return text.includes("\n");
 }
 
+export interface LauncherRowsOptions {
+  /** Whether the tour's row is offered (true unless said otherwise); the phone layout, where the tour never draws,
+   *  leaves it out. */
+  readonly isTourOffered?: boolean;
+  /** Who the viewer is and who may be here (NO_OWNERSHIP unless said otherwise), which say whose desktop each
+   *  window row is on. */
+  readonly ownership?: DesktopOwnership;
+  /** Whether the window is viewing somebody else's desktop (false unless said otherwise): every row that would
+   *  open something there stands down. */
+  readonly isViewing?: boolean;
+}
+
 /** The menu for the field's ``query`` (plan section 3.5): window rows appear only while typing; the free-text rows
  *  stand alone for a text with a line break. The line break is read off the field's text as typed, as the field
  *  reads it for the arrows, so a break just typed already makes a message; the rows send the trimmed text. */
-export function launcherRowsOf(state: DesktopState, query: string): LauncherMenuRows {
+export function launcherRowsOf(
+  state: DesktopState,
+  query: string,
+  options: LauncherRowsOptions = {},
+): LauncherMenuRows {
   const text = query.trim();
   const apps = openableApps(state);
   const isMessage = isMessageText(query);
-  const launchRows = isMessage ? [] : launchRowsOf(apps, text);
-  const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
-  const textRows = textRowsOf(apps, text);
+  const viewingReason = options.isViewing === true ? VIEWING_ROW_DISABLED_REASON : null;
+  const launchRows = isMessage ? [] : launchRowsOf(apps, text, viewingReason);
+  const tourRows = isMessage || options.isTourOffered === false ? [] : tourRowsOf(apps, text);
+  const windowRows =
+    text === "" || isMessage ? [] : windowRowsOf(state, text, options.ownership ?? NO_OWNERSHIP, viewingReason);
+  const textRows = textRowsOf(apps, text, viewingReason);
   return {
     launchRows,
+    tourRows,
     windowRows,
     textRows,
-    rows: [...launchRows, ...windowRows, ...textRows],
-    isNoMatch: text !== "" && !isMessage && launchRows.length === 0 && windowRows.length === 0,
+    rows: [...launchRows, ...tourRows, ...windowRows, ...textRows],
+    isNoMatch:
+      text !== "" && !isMessage && launchRows.length === 0 && tourRows.length === 0 && windowRows.length === 0,
   };
 }
 
 export function isRowEnabled(row: LauncherRow): boolean {
-  return row.kind !== "text" || row.disabledReason === null;
+  return row.kind === "tour" || row.disabledReason === null;
 }
 
-/** The row Enter runs when nothing moved the highlight: the first launch-path or window row, else the primary
- *  text action (the first enabled text row); -1 when the menu has no enabled row. */
+/** The row Enter runs when nothing moved the highlight: the first enabled launch-path, tour, or window row, else
+ *  the primary text action (the first enabled text row); -1 when the menu has no enabled row. */
 export function defaultHighlightIndex(rows: readonly LauncherRow[]): number {
-  const firstMatch = rows.findIndex((row) => row.kind !== "text");
+  const firstMatch = rows.findIndex((row) => row.kind !== "text" && isRowEnabled(row));
   if (firstMatch >= 0) return firstMatch;
   return rows.findIndex((row) => row.kind === "text" && isRowEnabled(row));
 }

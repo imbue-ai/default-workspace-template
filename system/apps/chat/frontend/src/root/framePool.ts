@@ -2,7 +2,8 @@
  * The chat root's inner frames: one iframe of ``/<chat-id>`` per chat the root has shown this
  * session, the selected one visible and the rest hidden, so switching back is instant.
  *
- * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. A hidden frame is
+ * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. Each page is handed
+ * the shell's handshake to the root through the relay, as it loads. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
  * but not on screen counts as open-but-hidden, like a minimized window's page.
@@ -11,6 +12,7 @@
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import type { ChatPageEmbedApi } from "../embedApi";
+import { handHandshakeDown } from "./relay";
 
 export const MAX_HELD_FRAMES = 4;
 
@@ -44,9 +46,19 @@ export class InnerFramePool {
     return false;
   }
 
+  /** The windows of this pool's frames. */
+  innerWindows(): Window[] {
+    const windows: Window[] = [];
+    for (const { frame } of this.held.values()) {
+      if (frame.contentWindow !== null) windows.push(frame.contentWindow);
+    }
+    return windows;
+  }
+
   /** Show ``chatId`` (creating its frame on first sight), hiding whatever was shown; null shows nothing. */
   show(chatId: string | null): void {
-    if (chatId !== null && !this.held.has(chatId)) this.create(chatId);
+    const isNewFrame = chatId !== null && !this.held.has(chatId);
+    if (isNewFrame) this.create(chatId);
     const previous = this.shownChatId;
     this.shownChatId = chatId;
     if (previous !== null && previous !== chatId) this.tell(previous, "hidden");
@@ -57,6 +69,9 @@ export class InnerFramePool {
       const held = this.held.get(chatId);
       if (held !== undefined) held.lastShownAt = Date.now();
       if (this.isRootShown) this.tell(chatId, "shown");
+      // A new page takes the keyboard as it loads; one switched back to has to be handed it, or the
+      // keyboard stays on the list row that picked it and the chat does not count as focused.
+      if (!isNewFrame && previous !== chatId && this.isRootShown) this.api(chatId)?.focus();
     }
     this.evict();
   }
@@ -121,6 +136,15 @@ export class InnerFramePool {
     return true;
   }
 
+  /** Hand ``hint`` to the live composer of ``chatId``'s page as its placeholder, focused; false when the page is not
+   *  loaded yet (the caller then stores the hint where the page's composer reads it on mount). */
+  hintComposer(chatId: string, hint: string): boolean {
+    const api = this.api(chatId);
+    if (api === null) return false;
+    api.hintComposer(hint);
+    return true;
+  }
+
   private api(chatId: string): ChatPageEmbedApi | null {
     const held = this.held.get(chatId);
     if (held === undefined || !held.isLoaded) return null;
@@ -128,8 +152,10 @@ export class InnerFramePool {
   }
 
   private introduce(chatId: string): void {
-    if (this.handshake === null) return;
-    this.api(chatId)?.handshake(this.handshake);
+    const held = this.held.get(chatId);
+    const inner = held?.frame.contentWindow;
+    if (this.handshake === null || held === undefined || !held.isLoaded || inner == null) return;
+    handHandshakeDown(inner, this.handshake);
   }
 
   private tell(chatId: string, what: "shown" | "hidden"): void {

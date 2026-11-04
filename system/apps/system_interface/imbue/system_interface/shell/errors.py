@@ -42,10 +42,6 @@ class SupervisorProgramActionError(ShellError, RuntimeError):
     """Supervisord refused, or could not be reached for, a stop or start."""
 
 
-class ShareGrantsError(ShellError, ValueError):
-    """The share grants document is one the gateway would refuse (it then admits nobody)."""
-
-
 class DesktopNotFoundError(ShellError, LookupError):
     """No desktop has the given id (or name)."""
 
@@ -82,6 +78,19 @@ class WindowNotFoundError(ShellError, LookupError):
     def __init__(self, window: str) -> None:
         self.window = window
         super().__init__(f"Window '{window}' not found")
+
+
+class WindowPoppedOutError(ShellError, ValueError):
+    """An op would change where a window the target client has popped out into its own window sits, and the op did
+    not carry ``force`` (answered 423): the pop-out is the user's arrangement."""
+
+    def __init__(self, op: str, window: str) -> None:
+        self.op = op
+        self.window = window
+        super().__init__(
+            f"Window {window} is popped out into its own window, so {op!r} would bring it back onto the desktop; "
+            "pass force to do so anyway"
+        )
 
 
 class PinnedWindowError(ShellError, ValueError):

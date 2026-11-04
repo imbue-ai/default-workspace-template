@@ -1,0 +1,58 @@
+[project]
+name = "routines-app"
+version = "0.1.0"
+description = "The Routines app: everything in the workspace that runs on a schedule, with its health, next run, history, and run-now, on/off, reschedule and fix controls"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    "app-schema",
+    "flask>=3.0",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "routines",
+    "werkzeug>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    "app-schema[testing]",
+    "pytest>=9.0",
+    "pytest-timeout>=2.3.0",
+    "inline-snapshot>=0.13",
+    "ruff~=0.12.8",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+[project.scripts]
+routines-app = "routines_app.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+artifacts = [
+    "src/routines_app/static/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/routines_app"]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["routines_app", "routines", "imbue", "app_manifest", "app_schema"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

@@ -17,8 +17,11 @@ vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListe
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
+  reportFocusChange: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
+const ensureParticipants = vi.fn(() => Promise.resolve());
+vi.mock("./models/Participants", () => ({ ensureParticipants }));
 
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
@@ -41,12 +44,17 @@ async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
   openSubagentView: typeof import("./shell").openSubagentView;
-  presence: { startPresenceReporting: ReturnType<typeof vi.fn>; reportPresence: ReturnType<typeof vi.fn> };
+  presence: {
+    startPresenceReporting: ReturnType<typeof vi.fn>;
+    reportPresence: ReturnType<typeof vi.fn>;
+    reportFocusChange: ReturnType<typeof vi.fn>;
+  };
 }> {
   vi.resetModules();
   const presence = (await import("./presence")) as unknown as {
     startPresenceReporting: ReturnType<typeof vi.fn>;
     reportPresence: ReturnType<typeof vi.fn>;
+    reportFocusChange: ReturnType<typeof vi.fn>;
   };
   const shell = await import("./shell");
   return {
@@ -62,6 +70,17 @@ function framed(): { postMessage: ReturnType<typeof vi.fn> } {
   const parent = { postMessage: vi.fn() };
   Object.defineProperty(window, "parent", { value: parent, configurable: true });
   return parent;
+}
+
+/** The window listeners `connect` adds, by event type: called directly, so listeners an earlier test left on the
+ *  shared window do not answer too. */
+function windowListenersAddedBy(connect: () => void): (type: string) => Array<(event: Event) => void> {
+  const addSpy = vi.spyOn(window, "addEventListener");
+  connect();
+  const added = addSpy.mock.calls.map(([type, listener]) => [type, listener] as const);
+  addSpy.mockRestore();
+  return (type) =>
+    added.filter(([addedType]) => addedType === type).map(([, listener]) => listener as (event: Event) => void);
 }
 
 function deliver(data: unknown, source: unknown): void {
@@ -110,6 +129,35 @@ describe("connectChatToShell", () => {
     expect(presence.reportPresence).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["framed", true],
+    ["visited directly", false],
+  ])("reports the document's focus as it comes and goes on the chat's own page, %s", async (_how, isFramed) => {
+    if (isFramed) framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    });
+
+    windowListeners("focus").forEach((listener) => listener(new Event("focus")));
+    windowListeners("blur").forEach((listener) => listener(new Event("blur")));
+
+    expect(presence.reportFocusChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports no focus from a subagent view of the chat", async () => {
+    framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
+    });
+
+    windowListeners("focus").forEach((listener) => listener(new Event("focus")));
+    windowListeners("blur").forEach((listener) => listener(new Event("blur")));
+
+    expect(presence.reportFocusChange).not.toHaveBeenCalled();
+  });
+
   it("still tells the shell where its window is from a subagent view", async () => {
     const parent = framed();
     const { connectChatToShell } = await loadShell();
@@ -153,25 +201,26 @@ describe("the chat page's location report", () => {
 
 describe("the embed API", () => {
   it("drives a framed page's presence the way the shell's messages do", async () => {
-    framed();
+    const parent = framed();
     const { connectChatToShell, presence } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
     const embed = window.chatPageEmbed;
     expect(embed).toBeDefined();
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
-    embed.handshake({
-      clientId: "client-2",
-      windowId: "",
-      desktopId: "",
-      app: "",
-      path: "",
-    });
+    deliver({ type: SHELL_HANDSHAKE, clientId: "client-2" }, parent);
+    ensureParticipants.mockClear();
     embed.shown();
     embed.hidden();
 
     expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-2", "hidden"]]);
     expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"]]);
+    // Coming back into view reads the roster again, so whoever joined meanwhile is drawn right; so does coming
+    // into focus (the window keeps every earlier test's focus listener too, so only the growth is counted).
+    expect(ensureParticipants).toHaveBeenCalledTimes(1);
+    const readsBeforeFocus = ensureParticipants.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    expect(ensureParticipants.mock.calls.length).toBeGreaterThan(readsBeforeFocus);
   });
 
   it("is absent on a top-level visit, which no root drives", async () => {

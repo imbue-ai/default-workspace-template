@@ -75,6 +75,23 @@ def test_terminator_records_the_operator_that_ended_each_segment() -> None:
     assert backgrounded.segments[0].terminator == "&"
 
 
+def test_a_line_continuation_joins_the_lines() -> None:
+    """A backslash-newline outside quotes is dropped, as the shell drops it,
+    rather than becoming a word at the head of the next command."""
+    parsed = parse_command('tk close a "x" && \\\ntk start b')
+    assert parsed is not None
+    assert [seg.tk_verb for seg in parsed.segments] == ["close", "start"]
+    assert [seg.terminator for seg in parsed.segments] == ["&&", None]
+
+    piped = parse_command("cat log | \\\ntail -n 5")
+    assert piped is not None
+    assert piped.segments[1].words == ("tail", "-n", "5")
+
+    quoted = parse_command("echo 'a\\\nb'")
+    assert quoted is not None
+    assert quoted.segments[0].words == ("echo", "a\\\nb")
+
+
 def test_a_mentioned_verb_inside_a_quote_is_not_an_invocation() -> None:
     assert _verbs('git commit -m "tk close foo"') == [None]
     assert _verbs("echo 'run tk start later'") == [None]

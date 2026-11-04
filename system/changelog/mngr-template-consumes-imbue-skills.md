@@ -1,0 +1,1 @@
+- The "no `application` in prose" ratchet no longer counts the macOS `~/Library/Application Support/...` path, which the vendored `imbue-studio` skill names for the Imbue Studio state directory; like MIME types, it is a path, not terminology.

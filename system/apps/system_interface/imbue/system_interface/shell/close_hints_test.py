@@ -1,7 +1,12 @@
 from typing import Any
 
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.windows import WindowClosedHint
+
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import WindowClosedHintPost
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
 from imbue.system_interface.shell.testing import recording_app
@@ -9,12 +14,13 @@ from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
 
-def _hint(url: str) -> WindowClosedHint:
-    return WindowClosedHint(
-        app="terminal",
-        url=url,
-        body={"path": "/?session=terminal-1", "window_id": "win-0000000000000001", "desktop_id": "home"},
+def _hint(url: str) -> WindowClosedHintPost:
+    hint = WindowClosedHint(
+        path=WindowPath("/?session=terminal-1"),
+        window_id=WindowId("win-0000000000000001"),
+        desktop_id=DesktopId("home"),
     )
+    return WindowClosedHintPost(app="terminal", url=url, hint=hint)
 
 
 def test_the_poster_delivers_the_closed_window_and_shrugs_off_an_app_that_is_down() -> None:

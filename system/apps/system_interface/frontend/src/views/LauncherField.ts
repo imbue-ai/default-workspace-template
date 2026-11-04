@@ -10,7 +10,10 @@
  * text, then closes.
  */
 
+import type { ChordKeyEvent } from "@imbue/workspace-ui/src/keybindings";
+import { matchesShellKeybinding } from "../model/keybindings";
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { isMessageText } from "../reducers/launcherRows";
@@ -41,9 +44,10 @@ export interface LauncherFieldAttrs {
   readonly onRise: (risePx: number) => void;
 }
 
-/** Whether a key press is the secondary action's chord: Enter with Ctrl, or with Cmd on a Mac. */
-export function isSecondaryChord(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey">): boolean {
-  return event.key === "Enter" && (event.ctrlKey || event.metaKey);
+/** Whether a key press is the secondary action's chord: the resolved `launcher-secondary-send`
+ *  binding, Ctrl+Enter / Cmd+Enter until anything else is assigned. */
+export function isSecondaryChord(event: ChordKeyEvent): boolean {
+  return matchesShellKeybinding(event, "launcher-secondary-send", ["ctrl+enter", "meta+enter"]);
 }
 
 /** Whether a key press is the line break: Enter with Shift and nothing else. */
@@ -85,6 +89,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         "div",
         {
           "data-launcher-field": "",
+          ...partAttrs("launcher-field"),
           class:
             // Fully round, and padded so its mark lands under the mark of the menu row above it: a
             // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.

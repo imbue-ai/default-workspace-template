@@ -10,8 +10,9 @@ vi.mock("mithril", () => ({
   default: { request: mockRequest, redraw: mockRedraw },
 }));
 
-import { loadSnapshotWithStream } from "./StreamingMessage";
-import { getConversationLoadState, getEventsForChat, type TranscriptEvent } from "./Response";
+import { catchUpLiveTail, loadSnapshotWithStream } from "./StreamingMessage";
+import { getConversationLoadState, getEventsForChat, getLastEventId, type TranscriptEvent } from "./Response";
+import { shownReplyDraft } from "./ReplyDrafts";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -147,5 +148,95 @@ describe("snapshot retry after reconnect", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function latestSource(): FakeEventSource {
+  const source = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+  if (source === undefined) {
+    throw new Error("no stream was opened");
+  }
+  return source;
+}
+
+function eventIdsOf(chatId: string): string[] {
+  return getEventsForChat(chatId).map((event) => event.event_id);
+}
+
+describe("reply drafts on the stream", () => {
+  it("holds a draft beside the transcript, shown only while the event it follows is the last one held", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "write me a poem")], offset: 0, total: 1 });
+    await loadSnapshotWithStream(chatId);
+
+    latestSource().onmessage?.({
+      data: JSON.stringify({ type: "assistant_draft", agent_id: chatId, after_event_id: "turn-1", text: "Roses are" }),
+    });
+
+    expect(eventIdsOf(chatId)).toEqual(["turn-1"]);
+    expect(shownReplyDraft(chatId, getLastEventId(chatId))?.text).toBe("Roses are");
+
+    // The reply itself lands: the draft it replaces is no longer shown, before any frame clears it.
+    latestSource().onmessage?.({ data: JSON.stringify(makeEvent("reply-1", "Roses are red")) });
+    expect(shownReplyDraft(chatId, getLastEventId(chatId))).toBeNull();
+  });
+
+  it("drops the chat's draft when an empty one arrives", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "hi")], offset: 0, total: 1 });
+    await loadSnapshotWithStream(chatId);
+    const frame = { type: "assistant_draft", agent_id: chatId, after_event_id: "turn-1" };
+
+    latestSource().onmessage?.({ data: JSON.stringify({ ...frame, text: "Hel" }) });
+    latestSource().onmessage?.({ data: JSON.stringify({ ...frame, text: "" }) });
+
+    expect(shownReplyDraft(chatId, "turn-1")).toBeNull();
+  });
+});
+
+describe("catchUpLiveTail", () => {
+  it("appends the events after the last held one that the stream never delivered", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "question")], offset: 0, total: 1 });
+    await loadSnapshotWithStream(chatId);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("reply-1", "the lost reply")], offset: 1, total: 2 });
+    await catchUpLiveTail(chatId);
+
+    expect(eventIdsOf(chatId)).toEqual(["turn-1", "reply-1"]);
+    expect(mockRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ after: "turn-1" }) }),
+    );
+  });
+
+  it("reloads the transcript when the event the stream missed sits before ones it delivered", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "question")], offset: 0, total: 1 });
+    await loadSnapshotWithStream(chatId);
+    // The reply never arrives on the stream; the next turn's message does.
+    latestSource().onmessage?.({ data: JSON.stringify(makeEvent("turn-2", "hello?")) });
+
+    // The route places the event after turn-2 at index 3: one more than the page holds.
+    mockRequest.mockResolvedValueOnce({ events: [], offset: 3, total: 3 });
+    mockRequest.mockResolvedValueOnce({
+      events: [makeEvent("turn-1", "question"), makeEvent("reply-1", "the lost reply"), makeEvent("turn-2", "hello?")],
+      offset: 0,
+      total: 3,
+    });
+    await catchUpLiveTail(chatId);
+
+    expect(eventIdsOf(chatId)).toEqual(["turn-1", "reply-1", "turn-2"]);
+  });
+
+  it("changes nothing when the page already holds the whole transcript", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "question")], offset: 0, total: 1 });
+    await loadSnapshotWithStream(chatId);
+
+    mockRequest.mockResolvedValueOnce({ events: [], offset: 1, total: 1 });
+    await catchUpLiveTail(chatId);
+
+    expect(eventIdsOf(chatId)).toEqual(["turn-1"]);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
   });
 });

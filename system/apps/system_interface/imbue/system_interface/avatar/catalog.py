@@ -3,7 +3,6 @@ kept with their originals under the app data directory because the originals are
 designs the shell ships."""
 
 from pathlib import Path
-from typing import Any
 from typing import Final
 
 from loguru import logger
@@ -13,7 +12,6 @@ from pydantic import field_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import LIVE_DESIGN_ID
 from imbue.system_interface.avatar.designs import LIVE_DESIGN_LABEL
@@ -78,11 +76,6 @@ class DesignListing(FrozenModel):
     id: DesignId = Field(description="The catalog id")
     label: str = Field(description="What the chooser calls it")
     source_path: str | None = Field(description="Where a registered design came from; None for a bundled one")
-
-
-@pure
-def design_listing_wire_json(listing: DesignListing) -> dict[str, Any]:
-    return {"id": str(listing.id), "label": listing.label, "source_path": listing.source_path}
 
 
 class AvatarCatalogStore(MutableModel):

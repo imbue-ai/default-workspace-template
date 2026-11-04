@@ -21,18 +21,18 @@ from playwright.sync_api import (
     expect,
 )
 from terminal_app.dispatch import load_ttyd_web_client
-from terminal_app.pages import PageConfig, SessionPage, render_page
-from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.pages import PageConfig, render_page
 from terminal_app.pty_page import add_pty_page_script
+from terminal_app.testing import (
+    BROWSER_PTY_URL,
+    BROWSER_WRAPPER_HOST,
+    BROWSER_WRAPPER_URL,
+    render_browser_wrapper_page,
+)
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
-_WRAPPER_HOST: Final[str] = "terminal.test"
-_PTY_LABEL: Final[str] = "pty"
-_PTY_PATH: Final[str] = "/?arg=_&arg=session&arg=terminal-1"
-_WRAPPER_URL: Final[str] = f"http://{_WRAPPER_HOST}/?session=terminal-1"
-_BARE_WRAPPER_URL: Final[str] = f"http://{_WRAPPER_HOST}/"
-_PTY_URL: Final[str] = f"http://{_PTY_LABEL}.{_WRAPPER_HOST}{_PTY_PATH}"
+_BARE_WRAPPER_URL: Final[str] = f"http://{BROWSER_WRAPPER_HOST}/"
 
 # Records every message its parent posts and every resize it sees.
 _RECORDING_PTY_PAGE: Final[str] = """<!doctype html>
@@ -56,17 +56,6 @@ window.term = {
 </script></body></html>"""
 
 
-def _wrapper_html() -> str:
-    session = TmuxSessionName("terminal-1")
-    page = SessionPage(
-        name=session,
-        title=TerminalTitle("Terminal 1"),
-        pty_path=_PTY_PATH,
-        pty_label=_PTY_LABEL,
-    )
-    return render_page(PageConfig(session=session, page=page))
-
-
 def _bare_wrapper_html() -> str:
     return render_page(PageConfig(session=None, page=None))
 
@@ -83,13 +72,15 @@ def _serve(context: BrowserContext, pty_page: str | bytes) -> None:
 
     def answer(route: Route) -> None:
         url = route.request.url
-        if url == _WRAPPER_URL:
-            route.fulfill(status=200, content_type="text/html", body=_wrapper_html())
+        if url == BROWSER_WRAPPER_URL:
+            route.fulfill(
+                status=200, content_type="text/html", body=render_browser_wrapper_page()
+            )
         elif url == _BARE_WRAPPER_URL:
             route.fulfill(
                 status=200, content_type="text/html", body=_bare_wrapper_html()
             )
-        elif url == _PTY_URL:
+        elif url == BROWSER_PTY_URL:
             route.fulfill(status=200, content_type="text/html", body=pty_page)
         else:
             route.fulfill(status=404, body="")
@@ -100,8 +91,8 @@ def _serve(context: BrowserContext, pty_page: str | bytes) -> None:
 def _open(context: BrowserContext, pty_page: str | bytes) -> tuple[Page, Frame]:
     _serve(context, pty_page)
     page = context.new_page()
-    page.goto(_WRAPPER_URL)
-    frame = page.frame(url=_PTY_URL)
+    page.goto(BROWSER_WRAPPER_URL)
+    frame = page.frame(url=BROWSER_PTY_URL)
     assert frame is not None
     frame.wait_for_load_state()
     return page, frame

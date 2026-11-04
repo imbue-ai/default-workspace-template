@@ -1,13 +1,14 @@
+import { PHONE_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { readFileSync } from "fs";
 import { describe, expect, it, vi } from "vitest";
 import { themeMetricsRecord } from "../testing/records";
 import type { MediaQueryLike } from "./metrics";
 import {
   PHONE_ATTRIBUTE,
-  PHONE_MEDIA_QUERY,
   TOUCH_ATTRIBUTE,
   ThemeMetricsError,
   applyRenderModes,
+  currentRenderModes,
   followRenderModes,
   parsePixelLength,
   readThemeMetrics,
@@ -30,6 +31,7 @@ function styleOf(tokens: Record<string, string>): { getPropertyValue: (name: str
 
 const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-title-bar-height": "36px",
+  "--desk-window-radius": "12px",
   "--desk-taskbar-height": "48px",
   "--desk-cell-width": "96px",
   "--desk-cell-height": "112px",
@@ -44,6 +46,9 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-floating-entry-size": "56px",
   "--desk-floating-entry-inset-x": "16px",
   "--desk-floating-entry-inset-y": "12px",
+  "--desk-overview-gap": "28px",
+  "--desk-overview-tile-title": "28px",
+  "--desk-overview-thumbnail-width": "200px",
 };
 
 describe("the theme file", () => {
@@ -150,5 +155,13 @@ describe("followRenderModes", () => {
     applyRenderModes(root.element, { isPhone: false, isTouch: false });
     expect(root.element.hasAttribute(PHONE_ATTRIBUTE)).toBe(false);
     expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(false);
+  });
+
+  it("currentRenderModes reads back what applyRenderModes stamped", () => {
+    const root = fakeRoot();
+    applyRenderModes(root.element, { isPhone: true, isTouch: false });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: true, isTouch: false });
+    applyRenderModes(root.element, { isPhone: false, isTouch: true });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: false, isTouch: true });
   });
 });

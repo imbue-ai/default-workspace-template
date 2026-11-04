@@ -26,11 +26,14 @@ import {
   getPendingAccountId,
   getPendingPick,
   isSwitchTarget,
+  nextSendSwitchTarget,
   pendingSwitchTarget,
   setPendingAccount,
   setPendingSwitch,
+  setSwitchSending,
   switchKind,
   trackPendingLaneSettlement,
+  underwaySwitchTarget,
 } from "./PendingLane";
 
 const HAIKU = {
@@ -40,6 +43,7 @@ const HAIKU = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: "claude-haiku-4-5",
+  default_effort: null,
 };
 const HAIKU_PICK = {
   identity: { model_id: "haiku", effort: "low", fast: false },
@@ -61,6 +65,7 @@ describe("the pending lane", () => {
     state.listeners.length = 0;
     shown.length = 0;
     setPendingAccount("agent-1", null);
+    setSwitchSending("agent-1", false);
   });
 
   it("is per chat, and cleared with null", () => {
@@ -110,6 +115,45 @@ describe("the pending lane", () => {
     setPendingAccount("agent-1", "acct-openai");
     state.chat = null;
     expect(pendingSwitchTarget("agent-1")).toBeNull();
+  });
+
+  it("makes the next send a switch only while no switch is being sent or run", () => {
+    setPendingAccount("agent-1", "acct-openai");
+    expect(nextSendSwitchTarget("agent-1")?.id).toBe("acct-openai");
+    expect(underwaySwitchTarget("agent-1")).toBeNull();
+
+    // The switch's own message is on its way.
+    setSwitchSending("agent-1", true);
+    expect(nextSendSwitchTarget("agent-1")).toBeNull();
+    expect(underwaySwitchTarget("agent-1")?.id).toBe("acct-openai");
+    setSwitchSending("agent-1", false);
+
+    // The switch is being carried out.
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic" },
+      handoff: handoffStateFixture({ phase: "summarizing" }),
+    });
+    expect(nextSendSwitchTarget("agent-1")).toBeNull();
+    expect(underwaySwitchTarget("agent-1")?.id).toBe("acct-openai");
+
+    // One another page started, to another account, is not this page's to name.
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic" },
+      handoff: rebindStateFixture(),
+    });
+    expect(underwaySwitchTarget("agent-1")).toBeNull();
+
+    // A failed one is neither: its notice governs, and the next send is an ordinary one.
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic" },
+      handoff: handoffStateFixture({ phase: "failed", error: "boom", failed_step: "start" }),
+    });
+    expect(nextSendSwitchTarget("agent-1")).toBeNull();
+    expect(underwaySwitchTarget("agent-1")).toBeNull();
+
+    // A cancelled one leaves the choice for the next try.
+    state.chat = chatSnapshotFixture("agent-1", { active_agent: { harness: "claude", account_id: "acct-anthropic" } });
+    expect(nextSendSwitchTarget("agent-1")?.id).toBe("acct-openai");
   });
 
   it("reads a move to the chat's own harness and lane as a rebind, anything else as a handoff", () => {

@@ -1,0 +1,3 @@
+`test_http_cast_closes_a_closed_browser_with_the_terminated_signal` is marked flaky, so offload retries it rather than turning CI red.
+
+The test waits for the cast socket's `closed` text frame, which its own comment described as "delivered intact before the close". It is not always: werkzeug corrupts the close handshake by writing a trailing HTTP response after the close frame, and when those bytes win the race the text frame is lost and the receive raises `ConnectionClosed(1005)`. Seen once in CI and gone on a re-run of the same commit. The underlying race is MIND-583, which is about the same close path and had assumed a text frame was the reliable signal.

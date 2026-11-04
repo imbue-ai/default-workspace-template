@@ -231,8 +231,8 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
           });
         }
-        // A chip or status line that landed inside an open handoff or inline in the timeline;
-        // the opaque pure-white chat background masks the thread behind it.
+        // A chip that landed inside an open handoff; the opaque pure-white chat background
+        // masks the thread behind it.
         // z-[2]: design-system-exception, as above.
         return m(
           "div",

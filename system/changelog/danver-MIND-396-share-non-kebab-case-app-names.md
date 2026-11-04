@@ -1,0 +1,1 @@
+The stop-when-no-windows spec's description of the services event stream now lists the display name among the registered fields a `service_registered` event compares, alongside the URL, label, and icon. Documentation only; the behavior it describes is the system_interface change in the same PR.

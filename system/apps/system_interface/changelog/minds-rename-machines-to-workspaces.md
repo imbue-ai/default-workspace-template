@@ -1,0 +1,1 @@
+User-facing launcher copy now says "workspace" where it meant the user's workspace: "No app in this workspace can start a chat", "No app in this workspace can take a draft", and "No apps are registered in this workspace yet." (previously "on this machine").
