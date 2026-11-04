@@ -7,3 +7,5 @@
 - The template `config.json` the image carries: minds' hidden built-ins and registered services plus a browser entry naming the Fortress launcher, rendered by `auth-sandbox-render-config` at image build and verified with `latchkey ensure-browser --source existing-config`.
 
 - The sandbox is reached over Modal's own TLS (`encrypted_ports` for the Screen on 8090 and owner-exec on 8793, `unencrypted_ports` for neko's ICE TCP mux on 59000), with no share gateway, relay or certificate in it; the Screen and owner-exec listen on every interface, the boot script writes the chrome's origin to `share.env` as owner-exec's CORS origin and passes it to the Screen as its `frame-ancestors`, and the Screen reads the media tunnel's address from `/run/auth-sandbox-connect-info.json`, which the connector writes.
+
+- The boot script exports `SCREEN_VIDEO_CODEC=vp8` and `SCREEN_FIXED_SIZE=1360x864`, so the Screen streams in a codec every browser decodes over WebRTC, Firefox included, and its display stays large enough for latchkey's 1280x720 login window whatever the size of the viewer's frame.
