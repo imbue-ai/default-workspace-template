@@ -1026,7 +1026,7 @@ class HandoffRunner:
         the message route appends under, so a send that arrives during delivery is delivered
         by this loop rather than overtaking one still held. Raises ``HandoffStepError`` while
         the successor is untracked (a resume that ran before the observe stream listed it):
-        the sends stay on the record for the next resume rather than being popped with
+        the sends stay on the record for the next resume rather than being taken with
         nothing to receive them. A send that does not land leaves the delivered list again, so the
         page stops showing it.
         """
