@@ -432,8 +432,9 @@ longer than two seconds), and answers the union:
 A candidate whose `host` is a name rather than an IP (a Modal tunnel's `r482.modal.host`, a
 relay's hostname) is answered as one candidate per IPv4 address the name resolves to, resolved
 within its broker's bound: Firefox ignores a remote ICE candidate whose address is a name, where
-Chromium resolves it. A name that does not resolve drops that candidate, with a log line, and
-never the answer. Candidates are filtered to guest port 59000, de-duplicated, and spelled with a
+Chromium resolves it. A name that does not resolve in the container is kept as the name (it may
+name a host only the viewer's machine resolves, such as a remote docker daemon's), and a
+malformed one drops that candidate, with a log line, never the answer. Candidates are filtered to guest port 59000, de-duplicated, and spelled with a
 lower-case `protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector
 lower-case, and the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
 viewer unchanged, and `expires_at` the earliest expiry. A broker that is slow, unreachable

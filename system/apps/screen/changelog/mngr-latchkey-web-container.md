@@ -4,7 +4,7 @@
 
 - `GET /api/connect-info` also reads the connect-info document in the file `SCREEN_CONNECT_INFO_PATH` names, on every request, when that variable is set; an absent or unreadable file is a broker that did not answer.
 
-- `GET /api/connect-info` answers a candidate a broker named by a hostname as one candidate per IPv4 address the name resolves to, since Firefox ignores a remote ICE candidate whose address is a name; a name that does not resolve drops that candidate, with a log line, never the answer.
+- `GET /api/connect-info` answers a candidate a broker named by a hostname as one candidate per IPv4 address the name resolves to, since Firefox ignores a remote ICE candidate whose address is a name; a name that does not resolve in the container is kept as the name, for a viewer that may resolve it (a remote docker daemon's host), and a malformed one drops that candidate, with a log line, never the answer.
 
 - `SCREEN_VIDEO_CODEC` (`h264`, the default, or `vp8`) picks the codec neko streams in. With `vp8` the three profiles keep their frame rates and bitrates as libvpx realtime CBR pipelines, which Firefox decodes without Cisco's OpenH264 plugin.
 

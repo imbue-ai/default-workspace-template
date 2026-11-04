@@ -1,7 +1,7 @@
 """``GET /api/connect-info`` (docs/system/specs/screen/spec.md section 5.2): the brokers asked in parallel, each
 bounded (two seconds for candidates, longer for relay servers, whose first mint goes through the connector to
 Cloudflare), and the union of what they answered in time, held in memory only. A candidate a broker names by a
-hostname is answered as the IPv4 addresses the name resolves to."""
+hostname is answered as the IPv4 addresses the name resolves to here, or as the name when it does not."""
 
 import ipaddress
 import socket
@@ -54,7 +54,9 @@ def resolve_candidate_hosts(
     candidates: tuple[MediaCandidate, ...], resolve: Callable[[str], tuple[str, ...]]
 ) -> tuple[MediaCandidate, ...]:
     """Each candidate named by a hostname replaced by one candidate per address the name resolves to, since Firefox
-    ignores a remote ICE candidate whose address is not an IP; a name that does not resolve drops its candidate."""
+    ignores a remote ICE candidate whose address is not an IP. A name that does not resolve here is kept as it is,
+    since it may name a host only the viewer's machine resolves (a remote docker daemon's); a malformed one is
+    dropped."""
     resolved: list[MediaCandidate] = []
     for candidate in candidates:
         if is_ip_literal(candidate.host):
@@ -62,14 +64,20 @@ def resolve_candidate_hosts(
             continue
         try:
             addresses = resolve(candidate.host)
-        except (OSError, ValueError) as e:
+        except ValueError as e:
             logger.warning(
-                "Dropped the candidate {}:{} ({}): the name does not resolve: {}",
+                "Dropped the candidate {}:{} ({}): the name is malformed: {}",
                 candidate.host,
                 candidate.port,
                 candidate.protocol.value.lower(),
                 e,
             )
+            continue
+        except OSError as e:
+            logger.info(
+                "Kept the candidate {}:{} as a name: it does not resolve here: {}", candidate.host, candidate.port, e
+            )
+            resolved.append(candidate)
             continue
         resolved.extend(
             candidate.model_copy_update(to_update(candidate.field_ref().host, address)) for address in addresses

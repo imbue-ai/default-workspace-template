@@ -149,9 +149,9 @@ def test_a_hostname_candidate_becomes_one_candidate_per_address_and_an_ip_is_kep
     assert asked == ["r482.modal.host"]
 
 
-def test_a_hostname_that_does_not_resolve_drops_its_candidate_alone() -> None:
-    unresolvable = MediaCandidate(host="gone.example", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
-    assert resolve_candidate_hosts((unresolvable, _TCP), _fake_resolver({}, [])) == (_TCP,)
+def test_a_hostname_that_does_not_resolve_here_is_kept_for_the_viewer_to_resolve() -> None:
+    laptop_only = MediaCandidate(host="docker-box.local", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    assert resolve_candidate_hosts((laptop_only, _TCP), _fake_resolver({}, [])) == (laptop_only, _TCP)
 
 
 def test_a_malformed_hostname_drops_its_candidate_alone() -> None:
@@ -168,14 +168,15 @@ def test_is_ip_literal_accepts_both_families_and_refuses_names() -> None:
 
 def test_the_answer_carries_resolved_addresses_deduplicated_across_brokers() -> None:
     named = MediaCandidate(host="r482.modal.host", port=32772, protocol=TransportProtocol.TCP, guest_port=59000)
-    gone = MediaCandidate(host="gone.example", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
-    file_broker = FakeBroker(name="connect-info file", candidates=(named, gone))
+    laptop_only = MediaCandidate(host="docker-box.local", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    file_broker = FakeBroker(name="connect-info file", candidates=(named, laptop_only))
     resolve = _fake_resolver({"r482.modal.host": ("127.0.0.1", "198.51.100.4", "198.51.100.4")}, [])
     answer = ConnectInfoAggregator(brokers=(_desktop(), file_broker), resolve_host=resolve).fetch(is_relay=False)
     assert answer.document()["candidates"] == [
         {"host": "127.0.0.1", "port": 32771, "protocol": "udp"},
         {"host": "127.0.0.1", "port": 32772, "protocol": "tcp"},
         {"host": "198.51.100.4", "port": 32772, "protocol": "tcp"},
+        {"host": "docker-box.local", "port": 40000, "protocol": "tcp"},
     ]
 
 
