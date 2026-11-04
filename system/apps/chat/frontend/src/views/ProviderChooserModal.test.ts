@@ -33,6 +33,7 @@ const state: {
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<RelayAnswer> => "relaying"));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
+const abortFlow = vi.hoisted(() => vi.fn());
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
@@ -49,7 +50,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   startFlow,
   submitCode: async () => undefined,
   submitKey: async () => undefined,
-  abortFlow: () => undefined,
+  abortFlow,
   clearFlow: () => undefined,
 }));
 
@@ -132,6 +133,7 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
 beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
+  abortFlow.mockClear();
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue("relaying");
   loadLanesAndAccountsWithRetry.mockReset();
@@ -617,11 +619,14 @@ describe("a sign-in finished in the browser", () => {
     const root = await clickLane("anthropic");
 
     (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    abortFlow.mockClear();
     started();
     await settled();
 
     expect(startFlow).toHaveBeenCalledTimes(2);
     expect(requestProviderRelay).toHaveBeenCalledOnce();
+    // The sign-in that started after Back belongs to nobody, so the chooser ends it.
+    expect(abortFlow).toHaveBeenCalledOnce();
   });
 
   it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
