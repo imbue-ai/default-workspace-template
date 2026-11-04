@@ -1,0 +1,1 @@
+`docs/system/analytics-collection.md` names the two feeds this template's own services write for the explorer analytics collection, the share gateway's per-minute request counts and the shell's `window_opened` client-activity events, and says the gateway's per-request access log is never collected. The root workspace gains the `event_streams` library as a member.
