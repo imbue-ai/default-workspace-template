@@ -87,8 +87,8 @@ export function fillParamOf(launchPath: LaunchPath): string | null {
  * What running a launch path comes to (plan sections 3.1 and 3.3), decided by the manifest alone and in this
  * order: ``text`` for a launch path with a ``text_param`` or a ``draft_param`` (a free-text row, whatever its
  * path); ``focus`` for a GET launch path at its app's pin path (the pinned window is raised, nothing opens);
- * ``one`` for every launch path of an unpinned app whose default shortcut focuses (a one-window app such as the
- * Screen: the launch lands in the window the desktop already holds, whichever client opened it, and opens one
+ * ``one`` for every launch path of an unpinned app whose first default shortcut focuses (a one-window app such as
+ * the Screen: the launch lands in the window the desktop already holds, whichever client opened it, and opens one
  * only when there is none; a pinned app's rows follow its pin instead); ``new`` for every other.
  */
 export type LaunchRowKind = "text" | "focus" | "one" | "new";
