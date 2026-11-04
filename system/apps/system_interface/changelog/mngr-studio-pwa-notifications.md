@@ -6,4 +6,4 @@ Notifications on a phone: the workspace can now push a notification to the owner
 
 - The shell keeps a VAPID signing key and the owner's devices under `data/.state/system_interface/web_push/`. Only the owner registers, lists, removes or tests a device.
 
-- `POST /api/web-push/send` (loopback only, refused through a share and in a preview) pushes `{title, body, path, tag}` to every registered device and answers each push service's status; a device whose subscription is gone is forgotten.
+- `POST /api/web-push/send` (loopback only, refused through a share and in a preview) pushes `{title, body, path, tag}` to every registered device at once and answers each push service's status. A notification with the same tag replaces the earlier one on a device and still alerts; one too large for a push service is refused with a 400; a device whose subscription is gone is forgotten.
