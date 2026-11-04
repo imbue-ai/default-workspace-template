@@ -20,10 +20,14 @@ from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
+from share_gateway.request_counts import DENIED_AGENT_ACCESS_UNCONFIGURED
+from share_gateway.request_counts import DENIED_AGENT_TOKEN
 from share_gateway.request_counts import DENIED_FOREIGN_HOST
+from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
 from share_gateway.request_counts import DENIED_NO_GRANT
 from share_gateway.request_counts import DENIED_NO_SESSION
 from share_gateway.request_counts import DENIED_ORIGIN
@@ -31,6 +35,7 @@ from share_gateway.request_counts import METHOD_CLASS_READ
 from share_gateway.request_counts import METHOD_CLASS_WEBSOCKET
 from share_gateway.request_counts import METHOD_CLASS_WRITE
 from share_gateway.request_counts import OUTCOME_ALLOWED
+from share_gateway.request_counts import REQUESTER_KIND_AGENT
 from share_gateway.request_counts import REQUESTER_KIND_NONE
 from share_gateway.request_counts import REQUESTER_KIND_OWNER
 from share_gateway.request_counts import REQUESTER_KIND_USER
@@ -990,3 +995,63 @@ def test_verify_without_a_counter_still_answers(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "bob@example.com")
     assert harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST)).status_code == 200
+
+
+def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
+    # A bearer token with no agent access configured.
+    unconfigured_counter = RequestCounter(tmp_path / "unconfigured.jsonl")
+    unconfigured = _make_harness(tmp_path, request_counter=unconfigured_counter)
+    unconfigured.client.get(
+        "/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer not-a-token"}
+    )
+    assert _counted_keys(unconfigured_counter) == [
+        ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_AGENT_ACCESS_UNCONFIGURED, 1)
+    ]
+
+    # A bearer token the admitter refuses, and one it admits.
+    def _admit(token: str, service_name: str | None) -> AgentIdentity | None:
+        return AgentIdentity("agent-7", "helper", "owner") if token == "good" else None
+
+    agent_counter = RequestCounter(tmp_path / "agents.jsonl")
+    agent_harness = _GatewayHarness(
+        build_gateway_app(
+            materials=ShareMaterials(
+                workspace_domain=_DOMAIN,
+                relay_token="tok",
+                connector_url="https://connector.example.com",
+                broker_url=_BROKER_URL,
+                chrome_origin=_CHROME_ORIGIN,
+            ),
+            grants_path=unconfigured.grants_path,
+            signing_secret=_SIGNING_SECRET,
+            jwks_cache=JwksCache(f"{_BROKER_URL}/share/jwks.json", preloaded_keys_by_kid={}),
+            jti_registry=SingleUseJtiRegistry(),
+            pending_logins=PendingLoginRegistry(),
+            auth_label=_AUTH_LABEL,
+            get_registered_apps=lambda: _APPS,
+            get_connect_info=lambda: {"ice_servers": [], "candidates": []},
+            admit_agent=_admit,
+            request_counter=agent_counter,
+        ),
+        None,  # type: ignore[arg-type]
+        unconfigured.grants_path,
+        PendingLoginRegistry(),
+    )
+    client = agent_harness.app.test_client()
+    client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer bad"})
+    client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer good"})
+    assert sorted(_counted_keys(agent_counter)) == sorted(
+        [
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_AGENT_TOKEN, 1),
+            ("web", REQUESTER_KIND_AGENT, "agent-7", METHOD_CLASS_READ, OUTCOME_ALLOWED, 1),
+        ]
+    )
+
+    # A visitor while the grants file is malformed: refused, and counted under their id.
+    misconfigured_counter = RequestCounter(tmp_path / "misconfigured.jsonl")
+    misconfigured = _make_harness(tmp_path, grants_text="this is = not toml [", request_counter=misconfigured_counter)
+    _install_session(misconfigured.client, "bob@example.com")
+    assert misconfigured.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST)).status_code == 503
+    assert _counted_keys(misconfigured_counter) == [
+        ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, DENIED_GRANTS_MISCONFIGURED, 1)
+    ]

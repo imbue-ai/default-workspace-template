@@ -311,7 +311,8 @@ A window keeps at most 256 distinct keys; every further key folds into one
 `overflow` record, so a flood bounds itself. The stream archives itself at
 32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`
 library's rule. A gateway that stops flushes every window, the open one
-included; one that dies loses at most a minute. With
+included; one that dies loses the windows not yet flushed, up to about two
+minutes. With
 `MNGR_AGENT_STATE_DIR` unset nothing is counted.
 
 The analytics collection of an explorer-plan workspace reads this feed and

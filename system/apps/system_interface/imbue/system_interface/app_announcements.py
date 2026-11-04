@@ -52,7 +52,6 @@ DEREGISTERED_ANNOUNCEMENT_TYPE: Final[EventType] = EventType("service_deregister
 # every app on each registry rewrite, grew some streams past a gigabyte.
 ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES: Final[int] = 5 * 1024 * 1024
 KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT: Final[int] = 3
-# Neither suffix fits mngr's replayed rotation name (``events.jsonl.<digits>``).
 
 
 class AppRegisteredAnnouncement(EventEnvelope):
