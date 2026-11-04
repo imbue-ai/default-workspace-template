@@ -95,8 +95,8 @@ latchkey curl -N -H "X-Latchkey-Device: <device id>" -H "X-Imbue-Studio-Agent: $
 - Send `X-Imbue-Studio-Agent` on every call: it is how the user's record of
   commands says which workspace ran what.
 - The answer streams as NDJSON, one JSON object per line: `{"type":
-  "stdout", "data": "..."}` and `{"type": "stderr", "data": "..."}` chunks as
-  they arrive, `{"type": "keepalive"}` while the command is silent (ignore it,
+  "stdout", "data": "..."}` and `{"type": "stderr", "data": "..."}` lines as
+  the command prints them, `{"type": "keepalive"}` while the command is silent (ignore it,
   and any other type you do not know), and one final `{"type": "exit",
   "code": <int or null>, "timed_out": <bool>}`. Keep `-N` so you see output
   as it happens.
