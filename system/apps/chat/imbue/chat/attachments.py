@@ -55,13 +55,18 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
     try:
         unique_subdirectory.mkdir(parents=True, exist_ok=True)
         file_storage.save(destination_path)
-        size = read_image_size(destination_path)
-        if size is None:
-            return destination_path
-        sized_subdirectory = uploads_directory / f"{unique_id}-{size.width}x{size.height}"
-        unique_subdirectory.rename(sized_subdirectory)
     except OSError as e:
         raise AttachmentError(f"Could not store uploaded file '{original_filename}'") from e
+    size = read_image_size(destination_path)
+    if size is None:
+        return destination_path
+    sized_subdirectory = uploads_directory / f"{unique_id}-{size.width}x{size.height}"
+    # The size is only a hint for drawing the image, so the file stays where it was saved without one.
+    try:
+        unique_subdirectory.rename(sized_subdirectory)
+    except OSError as e:
+        logger.warning("Kept upload {} without its size in the path: {}", destination_path, e)
+        return destination_path
     return sized_subdirectory / safe_name
 
 
