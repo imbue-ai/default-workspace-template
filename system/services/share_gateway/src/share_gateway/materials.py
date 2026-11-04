@@ -35,6 +35,8 @@ _AUTH_LABEL_RANDOM_LENGTH = 8
 
 STATE_DIR = Path("data/.state/share_gateway")
 CADDYFILE_PATH = STATE_DIR / "Caddyfile"
+# caddy's per-request access log (caddyfile.py): the owner's record of every request the share served.
+ACCESS_LOG_PATH = STATE_DIR / "access.log"
 # One frpc config per assigned relay lives at frpc-<relay_id>.toml under
 # STATE_DIR (see frpc_config_path); the workspace tunnels to EVERY relay of
 # its region. The last-fetched relay assignment is cached so a container

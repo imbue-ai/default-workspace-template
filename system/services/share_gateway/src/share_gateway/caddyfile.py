@@ -164,6 +164,8 @@ def render_caddyfile(
     https_port: int,
     gateway_port: int,
     chrome_origin: str,
+    # Where caddy writes its per-request access log, the owner's record of every request the share served.
+    access_log_path: Path,
 ) -> str:
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
@@ -227,6 +229,30 @@ def render_caddyfile(
 # unrouted (no frpc claim), so the CT-visible cert name reaches nothing.
 https://*.{workspace_domain}:{https_port} {{
     tls {tls_cert_path} {tls_key_path}
+
+    # The owner's per-request record: who connected (the visitor's address,
+    # from the PROXY protocol header), which origin, which path, the status,
+    # the size and the duration. Never a header, a query string or a response
+    # header: the session cookie, a visiting agent's admission token and the
+    # login callback's handoff token travel in exactly those, and an app's own
+    # headers may carry its credentials. Bounded by the rolling settings; the
+    # gateway's request counts (request_counts.py) carry identity instead.
+    log {{
+        output file {access_log_path} {{
+            roll_size 8MiB
+            roll_keep 4
+            roll_keep_for 720h
+        }}
+        format filter {{
+            wrap json
+            fields {{
+                request>headers delete
+                request>tls delete
+                resp_headers delete
+                request>uri regexp `\\?.*$` ""
+            }}
+        }}
+    }}
 
     # Labels are semi-secret (they gate the relay), so never leak one to
     # another site via the Referer of an outbound navigation.
