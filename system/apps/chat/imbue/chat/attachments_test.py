@@ -53,15 +53,14 @@ def test_store_uploaded_file_writes_content_under_unique_subdir(tmp_path: Path) 
     assert stored_path.parent.parent == uploads_directory
 
 
+_PNG_1600X900 = (
+    b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 1600, 900) + b"\x08\x06\x00\x00\x00"
+)
+
+
 def test_an_image_upload_names_its_subdirectory_after_the_size_it_is_drawn_at(tmp_path: Path) -> None:
     uploads_directory = tmp_path / "uploads"
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + struct.pack(">I", 13)
-        + b"IHDR"
-        + struct.pack(">II", 1600, 900)
-        + b"\x08\x06\x00\x00\x00"
-    )
+    png = _PNG_1600X900
 
     stored_path = store_uploaded_file(uploads_directory, "photo.png", _file_storage(png, "photo.png"))
 
@@ -70,6 +69,22 @@ def test_an_image_upload_names_its_subdirectory_after_the_size_it_is_drawn_at(tm
     assert [path.name for path in uploads_directory.iterdir()] == [stored_path.parent.name]
     relative_path = f"{stored_path.parent.name}/{stored_path.name}"
     assert resolve_upload_path(uploads_directory, relative_path) == stored_path.resolve()
+
+
+def test_an_image_whose_subdirectory_cannot_be_renamed_is_kept_without_its_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uploads_directory = tmp_path / "uploads"
+
+    def refuse_rename(self: Path, target: Path) -> Path:
+        raise OSError("rename refused")
+
+    monkeypatch.setattr(Path, "rename", refuse_rename)
+
+    stored_path = store_uploaded_file(uploads_directory, "photo.png", _file_storage(_PNG_1600X900, "photo.png"))
+
+    assert re.fullmatch(r"[0-9a-f]{32}", stored_path.parent.name)
+    assert stored_path.read_bytes() == _PNG_1600X900
 
 
 def test_a_file_with_no_readable_size_keeps_a_plain_subdirectory(tmp_path: Path) -> None:
