@@ -253,10 +253,13 @@ function buildRows(
             chatId,
             isStretchHead,
           }),
-        // The calls on the timeline's own line: those of its ungrouped runs and its wrap-up, not a step's.
+        // The calls on the timeline's own line: those of its ungrouped runs, its permission requests' messages and
+        // its wrap-up, not a step's.
         chipCallIds: chipCallIdsOf(
           [
-            ...section.items.flatMap((item) => (item.kind === "ungrouped" ? item.events : [])),
+            ...section.items.flatMap((item) =>
+              item.kind === "ungrouped" ? item.events : item.kind === "permission" ? [item.event] : [],
+            ),
             ...section.trailing_reply,
           ],
           toolResults,
