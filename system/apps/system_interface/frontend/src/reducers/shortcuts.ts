@@ -1,11 +1,10 @@
 /**
  * What a shortcut, a launcher tile, or a desktop's menu comes to (desktop-interface plan sections
- * 3.6, 4.8, 4.9): a focus-mode shortcut of a GET launch path raises the app's most recently focused
- * window in this client's layout and opens at the launch path only when there is none, and one of a
+ * 3.6, 4.8, 4.9): a focus-mode shortcut raises the app's most recently focused window in this
+ * client's layout and opens at the launch path only when there is none, except that one of a
  * one-window app's POST launch path always runs it into that app's window, as its launcher row does;
- * a new desktop is minted
- * ``Desktop <n>``; a shortcut added from a tile lands at the first free cell in reading order over
- * the current grid.
+ * a new desktop is minted ``Desktop <n>``; a shortcut added from a tile lands at the first free cell
+ * in reading order over the current grid.
  */
 
 import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geometry/grid";
