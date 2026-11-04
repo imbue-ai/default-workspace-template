@@ -79,7 +79,8 @@ export function attachmentServeUrl(path: string): string {
  * and the path stays visible to the reader.
  *
  * No escaping is needed: the backend stores each upload under a hex uuid dir
- * with a ``secure_filename``-sanitized basename, so a stored path only contains
+ * (``<id>-<width>x<height>`` for an image whose size it read) with a
+ * ``secure_filename``-sanitized basename, so a stored path only contains
  * ``[A-Za-z0-9._-]`` segments -- no spaces, parentheses, or brackets that would
  * break the markdown link or its URL.
  */
