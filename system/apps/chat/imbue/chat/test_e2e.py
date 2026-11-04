@@ -281,8 +281,10 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
+def _post_chat_json(
+    server: RunningWorkspace, path: str, body: dict[str, Any], expected_status: int = 200
+) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under ``expected_status``."""
     request = urllib.request.Request(
         f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
@@ -290,7 +292,7 @@ def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200, f"{path} answered {response.status}"
+        assert response.status == expected_status, f"{path} answered {response.status}"
         answer = json.loads(response.read())
     assert isinstance(answer, dict)
     return answer
@@ -2056,14 +2058,13 @@ def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_deliv
             wait_for(is_delivering[confirming].is_set, timeout=30.0, error_message="the switch never delivered")
 
             # Sent from another window: every page shows a held send from the chat's snapshot.
-            request = urllib.request.Request(
-                f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/message",
-                data=json.dumps({"message": follow_up, "message_id": "follow-up-1"}).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
+            answer = _post_chat_json(
+                server,
+                f"/api/chats/{FIXTURE_AGENT_ID}/message",
+                {"message": follow_up, "message_id": "follow-up-1"},
+                expected_status=202,
             )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                assert response.status == 202
+            assert answer["status"] == "held"
             # Holding a send pushes nothing of its own; with the delivery paused, the test stands in for the pushes
             # a running chat makes all the time.
             manager._broadcast_chats_updated()
