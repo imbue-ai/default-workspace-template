@@ -88,6 +88,43 @@ def test_reads_the_size_from_each_inline_format(
     assert read_image_size(_write(tmp_path, name, content)) == expected
 
 
+@pytest.mark.parametrize(
+    ("svg", "expected"),
+    [
+        ('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect/></svg>', (640, 480)),
+        ('<svg width="64px" height="32px" viewBox="0 0 10 10"></svg>', (64, 32)),
+        ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" role="img"></svg>', (300, 200)),
+        ("<svg viewBox='0,0,120.5,80.4'></svg>", (120, 80)),
+        ('<svg width="600" viewBox="0 0 300 200"></svg>', (600, 400)),
+        ('<svg height="100" viewBox="0 0 300 200"></svg>', (150, 100)),
+        ('<svg width="100%" height="100%" viewBox="0 0 40 30"></svg>', (40, 30)),
+        ('<?xml version="1.0"?>\n<!-- drawn by hand -->\n<svg viewBox="0 0 50 50"></svg>', (50, 50)),
+    ],
+)
+def test_reads_the_size_an_svg_declares_or_its_viewbox_shape(
+    tmp_path: Path, svg: str, expected: tuple[int, int]
+) -> None:
+    assert read_image_size(_write(tmp_path, "drawing.svg", svg.encode())) == expected
+
+
+def test_a_stroke_width_is_not_read_as_an_svg_width(tmp_path: Path) -> None:
+    svg = b'<svg stroke-width="2" viewBox="0 0 300 200"></svg>'
+
+    assert read_image_size(_write(tmp_path, "drawing.svg", svg)) == (300, 200)
+
+
+@pytest.mark.parametrize(
+    "svg",
+    [
+        '<svg width="100%" height="100%"></svg>',
+        '<svg width="10em" height="5em"></svg>',
+        "<html>not an svg</html>",
+    ],
+)
+def test_an_svg_that_declares_no_drawn_size_has_none(tmp_path: Path, svg: str) -> None:
+    assert read_image_size(_write(tmp_path, "drawing.svg", svg.encode())) is None
+
+
 def test_a_phone_photo_turned_on_its_side_reports_the_size_it_is_drawn_at(tmp_path: Path) -> None:
     """A portrait phone photo is stored landscape with an orientation tag (6: turn clockwise), and
     a browser draws it portrait, so its box must be portrait too."""

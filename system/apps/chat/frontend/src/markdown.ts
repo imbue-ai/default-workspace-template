@@ -95,8 +95,17 @@ export function requestedAtUrl(value: string, requestedAt: string): string | nul
 const IMAGE_LOADING_CLASS = "is-loading";
 const IMAGE_ARRIVING_CLASS = "is-arriving";
 
+/** Give a loaded image that has no width and height of its own the size the browser decoded. An SVG
+ *  with only a viewBox has none, and in a bubble that shrinks to fit its content it would draw at nothing. */
+function holdDecodedSize(image: HTMLImageElement): void {
+  if (image.hasAttribute("width") || image.naturalWidth === 0) return;
+  image.setAttribute("width", String(image.naturalWidth));
+  image.setAttribute("height", String(image.naturalHeight));
+}
+
 function revealLoadedImage(event: Event): void {
-  const image = event.target as HTMLElement;
+  const image = event.target as HTMLImageElement;
+  holdDecodedSize(image);
   image.classList.remove(IMAGE_LOADING_CLASS);
   image.classList.add(IMAGE_ARRIVING_CLASS);
   // With reduced motion there is no fade, and so no end of one to wait for.
@@ -133,7 +142,10 @@ function prepareImages(container: HTMLElement, requestedAt: string | undefined):
       const tagged = requestedAtUrl(src, requestedAt);
       if (tagged !== null) image.setAttribute("src", tagged);
     }
-    if (image.complete) continue;
+    if (image.complete) {
+      holdDecodedSize(image);
+      continue;
+    }
     image.classList.add(IMAGE_LOADING_CLASS);
     image.addEventListener("load", revealLoadedImage, { once: true });
     image.addEventListener("error", clearImageLoading, { once: true });

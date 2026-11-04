@@ -2,10 +2,13 @@
 
 An uploaded image's size rides its stored path (see ``attachments.store_uploaded_file``), so a
 chat bubble can hold exactly the space the image will take before it loads. Only the header is
-read, for the formats a chat bubble draws inline: PNG, GIF, BMP, WebP and JPEG. A JPEG whose
+read, for the formats a chat bubble draws inline: PNG, GIF, BMP, WebP, JPEG and SVG. A JPEG whose
 orientation tag turns it on its side reports its size turned, since that is how a browser draws it.
+An SVG reports the size its root element declares, or its viewBox's when it declares none: an SVG
+with only a viewBox has no size of its own, and draws at nothing in a bubble that shrinks to fit.
 """
 
+import re
 import struct
 from pathlib import Path
 
@@ -30,11 +33,25 @@ _EXIF_ORIENTATION_TAG = 0x0112
 # Orientations 5-8 turn the picture a quarter turn, so it is drawn with its width and height swapped.
 _TURNED_ORIENTATIONS = frozenset({5, 6, 7, 8})
 
+# An SVG's root element sits after at most a prolog, a doctype and comments.
+_SVG_SCAN_BYTES = 64 * 1024
+_SVG_ROOT_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
+# A length in user units or pixels; a percentage or another unit says nothing about the drawn size.
+# The lookbehind keeps ``stroke-width`` from reading as ``width``.
+_SVG_LENGTH_RE_TEMPLATE = r"(?<![\w-]){name}\s*=\s*[\"']\s*([0-9]*\.?[0-9]+)\s*(?:px)?\s*[\"']"
+_SVG_WIDTH_RE = re.compile(_SVG_LENGTH_RE_TEMPLATE.format(name="width"))
+_SVG_HEIGHT_RE = re.compile(_SVG_LENGTH_RE_TEMPLATE.format(name="height"))
+_SVG_VIEWBOX_RE = re.compile(
+    r"(?<![\w-])viewBox\s*=\s*[\"']\s*-?[0-9.]+[\s,]+-?[0-9.]+[\s,]+([0-9]*\.?[0-9]+)[\s,]+([0-9]*\.?[0-9]+)\s*[\"']"
+)
+
 
 def read_image_size(path: Path) -> tuple[int, int] | None:
     """The width and height ``path`` is drawn at, or None when it is not an image read here."""
     try:
         with path.open("rb") as image_file:
+            if path.suffix.lower() == ".svg":
+                return _svg_size(image_file.read(_SVG_SCAN_BYTES).decode("utf-8", errors="replace"))
             head = image_file.read(_HEAD_BYTES)
             if head.startswith(b"\xff\xd8"):
                 image_file.seek(2)
@@ -128,6 +145,32 @@ def _exif_orientation(tiff: bytes) -> int | None:
             (orientation,) = struct.unpack(f"{byte_order}H", entry[8:10])
             return orientation
     return None
+
+
+@pure
+def _svg_size(text: str) -> tuple[int, int] | None:
+    """The size an SVG's root element declares; a missing side follows its viewBox's shape."""
+    root = _SVG_ROOT_RE.search(text)
+    if root is None:
+        return None
+    tag = root.group(0)
+    width_match = _SVG_WIDTH_RE.search(tag)
+    height_match = _SVG_HEIGHT_RE.search(tag)
+    viewbox_match = _SVG_VIEWBOX_RE.search(tag)
+    width = float(width_match.group(1)) if width_match else None
+    height = float(height_match.group(1)) if height_match else None
+    if viewbox_match is not None:
+        viewbox_width, viewbox_height = float(viewbox_match.group(1)), float(viewbox_match.group(2))
+        if viewbox_width > 0 and viewbox_height > 0:
+            if width is None and height is None:
+                width, height = viewbox_width, viewbox_height
+            elif height is None and width is not None:
+                height = width * viewbox_height / viewbox_width
+            elif width is None and height is not None:
+                width = height * viewbox_width / viewbox_height
+    if width is None or height is None:
+        return None
+    return _positive(round(width), round(height))
 
 
 @pure

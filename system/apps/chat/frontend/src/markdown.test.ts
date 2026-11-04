@@ -193,6 +193,29 @@ describe("MarkdownContent images", () => {
     expect(image.classList.contains("is-arriving")).toBe(false);
   });
 
+  it("gives a loaded image with no size of its own the size the browser decoded, so a viewBox-only SVG still shows", () => {
+    const image = mountMarkdown("![board](/home/user/workspace/data/board.svg)", "ts-1");
+    Object.defineProperty(image, "naturalWidth", { value: 225 });
+    Object.defineProperty(image, "naturalHeight", { value: 150 });
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.getAttribute("width")).toBe("225");
+    expect(image.getAttribute("height")).toBe("150");
+  });
+
+  it("keeps the size an upload's path records over the decoded one", () => {
+    const path = `/code/uploads/${"d".repeat(32)}-300x200/board.svg`;
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+    Object.defineProperty(image, "naturalWidth", { value: 225 });
+    Object.defineProperty(image, "naturalHeight", { value: 150 });
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.getAttribute("width")).toBe("300");
+    expect(image.getAttribute("height")).toBe("200");
+  });
+
   it("drops the placeholder when the image fails to load as well", () => {
     const image = mountMarkdown("![chart](/home/user/workspace/data/missing.png)");
 
