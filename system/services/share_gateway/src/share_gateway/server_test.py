@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -103,6 +104,7 @@ def _make_harness(
     grants_text: str = _GRANTS,
     chrome_origin: str = _CHROME_ORIGIN,
     request_counter: RequestCounter | None = None,
+    admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
 ) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
@@ -127,6 +129,7 @@ def _make_harness(
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
         get_connect_info=lambda: {"ice_servers": [], "candidates": []},
+        admit_agent=admit_agent,
         request_counter=request_counter,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
@@ -1013,31 +1016,7 @@ def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
         return AgentIdentity("agent-7", "helper", "owner") if token == "good" else None
 
     agent_counter = RequestCounter(tmp_path / "agents.jsonl")
-    agent_harness = _GatewayHarness(
-        build_gateway_app(
-            materials=ShareMaterials(
-                workspace_domain=_DOMAIN,
-                relay_token="tok",
-                connector_url="https://connector.example.com",
-                broker_url=_BROKER_URL,
-                chrome_origin=_CHROME_ORIGIN,
-            ),
-            grants_path=unconfigured.grants_path,
-            signing_secret=_SIGNING_SECRET,
-            jwks_cache=JwksCache(f"{_BROKER_URL}/share/jwks.json", preloaded_keys_by_kid={}),
-            jti_registry=SingleUseJtiRegistry(),
-            pending_logins=PendingLoginRegistry(),
-            auth_label=_AUTH_LABEL,
-            get_registered_apps=lambda: _APPS,
-            get_connect_info=lambda: {"ice_servers": [], "candidates": []},
-            admit_agent=_admit,
-            request_counter=agent_counter,
-        ),
-        None,  # type: ignore[arg-type]
-        unconfigured.grants_path,
-        PendingLoginRegistry(),
-    )
-    client = agent_harness.app.test_client()
+    client = _make_harness(tmp_path, request_counter=agent_counter, admit_agent=_admit).client
     client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer bad"})
     client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer good"})
     assert sorted(_counted_keys(agent_counter)) == sorted(
