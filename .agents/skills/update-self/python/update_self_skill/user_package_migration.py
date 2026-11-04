@@ -228,20 +228,38 @@ def _set_sources(text: str, sources: dict[str, dict], changed: set[str]) -> str:
     )
 
 
+def _dev_group(requirements: Sequence[str], comment: str = "") -> str:
+    opening = f"dev = [  {comment}\n" if comment else "dev = [\n"
+    return opening + "".join(f'    "{item}",\n' for item in requirements) + "]\n"
+
+
+def _one_line_dev_group(line: str) -> list[str] | None:
+    """The items of a ``dev = [...]`` written on one line; None when the array goes on past it."""
+    try:
+        return tomllib.loads(line)["dev"]
+    except tomllib.TOMLDecodeError:
+        return None
+
+
 def _add_dev_requirement(text: str, requirement: str) -> str:
     lines = text.splitlines(keepends=True)
     span = _table_span(lines, "[dependency-groups]")
     if span is None:
         separator = "" if text.endswith("\n\n") else "\n"
-        return text + separator + f'[dependency-groups]\ndev = ["{requirement}"]\n'
+        return text + separator + "[dependency-groups]\n" + _dev_group([requirement])
     start, end = span
     for index in range(start + 1, end):
         if re.match(r"^\s*dev\s*=\s*\[", lines[index]):
-            lines[index] = re.sub(
-                r"\[", f'[\n    "{requirement}",', lines[index], count=1
-            )
+            existing = _one_line_dev_group(lines[index])
+            if existing is None:
+                lines.insert(index + 1, f'    "{requirement}",\n')
+            else:
+                comment = re.search(r"\]\s*(#.*)$", lines[index].rstrip("\n"))
+                lines[index] = _dev_group(
+                    [requirement, *existing], comment.group(1) if comment else ""
+                )
             return "".join(lines)
-    lines.insert(end, f'dev = ["{requirement}"]\n')
+    lines.insert(end, _dev_group([requirement]))
     return "".join(lines)
 
 

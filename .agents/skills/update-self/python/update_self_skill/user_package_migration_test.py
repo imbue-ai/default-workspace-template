@@ -677,6 +677,37 @@ def test_a_package_that_type_checks_itself_gets_ty_at_the_roots_pin_and_its_own_
     assert not any(path.endswith(_ROOT_ONLY_MODULE) for path in _ty_checked_files(app))
 
 
+def test_a_dev_group_written_on_one_line_comes_out_one_requirement_per_line(
+    workspace: Path,
+) -> None:
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text() + '\n[dependency-groups]\ndev = ["ty==0.0.85"]\n'
+    )
+    app = workspace / "system/apps/widget"
+    pyproject_path = app / "pyproject.toml"
+    pyproject_path.write_text(
+        pyproject_path.read_text()
+        + '\n[dependency-groups]\ndev = ["responses>=0.25"]  # the fixture server\n'
+    )
+    _write(
+        app / "test_widget_ratchets.py",
+        "from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors\n",
+    )
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+
+    assert (
+        "dev = [  # the fixture server\n"
+        '    "ty==0.0.85",\n'
+        '    "imbue-common[testing]",\n'
+        '    "responses>=0.25",\n'
+        "]\n"
+    ) in plan.package_text
+
+
 def test_a_package_whose_tests_do_not_type_check_it_gets_no_ty(workspace: Path) -> None:
     _write(
         workspace / "system/apps/widget/src/widget/runner_test.py",
