@@ -23,6 +23,18 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
+from share_gateway.request_counts import DENIED_FOREIGN_HOST
+from share_gateway.request_counts import DENIED_NO_GRANT
+from share_gateway.request_counts import DENIED_NO_SESSION
+from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import METHOD_CLASS_READ
+from share_gateway.request_counts import METHOD_CLASS_WEBSOCKET
+from share_gateway.request_counts import METHOD_CLASS_WRITE
+from share_gateway.request_counts import OUTCOME_ALLOWED
+from share_gateway.request_counts import REQUESTER_KIND_NONE
+from share_gateway.request_counts import REQUESTER_KIND_OWNER
+from share_gateway.request_counts import REQUESTER_KIND_USER
+from share_gateway.request_counts import RequestCounter
 from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
@@ -81,7 +93,12 @@ class _GatewayHarness:
         self.pending_logins = pending_logins
 
 
-def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN) -> _GatewayHarness:
+def _make_harness(
+    tmp_path: Path,
+    grants_text: str = _GRANTS,
+    chrome_origin: str = _CHROME_ORIGIN,
+    request_counter: RequestCounter | None = None,
+) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
     materials = ShareMaterials(
@@ -105,6 +122,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
         get_connect_info=lambda: {"ice_servers": [], "candidates": []},
+        request_counter=request_counter,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -904,3 +922,71 @@ def test_connect_info_answers_what_the_stack_holds_without_caching(
     assert first.headers["Cache-Control"] == "no-store"
     answers.pop(0)
     assert client.get("/connect-info").get_json() == answers[0]
+
+
+def _counted_keys(counter: RequestCounter) -> list[tuple[str, str, str, str, str, int]]:
+    return [
+        (
+            str(r["service"]),
+            str(r["requester_kind"]),
+            str(r["requester_id"]),
+            str(r["method_class"]),
+            str(r["outcome"]),
+            int(str(r["request_count"])),
+        )
+        for r in counter.drain(is_final=True)
+    ]
+
+
+def test_verify_counts_every_answer_by_service_requester_method_and_outcome(tmp_path: Path) -> None:
+    counter = RequestCounter(tmp_path / "events.jsonl")
+    harness = _make_harness(tmp_path, request_counter=counter)
+
+    # No session: an HTML navigation is bounced to the broker, a fetch gets 401; both are the same refusal.
+    harness.client.get("/_auth/verify", headers=_verify_headers())
+    harness.client.get("/_auth/verify", headers=_verify_headers(accept="application/json"))
+    # A hostname that is not the workspace's, and a POST from a foreign Origin.
+    harness.client.get("/_auth/verify", headers=_verify_headers(host="stranger.example.com"))
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="POST", origin="https://evil.example")
+    )
+    # The hosted chrome's preflight passes through uncounted as anyone.
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin=_CHROME_ORIGIN)
+    )
+    # A visitor on the workspace grant reads twice and opens a WebSocket; one on no grant is refused.
+    _install_session(harness.client, "bob@example.com")
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, is_websocket=True, origin=f"https://{_WEB_HOST}"),
+    )
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("eve@example.com", user_id="user-eve-9"))
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    # The owner writes, with no id of their own in the record.
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True, user_id="user-owner-1")
+    )
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_FILES_HOST, method="PUT", origin=f"https://{_FILES_HOST}")
+    )
+
+    assert sorted(_counted_keys(counter)) == sorted(
+        [
+            ("system_interface", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_NO_SESSION, 2),
+            ("", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_FOREIGN_HOST, 1),
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_WRITE, DENIED_ORIGIN, 1),
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, OUTCOME_ALLOWED, 1),
+            ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, OUTCOME_ALLOWED, 2),
+            ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_WEBSOCKET, OUTCOME_ALLOWED, 1),
+            ("web", REQUESTER_KIND_USER, "user-eve-9", METHOD_CLASS_READ, DENIED_NO_GRANT, 1),
+            ("files", REQUESTER_KIND_OWNER, "", METHOD_CLASS_WRITE, OUTCOME_ALLOWED, 1),
+        ]
+    )
+
+
+def test_verify_without_a_counter_still_answers(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+    assert harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST)).status_code == 200
