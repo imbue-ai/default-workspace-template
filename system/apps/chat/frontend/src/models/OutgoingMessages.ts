@@ -242,8 +242,9 @@ export function heldSendsStillToShow<T extends HeldSend>(heldSends: readonly T[]
  * (``countSentTurnsSince``, read from the loaded transcript) and its queued messages. The arrivals
  * that follow drop the rest. A cancelled switch returns its confirming message to the composer, so
  * that one is skipped; so is a confirming message the switch marker already shows
- * (``isCarriedBySwitch``), whose turn is the marker itself. Only the first to come back opens the
- * agent's next turn, and only when the switch hands its held sends over as that turn's own messages.
+ * (``isCarriedBySwitch``), whose turn is the marker itself. Only the oldest of them opens the agent's
+ * next turn, when it comes back rather than having landed already, and only when the switch hands its
+ * held sends over as that turn's own messages.
  */
 export function trackBackendArrivals(
   isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
