@@ -118,6 +118,43 @@ def test_a_tunnelled_websocket_upgrade_without_a_session_is_refused(gated_client
     assert "Sec-WebSocket-Accept" not in answer.headers
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "fetch_metadata"),
+    [
+        ("POST", "/api/run", {"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors"}),
+        ("POST", "/api/run", {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}),
+        ("POST", "/api/run", {"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"}),
+        ("GET", "/api/state", {"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors"}),
+        ("GET", "/api/ws", {**_WEBSOCKET_UPGRADE, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "websocket"}),
+        ("GET", "/neko/api/ws", {**_WEBSOCKET_UPGRADE, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "websocket"}),
+    ],
+)
+def test_a_request_from_another_origin_is_refused_despite_the_session(
+    gated_client: FlaskClient, owner_gate: OwnerGate, method: str, path: str, fetch_metadata: dict[str, str]
+) -> None:
+    # Another *.modal.host page is same-site with the Screen, so the browser sends the owner session with it.
+    headers = {**_owner_cookie(owner_gate), **fetch_metadata}
+    answer = gated_client.open(path, method=method, headers=headers, environ_base=_TUNNEL)
+    assert answer.status_code == 403
+    assert answer.get_json() == {"detail": "only the Screen's own pages may call it"}
+    assert "Sec-WebSocket-Accept" not in answer.headers
+
+
+def test_own_origin_requests_and_navigations_from_elsewhere_are_admitted(
+    gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
+) -> None:
+    session = _owner_cookie(owner_gate)
+    same_origin = {**session, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"}
+    assert gated_client.get("/health", headers=same_origin, environ_base=_TUNNEL).status_code == 200
+    # The chrome's frame of the Screen, its redirect, and the tab the chrome opens are cross-site navigations.
+    navigation = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}
+    traded = gated_client.get(f"/?owner_token={owner_token}", headers=navigation, environ_base=_TUNNEL)
+    assert traded.status_code == 302
+    assert gated_client.get("/health", headers={**session, **navigation}, environ_base=_TUNNEL).status_code == 200
+    typed = {**session, "Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"}
+    assert gated_client.get("/health", headers=typed, environ_base=_TUNNEL).status_code == 200
+
+
 def test_the_owner_token_sets_both_session_cookies_and_redirects_without_itself(
     gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
 ) -> None:

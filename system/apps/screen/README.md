@@ -144,6 +144,11 @@ logged and treated the same way.
   The token stays good for the sandbox's life, so an iframe reload may present it again.
 - Every other request, HTTP and WebSocket alike (`/api/ws`, `/neko/...`, any path), needs the
   owner session, else 401 `{"detail": "an owner session is required"}`, with no redirect.
+- A request that is not loopback and that its browser marks as made by a page of another origin
+  (`Sec-Fetch-Site` neither `same-origin` nor `none`) answers 403 `{"detail": "only the Screen's
+  own pages may call it"}`, unless it is a GET or HEAD navigation (the chrome's frame of the
+  Screen, and the tab it opens). Every `*.modal.host` page is same-site with the Screen, so the
+  browser sends the session cookies with such a page's requests and WebSockets too.
 - The session is two cookies with the same value, `screen_owner_session` (`Secure; HttpOnly;
   SameSite=Lax; Path=/`) and `screen_owner_session_partitioned` (`Secure; HttpOnly;
   SameSite=None; Partitioned; Path=/`), with no `Domain`, for the browser reasons the share
