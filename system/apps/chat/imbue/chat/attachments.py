@@ -61,12 +61,20 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
     if size is None:
         return destination_path
     sized_subdirectory = uploads_directory / f"{unique_id}-{size.width}x{size.height}"
-    # The size is only a hint for drawing the image, so the file stays where it was saved without one.
+    return _move_to_sized_subdirectory(unique_subdirectory, sized_subdirectory, safe_name)
+
+
+def _move_to_sized_subdirectory(unique_subdirectory: Path, sized_subdirectory: Path, safe_name: str) -> Path:
+    """Rename an upload's subdirectory to the one naming its size and return the file's new path.
+
+    The size is only a hint for drawing the image, so when the rename fails the file stays where it
+    was saved and its unsized path is returned.
+    """
     try:
         unique_subdirectory.rename(sized_subdirectory)
     except OSError as e:
-        logger.warning("Kept upload {} without its size in the path: {}", destination_path, e)
-        return destination_path
+        logger.warning("Kept upload {} without its size in the path: {}", unique_subdirectory / safe_name, e)
+        return unique_subdirectory / safe_name
     return sized_subdirectory / safe_name
 
 

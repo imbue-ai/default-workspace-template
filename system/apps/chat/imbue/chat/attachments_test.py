@@ -9,6 +9,7 @@ import pytest
 from werkzeug.datastructures import FileStorage
 
 from imbue.chat.attachments import _DEFAULT_UPLOAD_FILENAME
+from imbue.chat.attachments import _move_to_sized_subdirectory
 from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
@@ -71,19 +72,18 @@ def test_an_image_upload_names_its_subdirectory_after_the_size_it_is_drawn_at(tm
     assert resolve_upload_path(uploads_directory, relative_path) == stored_path.resolve()
 
 
-def test_an_image_whose_subdirectory_cannot_be_renamed_is_kept_without_its_size(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    uploads_directory = tmp_path / "uploads"
+def test_an_image_whose_subdirectory_cannot_be_renamed_is_kept_without_its_size(tmp_path: Path) -> None:
+    unique_subdirectory = tmp_path / "uploads" / "0123456789abcdef0123456789abcdef"
+    unique_subdirectory.mkdir(parents=True)
+    (unique_subdirectory / "photo.png").write_bytes(_PNG_1600X900)
+    # A directory cannot be renamed onto one that is not empty.
+    sized_subdirectory = tmp_path / "uploads" / f"{unique_subdirectory.name}-1600x900"
+    sized_subdirectory.mkdir()
+    (sized_subdirectory / "occupant").write_bytes(b"")
 
-    def refuse_rename(self: Path, target: Path) -> Path:
-        raise OSError("rename refused")
+    stored_path = _move_to_sized_subdirectory(unique_subdirectory, sized_subdirectory, "photo.png")
 
-    monkeypatch.setattr(Path, "rename", refuse_rename)
-
-    stored_path = store_uploaded_file(uploads_directory, "photo.png", _file_storage(_PNG_1600X900, "photo.png"))
-
-    assert re.fullmatch(r"[0-9a-f]{32}", stored_path.parent.name)
+    assert stored_path == unique_subdirectory / "photo.png"
     assert stored_path.read_bytes() == _PNG_1600X900
 
 
