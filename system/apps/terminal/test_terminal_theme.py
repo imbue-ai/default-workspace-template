@@ -6,11 +6,10 @@ frame, where the script dwt adds to ttyd's page sets them on a stub ``window.ter
 hands the page the shell's theme message, since the shell's built module is the shell's to test.
 """
 
-import time
 from typing import Final
 
 import pytest
-from playwright.sync_api import BrowserContext, Frame, Page, Route
+from playwright.sync_api import BrowserContext, Frame, Route
 from terminal_app.pty_page import add_pty_page_script
 from terminal_app.testing import (
     BROWSER_PTY_URL,
@@ -109,24 +108,12 @@ def _pty_frame(context: BrowserContext) -> tuple[Frame, Frame]:
     wrapper = page.frame(url=BROWSER_WRAPPER_URL)
     assert wrapper is not None
     wrapper.wait_for_load_state()
-    # The pty frame is pointed once the contract module is up and has greeted the page, after the wrapper's load.
-    wrapper.wait_for_function("document.getElementById('pty').src !== ''", timeout=5000)
-    # Setting src starts the frame's navigation; the frame carries the pty URL only once that commits.
-    pty = _frame_once_navigated(page, BROWSER_PTY_URL)
-    pty.wait_for_load_state()
+    handle = wrapper.locator("#pty").element_handle(timeout=5000)
+    pty = handle.content_frame()
+    assert pty is not None
+    # The wrapper points the pty frame once the contract module is up and has greeted the page, after the wrapper's load.
+    pty.wait_for_url(BROWSER_PTY_URL, timeout=5000)
     return page.main_frame, pty
-
-
-def _frame_once_navigated(page: Page, url: str, timeout_ms: float = 5000) -> Frame:
-    deadline = time.monotonic() + timeout_ms / 1000
-    while True:
-        frame = page.frame(url=url)
-        if frame is not None:
-            return frame
-        assert time.monotonic() < deadline, (
-            f"no frame reached {url} within {timeout_ms:g}ms"
-        )
-        page.wait_for_timeout(50)
 
 
 def test_a_theme_s_palette_is_set_on_xterm_over_xterm_s_own_colors(
