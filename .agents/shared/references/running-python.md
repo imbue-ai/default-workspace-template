@@ -47,7 +47,7 @@ always runs those in their own environment.
 
 ## When the instruction says `python3`
 
-Some scripts must run with the system `python3` and no venv at all -- hook
+Some scripts run with the system `python3` and no venv at all -- hook
 scripts, the bug-report collector, steps that run before the venv exists, and
 scripts that other programs call by path. Where a doc, a config file or a
 skill tells you to run something with `python3`, do exactly that. Everywhere
