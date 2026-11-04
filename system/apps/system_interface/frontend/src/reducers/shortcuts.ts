@@ -2,7 +2,8 @@
  * What a shortcut, a launcher tile, or a desktop's menu comes to (desktop-interface plan sections
  * 3.6, 4.8, 4.9): a focus-mode shortcut of a GET launch path raises the app's most recently focused
  * window in this client's layout and opens at the launch path only when there is none, and one of a
- * POST launch path runs it into that window; a new desktop is minted
+ * POST launch path always runs it, landing in a window of the app already at the page it answers;
+ * a new desktop is minted
  * ``Desktop <n>``; a shortcut added from a tile lands at the first free cell in reading order over
  * the current grid.
  */
@@ -27,8 +28,8 @@ export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try a
 
 /** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. A focus run raises the app's
  *  most recently focused window rather than running a GET launch path; a POST launch path does something, so it
- *  always runs, and the focus target lands it in that window. An app the page does not know is ``connecting`` until
- *  the first app list lands, and unregistered after. */
+ *  always runs, and the focus target lands it in a window of the app already at the page it answers. An app the page
+ *  does not know is ``connecting`` until the first app list lands, and unregistered after. */
 export function resolveLaunchRun(
   state: DesktopState,
   appName: string,

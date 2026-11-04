@@ -110,7 +110,7 @@ A client whose active desktop no longer exists is moved to the first desktop on 
 ### 3.6 Shortcuts and the grid
 
 A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, launch}` (the only V1 kind), `mode` is `focus` or `new`, and `cell` is `{column, row}` with both at least zero.
-`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs a GET launch path only when there is none; a POST launch path does something (the Screen's Browser opens the browser), so `focus` always runs it, landing in the app's window when there is one. `new` always runs it.
+`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs a GET launch path only when there is none; a POST launch path does something (the Screen's Browser opens the browser), so `focus` always runs it, landing in a window of the app already at the page it answers when there is one (the Screen's one window for its Browser). `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
 Every registered, non-internal app has its manifest's default shortcuts when it declares any (one `default_shortcut` table, or several as `[[default_shortcut]]`, in order), each whether or not its launch path takes typed or drafted text (none for one naming a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text and no mention (one declaring none of `text_param`, `draft_param`, and `mention_param`), or its first launch path when every one takes one, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.

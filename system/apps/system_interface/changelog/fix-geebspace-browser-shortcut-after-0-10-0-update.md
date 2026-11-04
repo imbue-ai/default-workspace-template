@@ -12,4 +12,4 @@ An app can now have several default desktop shortcuts. The Screen gets both a Sc
 
 - Right-clicking any of an app's shortcut entries in the launcher offers to add or remove that shortcut.
 
-- A focus-mode shortcut always runs a POST launch path (such as the Screen's Browser) in the app's existing window, instead of only raising the window, so the Browser shortcut always opens the browser.
+- A focus-mode shortcut of a POST launch path (such as the Screen's Browser) always runs it instead of only raising the app's window, landing in a window already at the page it answers (the Screen's window), so the Browser shortcut always opens the browser.
