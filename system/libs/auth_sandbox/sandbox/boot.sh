@@ -74,6 +74,13 @@ export OWNER_EXEC_LISTEN_HOST="0.0.0.0"
 export SCREEN_OWNER_TOKEN_SHA256_FILE="$RUNTIME_DIR/screen_token_sha256"
 export SCREEN_FRAME_ANCESTORS="$AUTH_SANDBOX_CHROME_ORIGIN"
 export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"
+# VP8, which every browser decodes over WebRTC (Firefox decodes H.264 only with Cisco's OpenH264
+# plugin), whatever browser the user signs in from.
+export SCREEN_VIDEO_CODEC="vp8"
+# One display size, whatever the viewer's frame: latchkey's login window is Playwright's 1280x720
+# viewport, about 1288x805 at (10, 37) under the XFCE panel, and would overflow a display a small
+# viewer shrank. The viewer scales the picture to its frame instead.
+export SCREEN_FIXED_SIZE="1360x864"
 
 mkdir -p /var/log/supervisor "$REPO_ROOT/data/.state"
 cd "$REPO_ROOT"
