@@ -59,6 +59,7 @@ class BackupEventType(UpperCaseStrEnum):
     SNAPSHOT_DELETED = auto()
     RESTIC_BACKUP_SUCCEEDED = auto()
     RESTIC_BACKUP_FAILED = auto()
+    BACKUP_SKIPPED_OVER_QUOTA = auto()
     BACKUP_REPEATEDLY_FAILING = auto()
     BACKUP_SLOW = auto()
     FORGET_COMPLETED = auto()
@@ -82,6 +83,7 @@ TICK_TERMINAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
         BackupEventType.RESTIC_BACKUP_FAILED.value,
+        BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value,
         BackupEventType.SNAPSHOT_FAILED.value,
         BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
         BackupEventType.TICK_ERROR.value,
@@ -198,6 +200,11 @@ class ResticBackupSucceededEvent(BackupEvent):
     stderr: str
 
 
+# The `reason` values a RESTIC_BACKUP_FAILED event can carry; the runner stamps
+# them and the system monitor and the desktop read them.
+BACKUP_FAILURE_REASON_QUOTA_EXCEEDED: Final[str] = "quota_exceeded"
+
+
 class ResticBackupFailedEvent(BackupEvent):
     """`restic backup` returned non-zero."""
 
@@ -210,6 +217,31 @@ class ResticBackupFailedEvent(BackupEvent):
     consecutive_failures: int = Field(
         default=0,
         description="How many ticks in a row have now failed (1 on the first failure)",
+    )
+    reason: str = Field(
+        default="",
+        description=(
+            "Why the backup failed, when the runner can tell from restic's output: "
+            "'quota_exceeded' when the backup store refused an upload (507); empty otherwise"
+        ),
+    )
+
+
+class BackupSkippedOverQuotaEvent(BackupEvent):
+    """The tick took no backup because the account is over its backup storage quota.
+
+    The backup store's usage probe said the account is past the soft limit, so the
+    tick ran the retention forget and a bounded prune to free space instead of
+    uploading more. Ends the tick like a backup outcome does; the next tick asks
+    again and backs up once the account is under the limit.
+    """
+
+    tick_id: str
+    used_bytes: int = Field(description="Bytes stored in this repository")
+    account_used_bytes: int = Field(description="Bytes stored across the account")
+    quota_bytes: int = Field(description="The soft limit the account is over")
+    hard_limit_bytes: int = Field(
+        description="The limit the store refuses uploads past"
     )
 
 

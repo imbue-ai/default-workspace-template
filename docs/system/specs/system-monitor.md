@@ -242,6 +242,7 @@ A walk that cannot read the disk at all ends in a `failed` state with no rows, s
 - running: a tick is in flight (with the last success's time, if any);
 - up to date: the newest terminal event is a success and it is younger than twice the interval;
 - stale: the newest success is older than that (with its time), or there is none yet;
+- out of storage: the newest tick skipped its backup because the account is over its backup storage quota, or the store refused the upload (with the last success's time, if any);
 - failing: the newest terminal event is a failure (with its time and the last success's).
 
 The summary also counts failed ticks in the last 24 hours.

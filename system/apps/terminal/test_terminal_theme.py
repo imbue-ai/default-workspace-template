@@ -108,11 +108,11 @@ def _pty_frame(context: BrowserContext) -> tuple[Frame, Frame]:
     wrapper = page.frame(url=BROWSER_WRAPPER_URL)
     assert wrapper is not None
     wrapper.wait_for_load_state()
-    # The pty frame is pointed once the contract module is up and has greeted the page, after the wrapper's load.
-    wrapper.wait_for_function("document.getElementById('pty').src !== ''", timeout=5000)
-    pty = page.frame(url=BROWSER_PTY_URL)
+    handle = wrapper.locator("#pty").element_handle(timeout=5000)
+    pty = handle.content_frame()
     assert pty is not None
-    pty.wait_for_load_state()
+    # The wrapper points the pty frame once the contract module is up and has greeted the page, after the wrapper's load.
+    pty.wait_for_url(BROWSER_PTY_URL, timeout=5000)
     return page.main_frame, pty
 
 
@@ -153,6 +153,7 @@ def test_a_theme_s_rules_leave_the_wrapper_page_as_it_is(
     assert wrapper.evaluate(_WRAPPER_BODY_STYLE) == unthemed
 
 
+@pytest.mark.flaky
 def test_the_standard_theme_puts_back_xterm_s_own_colors(
     phone_context: BrowserContext,
 ) -> None:

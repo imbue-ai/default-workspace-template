@@ -1,0 +1,1 @@
+The update-self skill's backup precondition documents `host-backup-now --check`'s new exit 4 (the account is out of backup storage, so the newest tick freed space instead of backing up) as one more outcome without a confirmed restore point.

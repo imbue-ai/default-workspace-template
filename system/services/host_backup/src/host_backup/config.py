@@ -11,8 +11,9 @@ Two on-disk inputs, both optional from the service's point of view:
   Rides the opt-in GitHub sync of runtime/ when that is enabled.
 - `data/.secrets/restic.env` -- restic's repository address + all secrets
   (`RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, and any backend credentials restic
-  reads from the environment, e.g. `AWS_ACCESS_KEY_ID` /
-  `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by Imbue Studio
+  reads from the environment: `RESTIC_REST_USERNAME` / `RESTIC_REST_PASSWORD`
+  for Imbue Studio's backup store, or e.g. `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` for an S3 backend). Written only by Imbue Studio
   (injected whole); a missing file simply means backups are not configured.
   Gitignored.
 
