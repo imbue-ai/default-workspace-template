@@ -514,9 +514,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  agent lands (see MessageInput), and shows from its record on any page. */
   function renderStarting(chatId: string): m.Vnode {
     lastStartingChatId = chatId;
+    const held = renderProvisionalHeldSends(chatId);
     return renderEmptyConversation(
       "message-list-creating",
-      withTurnStatus(chatId, [...renderProvisionalHeldSends(chatId), ...renderOutgoingMessages(chatId)]),
+      withTurnStatus(chatId, [...held, ...renderOutgoingMessages(chatId, held.length > 0)]),
       STARTING_STATUS,
     );
   }
