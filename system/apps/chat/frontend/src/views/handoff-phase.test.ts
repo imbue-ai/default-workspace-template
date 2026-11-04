@@ -14,7 +14,12 @@ vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
 
 import type { ChatSnapshot, HeldSend, ProvisionalChat } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
-import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
+import {
+  chatSnapshotFixture,
+  handoffStateFixture,
+  provisionalChatFixture,
+  rebindStateFixture,
+} from "../models/chatSnapshotFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { appendEvents } from "../models/Response";
@@ -210,17 +215,7 @@ describe("the held-send bubbles in a shared workspace", () => {
     const switching = `agent-switching-${Math.random()}`;
     chats.set(switching, chatSnapshotFixture(switching, { handoff: handoffStateFixture({ held_sends: heldSends }) }));
     const creating = `agent-creating-${Math.random()}`;
-    provisionals.set(creating, {
-      chat_id: creating,
-      name: "Chat 2",
-      account_id: "acct-1",
-      kind: "agent",
-      phase: "creating",
-      error: null,
-      is_seeded: false,
-      held_sends: heldSends,
-      model_pick: null,
-    });
+    provisionals.set(creating, provisionalChatFixture(creating, { held_sends: heldSends }));
 
     for (const bubbles of [renderHeldSends(switching), renderProvisionalHeldSends(creating)]) {
       const root = document.createElement("div");
