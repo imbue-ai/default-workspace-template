@@ -6,7 +6,7 @@ import pytest
 from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
-from share_gateway.access_log import SilentRequestHandler
+from share_gateway.request_handler import SilentRequestHandler
 from share_gateway.testing import serve_wsgi
 
 

@@ -48,7 +48,6 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.access_log import SilentRequestHandler
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
@@ -84,6 +83,7 @@ from share_gateway.materials import record_share_domain
 from share_gateway.request_counts import RequestCountFlusher
 from share_gateway.request_counts import RequestCounter
 from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
+from share_gateway.request_handler import SilentRequestHandler
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
