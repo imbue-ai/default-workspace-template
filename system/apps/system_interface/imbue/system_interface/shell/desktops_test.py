@@ -20,7 +20,6 @@ from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import ClientRecord
-from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import GridCell
 from workspace_layout.records import ShortcutTarget
@@ -61,7 +60,10 @@ from imbue.system_interface.shell.testing import default_target_pairs
 from imbue.system_interface.shell.testing import offered_targets_recorded
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import screen_row_toml
 from imbue.system_interface.shell.testing import shortcut_apps_on
+from imbue.system_interface.shell.testing import shortcut_at
+from imbue.system_interface.shell.testing import targets_and_cells
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_desktops_file
 from imbue.system_interface.shell.testing import write_registry
@@ -149,21 +151,6 @@ def test_a_workspaces_own_apps_are_added_once_to_every_desktop_and_a_removal_sti
     assert "notes" not in shortcut_apps_on(store.list_desktops()[0])
 
 
-def _shortcut_at(app: str, launch: str, column: int, row: int) -> DesktopShortcut:
-    return DesktopShortcut(
-        target=ShortcutTarget(app=AppName(app), launch=LaunchPathId(launch)),
-        mode=ShortcutMode.FOCUS,
-        cell=GridCell(column=column, row=row),
-    )
-
-
-def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
-    return [
-        (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
-        for shortcut in desktop.shortcuts
-    ]
-
-
 def test_a_workspace_updated_off_the_browser_app_trades_its_browser_shortcut_for_the_screens(tmp_path: Path) -> None:
     """A workspace that ran the browser app, as the update to the Screen leaves it: desktops arranged by hand holding
     the browser's shortcut, the Screen's one shortcut already added, and a record of apps. The browser's shortcut goes,
@@ -182,25 +169,17 @@ def test_a_workspace_updated_off_the_browser_app_trades_its_browser_shortcut_for
                 default_shortcuts=[("new", "new")],
                 launch_paths=[("new", "Files", "/")],
             ),
-            registry_row_toml(
-                "screen",
-                "http://localhost:7600",
-                program="screen",
-                launcher_rank=30,
-                default_shortcuts=[("screen", "focus"), ("browser", "focus")],
-                launch_paths=[("screen", "Screen", "/"), ("browser", "Browser", "/launch/browser")],
-                launch_methods={"browser": "POST"},
-            ),
+            screen_row_toml([("screen", "focus"), ("browser", "focus")]),
             registry_row_toml("notes", "http://localhost:8100", program="notes"),
         )
     )
     state_directory = tmp_path / "state"
     arranged = (
-        _shortcut_at("chat", "new", 0, 0),
-        _shortcut_at("browser", "new", 0, 1),
-        _shortcut_at("files", "new", 0, 2),
-        _shortcut_at("notes", "open", 1, 0),
-        _shortcut_at("screen", "screen", 2, 1),
+        shortcut_at("chat", "new", 0, 0),
+        shortcut_at("browser", "new", 0, 1),
+        shortcut_at("files", "new", 0, 2),
+        shortcut_at("notes", "open", 1, 0),
+        shortcut_at("screen", "screen", 2, 1),
     )
     home = default_desktop(arranged)
     work = home.model_copy_update(
@@ -216,7 +195,7 @@ def test_a_workspace_updated_off_the_browser_app_trades_its_browser_shortcut_for
 
     assert reconciled.is_written is True
     for desktop in reconciled.desktops:
-        assert _targets_and_cells(desktop) == [
+        assert targets_and_cells(desktop) == [
             ("chat", "new", 0, 0),
             ("files", "new", 0, 2),
             ("notes", "open", 1, 0),

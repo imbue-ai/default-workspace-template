@@ -19,8 +19,10 @@ from typing import Any
 from typing import Final
 
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import ShortcutMode
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import AppName
+from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import read_registry
@@ -38,6 +40,9 @@ from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowState
 from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import GridCell
+from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 
@@ -270,8 +275,39 @@ def builtin_registry_rows(directory: Path) -> tuple[list[RegistryRow], list[Regi
     return before_chat, with_chat
 
 
+def screen_row_toml(default_shortcuts: Sequence[tuple[str, str]]) -> str:
+    """The Screen's row with its two launch paths (``screen`` at ``/`` and the POST ``browser``) and the given default
+    shortcuts, each ``(launch, mode)``."""
+    return registry_row_toml(
+        "screen",
+        "http://localhost:7600",
+        program="screen",
+        launcher_rank=30,
+        default_shortcuts=default_shortcuts,
+        launch_paths=[("screen", "Screen", "/"), ("browser", "Browser", "/launch/browser")],
+        launch_methods={"browser": "POST"},
+    )
+
+
+def shortcut_at(
+    app: str, launch: str, column: int, row: int, mode: ShortcutMode = ShortcutMode.FOCUS
+) -> DesktopShortcut:
+    return DesktopShortcut(
+        target=ShortcutTarget(app=AppName(app), launch=LaunchPathId(launch)),
+        mode=mode,
+        cell=GridCell(column=column, row=row),
+    )
+
+
 def shortcut_apps_on(desktop: Desktop) -> tuple[str, ...]:
     return tuple(str(shortcut.target.app) for shortcut in desktop.shortcuts)
+
+
+def targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
+    return [
+        (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
+        for shortcut in desktop.shortcuts
+    ]
 
 
 def write_desktops_file(state_directory: Path, *desktops: Desktop) -> None:

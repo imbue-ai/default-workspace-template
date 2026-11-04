@@ -1,7 +1,6 @@
 """Tests for the pure desktop editor: the shared geometry vectors, and the verbs over desktops and layouts."""
 
 import json
-from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import timedelta
 from pathlib import Path
@@ -98,6 +97,9 @@ from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import desktop_with_windows
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import screen_row_toml
+from imbue.system_interface.shell.testing import shortcut_at
+from imbue.system_interface.shell.testing import targets_and_cells
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_registry
 
@@ -448,27 +450,17 @@ def test_the_pinned_apps_are_the_non_internal_rows_that_carry_a_pin(tmp_path: Pa
 # Desktops: shortcuts
 
 
-def _shortcut(
-    app: str, launch: str, column: int, row: int, mode: ShortcutMode = ShortcutMode.FOCUS
-) -> DesktopShortcut:
-    return DesktopShortcut(
-        target=ShortcutTarget(app=AppName(app), launch=LaunchPathId(launch)),
-        mode=mode,
-        cell=GridCell(column=column, row=row),
-    )
-
-
 def _desktop_with_shortcuts(*shortcuts: DesktopShortcut) -> Desktop:
     empty = desktop_with_windows()
     return empty.model_copy_update(to_update(empty.field_ref().shortcuts, shortcuts))
 
 
 def test_setting_a_shortcut_replaces_the_same_target_in_place_and_appends_a_new_one() -> None:
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0))
-    flipped = with_shortcut(desktop, _shortcut("chat", "new", 0, 0, ShortcutMode.NEW))
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 1, 0))
+    flipped = with_shortcut(desktop, shortcut_at("chat", "new", 0, 0, ShortcutMode.NEW))
     assert [shortcut.target.app for shortcut in flipped.shortcuts] == ["chat", "files"]
     assert flipped.shortcuts[0].mode is ShortcutMode.NEW
-    added = with_shortcut(flipped, _shortcut("terminal", "new", 2, 0))
+    added = with_shortcut(flipped, shortcut_at("terminal", "new", 2, 0))
     assert [shortcut.target.app for shortcut in added.shortcuts] == ["chat", "files", "terminal"]
     assert next_shortcut_cell(added) == GridCell(column=3, row=0)
     removed = without_shortcut(added, AppName("files"), LaunchPathId("new"))
@@ -476,7 +468,7 @@ def test_setting_a_shortcut_replaces_the_same_target_in_place_and_appends_a_new_
 
 
 def test_moving_a_shortcut_onto_an_occupied_cell_displaces_the_occupant_to_the_nearest_free_cell() -> None:
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 0, 1))
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 0, 1))
     moved = with_shortcut_moved(desktop, AppName("files"), LaunchPathId("new"), GridCell(column=0, row=0))
     assert {shortcut.target.app: shortcut.cell for shortcut in moved.shortcuts} == {
         "files": GridCell(column=0, row=0),
@@ -605,25 +597,13 @@ def _pairs(targets: AbstractSet[ShortcutTarget]) -> set[tuple[str, str]]:
     return {(str(target.app), str(target.launch)) for target in targets}
 
 
-def _screen_row_toml(default_shortcuts: Sequence[tuple[str, str]]) -> str:
-    return registry_row_toml(
-        "screen",
-        "http://localhost:8",
-        program="screen",
-        launcher_rank=30,
-        default_shortcuts=default_shortcuts,
-        launch_paths=[("screen", "Screen", "/"), ("browser", "Browser", "/launch/browser")],
-        launch_methods={"browser": "POST"},
-    )
-
-
 def test_an_app_declaring_several_default_shortcuts_is_seeded_with_each_it_offers_in_its_order(
     tmp_path: Path,
 ) -> None:
     rows = read_registry(
         write_registry(
             tmp_path / "apps.toml",
-            _screen_row_toml([("screen", "focus"), ("missing", "new"), ("browser", "focus")]),
+            screen_row_toml([("screen", "focus"), ("missing", "new"), ("browser", "focus")]),
             registry_row_toml("notes", "http://localhost:1", program="notes", launcher_rank=40),
         )
     )
@@ -641,13 +621,6 @@ def test_an_app_declaring_several_default_shortcuts_is_seeded_with_each_it_offer
     assert _pairs(first_default_shortcut_targets(rows, {AppName("screen"), AppName("gone")})) == {("screen", "screen")}
 
 
-def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
-    return [
-        (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
-        for shortcut in desktop.shortcuts
-    ]
-
-
 def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_again_in_launcher_order(
     tmp_path: Path,
 ) -> None:
@@ -659,7 +632,7 @@ def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_agai
     reconciled = with_default_shortcuts_offered(home, with_chat, offered)
 
     assert reconciled.shortcuts == seed_desktop_shortcuts(with_chat)
-    assert _targets_and_cells(reconciled) == [
+    assert targets_and_cells(reconciled) == [
         ("chat", "root", 0, 0),
         ("getting-started", "open", 1, 0),
         ("files", "new", 2, 0),
@@ -688,7 +661,7 @@ def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_
 def test_a_late_apps_shortcut_is_not_added_where_its_target_already_is(tmp_path: Path) -> None:
     before_chat, with_chat = builtin_registry_rows(tmp_path)
     placed_by_hand = _desktop_with_shortcuts(
-        *seed_desktop_shortcuts(before_chat), _shortcut("chat", "root", 6, 3, ShortcutMode.FOCUS)
+        *seed_desktop_shortcuts(before_chat), shortcut_at("chat", "root", 6, 3, ShortcutMode.FOCUS)
     )
 
     reconciled = with_default_shortcuts_offered(placed_by_hand, with_chat, default_shortcut_targets(before_chat))
@@ -719,15 +692,15 @@ def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shor
 def test_an_offered_apps_further_default_shortcut_is_added_at_the_next_free_cell(tmp_path: Path) -> None:
     """A workspace offered the Screen's one shortcut before the Screen declared a second gets only the second."""
     rows = read_registry(
-        write_registry(tmp_path / "apps.toml", _screen_row_toml([("screen", "focus"), ("browser", "focus")]))
+        write_registry(tmp_path / "apps.toml", screen_row_toml([("screen", "focus"), ("browser", "focus")]))
     )
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("screen", "screen", 2, 1))
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("screen", "screen", 2, 1))
 
     reconciled = with_default_shortcuts_offered(
         desktop, rows, {ShortcutTarget(app=AppName("screen"), launch=LaunchPathId("screen"))}
     )
 
-    assert _targets_and_cells(reconciled) == [
+    assert targets_and_cells(reconciled) == [
         ("chat", "new", 0, 0),
         ("screen", "screen", 2, 1),
         ("screen", "browser", 1, 0),
@@ -738,12 +711,12 @@ def test_an_offered_apps_further_default_shortcut_is_added_at_the_next_free_cell
 def test_only_the_shortcuts_of_apps_no_row_registers_are_dropped(tmp_path: Path) -> None:
     _, with_chat = builtin_registry_rows(tmp_path)
     desktop = _desktop_with_shortcuts(
-        _shortcut("chat", "new", 0, 0), _shortcut("retired", "new", 0, 1), _shortcut("files", "new", 0, 2)
+        shortcut_at("chat", "new", 0, 0), shortcut_at("retired", "new", 0, 1), shortcut_at("files", "new", 0, 2)
     )
 
     kept = without_shortcuts_of_unregistered_apps(desktop, with_chat)
 
-    assert _targets_and_cells(kept) == [("chat", "new", 0, 0), ("files", "new", 0, 2)]
+    assert targets_and_cells(kept) == [("chat", "new", 0, 0), ("files", "new", 0, 2)]
     assert without_shortcuts_of_unregistered_apps(kept, with_chat) is kept
 
 
@@ -752,7 +725,7 @@ def test_the_targets_on_a_desktop_are_every_shortcuts_or_only_those_of_a_default
 ) -> None:
     _, with_chat = builtin_registry_rows(tmp_path)
     desktop = _desktop_with_shortcuts(
-        _shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0), _shortcut("unregistered", "open", 2, 0)
+        shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 1, 0), shortcut_at("unregistered", "open", 2, 0)
     )
 
     assert _pairs(shortcut_targets_on([desktop, _desktop_with_shortcuts()])) == {
