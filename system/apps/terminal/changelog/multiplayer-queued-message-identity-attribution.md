@@ -1,0 +1,1 @@
+The terminal's type-check ratchet is marked flaky, so CI retries it: once in CI its `ty` run stalled past the 10-second test limit, against 0.2-1.8 seconds for every other project's (tracked as MIND-684).
