@@ -402,9 +402,13 @@ longer than two seconds), and answers the union:
   `{"candidates", "ice_servers", "expires_at"}`. A file that is absent or unreadable is the
   broker being absent.
 
-Candidates are filtered to guest port 59000, de-duplicated, and spelled with a lower-case
-`protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector lower-case, and
-the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
+A candidate whose `host` is a name rather than an IP (a Modal tunnel's `r482.modal.host`, a
+relay's hostname) is answered as one candidate per IPv4 address the name resolves to, resolved
+within its broker's bound: Firefox ignores a remote ICE candidate whose address is a name, where
+Chromium resolves it. A name that does not resolve drops that candidate, with a log line, and
+never the answer. Candidates are filtered to guest port 59000, de-duplicated, and spelled with a
+lower-case `protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector
+lower-case, and the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
 viewer unchanged, and `expires_at` the earliest expiry. A broker that is slow, unreachable
 or refusing is simply absent; with all of them absent the answer is empty lists, which the viewer
 reads as "use the server's own candidate". The answer is never written to disk and the

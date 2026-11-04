@@ -138,6 +138,7 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 
 The viewer's one question: `{"ice_servers": [...], "candidates": [{"host", "port", "protocol"}], "expires_at"}`.
 The service asks, with a two-second bound each and in parallel, the desktop (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/<id>/media-endpoints` and `.../ice-servers`, the integration spec section 4, reached as the chat app's notification client reaches the desktop) the share gateway's loopback route (`GET http://127.0.0.1:8791/connect-info`, section 15), and, when `SCREEN_CONNECT_INFO_PATH` names one, a connect-info file read on every request (an auth sandbox's, which its connector writes with the sandbox's TCP tunnel to port 59000), and answers the union, with candidates filtered to guest port 59000 and de-duplicated.
+A candidate a broker names by a hostname (the auth sandbox's Modal tunnel, a relay) is answered as one candidate per IPv4 address the name resolves to, within that broker's bound, because Firefox ignores a remote ICE candidate whose address is not an IP; a name that does not resolve drops its candidate, never the answer.
 `?relay=1` is the only time the service asks for ICE servers; without it `ice_servers` is empty (the TURN spec's direct-first rule).
 All brokers may be absent; the answer is then an empty candidate list, which the viewer treats as "try the server's own candidate as given".
 The answer is held in memory only.
