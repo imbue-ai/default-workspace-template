@@ -3,8 +3,8 @@
  *
  * They come from the chat's snapshot (``handoff.held_sends``), not from the page: the confirming
  * message first, then anything sent since. Each renders as the row the optimistic outgoing overlay
- * uses (the user bubble, or the notice a background-task report becomes), drawn as an ordinary
- * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). They stay
+ * uses (the user bubble under its sender, or the notice a background-task report becomes), drawn as an
+ * ordinary send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). They stay
  * until the snapshot stops listing them, so a reloaded page shows them too; the confirming message
  * stands down earlier, once the switch marker that carries it is on the transcript (the
  * successor's opening turn is its real form).
@@ -26,6 +26,7 @@ export function renderHeldSends(chatId: string): m.Vnode[] {
       content: held.text,
       extraRowClass: "held-send",
       displayDecision: held,
+      author: held,
     }),
   );
 }
@@ -40,6 +41,12 @@ export function renderProvisionalHeldSends(chatId: string): m.Vnode[] {
   return provisional.held_sends
     .filter((held) => !ownBubbleIds.has(held.message_id))
     .map((held) =>
-      renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
+      renderNotYetRealBubble({
+        key: `held-${held.message_id}`,
+        content: held.text,
+        extraRowClass: "held-send",
+        displayDecision: held,
+        author: held,
+      }),
     );
 }

@@ -23,6 +23,7 @@ import {
   isViewerOwner,
   participantName,
 } from "../models/Participants";
+import type { MessageAuthor } from "../models/Chats";
 import type { UserMessageEvent } from "../models/Response";
 import { participantPicture } from "./participant-picture";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
@@ -43,24 +44,29 @@ export const OTHER_PERSON_ROW_CLASS = "message message-user message-other flex f
 /** The side of the picture beside another person's bubble. */
 export const AUTHOR_PICTURE_SIZE_PX = 24;
 
+/** Who a user turn was said by, when it is not the viewer: their participant key and their name. */
+export interface TurnAuthor {
+  key: string;
+  name: string;
+}
+
 /** Who a user turn was said by, for drawing: null for the viewer's own turn (right-aligned, no name), else the
  *  author's key and name. A turn with no author is the owner's -- and so is one annotated under either of the
  *  owner's keys (the multiplayer spec, section 11): the synthetic ``owner`` from before the workspace was shared,
  *  or the account the roster marks as the owner, which an owner page opened before the share still calls
  *  ``owner`` -- so it is the viewer's own when the viewer is the owner, and the owner's entry otherwise. Until the
  *  page knows who it is, every turn reads as the viewer's own. */
-export function authorOfTurn(
-  event: Pick<UserMessageEvent, "author" | "author_name">,
-): { key: string; name: string } | null {
+export function authorOfTurn(event: MessageAuthor): TurnAuthor | null {
   const own = getOwnParticipant();
   if (own === null) return null;
-  if (event.author === undefined || isOwnerKey(event.author)) {
+  const key = event.author ?? null;
+  if (key === null || isOwnerKey(key)) {
     if (isViewerOwner()) return null;
     const owner = getOwner();
     return owner === null ? null : { key: owner.key, name: owner.display_name };
   }
-  if (event.author === own) return null;
-  return { key: event.author, name: participantName(event.author, event.author_name ?? null) };
+  if (key === own) return null;
+  return { key, name: participantName(key, event.author_name ?? null) };
 }
 
 /** The bubble is the chat's declared `user-message` part (its app.toml `[theming]`), which themes may style. */
@@ -79,6 +85,32 @@ const USER_BUBBLE_BASE =
 export const USER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-br-[4px] bg-user-bubble`;
 /** Another person's bubble: left-aligned under their name, in the not-yours grey. */
 export const OTHER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-tl-[4px] bg-bubble-other`;
+
+/** The row a user turn sits in: the viewer's own on the right, another person's on the left. */
+export function userMessageRowClass(author: TurnAuthor | null): string {
+  return author === null ? USER_MESSAGE_ROW_CLASS : OTHER_PERSON_ROW_CLASS;
+}
+
+/** A user turn's bubble: the viewer's own as is, or another person's under their name with their picture at the
+ *  left, the bubble squared at its top-left. ``bubbleExtraClass`` adds to the bubble (a queued message's muting). */
+export function renderUserBubble(author: TurnAuthor | null, children: m.Children[], bubbleExtraClass = ""): m.Vnode {
+  const extra = bubbleExtraClass === "" ? "" : ` ${bubbleExtraClass}`;
+  if (author === null) return m("div", { class: `${USER_BUBBLE_CLASS}${extra}`, ...USER_MESSAGE_PART }, children);
+  const entry = getParticipant(author.key);
+  return m("div", { class: "message-other-turn flex w-full flex-col items-start", "data-author": author.key }, [
+    m("div", { class: "message-author mb-1 ml-8 text-(length:--font-size-helper) text-secondary" }, author.name),
+    m("div", { class: "flex w-full items-start gap-2" }, [
+      participantPicture({
+        name: author.name,
+        pictureUrl: entry?.profile_picture_url ?? null,
+        color: entry?.color ?? null,
+        size: AUTHOR_PICTURE_SIZE_PX,
+        extra: "message-author-picture mt-0.5",
+      }),
+      m("div", { class: `${OTHER_BUBBLE_CLASS}${extra}`, ...USER_MESSAGE_PART }, children),
+    ]),
+  ]);
+}
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
@@ -155,22 +187,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      if (author === null) return m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren);
-      // Another person's turn: their name above, their picture at the left, the bubble squared at its top-left.
-      const entry = getParticipant(author.key);
-      return m("div", { class: "message-other-turn flex w-full flex-col items-start", "data-author": author.key }, [
-        m("div", { class: "message-author mb-1 ml-8 text-(length:--font-size-helper) text-secondary" }, author.name),
-        m("div", { class: "flex w-full items-start gap-2" }, [
-          participantPicture({
-            name: author.name,
-            pictureUrl: entry?.profile_picture_url ?? null,
-            color: entry?.color ?? null,
-            size: AUTHOR_PICTURE_SIZE_PX,
-            extra: "message-author-picture mt-0.5",
-          }),
-          m("div", { class: OTHER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren),
-        ]),
-      ]);
+      return renderUserBubble(author, bubbleChildren);
     },
   };
 }
@@ -231,9 +248,7 @@ export function renderUserMessage(event: UserMessageEvent, isResent = false): m.
       ? "message message-system-collapsed mb-1 flex flex-col items-end"
       : kind === UserMessageKind.Notice
         ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
-        : authorOfTurn(event) === null
-          ? `${USER_MESSAGE_ROW_CLASS} mb-5`
-          : `${OTHER_PERSON_ROW_CLASS} mb-5`;
+        : `${userMessageRowClass(authorOfTurn(event))} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [

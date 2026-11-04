@@ -33,10 +33,10 @@ import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
   NOTICE_ROW_SPACING_CLASS,
-  USER_BUBBLE_CLASS,
-  USER_MESSAGE_PART,
-  USER_MESSAGE_ROW_CLASS,
+  authorOfTurn,
   renderNoticeRow,
+  renderUserBubble,
+  userMessageRowClass,
 } from "./user-message-display";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
@@ -87,8 +87,9 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
 
 /** Render one queued message as a user bubble. Reuses the user-bubble *view* (the
  *  same markup ``StableUserMessage`` produces for a plain prompt) directly: a queued message is
- *  shown verbatim, except one the transcript will show as a notice (a background command's
- *  report), which shows as that notice already.
+ *  drawn as its transcript turn will be -- under its sender, in the words behind the author prefix
+ *  the agent is handed with a non-owner's message -- and one the transcript will show as a notice
+ *  (a background command's report) shows as that notice already.
  *
  *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend, or a
  *  Claude message still queued when the reply landed)
@@ -113,14 +114,15 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
       key: `queued-${queued.queued_id}`,
       content: queued.content,
       isGroupSpaced: isInGroup,
+      displayDecision: queued,
+      author: queued,
     });
   }
+  const author = authorOfTurn(queued);
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
-  return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-    ]),
+  return m("div", { class: `${userMessageRowClass(author)} queued-message`, key: `queued-${queued.queued_id}` }, [
+    renderUserBubble(author, [m("div", { class: "message-content whitespace-pre-wrap" }, cls.body)], "opacity-85"),
   ]);
 }
 

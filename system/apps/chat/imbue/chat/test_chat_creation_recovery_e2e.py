@@ -41,6 +41,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
@@ -98,7 +99,7 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
     _withheld: list[Callable[[], None]] = []
     _release_on_completion: bool = False
 
-    def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
+    def broadcast_provisional_chat_created(self, provisional: ProvisionalChatAsShown) -> None:
         def send() -> None:
             WebSocketBroadcaster.broadcast_provisional_chat_created(self, provisional)
 

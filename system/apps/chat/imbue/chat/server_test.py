@@ -150,6 +150,7 @@ from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
@@ -4762,7 +4763,7 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
-def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_as_theirs_without_the_prefix(
     tmp_path: Path,
 ) -> None:
     app, _log_path = _recording_app(tmp_path)
@@ -4776,18 +4777,19 @@ def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_withou
     )
     assert held.status_code == 202
 
-    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    # The successor is handed the prefix; the page, which draws the held send under its sender, is handed the words
+    # and who the sender is.
     manager: AgentManager = state_of(app).agent_manager
     record = manager._chat_record_store.read(ChatId(first))
     assert record is not None and record.handoff is not None
     assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
     listed = client.get("/api/chats").get_json()["chats"]
     assert [
-        {"message_id": held_send["message_id"], "text": held_send["text"]}
+        {key: held_send[key] for key in ("message_id", "text", "author", "author_name")}
         for held_send in listed[0]["handoff"]["held_sends"]
     ] == [
-        {"message_id": "trigger-1", "text": "Carry on in Codex"},
-        {"message_id": "m-2", "text": "and this"},
+        {"message_id": "trigger-1", "text": "Carry on in Codex", "author": None, "author_name": None},
+        {"message_id": "m-2", "text": "and this", "author": "user:user-bob-4471", "author_name": "bob"},
     ]
 
 
@@ -5911,6 +5913,32 @@ def test_a_visitors_send_to_a_chat_the_app_does_not_know_is_refused_with_nothing
     assert not (authors_root / unknown_id).exists()
     assert not (authors_root.parent / "authors.jsonl").exists()
     assert sorted(path.name for path in authors_root.glob("*")) == []
+
+
+def test_a_visitors_send_to_a_chat_being_created_is_shown_under_them_without_the_prefix() -> None:
+    """The agent the chat gets is handed the prefix; every page, the ones that reconnect included, is sent the
+    words and who sent them."""
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    client.post(
+        f"/api/chats/{chat_id}/message",
+        json={"message": "hello", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "and mine", "message_id": "m-2"})
+
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None
+    assert [held.text for held in proto.held_sends] == ["[from: bob] hello", "and mine"]
+    (shown,) = manager.get_provisional_chats_as_shown()
+    replayed = provisional_chat_created_message(shown)
+    assert [
+        {key: held[key] for key in ("message_id", "text", "author", "author_name")} for held in replayed["held_sends"]
+    ] == [
+        {"message_id": "m-1", "text": "hello", "author": _VISITOR_KEY, "author_name": "bob"},
+        {"message_id": "m-2", "text": "and mine", "author": None, "author_name": None},
+    ]
 
 
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:

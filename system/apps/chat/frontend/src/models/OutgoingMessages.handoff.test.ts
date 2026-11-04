@@ -88,6 +88,25 @@ describe("the bubbles of a chat switching harness", () => {
     ]);
   });
 
+  it("brings a visitor's held send back under its sender, and the owner's under the owner", () => {
+    const chat = `a-${Math.random()}`;
+    push([
+      chatSnapshotFixture(chat, {
+        handoff: rebindStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on on the other account", author: null, author_name: null },
+            { message_id: "m-2", text: "hi", author: "user:glenn-2", author_name: "glenn" },
+          ],
+        }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat)]);
+    expect(getOutgoingMessages(chat).map((o) => [o.messageId, o.author])).toEqual([
+      ["trigger-1", { author: null, author_name: null }],
+      ["m-2", { author: "user:glenn-2", author_name: "glenn" }],
+    ]);
+  });
+
   it("consumes the returning bubbles with the successor's items that landed while the sends were still held", () => {
     // The backend delivers the held sends before it clears the switch, so the prompt's turn (the
     // confirming message's real form) and a held send's queued entry can land while the

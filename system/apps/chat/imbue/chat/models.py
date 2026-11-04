@@ -354,11 +354,14 @@ class HandoffError(ValueError):
 
 class DisplayDecisionFields(FrozenModel):
     """The render decision a not-yet-delivered message's text would get as a transcript user_message
-    (``harnesses.message_display``), so the page draws it as the row it will become."""
+    (``harnesses.message_display``), and the author its turn will be stamped with (``authors.py``), so the page
+    draws it as the row it will become."""
 
     display: DisplayKind | None = Field(default=None, description="The decision's kind; None for a plain message")
     display_label: str | None = Field(default=None, description="The decision's chip or notice label")
     display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
+    author: ParticipantKey | None = Field(default=None, description="Who sent it; None for the owner")
+    author_name: str | None = Field(default=None, description="What the sender was called when they sent it")
 
 
 class QueuedMessageState(DisplayDecisionFields):
@@ -877,6 +880,15 @@ class ProvisionalChat(FrozenModel):
     kind: ChatKind = Field(
         default=ChatKind.AGENT,
         description="What it is being created as: an agent's chat, or a room, whose sends are attributed as a room's",
+    )
+
+
+class ProvisionalChatAsShown(FrozenModel):
+    """A provisional chat as the pages are sent it (the ``provisional_chat_created`` message)."""
+
+    chat: ProvisionalChat = Field(description="The chat's record, under the name it is shown by")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        description="The sends held for it, as the page draws them: the sender's words, and who the sender is"
     )
 
 

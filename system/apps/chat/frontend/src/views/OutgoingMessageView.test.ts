@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import m from "mithril";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { addOutgoing } from "../models/OutgoingMessages";
+import { setParticipantsForTesting, type Participant } from "../models/Participants";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
-import { USER_BUBBLE_CLASS } from "./user-message-display";
+import { OTHER_BUBBLE_CLASS, USER_BUBBLE_CLASS } from "./user-message-display";
 
 describe("the optimistic outgoing bubble", () => {
   it("shows the sent text as a delivered user bubble at once: solid, with no caption", () => {
@@ -47,5 +48,54 @@ describe("the optimistic outgoing bubble", () => {
 
     expect(root.querySelector(".message-notice")?.textContent).toBe("Background task: Build (finished)");
     expect(root.querySelector(".message-user-bubble")).toBeNull();
+  });
+});
+
+describe("a not-yet-delivered message in a shared workspace", () => {
+  const person = {
+    kind: "person" as const,
+    profile_picture_url: null,
+    email: null,
+    color: "#000",
+    is_owner: false,
+    is_connected: true,
+    last_seen: null,
+    last_input_at: null,
+  };
+  const roster: Participant[] = [
+    { ...person, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
+    { ...person, key: "user:glenn-2", display_name: "Glenn", handle: "Glenn" },
+  ];
+
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("draws another person's held send under their name, and the viewer's own send as theirs", () => {
+    setParticipantsForTesting("user:owner-1", roster);
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    addOutgoing(chatId, "hi", "m-1", undefined, { author: "user:glenn-2", author_name: "glenn" });
+    addOutgoing(chatId, "and mine");
+    const root = document.createElement("div");
+
+    m.render(root, renderOutgoingMessages(chatId));
+
+    const [glenns, owners] = Array.from(root.querySelectorAll(".outgoing-message"));
+    expect(glenns?.classList.contains("message-other")).toBe(true);
+    expect(glenns?.querySelector(".message-author")?.textContent).toBe("Glenn");
+    expect(glenns?.querySelector(".message-user-bubble")?.getAttribute("class")).toBe(OTHER_BUBBLE_CLASS);
+    expect(owners?.classList.contains("message-other")).toBe(false);
+    expect(owners?.querySelector(".message-user-bubble")?.getAttribute("class")).toBe(USER_BUBBLE_CLASS);
+  });
+
+  it("draws the owner's held send under the owner on a visitor's page", () => {
+    setParticipantsForTesting("user:glenn-2", roster);
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    addOutgoing(chatId, "Carry on in Codex", "trigger-1", undefined, { author: null, author_name: null });
+    const root = document.createElement("div");
+
+    m.render(root, renderOutgoingMessages(chatId));
+
+    expect(root.querySelector(".message-author")?.textContent).toBe("Josh");
   });
 });

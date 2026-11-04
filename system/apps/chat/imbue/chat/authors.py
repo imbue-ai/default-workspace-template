@@ -210,6 +210,16 @@ def resolve_author(
     return name_key(name), name
 
 
+@pure
+def author_of_send(message_id: str, annotations: Sequence[AuthorAnnotation]) -> tuple[ParticipantKey, str] | None:
+    """The author of a send the chat app still holds, by the composer id its annotation was recorded under; None for
+    an unannotated send, which is the owner's."""
+    recorded = [annotation for annotation in annotations if annotation.message_id == message_id]
+    if not recorded:
+        return None
+    return recorded[-1].author, recorded[-1].display_name
+
+
 def stamp_authors(events: Sequence[dict[str, Any]], annotations: Sequence[AuthorAnnotation]) -> None:
     """Stamp ``author`` and ``author_name`` on every ``user_message`` event that has an author, in place (the stored
     events are the same dicts, so a reload sees the same stamps); an event already stamped is left alone."""
@@ -274,10 +284,6 @@ class AuthorStore(MutableModel):
         """Stamp the authors of a chat's events, in place: a chat with no annotations still stamps a hand-typed
         prefix with its synthetic key."""
         stamp_authors(events, self.annotations(chat_id))
-
-    def participant_keys(self, chat_id: ChatId) -> tuple[ParticipantKey, ...]:
-        """Who has written in the chat, each once, in order of first message."""
-        return participant_keys_of(self.annotations(chat_id))
 
 
 def _read_annotations(path: Path) -> tuple[AuthorAnnotation, ...]:

@@ -55,6 +55,10 @@ from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.authors import AuthorAnnotation
+from imbue.chat.authors import author_of_send
+from imbue.chat.authors import participant_keys_of
+from imbue.chat.authors import resolve_author
 from imbue.chat.authors import split_author_prefix
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -128,6 +132,8 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import chat_kind_of
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import MessageDisplay
+from imbue.chat.harnesses.message_display import classify_delivered_message
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
@@ -186,6 +192,7 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import ResentSendSnapshot
@@ -588,9 +595,8 @@ _DecidedT = TypeVar("_DecidedT", bound=DisplayDecisionFields)
 
 
 @pure
-def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
-    """``message`` carrying the render decision ``text`` would get in the transcript."""
-    decision = classify_user_message(text)
+def _with_display_decision(message: _DecidedT, decision: MessageDisplay | None) -> _DecidedT:
+    """``message`` carrying the render decision its text would get in the transcript."""
     if decision is None:
         return message
     return message.model_copy_update(
@@ -600,10 +606,42 @@ def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
     )
 
 
+@pure
+def _with_author(message: _DecidedT, author: tuple[ParticipantKey, str] | None) -> _DecidedT:
+    """``message`` carrying the author its turn will be stamped with; unchanged for the owner's (None)."""
+    if author is None:
+        return message
+    return message.model_copy_update(
+        to_update(message.field_ref().author, author[0]),
+        to_update(message.field_ref().author_name, author[1]),
+    )
+
+
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
-    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
+    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript:
+    the content is the text as delivered, so a non-owner's carries their author prefix, which the decision reads
+    past."""
     queued = QueuedMessageState.model_validate(entry)
-    return _with_display_decision(queued, queued.content)
+    return _with_display_decision(queued, classify_delivered_message(queued.content))
+
+
+@pure
+def _authored_queue(
+    queued_messages: Sequence[QueuedMessageState], annotations: Sequence[AuthorAnnotation]
+) -> tuple[QueuedMessageState, ...]:
+    """The queue with each entry's author, joined from the chat's annotations as its transcript turn's will be."""
+    return tuple(
+        _with_author(queued, resolve_author(queued.content, queued.timestamp, annotations))
+        for queued in queued_messages
+    )
+
+
+@pure
+def _authored_held_sends(
+    held_sends: Sequence[HeldSendSnapshot], annotations: Sequence[AuthorAnnotation]
+) -> tuple[HeldSendSnapshot, ...]:
+    """The held sends with each one's author, joined from the annotation recorded under its message id."""
+    return tuple(_with_author(held, author_of_send(held.message_id, annotations)) for held in held_sends)
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -948,7 +986,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 @pure
 def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
     """One held send on the wire, carrying the render decision its text would get in the transcript."""
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), classify_user_message(text))
 
 
 @pure
@@ -1449,10 +1487,10 @@ class AgentManager:
     # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
     # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
     _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
-    # Who has written in a chat, for its snapshot (the multiplayer spec, section 5.4): reads the chat's author
-    # annotations, which live on the app state the manager must not import. Set once at composition
-    # (``set_participants_reader``); ``None`` (tests) = no chat names participants.
-    _participants_reader: Callable[[ChatId], tuple[ParticipantKey, ...]] | None
+    # A chat's author annotations, which live on the app state the manager must not import: they say who has written
+    # in the chat (the multiplayer spec, section 5.4) and who sent each message not on its transcript yet. Set once
+    # at composition (``set_author_annotations_reader``); ``None`` (tests) = no chat has any.
+    _author_annotations_reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]] | None
     # Evicts one agent's session watcher (releasing its resident transcript, thread, and
     # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
     # the watcher registry lives on the app state, which the manager must not import; the
@@ -1599,7 +1637,7 @@ class AgentManager:
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._chats_updated_listener = None
-        manager._participants_reader = None
+        manager._author_annotations_reader = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
         manager._session_watcher_check = None
@@ -1785,10 +1823,11 @@ class AgentManager:
         spec, section 6.4). The composition root calls this once."""
         self._chats_updated_listener = listener
 
-    def set_participants_reader(self, reader: Callable[[ChatId], tuple[ParticipantKey, ...]]) -> None:
-        """Install what answers who has written in a chat, for its snapshot (the multiplayer spec, section 5.4):
-        the author annotations live on the app state. The composition root calls this once."""
-        self._participants_reader = reader
+    def set_author_annotations_reader(self, reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]]) -> None:
+        """Install what reads a chat's author annotations, for its snapshot: who has written in it (the multiplayer
+        spec, section 5.4), and who sent each message it shows before the transcript does. The annotations live on
+        the app state. The composition root calls this once."""
+        self._author_annotations_reader = reader
 
     def _wake_main_chat_if_stopped(self) -> None:
         """Start the main chat's agent, on a thread of its own, when it is stopped: the main chat never sleeps.
@@ -1838,12 +1877,25 @@ class AgentManager:
         """Push a provisional chat to every client, under the name it is shown by."""
         self._broadcaster.broadcast_provisional_chat_created(self._provisional_as_shown(provisional))
 
-    def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChat:
+    def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChatAsShown:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
-        if title is None:
-            return provisional
-        return provisional.model_copy_update(to_update(provisional.field_ref().name, title))
+        # The held text is the delivered one, so the page is handed the words behind a non-owner's author prefix.
+        held_sends = tuple(
+            _held_send_snapshot(held.message_id, split_author_prefix(held.text)[1]) for held in provisional.held_sends
+        )
+        return ProvisionalChatAsShown(
+            chat=provisional
+            if title is None
+            else provisional.model_copy_update(to_update(provisional.field_ref().name, title)),
+            held_sends=_authored_held_sends(held_sends, self._author_annotations_of(provisional.chat_id)),
+        )
+
+    def _author_annotations_of(self, chat_id: ChatId) -> tuple[AuthorAnnotation, ...]:
+        """The chat's author annotations. Never called under ``_lock``: the author store takes a lock of its own,
+        and foreign locks are never taken under this one (see ``get_chat_snapshots``)."""
+        reader = self._author_annotations_reader
+        return () if reader is None else reader(chat_id)
 
     def get_main_chat_id(self) -> ChatId | None:
         """The workspace's main chat (``main_chat.py``), or None while it has no chat to take it.
@@ -1906,15 +1958,31 @@ class AgentManager:
             title = self._title_override_by_chat.get(snapshot.chat_id)
             awaiting = self._awaiting_chat_ids_locked(snapshot.chat_id, time.monotonic())
             resent_sends = self._resent_sends_by_chat.get(snapshot.chat_id, ())
-        # Read outside ``_lock``: the author store takes a lock of its own, and foreign locks are
-        # never taken under this one (see ``get_chat_snapshots``).
-        reader = self._participants_reader
-        participants = () if reader is None else reader(snapshot.chat_id)
+        annotations = self._author_annotations_of(snapshot.chat_id)
+        active_agent = snapshot.active_agent
+        handoff = snapshot.handoff
         return snapshot.model_copy_update(
             to_update(snapshot.field_ref().title, snapshot.title if title is None else title),
             to_update(snapshot.field_ref().awaiting_chat_ids, awaiting),
-            to_update(snapshot.field_ref().participants, participants),
+            to_update(snapshot.field_ref().participants, participant_keys_of(annotations)),
             to_update(snapshot.field_ref().resent_sends, resent_sends),
+            to_update(
+                snapshot.field_ref().active_agent,
+                active_agent.model_copy_update(
+                    to_update(
+                        active_agent.field_ref().queued_messages,
+                        _authored_queue(active_agent.queued_messages, annotations),
+                    )
+                ),
+            ),
+            to_update(
+                snapshot.field_ref().handoff,
+                None
+                if handoff is None
+                else handoff.model_copy_update(
+                    to_update(handoff.field_ref().held_sends, _authored_held_sends(handoff.held_sends, annotations))
+                ),
+            ),
         )
 
     def note_send_begun(self, agent_id: str) -> float:
@@ -4257,8 +4325,8 @@ class AgentManager:
         with self._lock:
             return list(self._provisional_chats.values())
 
-    def get_provisional_chats_as_shown(self) -> list[ProvisionalChat]:
-        """``get_provisional_chats`` under the names they are shown by, for a client catching up."""
+    def get_provisional_chats_as_shown(self) -> list[ProvisionalChatAsShown]:
+        """``get_provisional_chats`` as the pages are sent them, for a client catching up."""
         return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
 
     def get_provisional_chat(self, chat_id: str) -> ProvisionalChat | None:

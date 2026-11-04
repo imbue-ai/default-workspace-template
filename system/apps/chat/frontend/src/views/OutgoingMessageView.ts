@@ -10,20 +10,20 @@
  */
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
-import type { DisplayDecision } from "../models/Chats";
+import type { DisplayDecision, MessageAuthor } from "../models/Chats";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import {
   NOTICE_ROW_SPACING_CLASS,
-  USER_BUBBLE_CLASS,
-  USER_MESSAGE_PART,
-  USER_MESSAGE_ROW_CLASS,
+  authorOfTurn,
   renderNoticeRow,
+  renderUserBubble,
+  userMessageRowClass,
 } from "./user-message-display";
 
-// The user rail's own recipes; the extra classes are bare markers for tests.
-const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending`;
+// Bare markers for tests, beside the user rail's own row recipe.
+const OUTGOING_ROW_MARKERS = "outgoing-message outgoing-message--sending";
 
 // The committed user row's spacing, so consecutive not-yet-delivered bubbles stand apart and the
 // real turn replaces one without a reflow.
@@ -31,7 +31,7 @@ const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 export interface NotYetRealBubble {
   key: string;
-  /** The message's text, shown verbatim unless ``displayDecision`` draws it as a notice. */
+  /** The message's text; the bubble shows the body ``displayDecision`` gives it, and the text itself without one. */
   content: string;
   /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
    *  carries no bottom margin of its own. */
@@ -40,6 +40,9 @@ export interface NotYetRealBubble {
   extraRowClass?: string;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
+  /** Who sent it, for a message the backend reports (queued, or held); absent for the viewer's own send, which is
+   *  drawn as theirs. */
+  author?: MessageAuthor;
 }
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
@@ -49,9 +52,10 @@ export interface NotYetRealBubble {
 export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
   const cls = classifyDecidedMessage(bubble.content, bubble.displayDecision);
   const isNotice = cls.kind === UserMessageKind.Notice;
+  const author = bubble.author === undefined ? null : authorOfTurn(bubble.author);
   const [baseClass, spacingClass] = isNotice
     ? ["message-notice-row", NOTICE_ROW_SPACING_CLASS]
-    : [OUTGOING_ROW_CLASS, STANDALONE_ROW_SPACING_CLASS];
+    : [`${userMessageRowClass(author)} ${OUTGOING_ROW_MARKERS}`, STANDALONE_ROW_SPACING_CLASS];
   const rowClass = [baseClass, bubble.isGroupSpaced === true ? null : spacingClass, bubble.extraRowClass ?? null]
     .filter((part) => part !== null)
     .join(" ");
@@ -59,9 +63,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
-    ]),
+    renderUserBubble(author, [m("div", { class: "message-content whitespace-pre-wrap" }, cls.body)]),
   ]);
 }
 
@@ -70,6 +72,7 @@ function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
     key: outgoing.id,
     content: outgoing.content,
     displayDecision: outgoing.displayDecision,
+    author: outgoing.author,
   });
 }
 
