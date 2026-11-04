@@ -842,6 +842,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               if (flow === null || flow.relay_url === null) return;
               void relay(flow.relay_url, flow.flow_id).then((answer) => {
                 if (answer === null) return;
+                // Try again reuses the flow's port, so a taken one is not drawn afresh here.
+                if (answer === "port_taken") isRelayUnavailable = true;
                 // The user may have gone back, closed the chooser, or finished meanwhile.
                 const live = getFlow();
                 const isStillWaiting =

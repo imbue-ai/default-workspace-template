@@ -701,19 +701,22 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
   });
 
-  it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
-    state.lanes = [CHATGPT];
-    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
-    const root = await clickLane("openai");
-    requestProviderRelay.mockResolvedValue("unavailable");
+  it.each<RelayAnswer>(["unavailable", "port_taken"])(
+    "stops offering ChatGPT's browser sign-in once the desktop app answers Try again with %s",
+    async (refusal) => {
+      state.lanes = [CHATGPT];
+      state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+      const root = await clickLane("openai");
+      requestProviderRelay.mockResolvedValue(refusal);
 
-    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
-    await settled();
-    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+      await settled();
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
-    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
-    expect(root.textContent).not.toContain("Use your ChatGPT plan (runs on Codex)");
-  });
+      expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+      expect(root.textContent).not.toContain("Use your ChatGPT plan (runs on Codex)");
+    },
+  );
 
   it("offers another way in after a sign-in fails", async () => {
     state.lanes = [CHATGPT];
