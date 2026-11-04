@@ -14,7 +14,8 @@ those cookies, WebSocket upgrades and the neko proxy included.
 Every ``*.modal.host`` page is same-site with the Screen, so its cookies ride that page's requests too. The gate
 therefore also refuses a request its browser marks (``Sec-Fetch-Site``) as coming from a page of another origin,
 other than a GET or HEAD navigation: the chrome's frame of the Screen and the tab it opens are such navigations, and
-the Screen's own pages call it from its own origin.
+the Screen's own pages call it from its own origin. This holds for loopback too, since a page the sandbox's sign-in
+browser shows can reach the Screen there.
 
 The session is set twice, under two names, for the reasons the share gateway's ``session_cookie.py`` gives: a
 ``SameSite=Lax`` copy for a top-level visit and a ``SameSite=None; Partitioned`` copy for the chrome's cross-site
@@ -244,14 +245,13 @@ def install_owner_gate(app: Flask, gate: OwnerGate) -> None:
 
     @app.before_request
     def admit_only_the_owner() -> ResponseReturnValue | None:
-        is_loopback = is_loopback_address(request.remote_addr)
-        if not is_loopback and is_from_another_origin(
+        if is_from_another_origin(
             request.method, request.headers.get(_FETCH_SITE_HEADER), request.headers.get(_FETCH_MODE_HEADER)
         ):
             return error_response(OTHER_ORIGIN_REFUSED, HTTP_FORBIDDEN)
         if request.method == "GET" and OWNER_TOKEN_QUERY_PARAMETER in request.args:
             return _trade_owner_token_for_session(gate)
-        if is_loopback:
+        if is_loopback_address(request.remote_addr):
             return None
         if read_owner_token_sha256(gate) is not None and has_owner_session(gate, request.cookies):
             return None

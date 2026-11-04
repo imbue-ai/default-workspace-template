@@ -140,6 +140,14 @@ def test_a_request_from_another_origin_is_refused_despite_the_session(
     assert "Sec-WebSocket-Accept" not in answer.headers
 
 
+def test_a_loopback_request_from_another_origin_is_refused(gated_client: FlaskClient) -> None:
+    # A page the sandbox's sign-in browser shows reaches the Screen over loopback.
+    cross_site = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}
+    answer = gated_client.post("/api/run", data='{"command": ["true"]}', headers=cross_site)
+    assert answer.status_code == 403
+    assert answer.get_json() == {"detail": "only the Screen's own pages may call it"}
+
+
 def test_own_origin_requests_and_navigations_from_elsewhere_are_admitted(
     gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
 ) -> None:
