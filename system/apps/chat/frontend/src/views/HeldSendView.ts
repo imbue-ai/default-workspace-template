@@ -14,7 +14,7 @@
 
 import m from "mithril";
 import { getChatById, getProvisionalChat } from "../models/Chats";
-import { getOutgoingMessages } from "../models/OutgoingMessages";
+import { countHeldSendsShownElsewhere, getOutgoingMessages, heldSendsStillToShow } from "../models/OutgoingMessages";
 import { countSentTurnsSince, isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
 
@@ -24,22 +24,16 @@ import { renderNotYetRealBubble } from "./OutgoingMessageView";
 export function heldSendsShownElsewhere(chatId: string): number {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return 0;
-  return (
-    countSentTurnsSince(chatId, chat.active_agent.agent_id, chat.handoff.started_at) +
-    chat.active_agent.queued_messages.length
-  );
+  return countHeldSendsShownElsewhere(chat, chat.handoff.started_at, countSentTurnsSince);
 }
 
 export function renderHeldSends(chatId: string): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
-  let shownElsewhere = heldSendsShownElsewhere(chatId);
-  const standing = chat.handoff.held_sends.filter((held) => {
-    if (isMessageCarriedBySwitch(chatId, held.message_id)) return false;
-    if (held.is_delivered !== true || shownElsewhere === 0) return true;
-    shownElsewhere -= 1;
-    return false;
-  });
+  const standing = heldSendsStillToShow(
+    chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id)),
+    heldSendsShownElsewhere(chatId),
+  );
   return standing.map((held) =>
     renderNotYetRealBubble({
       key: `held-${held.message_id}`,

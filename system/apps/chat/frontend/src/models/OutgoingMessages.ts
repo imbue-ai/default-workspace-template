@@ -22,7 +22,7 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener, getChatById, isHandoffCancellable } from "./Chats";
-import type { DisplayDecision, HandoffState } from "./Chats";
+import type { ChatSnapshot, DisplayDecision, HandoffState, HeldSend } from "./Chats";
 import type { SendStatus } from "./Response";
 import { isChatBusyWithTurn } from "./activityState";
 
@@ -202,6 +202,33 @@ export function opensTurnWithHeldSends(handoff: HandoffState): boolean {
   return handoff.kind === "rebind" || handoff.is_fresh_start;
 }
 
+/** Counts the turns users' messages opened for an agent of a chat from a moment (ISO 8601) on, in the chat's loaded
+ *  transcript (``countSentTurnsSince`` in Response, which imports this module). */
+export type SentTurnsCounter = (chatId: string, agentId: string, since: string) => number;
+
+/** How many of the delivered held sends of a switch that began at ``startedAt`` the page already shows in their real
+ *  form: the user turns ``chat``'s agent has taken since, in its loaded transcript or in its queue. */
+export function countHeldSendsShownElsewhere(
+  chat: ChatSnapshot,
+  startedAt: string,
+  countSentTurnsSince: SentTurnsCounter,
+): number {
+  return (
+    countSentTurnsSince(chat.chat_id, chat.active_agent.agent_id, startedAt) + chat.active_agent.queued_messages.length
+  );
+}
+
+/** The listed held sends the page has no real form of, in order: the delivered ones stand down oldest first, one per
+ *  send ``shownElsewhere`` counts; a send the switch still holds always stays. */
+export function heldSendsStillToShow<T extends HeldSend>(heldSends: readonly T[], shownElsewhere: number): T[] {
+  let remaining = shownElsewhere;
+  return heldSends.filter((held) => {
+    if (held.is_delivered !== true || remaining === 0) return true;
+    remaining -= 1;
+    return false;
+  });
+}
+
 /**
  * Follow the agents store so a newly-queued message drops its "Sending…" bubble the instant
  * it becomes a real queued entry (no overlap). Deduped by queued_id, so re-pushed snapshots
@@ -220,7 +247,7 @@ export function opensTurnWithHeldSends(handoff: HandoffState): boolean {
  */
 export function trackBackendArrivals(
   isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
-  countSentTurnsSince: (chatId: string, agentId: string, since: string) => number = () => 0,
+  countSentTurnsSince: SentTurnsCounter = () => 0,
 ): void {
   const heldByChat = new Map<string, HeldSnapshot>();
   addChatsUpdatedListener((chats) => {
@@ -249,20 +276,14 @@ export function trackBackendArrivals(
         const returning = previous.handoff.held_sends;
         // A cancel delivers them to the agent the chat stays on, behind whatever it is still doing.
         const opensTurn = isCancelled ? !isChatBusyWithTurn(chat) : opensTurnWithHeldSends(previous.handoff);
-        let shownElsewhere =
-          countSentTurnsSince(chat.chat_id, chat.active_agent.agent_id, previous.handoff.started_at) +
-          chat.active_agent.queued_messages.length;
-        let hasOpenedTurn = false;
-        for (const held of isCancelled ? returning.slice(1) : returning) {
-          if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          const isShownElsewhere = held.is_delivered === true && shownElsewhere > 0;
-          if (isShownElsewhere) {
-            shownElsewhere -= 1;
-          } else {
-            const isOpening = opensTurn && !hasOpenedTurn;
-            addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), isOpening);
-          }
-          hasOpenedTurn = true;
+        const returned = (isCancelled ? returning.slice(1) : returning).filter(
+          (held) => !isCarriedBySwitch(chat.chat_id, held.message_id),
+        );
+        const shownElsewhere = countHeldSendsShownElsewhere(chat, previous.handoff.started_at, countSentTurnsSince);
+        for (const held of heldSendsStillToShow(returned, shownElsewhere)) {
+          // A first send that already landed opened the turn itself.
+          const isOpening = opensTurn && held === returned[0];
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), isOpening);
         }
       }
     }

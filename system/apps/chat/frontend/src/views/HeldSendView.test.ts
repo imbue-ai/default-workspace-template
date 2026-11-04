@@ -16,7 +16,8 @@ vi.mock("../models/Response", () => ({
   countSentTurnsSince: () => mocks.sentTurns,
   isMessageCarriedBySwitch: (_chatId: string, messageId: string) => mocks.carriedMessageIds.has(messageId),
 }));
-vi.mock("../models/OutgoingMessages", () => ({
+vi.mock("../models/OutgoingMessages", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/OutgoingMessages")>()),
   getOutgoingMessages: () => [],
 }));
 
