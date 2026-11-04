@@ -76,6 +76,9 @@ export interface ProviderChooserModalAttrs {
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 
+/** How starting a sign-in and handing its page to the desktop app ended. */
+type HandOff = "relaying" | "not_relaying" | "stood_down";
+
 /** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
  *  advance whether the browser will end on a code instead. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
@@ -203,6 +206,51 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
   }
 
+  /** Start the chosen sign-in and hand its page to the desktop app. Claude's CLI draws its callback
+   *  port at random, so when something on the user's machine already answers on the one it drew,
+   *  starting the sign-in again draws a fresh one, up to `MAX_SIGN_IN_PORT_DRAWS` ports in all.
+   *  Whether the desktop app is relaying the sign-in, or `stood_down` when `begin` must stop: a
+   *  newer attempt took over, or the user left the lane. */
+  async function startAndHandToDesktop(
+    chosen: Lane,
+    chosenMethod: LaneMethod,
+    options: { accountId?: string; isRelaySkipped?: boolean },
+    attempt: number,
+  ): Promise<HandOff> {
+    const takenPorts = new Set<string>();
+    for (let portDraw = 1; ; portDraw += 1) {
+      await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      if (attempt !== generation) return "stood_down";
+      // Back and Close clear the lane without superseding this attempt, and the sign-in just
+      // started is then nobody's.
+      if (lane !== chosen) {
+        abortFlow();
+        return "stood_down";
+      }
+      const started = getFlow();
+      if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped)
+        return "not_relaying";
+      const port = callbackPort(started.relay_url);
+      // A CLI that listens on a fixed port (codex) lands on the taken one again; asking again is futile.
+      if (port !== null && takenPorts.has(port)) {
+        isRelayUnavailable = true;
+        return "not_relaying";
+      }
+      isOpeningBrowser = true;
+      m.redraw();
+      const answer = await relay(started.relay_url, started.flow_id);
+      if (attempt !== generation) return "stood_down";
+      isOpeningBrowser = false;
+      if (lane !== chosen) return "stood_down";
+      if (answer === "port_taken") {
+        if (port !== null) takenPorts.add(port);
+        if (portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
+        isRelayUnavailable = true;
+      }
+      return answer === "relaying" ? "relaying" : "not_relaying";
+    }
+  }
+
   /** Open a lane's method. `fromChooser` decides where back goes. */
   async function begin(
     chosen: Lane,
@@ -243,39 +291,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
     let fallback: LaneMethod | null = null;
     try {
-      // Claude's CLI draws its callback port at random, so a port something on the user's machine
-      // already answers on is drawn again by starting the sign-in again, a few times at most.
-      const takenPorts = new Set<string>();
-      for (let portDraw = 1; ; portDraw += 1) {
-        await startFlow(chosen.id, chosenMethod.id, options.accountId);
-        if (attempt !== generation) return;
-        // Back and Close clear the lane without superseding this attempt, and the sign-in just
-        // started is then nobody's.
-        if (lane !== chosen) {
-          abortFlow();
-          return;
-        }
-        const started = getFlow();
-        if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped) break;
-        const port = callbackPort(started.relay_url);
-        // A CLI that listens on a fixed port (codex) lands on the taken one again; asking again is futile.
-        if (port !== null && takenPorts.has(port)) {
-          isRelayUnavailable = true;
-          break;
-        }
-        isOpeningBrowser = true;
-        m.redraw();
-        const answer = await relay(started.relay_url, started.flow_id);
-        if (attempt !== generation) return;
-        isOpeningBrowser = false;
-        if (lane !== chosen) return;
-        if (answer === "port_taken" && port !== null) takenPorts.add(port);
-        if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
-        if (answer === "relaying") mode = "relay";
-        if (answer === "port_taken") isRelayUnavailable = true;
-        break;
-      }
-      if (mode !== "relay" && chosenMethod.shape === "browser") {
+      const handOff = await startAndHandToDesktop(chosen, chosenMethod, options, attempt);
+      if (handOff === "stood_down") return;
+      if (handOff === "relaying") {
+        mode = "relay";
+      } else if (chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
         fallback = relaylessFallback(chosen);
       }
