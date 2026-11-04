@@ -3,7 +3,8 @@ import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { addOutgoing } from "../models/OutgoingMessages";
-import { setParticipantsForTesting, type Participant } from "../models/Participants";
+import { setParticipantsForTesting } from "../models/Participants";
+import { personFixture } from "../models/participantFixture";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 import { OTHER_BUBBLE_CLASS, USER_BUBBLE_CLASS } from "./user-message-display";
 
@@ -52,19 +53,9 @@ describe("the optimistic outgoing bubble", () => {
 });
 
 describe("a not-yet-delivered message in a shared workspace", () => {
-  const person = {
-    kind: "person" as const,
-    profile_picture_url: null,
-    email: null,
-    color: "#000",
-    is_owner: false,
-    is_connected: true,
-    last_seen: null,
-    last_input_at: null,
-  };
-  const roster: Participant[] = [
-    { ...person, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
-    { ...person, key: "user:glenn-2", display_name: "Glenn", handle: "Glenn" },
+  const roster = [
+    personFixture("user:owner-1", "Josh", { is_owner: true }),
+    personFixture("user:glenn-2", "Glenn"),
   ];
 
   afterEach(() => {

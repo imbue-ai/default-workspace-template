@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { QueuedMessage } from "../models/Chats";
-import { setParticipantsForTesting, type Participant } from "../models/Participants";
+import { setParticipantsForTesting } from "../models/Participants";
+import { personFixture } from "../models/participantFixture";
 
 // vi.mock factories are hoisted, so shared state comes from vi.hoisted. Mithril
 // itself is NOT mocked (its hyperscript builds the vnodes these tests inspect).
@@ -269,19 +270,9 @@ describe("renderQueuedMessages", () => {
 });
 
 describe("renderQueuedMessages in a shared workspace", () => {
-  const person = {
-    kind: "person" as const,
-    profile_picture_url: null,
-    email: null,
-    color: "#000",
-    is_owner: false,
-    is_connected: true,
-    last_seen: null,
-    last_input_at: null,
-  };
-  const roster: Participant[] = [
-    { ...person, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
-    { ...person, key: "user:glenn-2", display_name: "Glenn", handle: "Glenn" },
+  const roster = [
+    personFixture("user:owner-1", "Josh", { is_owner: true }),
+    personFixture("user:glenn-2", "Glenn"),
   ];
   // A visitor's message is queued as the agent was handed it; the backend joins its sender and decides its body.
   const glennsMessage = (queued_id: string, is_sending: boolean): QueuedMessage => ({
