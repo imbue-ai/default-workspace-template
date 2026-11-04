@@ -36,7 +36,7 @@ T = TypeVar("T")
 
 def resolve_ipv4_addresses(host: str) -> tuple[str, ...]:
     """The IPv4 addresses ``host`` resolves to, in the resolver's order without repeats; raises OSError when the name
-    does not resolve."""
+    does not resolve, and ValueError when it is not a name at all (an empty label, or one over 63 characters)."""
     entries = socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
     return tuple(dict.fromkeys(str(entry[4][0]) for entry in entries))
 
@@ -62,7 +62,7 @@ def resolve_candidate_hosts(
             continue
         try:
             addresses = resolve(candidate.host)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             logger.warning(
                 "Dropped the candidate {}:{} ({}): the name does not resolve: {}",
                 candidate.host,

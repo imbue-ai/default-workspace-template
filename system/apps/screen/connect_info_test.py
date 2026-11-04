@@ -154,6 +154,11 @@ def test_a_hostname_that_does_not_resolve_drops_its_candidate_alone() -> None:
     assert resolve_candidate_hosts((unresolvable, _TCP), _fake_resolver({}, [])) == (_TCP,)
 
 
+def test_a_malformed_hostname_drops_its_candidate_alone() -> None:
+    malformed = MediaCandidate(host="a..b", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    assert resolve_candidate_hosts((malformed, _TCP), resolve_ipv4_addresses) == (_TCP,)
+
+
 def test_is_ip_literal_accepts_both_families_and_refuses_names() -> None:
     assert is_ip_literal("203.0.113.5")
     assert is_ip_literal("2001:db8::1")
