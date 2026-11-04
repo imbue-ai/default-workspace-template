@@ -55,10 +55,10 @@ The chrome writes everything the session starts with in one file, `/run/auth-san
 {"latchkey_key": "<K>", "browser_state": "<base64 of the machine's browser_state.json.enc under K>" | null, "workspace_host_id": "<host-...>" | null, "timezone": "<IANA>" | null}
 ```
 
-`browser_state` is the workspace machine's own browser state, which the VM hands the chrome already encrypted under `K`, so a second service is a consent click rather than a login; the chrome sends null when it skips it (adding an account, typed credentials).
+`browser_state` is the workspace machine's own browser state, which the VM hands the chrome already encrypted under `K`, so a second service is a consent click rather than a login; it is null when the machine holds none, and when the sign-in adds an account to a service the machine already holds. A service that takes typed credentials gets it too, since that is known only from the prepare step's answer, but never sends it back.
 `workspace_host_id` seeds the launcher's fingerprint (`TILION_SEED`), so a service sees one device across that workspace's sign-ins, and `timezone` is the zone the launcher reports (`TILION_TZ`).
 
-When the sign-in has stored the credential, the chrome reads `credentials.json.enc`, `data-format-version` and `browser_state.json.enc` (when present) from `/run/auth-sandbox/latchkey/` and hands them, with `K`, to the workspace VM's `mngr-latchkey apply-state`, which merges them into the machine's store with `K` as the source key.
+When the sign-in has stored the credential, the chrome reads `credentials.json.enc`, `data-format-version` and, after a browser sign-in, `browser_state.json.enc` from `/run/auth-sandbox/latchkey/` and hands them, with `K`, to the workspace VM's `mngr-latchkey apply-state`, which merges them into the machine's store with `K` as the source key.
 
 ## The commands
 
