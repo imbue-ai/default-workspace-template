@@ -300,8 +300,6 @@ def test_caddyfile_writes_a_bounded_access_log_without_headers_or_query_strings(
     assert "output file /state/share_gateway/access.log {" in log_block
     assert "roll_size 8MiB" in log_block and "roll_keep 4" in log_block and "roll_keep_for 720h" in log_block
     assert "wrap json" in log_block
-    # Every place a secret can travel is dropped: the session cookie and a visiting agent's token ride request
-    # headers, Set-Cookie rides the response headers, and the login callback's handoff token rides the query.
     assert "request>headers delete" in log_block
     assert "resp_headers delete" in log_block
     assert 'request>uri regexp `\\?.*$` ""' in log_block

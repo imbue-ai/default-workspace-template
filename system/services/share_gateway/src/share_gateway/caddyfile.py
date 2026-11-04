@@ -164,8 +164,7 @@ def render_caddyfile(
     https_port: int,
     gateway_port: int,
     chrome_origin: str,
-    # Where caddy writes its per-request access log (materials.ACCESS_LOG_PATH): the owner's record of every
-    # request the share served, with the secret-bearing fields filtered out below.
+    # Where caddy writes its per-request access log, the owner's record of every request the share served.
     access_log_path: Path,
 ) -> str:
     """Render the full Caddyfile for one shared workspace."""

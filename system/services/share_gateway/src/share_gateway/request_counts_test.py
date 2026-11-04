@@ -91,7 +91,6 @@ def test_a_finished_window_is_written_as_one_record_per_key_under_the_envelope(t
     assert str(first["event_id"]).startswith("evt-") and len({r["event_id"] for r in records}) == 3
     assert first["window_start"] == "2027-01-15T08:00:00+00:00"
     assert first["window_seconds"] == WINDOW_SECONDS
-    # The record's time is the window's end, when the count became final.
     assert first["timestamp"] == "2027-01-15T08:01:00.000000000Z"
     assert set(first) == {
         "timestamp",

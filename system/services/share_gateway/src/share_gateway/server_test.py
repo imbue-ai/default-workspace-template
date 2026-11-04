@@ -950,7 +950,7 @@ def test_verify_counts_every_answer_by_service_requester_method_and_outcome(tmp_
     harness.client.get(
         "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="POST", origin="https://evil.example")
     )
-    # The hosted chrome's preflight passes through uncounted as anyone.
+    # The hosted chrome's preflight passes through, counted as nobody's.
     harness.client.get(
         "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin=_CHROME_ORIGIN)
     )
