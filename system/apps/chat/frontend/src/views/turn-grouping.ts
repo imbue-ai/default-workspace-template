@@ -168,7 +168,7 @@ export type TimelineItem =
    *  exactly like a no-steps turn. */
   | { kind: "ungrouped"; key: string; events: RunPart[] }
   /** An agent permission request, lifted out of any open step so it always
-   *  renders inline as a thread-breaking block. The user must be able to see and
+   *  renders inline, on the stretch's line between the steps. The user must be able to see and
    *  act on it without expanding a step. `event` may carry more than one
    *  permission-request tool call (a batched request); each card resolves its
    *  own verdict by looking up its own request id in `resolutionsByRequestId`
