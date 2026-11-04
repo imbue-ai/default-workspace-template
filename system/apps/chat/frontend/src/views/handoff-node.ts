@@ -25,6 +25,7 @@ import {
   TIMELINE_NODE_CLASS,
   TIMELINE_STEPS_CLASS,
   renderTimelineBullet,
+  renderTimelineTitleText,
   timelineChevronStateClass,
   timelineSpinnerBullet,
   timelineTitleClass,
@@ -128,7 +129,7 @@ export function renderHandoffNode(
           onclick: canExpand ? () => toggleBlockExpanded(options.expansionKey) : undefined,
         },
         [
-          title,
+          renderTimelineTitleText(title),
           canExpand
             ? m(
                 "span",

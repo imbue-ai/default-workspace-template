@@ -28,6 +28,7 @@ import {
   TIMELINE_NODE_CLASS,
   TIMELINE_STEPS_CLASS,
   renderTimelineBullet,
+  renderTimelineTitleText,
   timelineChevronStateClass,
   timelineSpinnerBullet,
   timelineTitleClass,
@@ -161,7 +162,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
           },
           [
-            step.title,
+            renderTimelineTitleText(step.title),
             canExpand
               ? m(
                   "span",

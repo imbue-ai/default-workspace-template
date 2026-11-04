@@ -11,3 +11,5 @@ The agent's side of the chat follows the multiplayer-chat prototype.
 - "You" shows over the first of a run of your own messages. Another person's name and picture show once per run of theirs.
 
 - A command you run in bash mode (`!ls`) and its output stand on your side and end the agent's stretch, as a new `person_chip` display kind.
+
+- The chevron beside the step the agent is working on no longer draws doubled once that step is opened: the title's shimmer now sweeps only its words.

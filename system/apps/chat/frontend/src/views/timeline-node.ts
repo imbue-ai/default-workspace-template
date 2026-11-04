@@ -87,6 +87,13 @@ export function timelineTitleClass(tone: TimelineTone): string {
   return `${TITLE_BASE} text-primary`;
 }
 
+/** The title's words, apart from the chevron beside them. The shimmer is clipped to the text of the element that
+ *  wears it, so it goes on the words alone: worn by the whole title it would also paint the chevron's glyph, unturned,
+ *  under the chevron's own turned one. */
+export function renderTimelineTitleText(text: string): m.Vnode {
+  return m("span", { class: "pv-tl-title-text" }, text);
+}
+
 /** The expand chevron beside the title. text-[18px]: icon glyph, sized
  *  independently of the text scale (and deliberately not text-lg, whose
  *  line-height would reflow the row). `leading-none` for the same reason one
