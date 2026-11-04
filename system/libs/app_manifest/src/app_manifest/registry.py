@@ -141,6 +141,10 @@ class RegistryRow(FrozenModel):
         default=False,
         description="Whether the shell may stop the app's program once no window shows it",
     )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the shell delegates the microphone to the app's frames",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     # CLEANUP: drop the ``default_shortcut`` alias and ``_read_one_default_shortcut_as_a_list`` once no registry row
     # predates the ``default_shortcuts`` key; every app rewrites its row when it next starts.

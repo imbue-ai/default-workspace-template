@@ -69,6 +69,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "program",
         "critical",
         "stop_when_no_windows",
+        "uses_microphone",
         "launch_paths",
         "default_shortcuts",
         "launcher_rank",

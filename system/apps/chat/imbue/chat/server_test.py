@@ -210,8 +210,9 @@ def client(app: Flask) -> FlaskClient:
 def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
     """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
     images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
-    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
-    carries none."""
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), the composer's dictation
+    may compile WebAssembly and download its speech model from Hugging Face and the CDN hosts it redirects to,
+    scripts still come only from the chat's origin, and a non-page answer carries none."""
     page = client.get("/")
 
     assert page.status_code == 200
@@ -220,6 +221,8 @@ def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskCl
     assert "frame-src http: https:" in policy
     assert "img-src * data: blob:" in policy
     assert "media-src * data: blob:" in policy
+    assert "script-src 'self' 'wasm-unsafe-eval'" in policy
+    assert "connect-src 'self' https://huggingface.co https://*.hf.co" in policy
     assert "Content-Security-Policy" not in client.get("/api/health").headers
 
 
