@@ -112,12 +112,15 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
-# Run by its path, the module puts the bare packages' directory on sys.path; imported as
-# part of its package, the venv already has it.
+# Run by its path, the module puts the bare packages' directory and its own package's on
+# sys.path; imported as part of its package, the venv already has both.
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from workspace_bare_scripts import forward_port, run_in_background
+
+from agents_shared.preview_wrapper_server import FrameKind
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -1273,7 +1276,7 @@ class FrameRecord(NamedTuple):
     frame_service_name: str
     title: str
     display_name: str
-    kind: str
+    kind: FrameKind
     note: str | None
     inner_path: str
 
@@ -1289,8 +1292,8 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         return None
     try:
         recorded = json.loads(state_path.read_text())[FRAME_STATE_KEY]
-        return FrameRecord(**recorded)
-    except (json.JSONDecodeError, OSError, KeyError, TypeError) as exc:
+        return FrameRecord(**{**recorded, "kind": FrameKind(recorded["kind"])})
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
 
@@ -1325,7 +1328,7 @@ def frame(
     frame_service_name: str,
     title: str,
     display_name: str,
-    kind: str,
+    kind: FrameKind,
     note: str | None = None,
     inner_path: str = "/",
     runner: Runner,

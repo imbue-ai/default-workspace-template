@@ -32,6 +32,7 @@ by hand:
 import argparse
 import html
 import json
+from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 
@@ -44,18 +45,23 @@ class BannerCopy(NamedTuple):
     hint: str
 
 
-KIND_CHANGE = "change"
-KIND_MOCK = "mock"
-BANNER_COPY_BY_KIND = {
+class FrameKind(StrEnum):
+    """What the framed page is, which decides what the banner says about it."""
+
     # A proposed change to an app the user already has (update-app's previews).
-    KIND_CHANGE: BannerCopy(
+    CHANGE = "change"
+    # A new app's look-and-feel mock (build-app), up until the app is really hooked
+    # up to its data: hard-coded content or a sample, with some of it not working yet.
+    MOCK = "mock"
+
+
+BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
+    FrameKind.CHANGE: BannerCopy(
         tag="Preview",
         description="proposed change &mdash; not yet live",
         hint="Approve or request changes in chat",
     ),
-    # A new app's look-and-feel mock (build-app), up until the app is really hooked
-    # up to its data: hard-coded content or a sample, with some of it not working yet.
-    KIND_MOCK: BannerCopy(
+    FrameKind.MOCK: BannerCopy(
         tag="Mock",
         description="early mock &mdash; not the finished app",
         hint="Ask for changes in chat",
@@ -67,7 +73,7 @@ def build_wrapper_html(
     inner_service: str,
     title: str,
     inner_path: str = "/",
-    kind: str = KIND_CHANGE,
+    kind: FrameKind = FrameKind.CHANGE,
     note: str | None = None,
 ) -> str:
     """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
@@ -83,11 +89,7 @@ def build_wrapper_html(
     """
     if not inner_path.startswith("/"):
         raise ValueError(f"inner path must start with '/', got {inner_path!r}")
-    copy = BANNER_COPY_BY_KIND.get(kind)
-    if copy is None:
-        raise ValueError(
-            f"kind must be one of {', '.join(sorted(BANNER_COPY_BY_KIND))}, got {kind!r}"
-        )
+    copy = BANNER_COPY_BY_KIND[kind]
     safe_title = html.escape(title)
     note_html = (
         f'\n  <div class="preview-note">{html.escape(note)}</div>' if note else ""
@@ -225,7 +227,7 @@ def serve(
     inner_service: str,
     title: str,
     inner_path: str,
-    kind: str = KIND_CHANGE,
+    kind: FrameKind = FrameKind.CHANGE,
     note: str | None = None,
 ) -> None:
     page_html = build_wrapper_html(
@@ -262,8 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--kind",
-        choices=sorted(BANNER_COPY_BY_KIND),
-        default=KIND_CHANGE,
+        type=FrameKind,
+        choices=list(FrameKind),
+        default=FrameKind.CHANGE,
         help="What the banner says the framed page is: a proposed change to an "
         "existing app (default), or an early mock of a new app.",
     )

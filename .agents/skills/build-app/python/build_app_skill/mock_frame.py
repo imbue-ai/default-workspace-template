@@ -56,7 +56,7 @@ FRAME_SUFFIX = "-mock"
 DISPLAY_NAME_SUFFIX = " (mock)"
 # What the app's own registry row says while the frame is up: not an app to open (the
 # frame is), and not stopped when no window shows it (the frame's window does).
-FRAMED_APP_OVERRIDES: dict[str, object] = {
+FRAMED_APP_OVERRIDES: forward_port.ManifestOverrides = {
     "internal": True,
     "stop_when_no_windows": False,
 }
@@ -95,7 +95,7 @@ class Frames:
             frame_service_name=frame_name(app.name),
             title=app.display_name,
             display_name=frame_display_name(app.display_name),
-            kind=preview_wrapper_server.KIND_MOCK,
+            kind=preview_wrapper_server.FrameKind.MOCK,
             note=note,
             inner_path=inner_path,
             runner=serve_isolated_instance.Runner(),
@@ -185,7 +185,7 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
 
 
 def _register(
-    app: FramedApp, repo_root: Path, overrides: dict[str, object] | None
+    app: FramedApp, repo_root: Path, overrides: forward_port.ManifestOverrides | None
 ) -> None:
     try:
         forward_port.register_manifest(

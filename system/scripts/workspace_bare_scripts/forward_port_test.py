@@ -1137,20 +1137,6 @@ def test_a_manifest_registration_with_overrides_lasts_until_the_next_plain_one(
     assert _read_apps(apps_file)[0] == plain_row
 
 
-def test_a_manifest_registration_refuses_an_override_of_a_key_no_manifest_owns(
-    tmp_path: Path,
-) -> None:
-    apps_file = tmp_path / "apps.toml"
-    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
-
-    with pytest.raises(forward_port.RegistrationError, match="label"):
-        forward_port.register_manifest(
-            apps_file, manifest, "http://localhost:8300", overrides={"label": "x"}
-        )
-
-    assert not apps_file.exists()
-
-
 def test_manifest_registration_with_a_matching_name_flag_is_accepted(
     tmp_path: Path,
 ) -> None:

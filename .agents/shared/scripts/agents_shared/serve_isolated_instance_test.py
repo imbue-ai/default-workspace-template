@@ -1278,7 +1278,7 @@ def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> N
     page = wrapper_mod.build_wrapper_html(
         "inbox",
         "Inbox",
-        kind=wrapper_mod.KIND_MOCK,
+        kind=wrapper_mod.FrameKind.MOCK,
         note="<b>Refresh</b> is not wired up",
     )
     preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
@@ -1288,8 +1288,6 @@ def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> N
     assert "<b>Refresh</b>" not in page
     assert '<span class="tag">Preview</span>' in preview_page
     assert 'class="preview-note"' not in preview_page
-    with pytest.raises(ValueError, match="kind must be one of"):
-        wrapper_mod.build_wrapper_html("inbox", "Inbox", kind="draft")
 
 
 def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
@@ -1388,7 +1386,7 @@ def _frame(
         frame_service_name=_FRAME_NAME,
         title="Inbox",
         display_name="Inbox (mock)",
-        kind=wrapper_mod.KIND_MOCK,
+        kind=wrapper_mod.FrameKind.MOCK,
         note=note,
         runner=runner or _RecordingRunner(),
         registry=registry or _RecordingRegistry(),
@@ -1599,7 +1597,7 @@ def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
         frame_service_name=_FRAME_NAME,
         title="Inbox",
         display_name="Inbox (mock)",
-        kind=wrapper_mod.KIND_MOCK,
+        kind=wrapper_mod.FrameKind.MOCK,
         note="Sample data; refresh does not work yet.",
         inner_path="/",
     )

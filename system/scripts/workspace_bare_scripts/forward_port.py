@@ -76,7 +76,7 @@ import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -1086,28 +1086,29 @@ def register(
         )
 
 
+class ManifestOverrides(TypedDict, total=False):
+    """The manifest-owned keys a registration may replace on an app's row."""
+
+    internal: bool
+    stop_when_no_windows: bool
+
+
 def register_manifest(
     path: Path,
     manifest_path: Path,
     url: str,
     *,
-    overrides: dict[str, object] | None = None,
+    overrides: ManifestOverrides | None = None,
 ) -> str:
     """Register the app ``manifest_path`` describes at ``url``, as ``--manifest`` does; return its name.
 
-    ``overrides`` replaces manifest-owned keys on the row for this registration only: the
+    ``overrides`` replaces the manifest's values on the row for this registration only: the
     next registration from the manifest alone (the app's own restart) writes the manifest's
-    values back. Raises RegistrationError when the manifest is refused or an override names
-    a key the manifest does not own.
+    values back. Raises RegistrationError when the manifest is refused.
     """
     manifest_fields, icon_path, manifest_error = _read_manifest(manifest_path, None)
     if manifest_error is not None:
         raise RegistrationError(manifest_error)
-    unknown_keys = sorted(set(overrides or {}) - set(_MANIFEST_OWNED_KEYS))
-    if unknown_keys:
-        raise RegistrationError(
-            f"overrides name keys a manifest does not own: {', '.join(unknown_keys)}"
-        )
     name = str(manifest_fields["name"])
     register(
         path,
