@@ -17,6 +17,10 @@
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
+/** The capsule of the Lucide "mic" glyph, which the chat's dictation button also draws filled to the input
+ *  level; the glyph is the capsule, its cradle, and its stand. */
+export const MIC_CAPSULE_PATH = "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z";
+
 // Inner markup for stroke-outline icons, all drawn on a 24x24 grid.
 const STROKE_PATHS = {
   attach:
@@ -27,6 +31,8 @@ const STROKE_PATHS = {
   pointer:
     '<path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2l.6 2.4"/><path d="M2.2 7.2l2.4.6"/><path d="M3.6 3.6l1.7 1.7"/>',
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
+  // Lucide "mic": the composer's dictation button.
+  mic: `<path d="${MIC_CAPSULE_PATH}"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>`,
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   // Lucide "user-plus": sharing grants people access by email, so the glyph
@@ -124,6 +130,12 @@ export interface IconOptions {
   // Draw the glyph solid instead of as an outline. Only sensible for shapes that read as a
   // silhouette -- the composer chip's "fast mode" bolt, which has to say "on" at 12px.
   filled?: boolean;
+}
+
+/** The paths of a stroke-outline icon alone, for a drawing that frames them itself (the dictation button draws
+ *  the mic over its own filled capsule) on the same 24x24 grid. */
+export function iconPaths(name: IconName): string {
+  return STROKE_PATHS[name];
 }
 
 /** Full <svg> string for a stroke-outline icon. */
