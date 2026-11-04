@@ -21,6 +21,7 @@ vi.hoisted(() => {
 });
 
 import type { Lane, ProviderAccount } from "../models/Providers";
+import type { RelayAnswer } from "../models/providerRelay";
 
 const state: {
   lanes: Lane[];
@@ -29,9 +30,10 @@ const state: {
   flow: unknown;
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
-const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
-const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<RelayAnswer> => "relaying"));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
+const abortFlow = vi.hoisted(() => vi.fn());
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
@@ -48,7 +50,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   startFlow,
   submitCode: async () => undefined,
   submitKey: async () => undefined,
-  abortFlow: () => undefined,
+  abortFlow,
   clearFlow: () => undefined,
 }));
 
@@ -56,7 +58,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
-import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
+import { MAX_SIGN_IN_PORT_DRAWS, PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -131,8 +133,9 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
 beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
+  abortFlow.mockClear();
   requestProviderRelay.mockReset();
-  requestProviderRelay.mockResolvedValue(true);
+  requestProviderRelay.mockResolvedValue("relaying");
   loadLanesAndAccountsWithRetry.mockReset();
   loadLanesAndAccountsWithRetry.mockResolvedValue(undefined);
   state.lanes = [lane()];
@@ -513,7 +516,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("shows Claude's paste-the-code steps when nothing relays", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
 
     const root = await clickLane("anthropic");
@@ -523,7 +526,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("falls back to ChatGPT's one-time code when nothing relays", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
 
@@ -534,7 +537,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("goes straight to ChatGPT's one-time code once nothing relays, rather than starting the browser login again", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
     const root = await clickLane("openai");
@@ -545,6 +548,130 @@ describe("a sign-in finished in the browser", () => {
     await settled();
 
     expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "device", "device"]);
+  });
+
+  function claudeRelayUrl(port: number): string {
+    return `https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A${port}%2Fcallback`;
+  }
+
+  /** The next sign-ins started draw these callback ports, one each, as Claude's CLI does. */
+  function drawClaudePorts(...ports: number[]): void {
+    for (const port of ports) {
+      startFlow.mockImplementationOnce(async () => {
+        state.flow = startedFlow("url_then_code", claudeRelayUrl(port));
+        return true;
+      });
+    }
+  }
+
+  it("starts the sign-in again when its callback port is taken, and waits on the browser once a port is free", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    drawClaudePorts(41907, 52318);
+
+    const root = await clickLane("anthropic");
+
+    expect(startFlow.mock.calls).toEqual([
+      ["anthropic", "subscription", undefined],
+      ["anthropic", "subscription", undefined],
+    ]);
+    expect(requestProviderRelay).toHaveBeenCalledTimes(2);
+    expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
+  });
+
+  it("says it is preparing the sign-in, not opening the browser, while it draws a fresh port", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    startFlow.mockResolvedValueOnce(true).mockImplementationOnce(() => new Promise(() => undefined));
+
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    // Let the chooser's own load settle first, since its end clears the busy flag.
+    await settled();
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(root.textContent).toContain("Preparing your sign-in.");
+  });
+
+  it("draws no fresh port once the user has gone back while the desktop app answered", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let answer: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (answer = resolve)));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    answer("port_taken");
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledOnce();
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+  });
+
+  it("hands the desktop app no fresh draw once the user has gone back while it started", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let started: () => void = () => undefined;
+    startFlow
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (started = () => resolve(true))));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    abortFlow.mockClear();
+    started();
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+    // The sign-in that started after Back belongs to nobody, so the chooser ends it.
+    expect(abortFlow).toHaveBeenCalledOnce();
+  });
+
+  it("ends no sign-in after going back when a newer start, perhaps another chooser's, overtook its own", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let overtaken: () => void = () => undefined;
+    startFlow
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (overtaken = () => resolve(false))));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    abortFlow.mockClear();
+    overtaken();
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+    expect(abortFlow).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
+    requestProviderRelay.mockResolvedValue("port_taken");
+    drawClaudePorts(41907, 52318, 60733);
+
+    const root = await clickLane("anthropic");
+
+    expect(startFlow).toHaveBeenCalledTimes(MAX_SIGN_IN_PORT_DRAWS);
+    expect(requestProviderRelay).toHaveBeenCalledTimes(MAX_SIGN_IN_PORT_DRAWS);
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+  });
+
+  it("falls back to ChatGPT's one-time code once a fresh sign-in lands on the port found taken", async () => {
+    requestProviderRelay.mockResolvedValue("port_taken");
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow(
+      "browser",
+      "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=s",
+    );
+
+    await clickLane("openai");
+
+    expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "chatgpt", "device"]);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
   });
 
   it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {
@@ -593,7 +720,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("shows no note on the one-time code, which does not need the setting", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };
 
@@ -617,7 +744,7 @@ describe("a sign-in finished in the browser", () => {
   it("moves to another way in when the desktop app can no longer open the page", async () => {
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
 
     (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
     await settled();
@@ -630,14 +757,14 @@ describe("a sign-in finished in the browser", () => {
   it("starts nothing when the desktop app's late answer to Try again comes after the user went back", async () => {
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
-    let answer: (isRelaying: boolean) => void = () => undefined;
-    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (answer = resolve)));
+    let answer: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (answer = resolve)));
 
     (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
     (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
     // What the real abortFlow does to the live flow.
     state.flow = null;
-    answer(false);
+    answer("unavailable");
     await settled();
 
     expect(startFlow).toHaveBeenCalledOnce();
@@ -647,14 +774,14 @@ describe("a sign-in finished in the browser", () => {
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
     const root = await clickLane("openai");
-    let cutShort: (isRelaying: boolean) => void = () => undefined;
-    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (cutShort = resolve)));
+    let cutShort: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (cutShort = resolve)));
 
     const tryAgain = root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement;
     tryAgain.click();
     tryAgain.click();
     // What the real requestProviderRelay does to an ask a newer one replaced.
-    cutShort(false);
+    cutShort("unavailable");
     await settled();
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
@@ -662,19 +789,22 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
   });
 
-  it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
-    state.lanes = [CHATGPT];
-    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
-    const root = await clickLane("openai");
-    requestProviderRelay.mockResolvedValue(false);
+  it.each<RelayAnswer>(["unavailable", "port_taken"])(
+    "stops offering ChatGPT's browser sign-in once the desktop app answers Try again with %s",
+    async (refusal) => {
+      state.lanes = [CHATGPT];
+      state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+      const root = await clickLane("openai");
+      requestProviderRelay.mockResolvedValue(refusal);
 
-    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
-    await settled();
-    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+      await settled();
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
-    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
-    expect(root.textContent).not.toContain("Use your ChatGPT plan (runs on Codex)");
-  });
+      expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+      expect(root.textContent).not.toContain("Use your ChatGPT plan (runs on Codex)");
+    },
+  );
 
   it("offers another way in after a sign-in fails", async () => {
     state.lanes = [CHATGPT];
@@ -698,6 +828,7 @@ describe("a sign-in finished in the browser", () => {
     requestProviderRelay.mockClear();
     startFlow.mockImplementationOnce(async () => {
       state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      return true;
     });
 
     (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
