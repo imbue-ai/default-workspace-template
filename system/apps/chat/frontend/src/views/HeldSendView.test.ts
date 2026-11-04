@@ -19,10 +19,16 @@ vi.mock("../models/OutgoingMessages", () => ({
   heldSendsLandedDuringSwitch: () => mocks.landed,
 }));
 
-import { chatSnapshotFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { renderHeldSends } from "./HeldSendView";
 
 const CHAT_ID = "agent-held";
+
+const HELD_SENDS = [
+  { message_id: "trigger-1", text: "Carry on on the other account" },
+  { message_id: "m-2", text: "and this" },
+  { message_id: "m-3", text: "and that" },
+];
 
 function renderedKeys(): unknown[] {
   return renderHeldSends(CHAT_ID).map((vnode) => vnode.key);
@@ -33,14 +39,7 @@ describe("renderHeldSends", () => {
     mocks.carriedMessageIds = new Set();
     mocks.landed = 0;
     mocks.chat = chatSnapshotFixture(CHAT_ID, {
-      handoff: rebindStateFixture({
-        phase: "switching",
-        held_sends: [
-          { message_id: "trigger-1", text: "Carry on on the other account" },
-          { message_id: "m-2", text: "and this" },
-          { message_id: "m-3", text: "and that" },
-        ],
-      }),
+      handoff: rebindStateFixture({ phase: "switching", held_sends: HELD_SENDS }),
     });
   });
 
@@ -54,6 +53,10 @@ describe("renderHeldSends", () => {
   });
 
   it("leaves a confirming message the switch marker carries out of the sends the landed turns account for", () => {
+    // Only a handoff's marker carries the confirming message, as the successor's opening turn.
+    mocks.chat = chatSnapshotFixture(CHAT_ID, {
+      handoff: handoffStateFixture({ phase: "switching", held_sends: HELD_SENDS }),
+    });
     mocks.carriedMessageIds = new Set(["trigger-1"]);
     mocks.landed = 1;
     expect(renderedKeys()).toEqual(["held-m-3"]);
