@@ -26,9 +26,9 @@ export type ShortcutRun =
 export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try again in a moment.";
 
 /** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. A focus run raises the app's
- *  most recently focused window rather than running a GET launch path; a POST launch path does something (the
- *  Screen's Browser opens the browser), so it always runs, and the focus target lands it in that window. An app the
- *  page does not know is ``connecting`` until the first app list lands, and unregistered after. */
+ *  most recently focused window rather than running a GET launch path; a POST launch path does something, so it
+ *  always runs, and the focus target lands it in that window. An app the page does not know is ``connecting`` until
+ *  the first app list lands, and unregistered after. */
 export function resolveLaunchRun(
   state: DesktopState,
   appName: string,
