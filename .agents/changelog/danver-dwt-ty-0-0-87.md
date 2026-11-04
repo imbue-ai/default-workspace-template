@@ -1,1 +1,1 @@
-The build-app scaffolder pins a new app's type-check ratchet to `ty` 0.0.87 (was 0.0.85), the version every committed project now uses.
+The build-app scaffolder pins a new app's type-check ratchet to `ty` 0.0.87 (was 0.0.85), the version every committed project now uses, and gives the app's `pyproject.toml` the workspace root's two-week supply-chain cooldown (`[tool.uv] exclude-newer = "14 days"`), since a scaffolded app is a standalone uv project that the root's setting does not reach.

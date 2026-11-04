@@ -277,6 +277,12 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["."]
 
+# Supply-chain cooldown, the workspace root's two-week window: a registry release is
+# adopted once it has been public this long, so a compromised release can be noticed
+# and yanked before a relock pulls it in.
+[tool.uv]
+exclude-newer = "14 days"
+
 # The workspace's shared code, live and editable. app-schema's own workspace sources
 # apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
 # here as well would be a second URL for one package, which uv refuses to lock.
