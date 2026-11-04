@@ -50,12 +50,14 @@ import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
+import { getEventsForChat } from "../models/Response";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
-import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
+import { railNodeAttrs } from "./agent-rail";
+import { AGENT_TEXT_EDGE_CLASS, STRETCH_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 import { formatElapsed, latestTurnSpan, type TurnSpan } from "./turnTiming";
@@ -86,8 +88,20 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
 }
 
 /** The in-flight tool caption, as labelled by the harness that produced the call. */
-function labelForToolCall(tc: ToolCall): string {
+export function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
+}
+
+/** The call the agent is running right now: the latest call with no result, while the backend reports a tool
+ *  running. Its chip shows it running in place of the status row (see `isRunningCallInline`). */
+export function runningToolCall(chatId: string): ToolCall | null {
+  if (getChatById(chatId)?.active_agent.activity_state !== "TOOL_RUNNING") return null;
+  return pendingToolCall(getEventsForChat(chatId));
+}
+
+/** How long the turn running a tool has run, as the status row would say it, or null before that is worth saying. */
+export function runningCallElapsed(chatId: string): string | null {
+  return elapsedSince(runningTurnStartedAt(chatId, "TOOL_RUNNING", true, getEventsForChat(chatId)), Date.now());
 }
 
 function compactingLead(cause: CompactionCause | null): string {
@@ -143,9 +157,12 @@ const WAKE_LABEL = "Confirming permission changes…";
 // server's activity states -- the server has no signal for this beat.
 const WAKE_STATE = "WAKING";
 
-// The row's place in the message column it sits in, spaced like a message so the reply that
-// replaces it does not move what is above it.
+// The row's place in the message column when it stands on its own, spaced like a message so the reply that
+// replaces it does not move what is above it, and on the bubbles' text edge.
 const STRIP_COLUMN_CLASS = `mb-5 ${AGENT_TEXT_EDGE_CLASS}`;
+
+// The row as the last piece of a stretch of the agent's output, which spaces it.
+const STRIP_STRETCH_CLASS = STRETCH_TEXT_EDGE_CLASS;
 
 // How long a turn (or a send waiting on the agent) runs before the row says how long it has run:
 // a quick answer needs no clock, a long one should show that it is still moving.
@@ -175,16 +192,19 @@ function renderStrip(
     "div",
     {
       class:
-        `agent-activity-indicator ${columnClass} flex min-h-5 items-center gap-2 pr-1 ` +
+        `agent-activity-indicator ${columnClass} flex min-h-5 items-center gap-1.5 pr-1 ` +
         "text-(length:--font-size-helper) text-secondary",
       "data-state": state,
       role: "status",
       "aria-live": "polite",
     },
     [
-      m("span", {
-        class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5", dotTone)}`,
-      }),
+      // The dot in an icon's box, so it sits on the stretch's line where a chip's icon does.
+      m(
+        "span",
+        { class: "flex size-[13px] shrink-0 items-center justify-center", ...railNodeAttrs("point") },
+        m("span", { class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5", dotTone)}` }),
+      ),
       label === null ? null : m("span", { class: "agent-activity-indicator__label truncate" }, label),
       elapsed === null
         ? null
@@ -318,6 +338,10 @@ const TOOL_CAPTION_MIN_MS = 700;
 interface ActivityIndicatorAttrs {
   chatId: string;
   events: TranscriptEvent[];
+  /** The row is the last piece of a stretch of the agent's output, on its line. */
+  isInStretch?: boolean;
+  /** The call the agent is running shows as a running chip in the stretch, so the row says nothing of it. */
+  isRunningCallInline?: boolean;
 }
 
 export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
@@ -440,6 +464,14 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     const turnStartedAt = runningTurnStartedAt(chatId, state, label !== null, events);
     const turnElapsed = elapsedSince(turnStartedAt, now);
     if (turnStartedAt !== null) scheduleTick(turnStartedAt, now);
+    if (state === "TOOL_RUNNING" && attrs.isRunningCallInline === true) {
+      // The chip says it, and keeps the clock this row schedules; nothing is held, so the row does not flash the
+      // caption back up once the call ends.
+      cancelRelease();
+      cancelWake();
+      heldToolCaption = null;
+      return null;
+    }
     if (state === "TOOL_RUNNING" && label !== null) {
       // Active tool -> (re)start the hold window; cancel any pending release.
       cancelRelease();
@@ -490,9 +522,10 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       cancelTick();
     },
     view(vnode) {
+      const columnClass = vnode.attrs.isInStretch === true ? STRIP_STRETCH_CLASS : STRIP_COLUMN_CLASS;
       const tasks = getChatById(vnode.attrs.chatId)?.active_agent.background_tasks ?? [];
-      if (tasks.length === 0) return activityStrip(vnode.attrs, STRIP_COLUMN_CLASS);
-      return m("div", { class: `agent-activity-stack ${STRIP_COLUMN_CLASS} flex flex-col gap-1` }, [
+      if (tasks.length === 0) return activityStrip(vnode.attrs, columnClass);
+      return m("div", { class: `agent-activity-stack ${columnClass} flex flex-col gap-1` }, [
         m(BackgroundTasksLine, { tasks }),
         activityStrip(vnode.attrs, ""),
       ]);

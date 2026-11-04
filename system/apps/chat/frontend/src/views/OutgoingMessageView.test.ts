@@ -17,7 +17,9 @@ describe("the optimistic outgoing bubble", () => {
     const row = root.querySelector(".outgoing-message");
     expect(row?.getAttribute("class")).not.toMatch(/opacity-/);
     expect(row?.querySelector(".message-user-bubble")?.getAttribute("class")).toBe(USER_BUBBLE_CLASS);
-    expect(row?.textContent).toBe("hello there");
+    expect(row?.querySelector(".message-user-bubble")?.textContent).toBe("hello there");
+    // Named like the turn it becomes, which opens a run of the viewer's own.
+    expect(row?.querySelector(".message-you")?.textContent).toBe("You");
   });
 
   it("keeps the committed user row's spacing, so consecutive sends stand apart", () => {

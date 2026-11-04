@@ -33,7 +33,7 @@ import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
   NOTICE_ROW_SPACING_CLASS,
-  USER_BUBBLE_CLASS,
+  USER_BUBBLE_CONTINUED_CLASS,
   USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
@@ -95,7 +95,9 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  renders identically to the optimistic outgoing bubble (see OutgoingMessageView), so a
  *  re-sent message stays continuously visible through the resend rather than blinking out
  *  (contract A1a); the backend drives the transition to the committed turn. */
-function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode {
+/** `isContinued`: the bubble carries on a run of the viewer's own bubbles (or sits in the queued group, whose header
+ *  names them), so it wears no "You" over it. */
+function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, isContinued: boolean): m.Vnode {
   const cls = classifyDecidedMessage(queued.content, queued);
   if (cls.kind === UserMessageKind.Notice) {
     // A notice being sent is drawn like the transcript row it becomes, as a sending bubble is.
@@ -113,12 +115,13 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
       key: `queued-${queued.queued_id}`,
       content: queued.content,
       isGroupSpaced: isInGroup,
+      isContinued,
     });
   }
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
   return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
+    m("div", { class: `${USER_BUBBLE_CONTINUED_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
   ]);
@@ -132,7 +135,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
  * the queued bubbles follow below. The group is a live mirror of the backend
  * snapshot -- it is never held or reconstructed on the frontend.
  */
-export function renderQueuedMessages(chatId: string): m.Vnode[] {
+export function renderQueuedMessages(chatId: string, isAfterOwnTurn = false): m.Vnode[] {
   const queued = getQueuedMessagesForChat(chatId);
   if (queued.length === 0) {
     return [];
@@ -146,7 +149,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   // identical markup to the optimistic ones they replace, so the handoff is invisible rather
   // than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
-    return queued.map((message) => renderQueuedBubble(message, false));
+    return queued.map((message, index) => renderQueuedBubble(message, false, isAfterOwnTurn || index > 0));
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
@@ -203,7 +206,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   return [
     m("div", { class: "queued-group mb-5 flex flex-col items-stretch gap-2", key: "queued-group" }, [
       header,
-      ...queued.map((message) => renderQueuedBubble(message, true)),
+      ...queued.map((message) => renderQueuedBubble(message, true, true)),
     ]),
   ];
 }

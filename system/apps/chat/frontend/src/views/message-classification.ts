@@ -150,7 +150,7 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
  *  is_meta injection) or relocated into an assistant-side block (a skill expansion). The
  *  rendering/rows layers use this to skip emitting a row.
  *
- *  Not "off the user rail": a notice draws inside the agent's bubble. */
+ *  Not "off the user rail": a notice draws in the stretch of the agent's output it lands in. */
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   const kind = classifyUserMessage(event).kind;
   return KIND_SPEC[kind].rail === Rail.None || kind === UserMessageKind.SkillExpansion;

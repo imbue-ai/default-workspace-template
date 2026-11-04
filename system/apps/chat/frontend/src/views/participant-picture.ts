@@ -10,7 +10,7 @@ import m from "mithril";
 
 /** The side of the face beside a turn's bubble, the agent's or another person's. The face and the gap beside it make
  *  up `--width-face-gutter` in style.css. */
-export const TURN_FACE_SIZE_PX = 36;
+export const TURN_FACE_SIZE_PX = 24;
 
 /** The column a turn's bubble starts in: one face and the gap beside it in from the row's edge (`--width-face-gutter`
  *  in style.css). A margin, so a row in the message list's stretching flex column keeps the column's right edge. */

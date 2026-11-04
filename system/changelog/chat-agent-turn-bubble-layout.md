@@ -1,1 +1,1 @@
-The shared frontend library (`system/libs/workspace_ui`) drops its `--width-agent-gutter` variable from `base.css`. Its one user, the chat transcript, now holds the agent's output in a bubble capped at the same width as a person's, so nothing reads the variable.
+The shared frontend library (`system/libs/workspace_ui`) drops its `--width-agent-gutter` variable from `base.css`. Its one user, the chat transcript, now caps the agent's bubbles and tool-call rows itself, so nothing reads the variable.

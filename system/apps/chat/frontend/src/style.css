@@ -12,16 +12,10 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-/* A turn's face (TURN_FACE_SIZE_PX, 36px) and the 8px gap beside it: a turn's bubble starts this far in
+/* A turn's face (TURN_FACE_SIZE_PX, 24px) and the 8px gap beside it: a turn's bubble starts this far in
    (views/participant-picture.ts). */
 :root {
-  --width-face-gutter: 44px;
-}
-
-/* The agent bubble's fill, made opaque: the translucent bubble grey over the chat background. The bubble paints it,
-   and so do the timeline pieces inside it that hide the thread behind them (bullets, inline runs). */
-@utility bg-agent-bubble {
-  background: linear-gradient(var(--color-bubble-other), var(--color-bubble-other)), var(--color-chat);
+  --width-face-gutter: 32px;
 }
 
 /* The chat root's list (root/ChatRail.ts): a chat that is working wears a dot that breathes,
@@ -99,16 +93,16 @@
    rather than a resizing spacer. The app only writes scrollTop for the discrete
    tail-follow and jump pins. */
 
-/* A system chip sits on the user's side of the column, except inside the agent's bubble, where it lines up with
-   the agent's text like the rest of the stretch. */
-.machine-bubble .message-system-collapsed {
-  align-items: flex-start;
-}
-
 .markdown-content {
   line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
+}
+
+/* The agent's prose bubble sets its text a little looser than the transcript's markdown elsewhere, as a person's
+   bubble does. */
+.machine-bubble .markdown-content {
+  line-height: 1.5;
 }
 
 .markdown-content p {

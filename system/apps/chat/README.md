@@ -1045,17 +1045,21 @@ workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
 app proxies from the shell -- asked at that path with the page's own query, its
 caching answer relayed -- so the page needs no second origin.
-Each stretch of the agent's output is one grey bubble under the workspace's name and
-picture: a stretch runs until a person speaks or another agent takes over, and holds
-the agent's prose, tool chips, cards, step timeline and the system notices among
-them, all starting on the bubble's text edge. A command a person runs in bash mode
-(`!ls`) and its output are theirs, not the agent's: they stand on the person's side
-and end the stretch (display `person_chip`). The reply the agent is still writing,
-and a switch the transcript does not show yet, join the last bubble while its
-stretch is open, and open a bubble of their own after a person's turn or a switch
-to another agent. The bubble is as wide as the widest thing in it, up to 80% of the
-row; the status line and done mark sit below it, on the same edge. People's and the
-agent's pictures are 36px.
+A stretch of the agent's output -- everything it does until a person speaks or another
+agent takes over -- sits under the workspace's name, once, with its picture beside the
+first piece. Each message's prose is a grey bubble of its own. Its tool chips, step
+timeline and the system notices among them sit on the chat between the bubbles, on the
+bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
+stretch, through the chip icons, step bullets and notice ticks, stopping short of each
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip (the
+working dot, the harness's caption, and how long the turn has run), and the status line,
+when there is one, is the stretch's last piece on the line; the done mark sits just under
+the stretch. A command a person runs in bash mode (`!ls`) and its output are theirs, not
+the agent's: they stand on the person's side and end the stretch (display `person_chip`).
+The reply the agent is still writing, and a switch the transcript does not show yet, end
+the last stretch while it is open, and open a stretch of their own after a person's turn
+or a switch to another agent. A run of one person's turns names them once, over its first
+bubble ("You" for the viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 

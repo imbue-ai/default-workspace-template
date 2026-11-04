@@ -653,32 +653,48 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_a_stretch_of_the_agents_output_is_one_bubble_with_its_work_on_its_text_edge(
-    tmp_path: Path, page: Page
-) -> None:
-    """A stretch of the agent's output is one bubble under one header, beside the agent's face, and its prose, tool
-    calls, system notices, step timeline and closing reply all start on the bubble's text edge."""
+def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tmp_path: Path, page: Page) -> None:
+    """A stretch of the agent's output sits under one header, beside the agent's face: each message's prose a bubble
+    of its own, and its tool calls, system notices and step timeline on the bubbles' text edge between them, threaded
+    by one line through the chip icons, ticks and bullets that never crosses a bubble."""
     with _running_e2e_server(tmp_path, session_events=_STEPPED_TURN_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
-        reply = chat.locator(".pv-final [data-agent-prose]")
-        expect(reply).to_have_text("Your workspace is on the new version.", timeout=15000)
-
+        bubbles = chat.locator("[data-machine-bubble]")
+        expect(bubbles).to_have_count(2, timeout=15000)
+        expect(bubbles.nth(0)).to_have_text("Checks all passed. Installing now.")
+        expect(bubbles.nth(1)).to_have_text("Your workspace is on the new version.")
         expect(chat.locator("[data-machine-header]")).to_have_count(1)
-        expect(chat.locator("[data-machine-bubble]")).to_have_count(1)
-        bubble = chat.locator("[data-machine-bubble]")
+        expect(chat.locator(".agent-rail-segment")).to_have_count(4)
+
         face = _box(chat.locator(".machine-face"))
-        assert face["right"] - face["left"] == 36, "the agent's face is not 36px wide"
-        assert _box(bubble)["left"] > face["right"], "the agent's bubble starts under its face, not beside it"
-        text_left = _box(bubble.locator("[data-agent-prose]").first)["left"]
-        assert text_left > _box(bubble)["left"], "the agent's text does not sit inside its bubble's padding"
-        for name, locator in (
-            ("the tool-call row", bubble.locator(".tool-chip-group").first),
-            ("the background task's notice", bubble.locator(".message-notice").first),
-            ("the step bullet", bubble.locator(".pv-tl-bullet").first),
-            ("the closing reply", reply),
-        ):
-            assert abs(_box(locator)["left"] - text_left) <= 1, f"{name} does not start on the text's edge"
+        first = _box(bubbles.nth(0))
+        assert face["right"] - face["left"] == 24, "the agent's face is not 24px wide"
+        assert abs(face["top"] - first["top"]) <= 1, "the agent's face is not level with its first bubble"
+        assert first["left"] > face["right"], "the agent's bubble starts under its face, not beside it"
+        assert bubbles.nth(0).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "4px"
+        assert bubbles.nth(1).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "18px"
+        for selector in (".tool-chip-group", ".message-notice", ".pv-tl-bullet"):
+            expect(chat.locator(f"[data-machine-bubble] {selector}")).to_have_count(0)
+
+        text_edge = first["left"] + 16
+        marks = (
+            ("the tool call's icon", chat.locator(".tool-chip-icon").first),
+            ("the background task's tick", chat.locator(".message-notice [data-rail-node]").first),
+            ("the step's bullet", chat.locator(".pv-tl-bullet [data-rail-node]").first),
+        )
+        line_x = text_edge + 6.5
+        for name, locator in marks:
+            box = _box(locator)
+            assert abs((box["left"] + box["right"]) / 2 - line_x) <= 1, f"{name} is not on the line"
+        bubble_boxes = [_box(bubbles.nth(i)) for i in range(2)]
+        for i in range(4):
+            segment = _box(chat.locator(".agent-rail-segment").nth(i))
+            assert abs((segment["left"] + segment["right"]) / 2 - line_x) <= 1, "a line segment is off the text edge"
+            for bubble in bubble_boxes:
+                assert segment["bottom"] <= bubble["top"] + 0.5 or segment["top"] >= bubble["bottom"] - 0.5, (
+                    "the line runs through a bubble"
+                )
 
 
 @pytest.mark.timeout(60, func_only=False)

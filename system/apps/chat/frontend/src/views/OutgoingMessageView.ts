@@ -17,9 +17,11 @@ import { UserMessageKind } from "./message-kinds";
 import {
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
+  USER_BUBBLE_CONTINUED_CLASS,
   USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
+  renderOwnSpeakerLabel,
 } from "./user-message-display";
 
 // The user rail's own recipes; the extra classes are bare markers for tests.
@@ -40,6 +42,9 @@ export interface NotYetRealBubble {
   extraRowClass?: string;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
+  /** The bubble carries on a run of the viewer's own turns, so it wears no "You" over it, as the turn it becomes
+   *  will not. */
+  isContinued?: boolean;
 }
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
@@ -58,23 +63,25 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
   if (isNotice) {
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
+  const isContinued = bubble.isContinued === true;
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
+    isContinued ? null : renderOwnSpeakerLabel(),
+    m("div", { class: isContinued ? USER_BUBBLE_CONTINUED_CLASS : USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
   ]);
 }
 
-function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
-  return renderNotYetRealBubble({
-    key: outgoing.id,
-    content: outgoing.content,
-    displayDecision: outgoing.displayDecision,
-  });
-}
-
 /** The optimistic outgoing bubbles for a chat, in send order. Returns [] when
- *  there are none. */
-export function renderOutgoingMessages(chatId: string): m.Vnode[] {
-  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
+ *  there are none. `isAfterOwnTurn`: the viewer's own turn is drawn just above, so
+ *  the first carries on its run. */
+export function renderOutgoingMessages(chatId: string, isAfterOwnTurn = false): m.Vnode[] {
+  return getOutgoingMessages(chatId).map((outgoing: OutgoingMessage, index) =>
+    renderNotYetRealBubble({
+      key: outgoing.id,
+      content: outgoing.content,
+      displayDecision: outgoing.displayDecision,
+      isContinued: isAfterOwnTurn || index > 0,
+    }),
+  );
 }

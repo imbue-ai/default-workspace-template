@@ -78,7 +78,8 @@ import {
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
-import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
+import { ActivityIndicator, runningToolCall, turnStatusPlacement } from "./ActivityIndicator";
+import { authorOfTurn } from "./user-message-display";
 import { TurnDoneMark } from "./TurnDoneMark";
 import type { TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
@@ -137,8 +138,9 @@ const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 /** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
  *  place; once the summary request is on the stream the rows carry it), then the reply the agent is still writing,
  *  while the window reaches the live end. Not a row of its own: a draft changes a few times a second, and a row
- *  would re-walk the whole held transcript on every change. */
-function renderAgentLiveTail(chatId: string): m.Vnode[] {
+ *  would re-walk the whole held transcript on every change. `opensStretch`: the nodes start a stretch of their own
+ *  rather than carry on the last row's. */
+function renderAgentLiveTail(chatId: string, opensStretch: boolean): m.Vnode[] {
   const handoffNode = renderHandoffTailNode(
     chatId,
     hasOpenHandoffRequest(getEventsForChat(chatId), getChatById(chatId)?.handoff ?? null),
@@ -146,24 +148,37 @@ function renderAgentLiveTail(chatId: string): m.Vnode[] {
   const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
   return [
     ...(handoffNode === null ? [] : [handoffNode]),
-    ...(draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)]),
+    ...(draft === null
+      ? []
+      : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, opensStretch && handoffNode === null)]),
   ];
 }
 
-/** Whether the last row's bubble holds the agent's output past the transcript: the row is an open stretch of the
- *  agent's output, and the held window reaches the live end, so no unloaded events lie between the two. */
+/** Whether the last row holds the live end of the transcript: the row is an open stretch of the agent's output, and
+ *  the held window reaches the live end, so no unloaded events lie between the two. */
 function isLiveTailInLastRow(chatId: string, rows: readonly RowDescriptor[]): boolean {
   return !hasMoreAfter(chatId) && (rows[rows.length - 1]?.takesLiveTail ?? false);
 }
 
-/** The agent's output past the transcript, when the last row does not hold it (the transcript ends on a person's
- *  turn or on a switch to another agent, or the window stops short of the live end): a stretch of its own. */
-function renderStandaloneLiveTail(chatId: string, rows: readonly RowDescriptor[]): m.Vnode[] {
-  return isLiveTailInLastRow(chatId, rows) ? [] : asAgentTurn(renderAgentLiveTail(chatId));
+/** Whether the call the agent is running shows as a running chip on the last row's line, which then says it in place
+ *  of the status row. */
+function isRunningCallInline(chatId: string, rows: readonly RowDescriptor[]): boolean {
+  const running = runningToolCall(chatId);
+  return (
+    running !== null &&
+    isLiveTailInLastRow(chatId, rows) &&
+    (rows[rows.length - 1]?.chipCallIds.has(running.tool_call_id) ?? false)
+  );
+}
+
+/** Whether the last row is the viewer's own turn, which a send of theirs drawn under it carries on the run of. */
+function isLastRowOwnTurn(rows: readonly RowDescriptor[]): boolean {
+  const turn = rows[rows.length - 1]?.speakerTurn ?? null;
+  return turn !== null && authorOfTurn(turn) === null;
 }
 
 /** The agent's nodes as a stretch of their own, or nothing when there are none. */
-function asAgentTurn(nodes: m.Vnode[]): m.Vnode[] {
+function asAgentTurn(nodes: m.Children[]): m.Vnode[] {
   return nodes.length === 0 ? [] : [renderAgentTurnRow("live-agent-turn", nodes)];
 }
 
@@ -439,6 +454,45 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return isRoomChat(chatId) ? [] : [renderTurnStatus(chatId, events)];
   }
 
+  /** The status row as the last piece of a stretch of the agent's output, on its line: nothing in a room, or while
+   *  the row stands under the user's own sends instead. */
+  function stretchStatusNodes(chatId: string, events: TranscriptEvent[], isCallInline: boolean): m.Children[] {
+    if (isRoomChat(chatId) || turnStatusPlacement(chatId) === "after-sends") return [];
+    return [
+      m(ActivityIndicator, {
+        key: "turn-status",
+        chatId,
+        events,
+        isInStretch: true,
+        isRunningCallInline: isCallInline,
+      }),
+    ];
+  }
+
+  /** The live end of the transcript when the last row does not hold it (the transcript ends on a person's turn or on
+   *  a switch to another agent, or the window stops short of the live end): the agent's output past the transcript as
+   *  a stretch of its own, the status row on its line, or the status row alone under the last row. */
+  function renderLiveEndAfterRows(
+    chatId: string,
+    events: TranscriptEvent[],
+    rows: readonly RowDescriptor[],
+  ): m.Children[] {
+    if (isLiveTailInLastRow(chatId, rows)) return [];
+    const agentNodes = renderAgentLiveTail(chatId, true);
+    if (agentNodes.length > 0) return asAgentTurn([...agentNodes, ...stretchStatusNodes(chatId, events, false)]);
+    return turnStatusPlacement(chatId) === "after-sends" ? [] : turnStatusNodes(chatId, events);
+  }
+
+  /** The viewer's sends not yet on the transcript, in the order they show: what the agent has queued, what the chat
+   *  app holds through a switch, then this page's own. The first wears "You" unless it carries on the viewer's turn
+   *  drawn above. */
+  function renderPendingSends(chatId: string, isAfterOwnTurn: boolean): m.Vnode[] {
+    const queued = renderQueuedMessages(chatId, isAfterOwnTurn);
+    const held = renderHeldSends(chatId, isAfterOwnTurn || queued.length > 0);
+    const outgoing = renderOutgoingMessages(chatId, isAfterOwnTurn || queued.length > 0 || held.length > 0);
+    return [...queued, ...held, ...outgoing];
+  }
+
   /** Messages already on their way to a chat with no transcript yet, with the row saying where they are. */
   function withTurnStatus(chatId: string, nodes: m.Children[]): m.Children[] {
     return nodes.length === 0 ? nodes : [...nodes, ...turnStatusNodes(chatId, [])];
@@ -683,9 +737,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       getEventCount(chatId) === 0
         ? [
             ...asAgentTurn([renderHandoffTailNode(chatId, false)].filter((node) => node !== null)),
-            ...renderQueuedMessages(chatId),
-            ...renderHeldSends(chatId),
-            ...renderOutgoingMessages(chatId),
+            ...renderPendingSends(chatId, false),
           ].filter((node) => node !== null)
         : [];
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
@@ -775,7 +827,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
-        () => (hasMoreAfter(chatId) ? [] : renderAgentLiveTail(chatId)),
+        () =>
+          hasMoreAfter(chatId)
+            ? []
+            : [
+                ...renderAgentLiveTail(chatId, false),
+                ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
+              ],
       );
       rowsCacheKey = renderKey;
     }
@@ -798,18 +856,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
-        // The agent's output past the transcript sits in the last row's bubble when that row is the
-        // agent's and ends the transcript; otherwise it is a stretch of its own.
-        ...renderStandaloneLiveTail(chatId, rows),
-        // The status row under the latest turn while the agent works on it, or that turn's done
-        // mark once it has finished; anything queued behind it follows.
-        ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
+        // The agent's output past the transcript and the status row end the last row's stretch when
+        // that row is the agent's and ends the transcript; otherwise they follow it.
+        ...renderLiveEndAfterRows(chatId, events, rows),
+        // The latest turn's done mark once it has finished; anything queued behind it follows, then
+        // the messages the chat app holds while the chat switches harness, then this page's own
+        // not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
-        ...renderQueuedMessages(chatId),
-        // The messages the chat app holds while the chat switches harness, then this page's
-        // own not-yet-delivered sends.
-        ...renderHeldSends(chatId),
-        ...renderOutgoingMessages(chatId),
+        ...renderPendingSends(chatId, isLastRowOwnTurn(rows)),
         // The status row under the user's own send while it waits on the agent.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),

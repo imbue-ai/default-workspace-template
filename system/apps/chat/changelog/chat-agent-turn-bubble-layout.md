@@ -1,5 +1,13 @@
-Each stretch of the agent's output is now one grey bubble, with the agent's name and face once at its top. A stretch runs until a person speaks or another agent takes over. Its prose, tool calls, step timeline, cards, and system notices such as a finished background task all sit inside the bubble, starting on the same left edge as the text. Before, each piece of text was its own bubble under its own name and face, and the tool calls and timeline sat at a different edge. The bubble is as wide as the widest thing in it, up to 80% of the row. A turn's closing reply below its steps is inside the bubble too, no longer plain text.
+The agent's side of the chat follows the multiplayer-chat prototype.
 
-A command you run in bash mode (`!ls`) and its output are yours, not the agent's: they stand on your side of the transcript and end the agent's stretch, carried as a new `person_chip` display kind.
+- The agent's name and face show once per stretch of its output, which runs until a person speaks or another agent takes over. Before, they repeated over every bubble that followed a tool call.
 
-The status line and done mark under the latest turn sit below the bubble, lined up with its text. The agent's face and other people's pictures beside their bubbles are 36px, up from 24px.
+- Each message's prose is a bubble. A turn's closing reply below its steps is now a bubble too, not plain text.
+
+- Tool calls, the step timeline and system notices sit between the bubbles on their text edge, 12px apart. A thin line runs through their icons, bullets and ticks.
+
+- The call the agent is running shows in its own chip, with the working dot and the turn's clock, in place of the status line. The status line joins the line as the stretch's last piece. The done mark is a small receipt just under the stretch.
+
+- "You" shows over the first of a run of your own messages. Another person's name and picture show once per run of theirs.
+
+- A command you run in bash mode (`!ls`) and its output stand on your side and end the agent's stretch, as a new `person_chip` display kind.

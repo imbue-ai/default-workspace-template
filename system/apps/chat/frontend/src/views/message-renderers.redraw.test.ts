@@ -80,7 +80,7 @@ beforeEach(() => {
   const event = authErrorEvent();
   const toolResults = new Map<string, ToolResultEvent>();
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
+    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1", isStretchHead: false }),
   });
 });
 
@@ -128,7 +128,7 @@ describe("the agent's header without a hand-cranked render", () => {
     };
     const toolResults = new Map<string, ToolResultEvent>();
     m.mount(document.getElementById("root") as HTMLElement, {
-      view: () => m("div", renderAgentTurn(renderAssistantMessage(event, toolResults, "chat-1"))),
+      view: () => m("div", renderAgentTurn([renderAssistantMessage(event, toolResults, "chat-1")])),
     });
     const header = (): HTMLElement | null => document.querySelector("[data-machine-header]");
     const face = (): HTMLElement | null => document.querySelector(".machine-face");

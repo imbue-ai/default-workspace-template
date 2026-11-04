@@ -42,9 +42,20 @@ function markdownContents(node: unknown): string[] {
   return [];
 }
 
-function renderInner(event: UserMessageEvent): m.Vnode {
+function renderInner(event: UserMessageEvent): m.Children {
   const comp = StableUserMessage();
-  return comp.view(m(StableUserMessage, { event })) as m.Vnode;
+  return comp.view(m(StableUserMessage, { event })) as m.Children;
+}
+
+/** The bubble a person's turn draws, without the name over it. */
+function renderBubble(event: UserMessageEvent): m.Vnode | undefined {
+  const inner = renderInner(event);
+  return (Array.isArray(inner) ? inner : [inner]).find(
+    (node): node is m.Vnode =>
+      typeof node === "object" &&
+      node !== null &&
+      String((node as m.Vnode<{ className?: string }>).attrs?.className ?? "").includes("message-user-bubble"),
+  );
 }
 
 describe("user-message-display system chips", () => {
@@ -97,7 +108,7 @@ describe("user-message-display status messages", () => {
       non_turn_tail: true,
     };
     expect(collectClasses(renderUserMessage(event))).toContain("message message-user flex flex-col items-end mb-5");
-    expect(allText(renderInner(event))).toBe("/compact");
+    expect(allText(renderBubble(event))).toBe("/compact");
   });
 });
 
@@ -119,14 +130,14 @@ describe("user-message-display prompt bubbles", () => {
   }
 
   it("shows only what the user typed when the chat app wrapped the send in context", () => {
-    const inner = renderInner(wrappedSend("1"));
+    const inner = renderBubble(wrappedSend("1"));
 
     expect(allText(inner)).toBe("1");
     expect(allText(inner)).not.toContain("chat-seed-context");
   });
 
   it("still renders the attachment a wrapped send carries, beside the words", () => {
-    const inner = renderInner(wrappedSend(`here you go\n\n${ATTACHMENT}`));
+    const inner = renderBubble(wrappedSend(`here you go\n\n${ATTACHMENT}`));
 
     expect(allText(inner)).toBe("here you go");
     expect(markdownContents(inner)).toEqual([ATTACHMENT]);
@@ -233,6 +244,36 @@ describe("user-message-display other people's turns", () => {
     const seenByVisitor = mounted(turn({ author: "owner", author_name: "Owner" }));
     expect(seenByVisitor.querySelector(".message-author")?.textContent).toBe("Josh");
     expect(seenByVisitor.querySelector("[data-author]")?.getAttribute("data-author")).toBe("user:owner-1");
+  });
+
+  it("names a run of one person's turns once, over its first bubble, and starts a new run for someone else", () => {
+    setParticipantsForTesting("user:owner-1", roster());
+    const bob = (id: string): UserMessageEvent => ({
+      ...turn({ author: "user:bob-2", author_name: "Bob" }),
+      event_id: id,
+    });
+    const own = (id: string): UserMessageEvent => ({ ...turn(null), event_id: id });
+    const render = (event: UserMessageEvent, previousTurn: UserMessageEvent | null): HTMLElement => {
+      const root = document.createElement("div");
+      m.render(root, renderUserMessage(event, false, previousTurn));
+      return root;
+    };
+
+    const bobsSecond = render(bob("b2"), bob("b1"));
+    expect(bobsSecond.querySelector(".message-author")).toBeNull();
+    expect(bobsSecond.querySelector("[data-participant-picture]")).toBeNull();
+    expect(bobsSecond.querySelector(".message-user-bubble")?.className).not.toContain("rounded-tl-[4px]");
+
+    const ownFirst = render(own("o1"), bob("b2"));
+    expect(ownFirst.querySelector(".message-you")?.textContent).toBe("You");
+    expect(ownFirst.querySelector(".message-user-bubble")?.className).toContain("rounded-br-[4px]");
+    const ownSecond = render(own("o2"), own("o1"));
+    expect(ownSecond.querySelector(".message-you")).toBeNull();
+    expect(ownSecond.querySelector(".message-user-bubble")?.className).not.toContain("rounded-br-[4px]");
+
+    const bobAgain = render(bob("b3"), own("o2"));
+    expect(bobAgain.querySelector(".message-author")?.textContent).toBe("Bob");
+    expect(bobAgain.querySelector(".message-user-bubble")?.className).toContain("rounded-tl-[4px]");
   });
 
   it("names an author the roster no longer lists by the name the turn carried", () => {

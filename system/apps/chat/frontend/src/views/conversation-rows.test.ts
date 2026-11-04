@@ -131,14 +131,15 @@ function vnodes(
   return [v, ...vnodes(v.children)];
 }
 
-/** The parts a stretch's row holds in its bubble, as the vnodes the row renders. */
+/** The parts a stretch's row holds down its column, as the vnodes the row renders (the line over them aside). */
 function turnParts(row: RowDescriptor): { key?: unknown; children?: unknown }[] {
-  const bubble = vnodes(row.render()).find((v) => v.attrs?.["data-machine-bubble"] !== undefined);
-  return bubble === undefined ? [] : (bubble.children as { key?: unknown }[]);
+  const column = vnodes(row.render()).find((v) => v.attrs?.["data-agent-stretch"] !== undefined);
+  if (column === undefined) return [];
+  return (column.children as { key?: unknown }[]).filter((child) => child.key !== "agent-rail");
 }
 
 /** The transcript as the list shows it: a person's turn by its key, a stretch of the agent's output by the keys of
- *  the parts in its bubble. */
+ *  its parts. */
 function layout(rows: RowDescriptor[]): (string | string[])[] {
   return rows.map((row) => (row.key.startsWith("turn-") ? turnParts(row).map((part) => String(part.key)) : row.key));
 }
@@ -329,7 +330,7 @@ describe("buildConversationRows", () => {
   });
 });
 
-describe("one bubble for each stretch of the agent's output", () => {
+describe("a stretch of the agent's output", () => {
   const STEP_DONE = "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Install the update";
 
   /** Each row mounted on its own, as the windowed list mounts it. */
@@ -343,7 +344,12 @@ describe("one bubble for each stretch of the agent's output", () => {
     return list;
   }
 
-  it("holds prose, tool work and more prose in one bubble under one header", () => {
+  /** The pieces on a stretch's line, by the kind each one is met as, in order. */
+  function railKinds(stretch: Element): string[] {
+    return [...stretch.querySelectorAll("[data-rail-node]")].map((node) => node.getAttribute("data-rail-node") ?? "");
+  }
+
+  it("draws each message's prose as a bubble of its own under one header, with its tool work between them", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
@@ -358,13 +364,18 @@ describe("one bubble for each stretch of the agent's output", () => {
     expect(layout(rows)).toEqual(["u-t1", ["a-t2", "a-t4"]]);
     const list = renderRows(rows);
     expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(1);
-    const bubbles = list.querySelectorAll("[data-machine-bubble]");
-    expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].querySelector(".tool-chip-group")).not.toBeNull();
-    expect(bubbles[0].textContent).toContain("The new version does move it.");
+    const bubbles = [...list.querySelectorAll("[data-machine-bubble]")];
+    expect(bubbles.map((bubble) => bubble.textContent?.trim())).toEqual([
+      "I'll check whether this version moves it.",
+      "The new version does move it.",
+    ]);
+    // Only the stretch's first bubble squares its corner toward the face.
+    expect(bubbles.map((bubble) => bubble.className.includes("rounded-tl-[4px]"))).toEqual([true, false]);
+    expect(list.querySelector("[data-machine-bubble] .tool-chip-group")).toBeNull();
+    expect(railKinds(list.querySelector("[data-agent-stretch]")!)).toEqual(["box", "chips", "box"]);
   });
 
-  it("starts a new bubble once the person speaks, but keeps a system notice inside the stretch's", () => {
+  it("starts a new stretch once the person speaks, keeping a system notice on the line of the stretch it lands in", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
@@ -381,7 +392,9 @@ describe("one bubble for each stretch of the agent's output", () => {
     expect(layout(rows)).toEqual(["u-t1", ["a-t2", "n1", "a-t6"], "u-t7", ["a-t8"]]);
     const list = renderRows(rows);
     expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(2);
-    expect(list.querySelector("[data-machine-bubble] .message-notice")).not.toBeNull();
+    const stretches = list.querySelectorAll("[data-agent-stretch]");
+    expect(railKinds(stretches[0])).toEqual(["box", "point", "box"]);
+    expect(stretches[0].querySelector("[data-machine-bubble] .message-notice")).toBeNull();
   });
 
   // Claude records a lone "\n\n" text block as its own line before the tool call's line lands.
@@ -420,10 +433,26 @@ describe("one bubble for each stretch of the agent's output", () => {
     );
 
     expect(layout(rows)).toEqual(["u-t1", ["a-t2"], "b1", "b2", ["a-t5"]]);
-    expect(renderRows(rows).querySelectorAll("[data-machine-bubble] .message-system-collapsed")).toHaveLength(0);
+    expect(renderRows(rows).querySelectorAll("[data-agent-stretch] .message-system-collapsed")).toHaveLength(0);
   });
 
-  it("puts the agent's output past the rows in the last bubble only while that stretch is open", () => {
+  it("names a run of the person's turns once: the turn just above is the one a turn carries on", () => {
+    const rows = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "one"), userMsg("t2", "two"), assistantText("t3", "ok", "end_turn"), userMsg("t4", "three")],
+      true,
+    );
+
+    expect(layout(rows)).toEqual(["u-t1", "u-t2", ["a-t3"], "u-t4"]);
+    const list = renderRows(rows);
+    // The viewer's own turns: "You" over the first of a run, and again once the agent has spoken between.
+    expect(
+      [...list.querySelectorAll(".message-user")].map((row) => row.querySelector(".message-you") !== null),
+    ).toEqual([true, false, true]);
+    expect(rows.map((row) => row.speakerTurn?.event_id ?? null)).toEqual(["u-t1", "u-t2", null, "u-t4"]);
+  });
+
+  it("puts the agent's output past the rows at the end of the last stretch only while that stretch is open", () => {
     const tail = (): m.Children[] => [m("div.live-tail", { key: "live" }, "still writing")];
     const open = buildConversationRows(
       "agent-1",
@@ -460,7 +489,7 @@ describe("one bubble for each stretch of the agent's output", () => {
     expect(afterPerson[afterPerson.length - 1].takesLiveTail).toBe(false);
   });
 
-  it("holds a turn's timeline, its prose and its closing reply in the one bubble", () => {
+  it("lays a turn's timeline, its prose and its closing reply on one line, the prose in bubbles of its own", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
@@ -479,12 +508,41 @@ describe("one bubble for each stretch of the agent's output", () => {
     expect(layout(rows)).toEqual(["u-t1", ["progress-section-u-t1"]]);
     const list = renderRows(rows);
     expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(1);
-    const bubbles = list.querySelectorAll("[data-machine-bubble]");
-    expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].querySelector(".pv--timeline")).not.toBeNull();
-    expect(bubbles[0].querySelector(".pv-final")?.textContent?.trim()).toBe("Your workspace is on the new version.");
-    expect(bubbles[0].textContent).toContain("Checks all passed. Installing now.");
-    expect(bubbles[0].textContent).toContain("The script moved in the update.");
+    const bubbles = [...list.querySelectorAll("[data-machine-bubble]")];
+    expect(bubbles.map((bubble) => bubble.textContent?.trim())).toEqual([
+      "Checks all passed. Installing now.",
+      "The script moved in the update.",
+      "Your workspace is on the new version.",
+    ]);
+    expect(bubbles[0].className).toContain("rounded-tl-[4px]");
+    expect(bubbles[2].closest(".pv-final")).not.toBeNull();
+    expect(railKinds(list.querySelector("[data-agent-stretch]")!)).toEqual([
+      "box",
+      "step",
+      "chips",
+      "box",
+      "chips",
+      "box",
+    ]);
+  });
+
+  it("records the calls its line shows as chips, and not the work inside a step", () => {
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "install the update"),
+        tkMsg("t2", "tk start cod-step-aaa", "c1"),
+        result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Install the update"),
+        toolMsg("t3", "c2", "Run the installer"),
+        tkMsg("t4", 'tk close cod-step-aaa "Installed"', "c3"),
+        result("c3", STEP_DONE),
+        toolMsg("t5", "c4", "Notify the user"),
+        agentMsg("t6", "c5", "Check the install"),
+      ],
+      false,
+    );
+
+    expect([...rows[rows.length - 1].chipCallIds]).toEqual(["c4"]);
   });
 });
 

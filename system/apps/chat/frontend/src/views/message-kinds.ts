@@ -51,10 +51,10 @@
 /** Which side / channel a message renders on. */
 export enum Rail {
   /** The "user" channel (`.message-user` / `.message-system-collapsed`): a person's bubble, or a system chip,
-   *  which sits on the agent bubble's text edge inside a stretch of the agent's output (a bash-mode command and
-   *  its output, the person's own, stand on their side instead). */
+   *  which sits on the bubbles' text edge in a stretch of the agent's output (a bash-mode command and its output,
+   *  the person's own, stand on their side instead). */
   User = "user",
-  /** The agent's channel, inside its bubble -- used when a user_message's content
+  /** The agent's channel, in a stretch of its output -- used when a user_message's content
    *  is relocated into an assistant-side block (e.g. a skill body folded into its
    *  `Tool: Skill` call). */
   Assistant = "assistant",
@@ -147,8 +147,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "COLLAPSED chip ('▸ <label>') at the point it arrived, inside the agent's " +
-      "bubble on its text edge, as part of the stretch it lands in. It is " +
+      "COLLAPSED chip ('▸ <label>') at the point it arrived, on the agent's " +
+      "bubbles' text edge, as a piece of the stretch it lands in. It is " +
       "not a turn of its own, but the timeline breaks at it: what the agent said " +
       "before stays above it, and the work it resumes (any open step carried " +
       "over) renders below it. Click to expand the raw body. Same " +
@@ -215,8 +215,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "A single line at the point it arrived, inside the agent's bubble on its " +
-      "text edge as part of the stretch it lands in, breaking the timeline " +
+      "A single line at the point it arrived, on the agent's bubbles' text " +
+      "edge as a piece of the stretch it lands in, its tick on the stretch's line, breaking the timeline " +
       "like a SystemChip: a tick, the lead in medium weight ('Background task " +
       "completed:'), then the summary in plain secondary text. Nothing to expand " +
       "-- the summary is the whole of it.",

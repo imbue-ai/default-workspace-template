@@ -16,16 +16,18 @@ import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
 
-export function renderHeldSends(chatId: string): m.Vnode[] {
+/** `isAfterOwnTurn`: the viewer's own turn is drawn just above, so the first carries on its run. */
+export function renderHeldSends(chatId: string, isAfterOwnTurn = false): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
   const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
-  return standing.map((held) =>
+  return standing.map((held, index) =>
     renderNotYetRealBubble({
       key: `held-${held.message_id}`,
       content: held.text,
       extraRowClass: "held-send",
       displayDecision: held,
+      isContinued: isAfterOwnTurn || index > 0,
     }),
   );
 }
@@ -39,7 +41,12 @@ export function renderProvisionalHeldSends(chatId: string): m.Vnode[] {
   const ownBubbleIds = new Set(getOutgoingMessages(chatId).map((outgoing) => outgoing.messageId));
   return provisional.held_sends
     .filter((held) => !ownBubbleIds.has(held.message_id))
-    .map((held) =>
-      renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
+    .map((held, index) =>
+      renderNotYetRealBubble({
+        key: `held-${held.message_id}`,
+        content: held.text,
+        extraRowClass: "held-send",
+        isContinued: index > 0,
+      }),
     );
 }
