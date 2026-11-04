@@ -95,7 +95,8 @@ export function labelForToolCall(tc: ToolCall): string {
 }
 
 /** The call the agent is running right now: the latest call with no result, while the backend reports a tool
- *  running. Its chip shows it running in place of the status row (see `isRunningCallInline`). */
+ *  running. Its chip on a stretch's line shows it running in place of the status row (see `isRunningCallInline`); a
+ *  chip in a step's opened work leaves it to the status row. */
 export function runningToolCall(chatId: string): ToolCall | null {
   if (getChatById(chatId)?.active_agent.activity_state !== "TOOL_RUNNING") return null;
   return pendingToolCall(getEventsForChat(chatId));
