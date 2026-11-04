@@ -521,7 +521,7 @@ class HeldSend(FrozenModel):
 
 
 class HeldSendSnapshot(DisplayDecisionFields, MessageAuthorFields):
-    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
+    """One message the chat app holds while the chat converges or is still being created, as the chat pages draw it."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
     text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
