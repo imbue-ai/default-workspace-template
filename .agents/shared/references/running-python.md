@@ -87,8 +87,9 @@ The code runs under one of two interpreters, and what it imports decides which:
   agent hooks on every tool call. Some code must run with no venv whatever it
   imports, so it stays in this tier:
   - no venv exists where it runs: the build steps before `uv sync`
-    (`build_workspace.sh`), publish-template's tools after their worktree
-    reset removes `.venv`;
+    (`build_workspace.sh`). publish-template's manifest tools also run after
+    their worktree reset removes `.venv`, but they need pydantic, so they run
+    under `uv run --no-project --with 'pydantic>=2'` instead;
   - the venv may be broken or mid-change: update-self, and the boot's recovery
     of an interrupted update;
   - the venv installs another copy of it: update-self's staged copy of the
