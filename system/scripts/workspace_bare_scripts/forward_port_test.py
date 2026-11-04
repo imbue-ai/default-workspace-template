@@ -1012,6 +1012,11 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             id="default-shortcut-array-entry-not-a-table",
         ),
         pytest.param(
+            "default_shortcut = []\n",
+            "default_shortcut, when declared, names at least one shortcut",
+            id="default-shortcut-empty-array",
+        ),
+        pytest.param(
             '[[message_handlers]]\ntype = "minds:focus-chat"\n',
             "every message handler needs exactly one of a string 'path' or 'show'",
             id="message-handler-without-a-path-or-show",

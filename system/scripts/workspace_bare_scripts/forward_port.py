@@ -690,6 +690,11 @@ def _copied_default_shortcuts(
     ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
     requires."""
     entries = shortcut if isinstance(shortcut, list) else [shortcut]
+    if not entries:
+        return (
+            None,
+            f"manifest {str(path)!r}: default_shortcut, when declared, names at least one shortcut",
+        )
     copied: list[dict[str, object]] = []
     for entry in entries:
         if not (
