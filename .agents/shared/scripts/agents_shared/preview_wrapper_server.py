@@ -5,9 +5,9 @@ browser origin, so by default it renders as a bare window -- visually
 indistinguishable from the live interface. This server wraps that inner
 service in a chrome page that frames it on all four sides: an accent border +
 a header label marking the window as a *preview of a proposed change* (or, for
-``--kind mock``, as an early *mock* of an app that is not finished yet, with an
-optional ``--note`` saying what is not real yet), with the inner service held in
-a bordered "stage" iframe inside that frame.
+``--kind mock``, as an early *UI sketch* of an app that is not finished yet, with
+an optional ``--note`` saying what is not real yet), with the inner service held
+in a bordered "stage" iframe inside that frame.
 
 It is deliberately service-agnostic. Given any inner service name already
 registered via ``forward_port.py``, plus a human-readable title, it serves the
