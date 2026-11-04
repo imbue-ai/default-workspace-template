@@ -10,10 +10,10 @@ a query string, an address or a header: caddy's access log (``caddyfile.py``) is
 """
 
 import json
-import os
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -24,11 +24,12 @@ from event_streams.archive import compress_staged_streams
 from event_streams.archive import stage_oversized_stream
 from event_streams.archive import staged_streams
 
+from share_gateway import agent_events
+from share_gateway.agent_events import EVENTS_FILENAME
 from share_gateway.log import log
 
 EVENT_SOURCE: Final[str] = "gateway_requests"
 EVENT_TYPE: Final[str] = "gateway_request_count"
-EVENTS_FILENAME: Final[str] = "events.jsonl"
 WINDOW_SECONDS: Final[int] = 60
 FLUSH_INTERVAL_SECONDS: Final[float] = 60.0
 # The most keys one window keeps; every further key of the window folds into ``OVERFLOW_REQUESTER_KIND``.
@@ -62,12 +63,12 @@ RequestKey = tuple[str, str, str, str, str]
 _OVERFLOW_KEY: Final[RequestKey] = ("", OVERFLOW_REQUESTER_KIND, "", "", OUTCOME_ALLOWED)
 
 
-def events_path_from_environ(environ: "os._Environ[str] | dict[str, str]") -> Path | None:
+def events_path_from_environ(environ: Mapping[str, str]) -> Path | None:
     """Where the feed is written, or None (and no counting) when the services agent's state dir is unset."""
-    state_dir = environ.get("MNGR_AGENT_STATE_DIR", "")
-    if not state_dir:
+    events_dir = agent_events.events_dir_from_environ(environ, EVENT_SOURCE)
+    if events_dir is None:
         return None
-    return Path(state_dir) / "events" / EVENT_SOURCE / EVENTS_FILENAME
+    return events_dir / EVENTS_FILENAME
 
 
 def classify_method(method: str, is_websocket_upgrade: bool) -> str:
