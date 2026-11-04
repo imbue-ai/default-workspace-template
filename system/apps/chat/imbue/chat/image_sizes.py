@@ -13,6 +13,8 @@ import struct
 from pathlib import Path
 from typing import NamedTuple
 
+from loguru import logger
+
 from imbue.imbue_common.pure import pure
 
 # Enough of the file for every header below but a JPEG's.
@@ -64,7 +66,8 @@ def read_image_size(path: Path) -> ImageSize | None:
             if head.startswith(b"\xff\xd8"):
                 image_file.seek(2)
                 return _jpeg_size(image_file.read(_JPEG_SCAN_BYTES))
-    except OSError:
+    except OSError as e:
+        logger.debug("Could not read the size of {}: {}", path, e)
         return None
     return _header_size(head)
 
