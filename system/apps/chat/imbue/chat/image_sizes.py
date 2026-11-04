@@ -2,8 +2,9 @@
 
 An uploaded image's size rides its stored path (see ``attachments.store_uploaded_file``), so a
 chat bubble can hold exactly the space the image will take before it loads. Only the header is
-read, for the formats a chat bubble draws inline: PNG, GIF, BMP, WebP, JPEG and SVG. A JPEG whose
-orientation tag turns it on its side reports its size turned, since that is how a browser draws it.
+read, for PNG, GIF, BMP, WebP, JPEG and SVG; the other formats a bubble draws inline (AVIF, ICO)
+keep an unsized path, and so the fixed-shape box. A JPEG whose orientation tag turns it on its
+side reports its size turned, since that is how a browser draws it.
 An SVG reports the size its root element declares (an absolute length such as ``pt`` or ``mm`` in
 CSS pixels), or its viewBox's when it declares none: an SVG with only a viewBox has no size of its
 own, and draws at nothing in a bubble that shrinks to fit. A size in a font-relative unit is not
