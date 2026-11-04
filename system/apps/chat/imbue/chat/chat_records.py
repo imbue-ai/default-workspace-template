@@ -153,11 +153,13 @@ class ChatTransitionRecord(FrozenModel):
         """The id minted for this switch; a runner that finds another id stops (the switch was called off)."""
         raise NotImplementedError
 
+    def shown_sends(self) -> tuple[HeldSend, ...]:
+        """The sends the switch has delivered and those it still holds, in order."""
+        return (*self.delivered_sends, *self.held_sends)
+
     def held_send_for(self, message_id: str) -> HeldSend | None:
         """The send under ``message_id`` the switch holds or has delivered, or None."""
-        return next(
-            (held for held in (*self.delivered_sends, *self.held_sends) if held.message_id == message_id), None
-        )
+        return next((held for held in self.shown_sends() if held.message_id == message_id), None)
 
     def is_trigger_listed(self) -> bool:
         """Whether the page lists the confirming message: the switch was made with one, and still holds it or has
@@ -170,9 +172,7 @@ class ChatTransitionRecord(FrozenModel):
 
     def shown_sends_after_trigger(self) -> tuple[HeldSend, ...]:
         """The sends the switch holds or has delivered, other than the confirming message, in order."""
-        return tuple(
-            held for held in (*self.delivered_sends, *self.held_sends) if held.message_id != self.trigger_message_id
-        )
+        return tuple(held for held in self.shown_sends() if held.message_id != self.trigger_message_id)
 
     def with_oldest_held_send_delivered(self) -> Self:
         """This switch with its oldest held send moved onto the delivered list, as it is taken to be delivered."""
