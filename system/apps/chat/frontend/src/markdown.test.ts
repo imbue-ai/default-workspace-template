@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import m from "mithril";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // lightbox touches the DOM imperatively; markdown.ts only needs its export to exist.
 vi.mock("./lightbox", () => ({ openImageLightbox: vi.fn() }));
@@ -161,6 +161,10 @@ describe("renderMarkdown links", () => {
 });
 
 describe("MarkdownContent images", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("holds a placeholder for an image until it loads, then lets its own size take over", () => {
     const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
 
@@ -244,6 +248,8 @@ describe("MarkdownContent images", () => {
   });
 
   it("draws an image this document uploaded from its local copy, at the size its path records", () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
     const path = `/code/uploads/${"c".repeat(32)}-800x600/photo.png`;
     rememberLocalImage(path, "blob:local-photo");
 
@@ -252,10 +258,7 @@ describe("MarkdownContent images", () => {
     expect(image.getAttribute("src")).toBe("blob:local-photo");
     expect(image.getAttribute("width")).toBe("800");
     expect(image.getAttribute("height")).toBe("600");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
     forgetLocalImage(path);
-    vi.unstubAllGlobals();
     expect(localImageUrl(path)).toBeUndefined();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:local-photo");
   });
