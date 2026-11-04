@@ -94,9 +94,11 @@ The code runs under one of two interpreters, and what it imports decides which:
     of an interrupted update;
   - the venv installs another copy of it: update-self's staged copy of the
     target release;
-  - something outside this release runs it as `python3 <path>`: Imbue Studio,
-    minds_evals and minds_admin (`background_tasks.py`), and the program lines
-    of apps users scaffolded (`forward_port.py`).
+  - something outside this release runs it as `python3 <path>`: Imbue Studio
+    (`background_tasks.py`, `message_chat.py`, the bug-report collector and
+    the other `system/scripts/` stubs it calls), minds_evals and minds_admin
+    (`background_tasks.py`), and the program lines of apps users scaffolded
+    (`forward_port.py`).
 - **Venv tier**: code that imports a third-party package, or a venv-tier
   package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
