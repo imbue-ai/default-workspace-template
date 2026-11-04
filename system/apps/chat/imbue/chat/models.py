@@ -853,7 +853,7 @@ class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
     Keyed by its chat id (the id mngr will give its first agent), listed among the chats, and pushed
-    to the chat pages verbatim as the ``provisional_chat_created`` message.
+    to the chat pages as the ``provisional_chat_created`` message in the form ``ProvisionalChatAsShown`` gives it.
     """
 
     chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")

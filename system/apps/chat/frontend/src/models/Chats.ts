@@ -198,7 +198,8 @@ export interface QueuedMessage extends DisplayDecision, MessageAuthor {
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
 export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
-/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
+/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat`` as its
+ *  ``ProvisionalChatAsShown`` sends it, its held sends as the page draws them. */
 export interface ProvisionalChat {
   chat_id: string;
   name: string;
