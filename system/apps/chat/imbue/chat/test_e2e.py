@@ -695,6 +695,8 @@ def test_another_persons_queued_message_is_drawn_under_their_name_without_the_pr
         queued = _chat(page).locator(".queued-message", has_text="actually also update the changelog")
         expect(queued).to_be_visible(timeout=15000)
         expect(queued).to_have_class(re.compile(r"message-other"))
+        # Joined to Bob's annotation: the prefix alone would name a synthetic ``name:Bob``.
+        expect(queued.locator("[data-author]")).to_have_attribute("data-author", "user:user-bob-4471")
         expect(queued.locator(".message-author")).to_have_text("Bob")
         expect(queued.locator("[data-participant-picture]")).to_have_text("B")
         expect(_chat(page).locator(".queued-group")).not_to_contain_text("[from:")
