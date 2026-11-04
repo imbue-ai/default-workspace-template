@@ -58,7 +58,7 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
         size = read_image_size(destination_path)
         if size is None:
             return destination_path
-        sized_subdirectory = uploads_directory / f"{unique_id}-{size[0]}x{size[1]}"
+        sized_subdirectory = uploads_directory / f"{unique_id}-{size.width}x{size.height}"
         unique_subdirectory.rename(sized_subdirectory)
     except OSError as e:
         raise AttachmentError(f"Could not store uploaded file '{original_filename}'") from e

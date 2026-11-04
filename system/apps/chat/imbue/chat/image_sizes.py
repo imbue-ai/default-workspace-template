@@ -11,6 +11,7 @@ with only a viewBox has no size of its own, and draws at nothing in a bubble tha
 import re
 import struct
 from pathlib import Path
+from typing import NamedTuple
 
 from imbue.imbue_common.pure import pure
 
@@ -46,7 +47,14 @@ _SVG_VIEWBOX_RE = re.compile(
 )
 
 
-def read_image_size(path: Path) -> tuple[int, int] | None:
+class ImageSize(NamedTuple):
+    """The width and height an image is drawn at, in CSS pixels."""
+
+    width: int
+    height: int
+
+
+def read_image_size(path: Path) -> ImageSize | None:
     """The width and height ``path`` is drawn at, or None when it is not an image read here."""
     try:
         with path.open("rb") as image_file:
@@ -62,7 +70,7 @@ def read_image_size(path: Path) -> tuple[int, int] | None:
 
 
 @pure
-def _header_size(head: bytes) -> tuple[int, int] | None:
+def _header_size(head: bytes) -> ImageSize | None:
     if head.startswith(_PNG_SIGNATURE) and len(head) >= 24:
         width, height = struct.unpack(">II", head[16:24])
         return _positive(width, height)
@@ -79,7 +87,7 @@ def _header_size(head: bytes) -> tuple[int, int] | None:
 
 
 @pure
-def _webp_size(head: bytes) -> tuple[int, int] | None:
+def _webp_size(head: bytes) -> ImageSize | None:
     chunk = head[12:16]
     if chunk == b"VP8 " and len(head) >= 30:
         width, height = struct.unpack("<HH", head[26:30])
@@ -93,7 +101,7 @@ def _webp_size(head: bytes) -> tuple[int, int] | None:
 
 
 @pure
-def _jpeg_size(body: bytes) -> tuple[int, int] | None:
+def _jpeg_size(body: bytes) -> ImageSize | None:
     """The size from a JPEG's markers (``body`` starts after its start-of-image), turned by its orientation."""
     orientation = 1
     offset = 0
@@ -148,7 +156,7 @@ def _exif_orientation(tiff: bytes) -> int | None:
 
 
 @pure
-def _svg_size(text: str) -> tuple[int, int] | None:
+def _svg_size(text: str) -> ImageSize | None:
     """The size an SVG's root element declares; a missing side follows its viewBox's shape."""
     root = _SVG_ROOT_RE.search(text)
     if root is None:
@@ -174,5 +182,5 @@ def _svg_size(text: str) -> tuple[int, int] | None:
 
 
 @pure
-def _positive(width: int, height: int) -> tuple[int, int] | None:
-    return (width, height) if width > 0 and height > 0 else None
+def _positive(width: int, height: int) -> ImageSize | None:
+    return ImageSize(width, height) if width > 0 and height > 0 else None
