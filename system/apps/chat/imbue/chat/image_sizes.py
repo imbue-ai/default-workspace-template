@@ -8,6 +8,7 @@ An SVG reports the size its root element declares, or its viewBox's when it decl
 with only a viewBox has no size of its own, and draws at nothing in a bubble that shrinks to fit.
 """
 
+import math
 import re
 import struct
 from pathlib import Path
@@ -171,17 +172,25 @@ def _svg_size(text: str) -> ImageSize | None:
     width = float(width_match.group(1)) if width_match else None
     height = float(height_match.group(1)) if height_match else None
     if width is not None and height is not None:
-        return _positive(round(width), round(height))
+        return _rounded_size(width, height)
     if viewbox_match is None:
         return None
     viewbox_width, viewbox_height = float(viewbox_match.group(1)), float(viewbox_match.group(2))
     if viewbox_width <= 0 or viewbox_height <= 0:
         return None
     if width is not None:
-        return _positive(round(width), round(width * viewbox_height / viewbox_width))
+        return _rounded_size(width, width * viewbox_height / viewbox_width)
     if height is not None:
-        return _positive(round(height * viewbox_width / viewbox_height), round(height))
-    return _positive(round(viewbox_width), round(viewbox_height))
+        return _rounded_size(height * viewbox_width / viewbox_height, height)
+    return _rounded_size(viewbox_width, viewbox_height)
+
+
+@pure
+def _rounded_size(width: float, height: float) -> ImageSize | None:
+    # A length too long to hold in a float reads as infinite, and says nothing about the drawn size.
+    if not (math.isfinite(width) and math.isfinite(height)):
+        return None
+    return _positive(round(width), round(height))
 
 
 @pure

@@ -119,6 +119,8 @@ def test_a_stroke_width_is_not_read_as_an_svg_width(tmp_path: Path) -> None:
         '<svg width="100%" height="100%"></svg>',
         '<svg width="10em" height="5em"></svg>',
         "<html>not an svg</html>",
+        f'<svg width="{"9" * 400}" height="10"></svg>',
+        f'<svg width="1{"0" * 300}" viewBox="0 0 1 1{"0" * 300}"></svg>',
     ],
 )
 def test_an_svg_that_declares_no_drawn_size_has_none(tmp_path: Path, svg: str) -> None:
