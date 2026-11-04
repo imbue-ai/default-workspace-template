@@ -21,8 +21,6 @@ class CallbackServer(http.server.HTTPServer):
 
 
 class Callback(http.server.BaseHTTPRequestHandler):
-    server: CallbackServer
-
     def do_GET(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         ok = query.get("state") == [state] and query.get("code") == ["the-code"]
@@ -30,6 +28,7 @@ class Callback(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", "https://platform.claude.com/oauth/code/success")
         self.send_header("Content-Length", "0")
         self.end_headers()
+        assert isinstance(self.server, CallbackServer)
         self.server.succeeded = ok
 
     def log_message(self, format: str, *args: object) -> None:

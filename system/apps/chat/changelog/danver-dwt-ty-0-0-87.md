@@ -1,0 +1,1 @@
+The type-check ratchet runs `ty` 0.0.87 (was 0.0.85). 0.0.87 rejects a request handler that re-declares the `server` attribute it inherits with a narrower type, and its two findings are fixed: the stand-in sign-in CLI's callback handler and the sign-in relay tests' listener check the server's type where they use it instead of re-declaring the attribute.
