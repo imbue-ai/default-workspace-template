@@ -507,7 +507,7 @@ describe("opening", () => {
   it("a launch-path row of a one-window app lands in the window the desktop holds, whichever client opened it", async () => {
     api.apps = [
       appRecord("screen", {
-        default_shortcut: { launch: "screen", mode: "focus" },
+        default_shortcuts: [{ launch: "screen", mode: "focus" }],
         launch_paths: [launchPathRecord({ id: "screen", label: "Screen", path: "/" })],
       }),
     ];
@@ -537,7 +537,7 @@ describe("opening", () => {
 
   it("a launch-path row opens a new window, or raises the pinned window when its path is the pin's", async () => {
     const store = await storeWithPinnedBuddy();
-    socket.deliver().onAppsUpdated([appRecord("docs", { default_shortcut: { launch: "new", mode: "new" } })]);
+    socket.deliver().onAppsUpdated([appRecord("docs", { default_shortcuts: [{ launch: "new", mode: "new" }] })]);
     await store.runLaunchRow("docs", "new");
     expect(api.calls).toContain("launch:home:docs:new:{}:new");
     socket.deliver().onAppsUpdated([
@@ -2883,7 +2883,7 @@ describe("the phone layout", () => {
     api.apps = [
       ...api.apps,
       appRecord("sheets", {
-        default_shortcut: null,
+        default_shortcuts: [],
         launch_paths: [
           launchPathRecord({ id: "ask", label: "Ask sheets", params: ["message"], text_param: "message" }),
           launchPathRecord({ id: "open", label: "Open sheets", path: "/" }),

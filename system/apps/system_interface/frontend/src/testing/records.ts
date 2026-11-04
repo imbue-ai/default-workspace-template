@@ -69,7 +69,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     critical: false,
     stop_when_no_windows: false,
     launch_paths: [launchPathRecord({ label: `New ${name}` })],
-    default_shortcut: { launch: "new", mode: "focus" },
+    default_shortcuts: [{ launch: "new", mode: "focus" }],
     launcher_rank: null,
     pin: null,
     message_handlers: [],

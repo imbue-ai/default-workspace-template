@@ -68,9 +68,9 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.icon == "icon.svg"
     assert manifest.priority == "files"
     assert manifest.program == "files"
-    assert manifest.default_shortcut is not None
-    assert manifest.default_shortcut.mode is ShortcutMode.FOCUS
-    assert manifest.default_shortcut.launch == "new"
+    assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
+        ("new", ShortcutMode.FOCUS)
+    ]
     assert [
         (launch_path.id, launch_path.path) for launch_path in manifest.launch_paths
     ] == [("new", "/")]
@@ -747,8 +747,7 @@ def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_pa
             "default_shortcut": {"launch": "open", "mode": "focus"},
         }
     )
-    assert rooted.default_shortcut is not None
-    assert rooted.default_shortcut.launch == "open"
+    assert [shortcut.launch for shortcut in rooted.default_shortcuts] == ["open"]
 
     with pytest.raises(ValidationError, match="default_shortcut.launch"):
         AppManifest.model_validate(
@@ -760,6 +759,53 @@ def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_pa
                 "default_shortcut": {"launch": "open", "mode": "focus"},
             }
         )
+
+
+def _two_launch_path_manifest_data(default_shortcut: object) -> dict[str, object]:
+    return {
+        "name": "screen",
+        "display_name": "Screen",
+        "icon": "icon.svg",
+        "launch_paths": [
+            {"id": "screen", "label": "Screen", "path": "/"},
+            {"id": "browser", "label": "Browser", "path": "/launch/browser", "method": "POST"},
+        ],
+        "default_shortcut": default_shortcut,
+    }
+
+
+def test_an_array_of_default_shortcuts_seeds_each_in_order() -> None:
+    manifest = AppManifest.model_validate(
+        _two_launch_path_manifest_data(
+            [{"launch": "screen", "mode": "focus"}, {"launch": "browser", "mode": "new"}]
+        )
+    )
+
+    assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
+        ("screen", ShortcutMode.FOCUS),
+        ("browser", ShortcutMode.NEW),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("default_shortcut", "message"),
+    [
+        ([], "at least one shortcut"),
+        (
+            [{"launch": "screen", "mode": "focus"}, {"launch": "screen", "mode": "new"}],
+            "launches must be unique",
+        ),
+        (
+            [{"launch": "screen", "mode": "focus"}, {"launch": "other", "mode": "new"}],
+            "default_shortcut.launch 'other'",
+        ),
+    ],
+)
+def test_an_array_of_default_shortcuts_is_checked_shortcut_by_shortcut(
+    default_shortcut: object, message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AppManifest.model_validate(_two_launch_path_manifest_data(default_shortcut))
 
 
 def test_default_shortcut_requires_a_launch() -> None:
@@ -787,7 +833,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.priority == "user"
     assert manifest.program == "news"
     assert manifest.internal is False
-    assert manifest.default_shortcut is None
+    assert manifest.default_shortcuts == ()
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
     assert manifest.pin is None

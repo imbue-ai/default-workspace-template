@@ -47,7 +47,9 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
+from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
@@ -79,7 +81,8 @@ def registry_row_toml(
     is_critical: bool = False,
     is_internal: bool = False,
     is_system: bool = False,
-    default_shortcut: tuple[str, str] | None = None,
+    # Each default shortcut as ``(launch, mode)``.
+    default_shortcuts: Sequence[tuple[str, str]] = (),
     display_name: str | None = None,
     label: str = "",
     launcher_rank: int | None = None,
@@ -106,8 +109,7 @@ def registry_row_toml(
     shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
     theming_mode: str | None = None,
 ) -> str:
-    """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
-    ``default_shortcut`` is ``(launch, mode)``."""
+    """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads."""
     lines = [
         "[[apps]]",
         f'name = "{name}"',
@@ -123,8 +125,9 @@ def registry_row_toml(
         lines.append(f'program = "{program}"')
     if launcher_rank is not None:
         lines.append(f"launcher_rank = {launcher_rank}")
-    if default_shortcut is not None:
-        lines.append(f'default_shortcut = {{ launch = "{default_shortcut[0]}", mode = "{default_shortcut[1]}" }}')
+    if default_shortcuts:
+        shortcuts = ", ".join(f'{{ launch = "{launch}", mode = "{mode}" }}' for launch, mode in default_shortcuts)
+        lines.append(f"default_shortcuts = [{shortcuts}]")
     if pin is not None:
         path, style, scope, default_mode = pin
         lines.append(
@@ -184,12 +187,12 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             "terminal",
             TEST_TERMINAL_URL,
             program="terminal",
-            default_shortcut=("new", "new"),
+            default_shortcuts=[("new", "new")],
             launch_paths=[("new", "New terminal", "/new")],
             launch_params={"new": ["workdir"]},
             window_closed_path=TEST_TERMINAL_WINDOW_CLOSED_PATH,
         ),
-        registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
+        registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcuts=[("open", "focus")]),
         *extra_rows,
     )
 
@@ -210,14 +213,14 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
             is_system=True,
             display_name="Getting Started",
             launcher_rank=15,
-            default_shortcut=("open", "focus"),
+            default_shortcuts=[("open", "focus")],
         ),
         registry_row_toml(
             "files",
             TEST_FILES_URL,
             display_name="Files",
             launcher_rank=20,
-            default_shortcut=("new", "new"),
+            default_shortcuts=[("new", "new")],
             launch_paths=[("new", "Files", "/home/user/workspace/")],
         ),
         registry_row_toml(
@@ -225,7 +228,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
             "http://localhost:7500",
             is_system=True,
             launcher_rank=30,
-            default_shortcut=("new", "focus"),
+            default_shortcuts=[("new", "focus")],
             launch_paths=[("new", "Browser", "/new")],
             launch_methods={"new": "POST"},
         ),
@@ -235,7 +238,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
             is_critical=True,
             is_system=True,
             launcher_rank=40,
-            default_shortcut=("new", "new"),
+            default_shortcuts=[("new", "new")],
             launch_paths=[("new", "Terminal", "/new")],
             launch_methods={"new": "POST"},
         ),
@@ -250,7 +253,7 @@ def builtin_chat_row_toml() -> str:
         is_critical=True,
         is_system=True,
         launcher_rank=10,
-        default_shortcut=("root", "new"),
+        default_shortcuts=[("root", "new")],
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
         launch_methods={"new": "POST"},
         pin=("/", "avatar", "independent", "floating"),
@@ -280,6 +283,19 @@ def write_desktops_file(state_directory: Path, *desktops: Desktop) -> None:
 
 def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
     return json.loads((state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())
+
+
+def offered_targets_recorded(state_directory: Path) -> list[tuple[str, str]]:
+    """The ``(app, launch)`` of every target ``default_shortcuts_offered.json`` records, in its order, after checking
+    it is the current version."""
+    record = read_default_shortcuts_offered(state_directory)
+    assert record["version"] == DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
+    return [(target["app"], target["launch"]) for target in record["targets"]]
+
+
+def default_target_pairs(rows: Sequence[RegistryRow]) -> list[tuple[str, str]]:
+    """The ``(app, launch)`` of every default shortcut ``rows`` seed a desktop with, sorted as the record keeps them."""
+    return sorted((str(target.app), str(target.launch)) for target in default_shortcut_targets(rows))
 
 
 # The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop.

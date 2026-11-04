@@ -501,7 +501,7 @@ def test_desktops_and_list_read_the_inventory_document(
     files = fake_app(
         "files",
         launch_paths=[new_viewer],
-        default_shortcut=DefaultShortcut(launch=LaunchPathId("new"), mode=ShortcutMode.FOCUS),
+        default_shortcuts=[DefaultShortcut(launch=LaunchPathId("new"), mode=ShortcutMode.FOCUS)],
     )
     shortcuts = [
         {

@@ -201,7 +201,7 @@ _LISTED_CLIENT_FIELDS: Final[tuple[str, ...]] = (
     "shown_history",
     "last_seen",
 )
-_LISTED_APP_FIELDS: Final[tuple[str, ...]] = ("name", "display_name", "is_running", "launch_paths", "default_shortcut")
+_LISTED_APP_FIELDS: Final[tuple[str, ...]] = ("name", "display_name", "is_running", "launch_paths", "default_shortcuts")
 
 # A read answers from memory and the state files; an ``open`` waits on nothing slower than a
 # file write either, but keeps a wider bound for a shell busy with a client's save.

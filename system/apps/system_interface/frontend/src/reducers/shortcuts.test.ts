@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  layoutRecord,
+  placementRecord,
+  windowRecord,
+} from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 import { cellForAddedShortcut, nextDesktopName, resolveLaunchRun } from "./shortcuts";
@@ -30,6 +37,33 @@ describe("resolveLaunchRun", () => {
       layout: layoutRecord([placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })]),
     });
     expect(resolveLaunchRun(state, "docs", "new", "focus")).toEqual({ kind: "raise", windowId: "win-1" });
+  });
+
+  it("a focus shortcut of a POST launch path runs it even with a window to focus, landing in that window", () => {
+    const screen = appRecord("screen", {
+      launch_paths: [
+        launchPathRecord({ id: "screen", path: "/" }),
+        launchPathRecord({ id: "browser", path: "/launch/browser", method: "POST" }),
+      ],
+      default_shortcuts: [
+        { launch: "screen", mode: "focus" },
+        { launch: "browser", mode: "focus" },
+      ],
+    });
+    const viewing = desktopRecord("home", { windows: [windowRecord("win-9", "screen", "/")] });
+    const state = [
+      { type: "apps_updated", apps: [screen] } as DesktopEvent,
+      { type: "desktops_updated", desktops: [viewing] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+      { type: "layout_loaded", desktopId: "home", layout: layoutRecord([placementRecord("win-9")]) } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+
+    expect(resolveLaunchRun(state, "screen", "screen", "focus")).toEqual({ kind: "raise", windowId: "win-9" });
+    expect(resolveLaunchRun(state, "screen", "browser", "focus")).toEqual({
+      kind: "open",
+      app: "screen",
+      launch: "browser",
+    });
   });
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {

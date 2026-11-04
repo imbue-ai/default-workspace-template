@@ -96,7 +96,7 @@ export type LaunchRowKind = "text" | "focus" | "one" | "new";
 export function launchRowKindOf(app: AppRecord, launchPath: LaunchPath): LaunchRowKind {
   if (fillParamOf(launchPath) !== null) return "text";
   if (app.pin !== null && launchPath.method === "GET" && launchPath.path === app.pin.path) return "focus";
-  if (app.pin === null && app.default_shortcut?.mode === "focus") return "one";
+  if (app.pin === null && app.default_shortcuts[0]?.mode === "focus") return "one";
   return "new";
 }
 
@@ -119,22 +119,23 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
 }
 
-/** The app's one desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6):
- *  its ``default_shortcut`` when that names a launch path it offers, whether or not that path takes text; else, for
- *  an app a program runs, its first launch path taking no text, no mention, and no app, or its first when every one
- *  takes one, focusing. An internal app has none, and so does a row with no program (a preview frame, an isolated
- *  test server) that declares none. */
-export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
-  if (app.internal) return null;
-  const declared = app.default_shortcut;
-  if (declared !== null) return launchPathOf(app, declared.launch) === null ? null : declared;
-  if (app.program === "") return null;
+/** The app's desktop shortcuts, by the rule the shell seeds desktops with (desktop-interface plan section 3.6): each
+ *  of its ``default_shortcuts`` that names a launch path it offers, whether or not that path takes text; else, for an
+ *  app a program runs that declares none, its first launch path taking no text, no mention, and no app, or its first
+ *  when every one takes one, focusing. An internal app has none, and so does a row with no program (a preview frame,
+ *  an isolated test server) that declares none. */
+export function appShortcutsOf(app: AppRecord): readonly DefaultShortcut[] {
+  if (app.internal) return [];
+  if (app.default_shortcuts.length > 0) {
+    return app.default_shortcuts.filter((shortcut) => launchPathOf(app, shortcut.launch) !== null);
+  }
+  if (app.program === "") return [];
   const first =
     app.launch_paths.find(
       (launchPath) =>
         fillParamOf(launchPath) === null && launchPath.mention_param === null && launchPath.app_params === null,
     ) ?? app.launch_paths[0];
-  return first === undefined ? null : { launch: first.id, mode: "focus" };
+  return first === undefined ? [] : [{ launch: first.id, mode: "focus" }];
 }
 
 /** The params a free-text row launches with: the text as its fill param; none for empty text. */

@@ -118,7 +118,7 @@ def fake_desktop(
 def fake_app(
     name: str,
     launch_paths: Sequence[RegistryLaunchPath] = (),
-    default_shortcut: DefaultShortcut | None = None,
+    default_shortcuts: Sequence[DefaultShortcut] = (),
     is_internal: bool = False,
 ) -> InventoryApp:
     """A running app of the inventory, named for itself, served on a loopback port nothing listens on."""
@@ -133,7 +133,7 @@ def fake_app(
         critical=False,
         stop_when_no_windows=False,
         launch_paths=tuple(launch_paths),
-        default_shortcut=default_shortcut,
+        default_shortcuts=tuple(default_shortcuts),
         launcher_rank=None,
         pin=None,
         message_handlers=(),

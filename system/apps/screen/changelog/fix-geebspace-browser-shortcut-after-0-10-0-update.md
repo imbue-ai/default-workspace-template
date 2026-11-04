@@ -1,0 +1,1 @@
+The Screen declares two default desktop shortcuts, Screen and Browser, so the desktop has the same two entries as the launcher. A workspace that already had the Screen shortcut gets the Browser one added once.

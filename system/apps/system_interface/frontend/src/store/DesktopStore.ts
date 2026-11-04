@@ -33,7 +33,7 @@ import {
   NO_TEXT_APP_REASON,
   appChatLaunchOf,
   appChatParams,
-  appShortcutOf,
+  appShortcutsOf,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -1014,7 +1014,7 @@ export class DesktopStore {
   }
 
   /** A home tile's tap: the app's window on this client's desktop nearest the top of its stack, else its newest
-   *  window anywhere, else the launch of the app's desktop shortcut (``appShortcutOf``), or its first launch path
+   *  window anywhere, else the launch of the app's first desktop shortcut (``appShortcutsOf``), or its first launch path
    *  when it has none. */
   async runHomeTile(appName: string): Promise<void> {
     const target = focusTargetOf(this.state, appName);
@@ -1023,7 +1023,7 @@ export class DesktopStore {
       return;
     }
     const app = appByName(this.state, appName);
-    const launch = (app === undefined ? null : appShortcutOf(app))?.launch ?? app?.launch_paths[0]?.id;
+    const launch = (app === undefined ? undefined : appShortcutsOf(app)[0])?.launch ?? app?.launch_paths[0]?.id;
     if (app === undefined || launch === undefined) {
       this.toast(`Cannot open: ${appName} has nothing to open`);
       return;
