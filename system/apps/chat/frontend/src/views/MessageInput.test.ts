@@ -2517,7 +2517,7 @@ describe("MessageInput dictation", () => {
     render();
     await flushAsync();
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.sendMessage.mock.calls[0][1]).toBe("Ship it.");
+    expect(mocks.sendMessage).toHaveBeenCalledWith(CHAT, "Ship it.", expect.any(String));
   });
 
   it("drops the unfinished words on Escape and keeps the final ones", () => {

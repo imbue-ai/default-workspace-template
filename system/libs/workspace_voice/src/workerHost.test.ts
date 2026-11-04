@@ -72,6 +72,8 @@ describe("the engine worker host", () => {
     expect(options).toEqual({ assetBase: ASSET_BASE });
     expect(first.messages[first.messages.length - 1]).toEqual({ type: "ready", engineId: SPEC.id, device: "webgpu" });
     expect(first.types().filter((type) => type === "progress").length).toBe(variantFiles(spec, variant).length);
+    // The engine's load, which reports no progress, is announced once the download is over.
+    expect(first.types().slice(-2)).toEqual(["loading", "ready"]);
     expect(second.types()).toEqual(first.types());
   });
 

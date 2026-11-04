@@ -86,6 +86,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     const files = await download(spec, variantFiles(spec, variant), {
       onProgress: (loadedBytes, totalBytes) => broadcast({ type: "progress", loadedBytes, totalBytes }),
     });
+    broadcast({ type: "loading" });
     return options.loadEngine(spec, variant, files, { assetBase });
   };
 

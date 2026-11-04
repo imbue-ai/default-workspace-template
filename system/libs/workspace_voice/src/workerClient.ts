@@ -9,11 +9,13 @@ import type { Device, EngineId } from "./engines";
 import type { TranscriptionResult } from "./speechEngine";
 import type { PageMessage, WorkerMessage } from "./workerProtocol";
 
-/** The part of a MessagePort (or a dedicated Worker) the client uses. */
+/** The part of a MessagePort (or a dedicated Worker) the client uses; ``onerror`` is the worker's own, for a
+ *  script that fails to load or an error nothing in it caught. */
 export interface EngineWorkerPort {
   postMessage(message: PageMessage, transfer?: Transferable[]): void;
   onmessage: ((event: MessageEvent<WorkerMessage>) => void) | null;
   onmessageerror?: ((event: MessageEvent) => void) | null;
+  onerror?: ((event: ErrorEvent) => void) | null;
 }
 
 export type PortFactory = (engineId: EngineId) => EngineWorkerPort;
@@ -52,9 +54,13 @@ export interface EngineWorkerClientOptions {
   /** How long a job may go unanswered before the worker is taken for dead. Inference on a slow machine can take
    *  longer than the audio it covers, so this is generous. */
   transcribeTimeoutMs?: number;
+  /** How long a load may go without a word from the worker (a download's progress, the engine loading, ready)
+   *  before the worker is taken for dead. */
+  loadStallTimeoutMs?: number;
 }
 
 export const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 120_000;
+export const DEFAULT_LOAD_STALL_TIMEOUT_MS = 180_000;
 
 interface PendingTranscription {
   resolve(result: TranscriptionResult): void;
@@ -75,16 +81,24 @@ export function connectEngineWorker(
   options: EngineWorkerClientOptions = {},
 ): EngineWorkerClient {
   const timeoutMs = options.transcribeTimeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+  const stallMs = options.loadStallTimeoutMs ?? DEFAULT_LOAD_STALL_TIMEOUT_MS;
   const port = createPort(engineId);
   const pending = new Map<number, PendingTranscription>();
   const unloadedListeners: (() => void)[] = [];
   let pendingLoads: PendingLoad[] = [];
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
   let nextId = 0;
   let isDead = false;
+
+  const clearStallTimer = (): void => {
+    if (stallTimer !== null) clearTimeout(stallTimer);
+    stallTimer = null;
+  };
 
   const die = (error: Error): void => {
     if (isDead) return;
     isDead = true;
+    clearStallTimer();
     for (const job of pending.values()) {
       clearTimeout(job.timer);
       job.reject(error);
@@ -95,24 +109,36 @@ export function connectEngineWorker(
     port.onmessage = null;
   };
 
+  // A load that has gone quiet is a worker that is gone: one that never started, or one that died downloading.
+  const armStallTimer = (): void => {
+    clearStallTimer();
+    if (pendingLoads.length === 0) return;
+    stallTimer = setTimeout(() => die(new EngineWorkerLostError("The speech engine stopped answering")), stallMs);
+  };
+
+  const settleLoads = (settle: (load: PendingLoad) => void): void => {
+    const loads = pendingLoads;
+    pendingLoads = [];
+    clearStallTimer();
+    for (const load of loads) settle(load);
+  };
+
   port.onmessage = (event) => {
     const message = event.data;
     switch (message.type) {
       case "progress":
+        armStallTimer();
         for (const load of pendingLoads) load.onProgress(message.loadedBytes, message.totalBytes);
         break;
-      case "ready": {
-        const loads = pendingLoads;
-        pendingLoads = [];
-        for (const load of loads) load.resolve(message.device);
+      case "loading":
+        armStallTimer();
         break;
-      }
-      case "load-error": {
-        const loads = pendingLoads;
-        pendingLoads = [];
-        for (const load of loads) load.reject(new EngineLoadError(message.message, message.filePath));
+      case "ready":
+        settleLoads((load) => load.resolve(message.device));
         break;
-      }
+      case "load-error":
+        settleLoads((load) => load.reject(new EngineLoadError(message.message, message.filePath)));
+        break;
       case "unloaded":
         for (const listener of unloadedListeners) listener();
         break;
@@ -135,6 +161,7 @@ export function connectEngineWorker(
     }
   };
   port.onmessageerror = () => die(new EngineWorkerLostError("The speech engine sent something unreadable"));
+  port.onerror = (event) => die(new EngineWorkerLostError(event.message || "The speech engine worker failed"));
 
   return {
     engineId,
@@ -145,6 +172,7 @@ export function connectEngineWorker(
       if (isDead) return Promise.reject(new EngineWorkerLostError("The speech engine worker is gone"));
       return new Promise<Device>((resolve, reject) => {
         pendingLoads.push({ resolve, reject, onProgress });
+        armStallTimer();
         port.postMessage({ type: "load", engineId, preferredDevice, assetBase });
       });
     },
@@ -180,15 +208,25 @@ export function engineWorkerName(engineId: EngineId): string {
 }
 
 /** The page's port to the workspace's engine worker: a SharedWorker where the browser has them, else a worker of
- *  the page's own. The worker's URL is a literal here so the bundler emits it as a chunk of its own. */
+ *  the page's own. The worker's URL is a literal here so the bundler emits it as a chunk of its own. A shared
+ *  worker's errors arrive on the worker and its messages on its port, so the two are folded into one port. */
 export function openEngineWorkerPort(engineId: EngineId): EngineWorkerPort {
   if (typeof SharedWorker === "function") {
     const worker = new SharedWorker(new URL("./engineWorker.ts", import.meta.url), {
       type: "module",
       name: engineWorkerName(engineId),
     });
+    const folded: EngineWorkerPort = {
+      postMessage: (message, transfer) => worker.port.postMessage(message, transfer ?? []),
+      onmessage: null,
+      onmessageerror: null,
+      onerror: null,
+    };
+    worker.port.onmessage = (event) => folded.onmessage?.(event);
+    worker.port.onmessageerror = (event) => folded.onmessageerror?.(event);
+    worker.onerror = (event) => folded.onerror?.(event);
     worker.port.start();
-    return worker.port;
+    return folded;
   }
   return new Worker(new URL("./engineWorker.ts", import.meta.url), { type: "module" });
 }

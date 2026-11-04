@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineLoadError, EngineWorkerLostError, connectEngineWorker, engineWorkerName } from "./workerClient";
-import type { EngineWorkerPort } from "./workerClient";
+import type { EngineWorkerClientOptions, EngineWorkerPort } from "./workerClient";
 import type { PageMessage, WorkerMessage } from "./workerProtocol";
 
 class FakePort implements EngineWorkerPort {
   readonly sent: { message: PageMessage; transfer: Transferable[] | undefined }[] = [];
   onmessage: ((event: MessageEvent<WorkerMessage>) => void) | null = null;
   onmessageerror: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
   postMessage(message: PageMessage, transfer?: Transferable[]): void {
     this.sent.push({ message, transfer });
   }
@@ -17,7 +18,7 @@ class FakePort implements EngineWorkerPort {
 
 const ASSET_BASE = "https://chat.test/assets/voice/";
 
-function connect(options: { transcribeTimeoutMs?: number } = {}) {
+function connect(options: EngineWorkerClientOptions = {}) {
   const port = new FakePort();
   const client = connectEngineWorker("moonshine-base", ASSET_BASE, () => port, options);
   return { port, client };
@@ -94,6 +95,29 @@ describe("the engine worker client", () => {
     expect(client.isDead).toBe(true);
     await expect(client.transcribe(new Float32Array(4))).rejects.toBeInstanceOf(EngineWorkerLostError);
     await expect(client.load(null, () => undefined)).rejects.toBeInstanceOf(EngineWorkerLostError);
+  });
+
+  it("takes a load that goes quiet for a lost worker, but not one that keeps reporting", async () => {
+    const { port, client } = connect({ loadStallTimeoutMs: 1000 });
+    const load = client.load(null, () => undefined);
+    const settled = load.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(900);
+    port.answer({ type: "progress", loadedBytes: 1, totalBytes: 2 });
+    await vi.advanceTimersByTimeAsync(900);
+    port.answer({ type: "loading" });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(client.isDead).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settled).toBeInstanceOf(EngineWorkerLostError);
+    expect(client.isDead).toBe(true);
+  });
+
+  it("dies on the worker's own error, failing what is pending", async () => {
+    const { port, client } = connect();
+    const load = client.load(null, () => undefined);
+    port.onerror?.({ message: "boom" } as ErrorEvent);
+    await expect(load).rejects.toThrow("boom");
+    expect(client.isDead).toBe(true);
   });
 
   it("tells its listeners when the worker released the engine, and names the worker for the engine", () => {

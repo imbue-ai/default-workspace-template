@@ -16,6 +16,8 @@ export type PageMessage =
 
 export type WorkerMessage =
   | { type: "progress"; loadedBytes: number; totalBytes: number }
+  /** The files are down and checked; the engine is loading, which reports no progress. */
+  | { type: "loading" }
   | { type: "ready"; engineId: EngineId; device: Device }
   /** The load failed; ``filePath`` names the file when a download did. */
   | { type: "load-error"; message: string; filePath: string | null }
