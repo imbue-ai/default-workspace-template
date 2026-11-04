@@ -282,7 +282,7 @@ The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
-icon, launch paths, default shortcut, launcher rank, message handlers) and
+icon, launch paths, default shortcuts, launcher rank, message handlers) and
 whether it is running.
 The page learns the apps from `GET /api/inventory` right after it arrives (one
 read for the desktops, the apps, and the clients), so it never draws a
