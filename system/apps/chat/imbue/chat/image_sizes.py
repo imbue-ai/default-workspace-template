@@ -12,10 +12,10 @@ import math
 import re
 import struct
 from pathlib import Path
-from typing import NamedTuple
-
 from loguru import logger
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
 # Enough of the file for every header below but a JPEG's.
@@ -50,11 +50,11 @@ _SVG_VIEWBOX_RE = re.compile(
 )
 
 
-class ImageSize(NamedTuple):
+class ImageSize(FrozenModel):
     """The width and height an image is drawn at, in CSS pixels."""
 
-    width: int
-    height: int
+    width: int = Field(description="The drawn width, in CSS pixels")
+    height: int = Field(description="The drawn height, in CSS pixels")
 
 
 def read_image_size(path: Path) -> ImageSize | None:
@@ -195,4 +195,4 @@ def _rounded_size(width: float, height: float) -> ImageSize | None:
 
 @pure
 def _positive(width: int, height: int) -> ImageSize | None:
-    return ImageSize(width, height) if width > 0 and height > 0 else None
+    return ImageSize(width=width, height=height) if width > 0 and height > 0 else None

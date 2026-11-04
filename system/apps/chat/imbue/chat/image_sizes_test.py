@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.chat.image_sizes import ImageSize
 from imbue.chat.image_sizes import read_image_size
 
 
@@ -85,7 +86,7 @@ def _write(tmp_path: Path, name: str, content: bytes) -> Path:
 def test_reads_the_size_from_each_inline_format(
     tmp_path: Path, name: str, content: bytes, expected: tuple[int, int]
 ) -> None:
-    assert read_image_size(_write(tmp_path, name, content)) == expected
+    assert read_image_size(_write(tmp_path, name, content)) == ImageSize(width=expected[0], height=expected[1])
 
 
 @pytest.mark.parametrize(
@@ -104,13 +105,15 @@ def test_reads_the_size_from_each_inline_format(
 def test_reads_the_size_an_svg_declares_or_its_viewbox_shape(
     tmp_path: Path, svg: str, expected: tuple[int, int]
 ) -> None:
-    assert read_image_size(_write(tmp_path, "drawing.svg", svg.encode())) == expected
+    assert read_image_size(_write(tmp_path, "drawing.svg", svg.encode())) == ImageSize(
+        width=expected[0], height=expected[1]
+    )
 
 
 def test_a_stroke_width_is_not_read_as_an_svg_width(tmp_path: Path) -> None:
     svg = b'<svg stroke-width="2" viewBox="0 0 300 200"></svg>'
 
-    assert read_image_size(_write(tmp_path, "drawing.svg", svg)) == (300, 200)
+    assert read_image_size(_write(tmp_path, "drawing.svg", svg)) == ImageSize(width=300, height=200)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +133,9 @@ def test_an_svg_that_declares_no_drawn_size_has_none(tmp_path: Path, svg: str) -
 def test_a_phone_photo_turned_on_its_side_reports_the_size_it_is_drawn_at(tmp_path: Path) -> None:
     """A portrait phone photo is stored landscape with an orientation tag (6: turn clockwise), and
     a browser draws it portrait, so its box must be portrait too."""
-    assert read_image_size(_write(tmp_path, "portrait.jpg", _jpeg(4032, 3024, orientation=6))) == (3024, 4032)
+    assert read_image_size(_write(tmp_path, "portrait.jpg", _jpeg(4032, 3024, orientation=6))) == ImageSize(
+        width=3024, height=4032
+    )
 
 
 @pytest.mark.parametrize(
