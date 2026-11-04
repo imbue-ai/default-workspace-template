@@ -9,6 +9,7 @@ event's keys checked against the shared requirement.
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 from imbue.chat.harnesses.antigravity.agy_transcript import DecodedStep
@@ -16,7 +17,14 @@ from imbue.chat.harnesses.antigravity.agy_transcript import DecodedToolCall
 from imbue.chat.harnesses.antigravity.session_parser import parse_step as agy_parse_step
 from imbue.chat.harnesses.claude.session_parser import parse_lines as claude_parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_lines as codex_parse_lines
+from imbue.chat.harnesses.grok.session_parser import GrokLaneState
+from imbue.chat.harnesses.grok.session_parser import INTERNAL_MARKER_TYPES as GROK_INTERNAL_MARKER_TYPES
+from imbue.chat.harnesses.grok.session_parser import parse_record as grok_parse_record
+from imbue.chat.harnesses.grok.testing import find_fixture_scenario
+from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
+from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
+from imbue.chat.harnesses.transcript_store import iter_line_spans
 
 _ASSISTANT_REQUIRED = {
     "timestamp",
@@ -304,3 +312,23 @@ def test_antigravity_events_satisfy_the_contract() -> None:
     )
     events = [event for step in (user_step, assistant_step, tool_step) for event in agy_parse_step(step)]
     _assert_contract(events, "antigravity")
+
+
+def _grok_wire_events(scenario_dir: Path) -> list[dict[str, Any]]:
+    """Every wire event of a captured grok scenario's root session, as its loader receives them."""
+    session_id = read_fixture_root_ids(scenario_dir)[0]
+    lane = GrokLaneState(session_id=session_id, is_root=True)
+    events: list[dict[str, Any]] = []
+    for offset, _length, line in iter_line_spans(read_fixture_updates(scenario_dir, session_id), 0):
+        for event in grok_parse_record(json.loads(line), lane, offset=offset):
+            if event["type"] not in GROK_INTERNAL_MARKER_TYPES:
+                events.append(event)
+    return events
+
+
+def test_grok_events_satisfy_the_contract() -> None:
+    """A real grok 1.0.62 session with a shell call: a user turn, the call, its result and the reply."""
+    events = _grok_wire_events(find_fixture_scenario("tool"))
+
+    _assert_contract(events, "grok")
+    assert all(event["session_id"] for event in events)

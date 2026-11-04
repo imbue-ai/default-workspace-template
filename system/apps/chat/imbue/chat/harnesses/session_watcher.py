@@ -201,7 +201,14 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """Register the sink that receives the ids of harness-native background tasks as they end.
 
         No-op by default: only a harness whose transcript records the end of its own background
-        tasks (Claude's ``<task-notification>``) calls it.
+        tasks calls it.
+        """
+
+    def set_wake_pending_tasks_callback(self, callback: FinishedTasksCallback) -> None:
+        """Register the sink that receives the ids of harness-native background tasks that ended and
+        will start a turn of their own that has not started yet, a turn in flight or not.
+
+        No-op by default: only a harness whose transcript says so calls it.
         """
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
@@ -282,9 +289,8 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     ) -> None:
         """Give a watcher the capabilities it needs to DELIVER its own queue. No-op by default.
 
-        Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
-        whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
-        Every other harness's queue is consumed by the harness itself and needs no sender.
+        Only a harness that holds the queue on the agent's behalf needs these, since nothing
+        else delivers what it holds. A harness whose agent consumes its own queue needs no sender.
 
         ``is_alive`` is not optional politeness: mngr's text send AUTO-STARTS a stopped agent,
         and the working->IDLE signal cannot distinguish "turn finished" from "process died". A

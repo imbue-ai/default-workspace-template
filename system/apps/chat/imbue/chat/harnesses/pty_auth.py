@@ -290,6 +290,17 @@ def extract_hyperlink_value(raw_output: str, target_regex: re.Pattern[str]) -> s
     return None
 
 
+def take_expect_output(process: Any) -> str:
+    """Everything the last matching `process.expect` read: the text before and through its match, and the rest of
+    that read, which pexpect keeps in its buffer where `read_nonblocking` never looks.
+
+    The buffer is emptied, so the drains that follow read on from where the match left off.
+    """
+    remainder = process.buffer
+    process.buffer = ""
+    return (process.before or "") + (process.after or "") + remainder
+
+
 def drain_pty_stream_until_quiet(process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float) -> str:
     """Read PTY output until no chunk arrives for `quiet_seconds`.
 

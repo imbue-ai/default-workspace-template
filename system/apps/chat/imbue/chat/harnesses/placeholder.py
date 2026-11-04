@@ -11,7 +11,7 @@ state dir.
 These are deliberately inert, not merely minimal. The watcher parses nothing and reports an
 empty transcript; the resolver switches nothing; the catalog is empty (so the model bar
 renders the unrecognized-model marker). The one thing that IS live is the activity dot,
-because it costs two lines: both plugins that use this maintain mngr's ``active`` marker
+because it costs two lines: the plugin whose tracker this is maintains mngr's ``active`` marker
 already, so the dot tracks whether a turn is in flight even with no transcript behind it.
 
 DELETION CRITERION: when a harness lands its real watcher/tracker/resolver/catalog, it drops

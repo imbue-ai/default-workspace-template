@@ -8,9 +8,10 @@ const LABEL_BY_HARNESS: Record<string, string> = {
   "pi-coding": "Pi",
   opencode: "OpenCode",
   antigravity: "Antigravity CLI",
+  grok: "Grok Build",
 };
 
-const COMPACTABLE_HARNESSES = new Set(["claude", "codex", "pi-coding"]);
+const COMPACTABLE_HARNESSES = new Set(["claude", "codex", "pi-coding", "grok"]);
 
 /** What `getHarnessCatalog` answers in a test: a catalog with the harness's name, switch mode and
  *  whether it can be compacted, and no models. */

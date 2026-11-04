@@ -1,5 +1,6 @@
 """Unit tests for the shared PathWatcher."""
 
+import shutil
 import threading
 import time
 from itertools import pairwise
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from watchdog.observers.api import ObservedWatch
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
@@ -148,6 +150,83 @@ def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_
     assert 2 <= len(cycles) <= 6
     gaps = [later - earlier for earlier, later in pairwise(cycles)]
     assert min(gaps) >= interval * 0.9
+
+
+def _has_running_watch_on(watcher: PathWatcher, path: Path) -> bool:
+    observer = watcher._watch_observer._observer
+    return observer is not None and any(
+        emitter.watch.path == str(path) and emitter.should_keep_running() for emitter in list(observer.emitters)
+    )
+
+
+def test_a_watched_directory_that_is_deleted_and_recreated_is_watched_again(tmp_path: Path) -> None:
+    """watchdog stops a watch whose directory is deleted; the recreated directory gets a fresh one."""
+    watched_dir = tmp_path / "turns"
+    watched_dir.mkdir()
+    watcher = PathWatcher.build((watched_dir,), lambda: None, min_cycle_interval_seconds=0.0)
+    watcher.start()
+    try:
+        wait_until_true(lambda: _has_running_watch_on(watcher, watched_dir), 5.0, "a watch on the directory")
+        shutil.rmtree(watched_dir)
+        wait_until_true(
+            lambda: not _has_running_watch_on(watcher, watched_dir), 5.0, "the deleted directory's watch stopping"
+        )
+
+        watched_dir.mkdir()
+
+        wait_until_true(
+            lambda: _has_running_watch_on(watcher, watched_dir), 5.0, "a fresh watch on the recreated directory"
+        )
+    finally:
+        watcher.stop()
+
+
+class _DeadEmitter:
+    """An emitter whose thread died without being stopped, as one that raised does."""
+
+    def __init__(self, watch: ObservedWatch) -> None:
+        self.watch = watch
+
+    def is_alive(self) -> bool:
+        return False
+
+    def should_keep_running(self) -> bool:
+        return True
+
+
+class _ObserverWithADeadEmitter:
+    def __init__(self, watch: ObservedWatch) -> None:
+        self.emitters = {_DeadEmitter(watch)}
+        self.unscheduled: list[ObservedWatch] = []
+        self.is_stopped = False
+
+    def unschedule(self, watch: ObservedWatch) -> None:
+        self.unscheduled.append(watch)
+
+    def stop(self) -> None:
+        self.is_stopped = True
+
+    def join(self, timeout: float) -> None:
+        pass
+
+
+def test_a_watch_whose_emitter_thread_died_is_released_and_scheduled_again(tmp_path: Path) -> None:
+    shared = SharedWatchObserver.build()
+    handler = WakeOnChangeHandler(threading.Event())
+    watch = ObservedWatch(str(tmp_path), recursive=False)
+    dead_observer = _ObserverWithADeadEmitter(watch)
+    shared._observer = dead_observer
+    shared._watch_by_key[(str(tmp_path), False)] = watch
+    shared._handlers_by_key[(str(tmp_path), False)] = {handler}
+    try:
+        assert not shared.is_watching(tmp_path, False, handler)
+        assert dead_observer.unscheduled == [watch]
+        assert dead_observer.is_stopped
+
+        assert shared.subscribe(tmp_path, False, handler)
+        assert shared.is_watching(tmp_path, False, handler)
+    finally:
+        shared.close()
 
 
 def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Path) -> None:

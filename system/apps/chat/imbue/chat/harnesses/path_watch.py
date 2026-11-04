@@ -2,8 +2,8 @@
 
 The one "watch these paths, wake this loop" block shared by everything that tails
 files: the model tracking (re-deriving an agent's choice whenever its live
-``model_state.json`` changes) and every store-backed session watcher
-(claude/codex/pi, via ``StoreBackedWatcher``). This wraps
+``model_state.json`` changes) and every store-backed session watcher (via
+``StoreBackedWatcher``). This wraps
 the one shared primitive that already exists --
 :class:`~imbue.chat.watcher_common.WakeOnChangeHandler` plus
 ``POLL_INTERVAL_SECONDS`` -- into a small object that watches a set of paths and
@@ -15,8 +15,8 @@ Per-path rule: an existing directory is watched recursively (so codex's rotating
 rollout files under a stable sessions root all wake the loop without rescheduling);
 anything else is watched via its parent directory (so a not-yet-created file --
 claude's ``settings.json`` before first launch -- is caught the moment it appears).
-Directories that do not exist yet are retried on each loop, mirroring the codex
-watcher's lazy observer start.
+Directories that do not exist yet are retried on each loop, and so is a watched directory
+that was deleted, whose watch watchdog stops for good.
 
 Every watcher of one app watches through one :class:`SharedWatchObserver`, so watchers
 of the same directory share its OS watch and watchdog's threads (one per observer, two per
@@ -123,18 +123,41 @@ class SharedWatchObserver:
             if handlers is None or handler not in handlers:
                 return
             handlers.discard(handler)
-            watch = self._watch_by_key[key]
             if handlers:
-                self._observer.remove_handler_for_watch(handler, watch)
+                self._observer.remove_handler_for_watch(handler, self._watch_by_key[key])
                 return
-            del self._handlers_by_key[key]
-            del self._watch_by_key[key]
-            self._observer.unschedule(watch)
-            if self._watch_by_key:
-                return
-            idle_observer = self._observer
-            self._observer = None
-        _stop_observer(idle_observer)
+            idle_observer = self._release_watch(key)
+        if idle_observer is not None:
+            _stop_observer(idle_observer)
+
+    def is_watching(self, directory: Path, is_recursive: bool, handler: FileSystemEventHandler) -> bool:
+        """Whether ``directory``'s events still reach ``handler``.
+
+        A watch whose emitter stopped, which watchdog does once the watched directory is deleted, or whose
+        emitter thread died, is released for every subscriber, so the next subscription gets a fresh one.
+        """
+        key: _WatchKey = (str(directory), is_recursive)
+        with self._lock:
+            handlers = self._handlers_by_key.get(key)
+            if handlers is None or handler not in handlers:
+                return False
+            if _is_watch_running(self._observer, self._watch_by_key[key]):
+                return True
+            logger.debug("The watch on {} stopped; watching it again once it exists", directory)
+            idle_observer = self._release_watch(key)
+        if idle_observer is not None:
+            _stop_observer(idle_observer)
+        return False
+
+    def _release_watch(self, key: _WatchKey) -> Any:
+        """Unschedule ``key``'s watch, returning the observer to stop when that was its last watch. Holds ``_lock``."""
+        del self._handlers_by_key[key]
+        self._observer.unschedule(self._watch_by_key.pop(key))
+        if self._watch_by_key:
+            return None
+        idle_observer = self._observer
+        self._observer = None
+        return idle_observer
 
     def close(self) -> None:
         """Stop the observer and every watch it holds; later subscriptions are refused. Idempotent."""
@@ -146,6 +169,13 @@ class SharedWatchObserver:
             self._handlers_by_key.clear()
         if observer is not None:
             _stop_observer(observer)
+
+
+def _is_watch_running(observer: Any, watch: ObservedWatch) -> bool:
+    return any(
+        emitter.watch == watch and emitter.is_alive() and emitter.should_keep_running()
+        for emitter in list(observer.emitters)
+    )
 
 
 def _stop_observer(observer: Any) -> None:
@@ -255,8 +285,10 @@ class PathWatcher:
 
         For an existing directory path, watch it recursively; otherwise watch the
         path's parent directory (catching a file that does not exist yet). A dir
-        that is still absent is skipped and retried on the next loop.
+        that is still absent is skipped and retried on the next loop, and so is a
+        watched dir whose watch stopped.
         """
+        self._forget_stopped_watches()
         for path in self._paths:
             if path.is_dir():
                 target, is_recursive = path, True
@@ -280,3 +312,10 @@ class PathWatcher:
                 if not is_subscribed:
                     return
                 self._watched.add(key)
+
+    def _forget_stopped_watches(self) -> None:
+        """Drop each watched dir whose events no longer reach this watcher, leaving the loop to subscribe again."""
+        with self._subscription_lock:
+            for directory, is_recursive in list(self._watched):
+                if not self._watch_observer.is_watching(Path(directory), is_recursive, self._handler):
+                    self._watched.discard((directory, is_recursive))

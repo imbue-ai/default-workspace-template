@@ -283,6 +283,18 @@ def _delivered_but_blocked() -> MessageResult:
     return MessageResult(blocked_agents=[("alpha", "Claude is waiting for you to confirm a model switch.")])
 
 
+def _refused() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="shell mode", kind=SendFailureKind.INPUT_BLOCKED)]
+    )
+
+
+def _busy() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="mid-turn", kind=SendFailureKind.AGENT_BUSY)]
+    )
+
+
 def _not_found_beside_unconfirmed() -> MessageResult:
     result = _submission_unconfirmed()
     result.failures.extend(_not_found_on_host().failures)
@@ -293,16 +305,18 @@ def _not_found_beside_unconfirmed() -> MessageResult:
 @pytest.mark.parametrize(
     ("known_location_result", "expected_kind"),
     [
+        (_refused, "input_blocked"),
+        (_busy, "agent_busy"),
         (_delivered_but_blocked, "input_blocked"),
         (_not_found_beside_unconfirmed, "submission_unconfirmed"),
     ],
-    ids=["delivered-but-blocked", "not-found-beside-unconfirmed"],
+    ids=["refused", "busy", "delivered-but-blocked", "not-found-beside-unconfirmed"],
 )
 def test_a_failure_another_send_cannot_help_is_returned_as_it_is(
     known_location_result: Callable[[], MessageResult], expected_kind: str
 ) -> None:
-    """A blocked send was delivered, so sending again could only deliver it twice. A send that was unconfirmed at one
-    agent and missed another is not the plain ambiguity a resend answers.
+    """A refusal is the agent's answer. A blocked send was delivered, so sending again could only deliver it twice. A
+    send that was unconfirmed at one agent and missed another is not the plain ambiguity a resend answers.
     """
     send_calls: list[tuple[AgentMatch, ...]] = []
     known = _make_match()
@@ -553,6 +567,59 @@ def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> Non
     messenger = _scripted_messenger([_not_ready(), _submission_unconfirmed()], send_calls)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
     assert send_calls == [(known,)] * 3
+
+
+class _KnownLocationPresses:
+    """A discovery that finds the agent on host-b, and a press that reaches it only there.
+
+    At the known location the press fails with ``failure_kind``, or matches nothing when it is None.
+    """
+
+    def __init__(self, failure_kind: SendFailureKind | None) -> None:
+        self.failure_kind = failure_kind
+        self.discover_calls: list[AgentId] = []
+        self.press_calls: list[tuple[AgentMatch, ...]] = []
+
+    def discover(self, agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        self.discover_calls.append(agent_id)
+        return (_make_match(host="host-b"),)
+
+    def press(self, matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
+        self.press_calls.append(tuple(matches))
+        if str(matches[0].host_name) == "host-b":
+            return _delivered_to(matches)
+        failures = (
+            []
+            if self.failure_kind is None
+            else [AgentSendFailure(agent_name="alpha", reason="no", kind=self.failure_kind)]
+        )
+        return MessageResult(failures=failures)
+
+    def call_counts(self) -> tuple[int, int]:
+        return len(self.press_calls), len(self.discover_calls)
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("failure_kind", "is_pressed_after_discovery"),
+    [
+        pytest.param(SendFailureKind.INPUT_BLOCKED, False, id="refused"),
+        pytest.param(SendFailureKind.AGENT_NOT_FOUND, True, id="agent_moved"),
+        pytest.param(SendFailureKind.AGENT_UNREACHABLE, True, id="not_running"),
+        pytest.param(None, True, id="nothing_matched"),
+    ],
+)
+def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
+    failure_kind: SendFailureKind | None, is_pressed_after_discovery: bool
+) -> None:
+    """A press the agent refused is not pressed again, where it could cancel a turn the agent started meanwhile."""
+    presses = _KnownLocationPresses(failure_kind)
+    messenger = MngrMessenger(discover=presses.discover, press=presses.press)
+
+    is_pressed = messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (_make_match(),))
+
+    assert is_pressed is is_pressed_after_discovery
+    assert presses.call_counts() == ((2, 1) if is_pressed_after_discovery else (1, 0))
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")

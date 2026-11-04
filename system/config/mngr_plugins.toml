@@ -38,6 +38,11 @@ subdirectory = "libs/mngr_antigravity"
 tools = ["mngr"]
 
 [[plugins]]
+package = "imbue-mngr-grok"
+subdirectory = "libs/mngr_grok"
+tools = ["mngr"]
+
+[[plugins]]
 package = "imbue-mngr-wait"
 subdirectory = "libs/mngr_wait"
 tools = ["mngr"]

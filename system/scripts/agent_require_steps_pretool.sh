@@ -32,12 +32,16 @@ input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name // empty')
 
 # Tools that don't count as "substantive work" -- the agent should be free
-# to read, search, and navigate without declaring steps first.
+# to read, search, and navigate without declaring steps first. claude's names,
+# then grok's read-only ones (grok's shell tools arrive here as Bash).
 case "$tool_name" in
     Read|Glob|Grep|WebFetch|WebSearch|ToolSearch|Skill|\
     TaskCreate|TaskUpdate|TaskGet|TaskList|TaskOutput|TaskStop|\
     LSP|Monitor|SendMessage|EnterPlanMode|ExitPlanMode|\
-    mcp__sculptor__ask_user_question|mcp__sculptor__exit_plan_mode)
+    mcp__sculptor__ask_user_question|mcp__sculptor__exit_plan_mode|\
+    read_file|list_dir|grep|search_tool|web_search|web_fetch|\
+    get_command_or_subagent_output|wait_commands_or_subagents|scheduler_list|\
+    ask_user_question|enter_plan_mode|exit_plan_mode)
         exit 0
         ;;
 esac

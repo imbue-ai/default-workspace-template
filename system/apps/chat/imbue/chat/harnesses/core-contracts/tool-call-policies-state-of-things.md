@@ -8,21 +8,36 @@ timeless; everything here is a snapshot.
 
 ## At a glance
 
-| Policy | claude | codex | pi | agy |
-|---|---|---|---|---|
-| P1 no pipe into `tail`/`head` | live | live | live | live |
-| P2 no git history rewrite | live | live | live | live |
-| P3 permission request stands alone | live | **partial** | live | **partial** |
-| P4 OOM band + git identity | live | live | live | live |
-| P5 substantive work under a step | live | **partial** | live | **partial** |
-| P6 `tk start`/`close` shares a call only with tk | live | **partial** | live | live |
-| P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
-| P8 a chat turn with something for the user notifies | prose-only | prose-only | prose-only | prose-only |
-| P9 secret file read only by the wrapper | live | live | live | **partial** |
-| P10 secret request stands alone | live | **partial** | live | **partial** |
+| Policy | claude | codex | pi | agy | grok |
+|---|---|---|---|---|---|
+| P1 no pipe into `tail`/`head` | live | live | live | live | live |
+| P2 no git history rewrite | live | live | live | live | live |
+| P3 permission request stands alone | live | **partial** | live | **partial** | live |
+| P4 OOM band + git identity | live | live | live | live | live |
+| P5 substantive work under a step | live | **partial** | live | **partial** | live |
+| P6 `tk start`/`close` shares a call only with tk | live | **partial** | live | live | live |
+| P7 open steps are reconciled | live | live | live | **live (turn-start only)** | **live (first tool call)** |
+| P8 a chat turn with something for the user notifies | prose-only | prose-only | prose-only | prose-only | prose-only |
+| P9 secret file read only by the wrapper | live | live | live | **partial** | live |
+| P10 secret request stands alone | live | **partial** | live | **partial** | live |
 
 No harness is fully `n/a` any more, and five rows are `partial` for reasons that are
-structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
+structural rather than unwired. Measured against codex-cli 0.147.0, pi 0.84.1 and grok 1.0.62.
+
+- **grok P7 — live, first tool call.** grok discards an allowing UserPromptSubmit hook's output
+  (JSON `additionalContext` and plain stdout alike, measured), so the prompt only records the
+  turn and the reminder rides the first allowed PreToolUse of that turn. A turn that makes no
+  allowed tool call gets none.
+- **grok P9 — live, partly by grok's own permission rule.** The shell half is live, and so is
+  every grok tool that names a file: `read_file`, `search_replace`, `write` and `grep`'s `path`
+  are refused under the directory, and `list_dir` lists it as `ls` does. A `spawn_subagent` whose
+  `cwd` is the directory is refused too, as the shell's `cd` there is, since its subagent's shell
+  would read a secret by its bare name. Two routes reach a
+  secret file without naming it, so no check on the call's text sees them: `grep` with a `glob`
+  such as `*`, and `use_tool` reading its arguments from a file (both under "Known bypasses").
+  The `[agent_types.grok]` settings carry `[permission] deny = ["Read(**/.secrets/**)"]`, which
+  closes both. That rule also denies `read_file` the directory's README, which `cat` still reads.
+  A second rule, `Read(**/.mcpc/**)`, covers mcpc's store by its `~/.mcpc` link (not measured).
 
 - **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
   (`write_to_file`, `replace_file_content`) can never be nudged: no agy hook carries tool
@@ -73,6 +88,7 @@ capability exists.
 | codex | `exit 2` + stderr | `updatedInput` **with** `permissionDecision: "allow"` | `additionalContext` |
 | pi | `{block, reason}` | mutate `event.input.command` | append to `tool_result` content |
 | agy | `exit 2` + stderr (becomes the tool result) | prepend before `exec` | stderr on the same result |
+| grok | `exit 2` + JSON `permissionDecisionReason` (stderr alone reaches the model as its first line only) | `updatedInput` alone; one that fails the tool's schema denies the call | PreToolUse `additionalContext` (UserPromptSubmit output is discarded) |
 
 ## How each harness attaches
 
@@ -184,9 +200,9 @@ mngr's own pi extension carries no command policy: pi's guards are this repo's, 
 claude's and codex's are.
 
 **Which command a guard sees.** The "rewriter runs last so blockers see the original" story is
-only true on **agy** and **pi**, where the guards and the rewrite run in sequence in one
-script (agy) or one `tool_call` handler (pi). It is belt-and-braces on claude and codex and
-should not be relied on there: claude runs a matcher's hooks in PARALLEL
+only true on **agy**, **pi** and **grok**, where the guards and the rewrite run in sequence in one
+script (agy, and grok's dispatcher) or one `tool_call` handler (pi). It is belt-and-braces on
+claude and codex and should not be relied on there: claude runs a matcher's hooks in PARALLEL
 (`agent_rewrite_bash_command.py` says so in its own comment), and codex does not thread
 `updatedInput` into later hooks of the same event (measured: a rewriting hook placed first, a
 logging hook second, and the logger saw the original). On pi, keep the rewrite inside
@@ -203,6 +219,64 @@ The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do 
 and trusts the project — managed or not — is held to the guards and the step discipline.
 mngr's lifecycle extension, which carries no policy, is loaded only via the `-e` flag mngr adds
 to a managed agent's launch command (`plugin.py::assemble_command`).
+
+### grok  (wiring: `.grok/hooks/policy.json` + `system/scripts/agent_grok_policy_guards.py`)
+grok speaks claude's hook protocol (its payload carries claude's snake-case keys beside its own
+camelCase ones, and it reads `hookSpecificOutput` replies), but names each tool by its own name:
+a shell call is `run_terminal_command`, not `Bash`. So one PreToolUse hook, the dispatcher,
+translates every call and runs the **same scripts claude runs**, unmodified, in claude's order
+(`PRETOOLUSE_SCRIPTS`, held to `.claude/settings.json` by `agent_hook_wiring_test.py`), the
+rewrite after every guard. grok runs a project's hooks in sequence and blocks the turn on each,
+so one process with a prefilter per guard is the cheaper shape: measured, a median of 104 ms per
+allowed shell call and 90 ms per `read_file`, against 167 and 163 ms for claude's seven hooks
+wired directly and 23 ms for a no-op `python3` hook; most of the dispatcher's time is the
+require-a-step check.
+
+* **Shell calls** (`run_terminal_command`, and `monitor`, whose command also runs a shell and
+  whose result is always a background task) reach the guards as
+  `{"tool_name":"Bash","tool_input":{"command","run_in_background"}}`. The background flag is
+  grok's own rule, measured: when `block_until_ms` is set it decides (grok moves a command still
+  running when the wait ends to the background, so a wait below the dispatcher's
+  `MIN_FOREGROUND_BLOCK_UNTIL_MS`, `0` included, counts as backgrounded), and when it is absent or
+  `null`, `is_background: true` or `timeout: 0` backgrounds; claude's `run_in_background` means
+  nothing to grok.
+* **Every other tool** reaches only the guards that police every tool (`agent_secrets_guard.sh`)
+  and the step nudge, under its grok name and input.
+* **`use_tool`** arrives under the name of the tool it calls, with `{tool_name, tool_input}` as
+  its input (grok reads a `tool_input_file` or `file` before the hook runs), and is judged as
+  that call. grok refuses its own tools through `use_tool`, so in practice the call inside is an
+  MCP tool's.
+* **Refused outright:** `workflow`, and a shell call whose `toolInputTruncated` is true (grok
+  cuts a tool input past 128 KiB and the cut hides the end of the command). A truncated file
+  tool is still judged, on its path, which grok never cuts.
+* **Replies.** A refusal exits 2 with the guard's reason on stderr and as the JSON
+  `permissionDecisionReason`, since grok shows the model only the first stderr line of a plain
+  exit 2. A rewrite is `updatedInput` with the tool's other fields kept; it needs no
+  `permissionDecision`. grok's `updates.jsonl` records the original input on the `tool_call` and
+  the rewritten one on every `tool_call_update`.
+* **Fail open.** Only a guard's exit 2 refuses. A crash, a missing script or a run past the hook's
+  budget (`PRE_TOOL_USE_BUDGET_SECONDS`, under the hook's `timeout`) is logged to
+  `grok_policy_guards.log` in the agent's state dir and the call goes ahead; so is anything the
+  dispatcher itself did not expect. Each handler runs the dispatcher only when the file is there
+  (`test -f ... &&`): grok goes ahead after a hook's exit 1, while python3 exits 2 for a missing
+  script, and a session keeps the hooks it started with after an older commit is checked out. grok
+  fails a handler open when its `timeout` runs out (5 s for PreToolUse when unset) and never loads
+  one whose `timeout` is negative or not a number, so every handler in `policy.json` sets one, in
+  seconds.
+* **P7.** UserPromptSubmit records the turn (`grok_policy_turn.json`: `sessionId`, `promptId`) for
+  a root session's prompt; a subagent's carries `subagentType` and records nothing. The first
+  allowed PreToolUse with that `sessionId` claims the record by renaming it and runs
+  `agent_open_tickets_reminder.sh`; a refused call leaves it for the next one.
+
+Project hooks load only for a trusted folder, which mngr seeds for every work dir. Measured:
+`.grok/hooks/policy.json` runs for a root session in a linked worktree whose main checkout is the
+trusted one, and in every kind of subagent (shared, `cwd`, `isolation: "worktree"`). The `Stop`
+entries are the stop nudge, code-guardian's stop gate, by its absolute path under
+`/opt/agent-plugins` (grok sets no plugin root), gated by `.reviewer` settings as on claude and run
+through `grok_turn_end_stop_hook.sh` only for a turn's end (grok also fires `Stop` with reason
+`shutdown` when a session ends: at quit, `/new` or a resume), and
+`grok_background_task_hooks.py stop`, which records the background tasks the turn left running.
+There is no cwd `Stop` hook: grok runs hooks from the workspace root.
 
 ## Output contracts (the reference the mapping below relies on)
 
@@ -250,6 +324,28 @@ are the routes around them that are worth knowing; all were measured.
   extensions only `if (projectTrusted)`, and trust resolves to false for a non-interactive run
   with no stored decision -- so a nested `pi -p` started from a subdirectory gets NO guards at
   all. mngr seeds trust for the work dir, which covers the normal case.
+- **grok in an untrusted folder (open).** `.grok/hooks/` loads only for a trusted folder, as pi's
+  extensions do; mngr seeds trust for every work dir.
+- **grok `use_tool` with `tool_input_file` or `file` (closed).** grok reads the file before
+  PreToolUse, and the payload carries its parsed contents, not its path, so a JSON file under
+  `data/.secrets/` (mcpc's `credentials.json` is one) reaches an MCP tool, and its result the
+  model, without any guard seeing where it came from. A file that is not JSON (the `.env` a
+  secret card writes) fails to parse, and nothing of it is shown. The dispatcher cannot refuse
+  what it never sees; grok's own permission rule `Read(**/.secrets/**)` in `[permission] deny`,
+  which the grok settings carry, refuses the read ("MCP source Read denied"), measured under
+  always-approve.
+- **grok `grep` with a match-all `glob` (closed).** ripgrep searches the hidden and ignored files
+  a glob selects, so `glob: "*"` (which grok's own tool description suggests for searching
+  ignored files), `**`, `?*` or `**/*` from the workspace prints the values in
+  `data/.secrets/`, with no path naming the directory. A glob that does not select the
+  directory itself (`*.env`, `**/*.env`, `data/.secrets/*`) finds nothing there. The same
+  `Read(**/.secrets/**)` rule leaves those files out of grep's results while the search still
+  runs, and refuses `read_file` there by an absolute path or a `..` spelling too, measured.
+- **grok `workflow` and truncated inputs (closed).** The dispatcher refuses `workflow`, a script
+  that runs many subagents as one background job, and any shell call grok truncated.
+- **grok `!` commands (open, not agent-reachable).** By grok's own docs a `!` command typed into
+  its composer fires no hook at all. The agent cannot type one; whether a chat message that
+  starts with `!` becomes one is not measured.
 - **`sh -c` / `eval` (open on every harness, including claude).** The blockers anchor on the
   command text, so re-entering through another interpreter evades them by construction.
 
@@ -259,24 +355,31 @@ When a rule changes, update every harness that carries it:
 - **Safety 1–4, 9, 10 and workflow 6** (`agent_prevent_commit_rewrite.sh`,
   `agent_block_pipe_tail_head.sh`, `agent_latchkey_request_standalone.sh`,
   `agent_secrets_guard.sh`, `agent_tk_standalone.sh`, `agent_rewrite_bash_command.py`): the
-  scripts alone. claude and codex run them as hooks, and agy's shim and pi's
-  `policy_guards.ts` feed them the same payload. `agent_secrets_guard.sh` is the one guard pi
-  also runs on its file tools, because P9 covers a `read` of a secret file as much as a `cat`.
-  Keep the rewrite **last** in both hook configs and in pi's handler — a blocker that
+  scripts alone. claude and codex run them as hooks, and agy's shim, pi's
+  `policy_guards.ts` and grok's dispatcher feed them the same payload. `agent_secrets_guard.sh`
+  is the one guard pi and grok also run on their file tools, because P9 covers a `read` of a
+  secret file as much as a `cat`; its checker lists each harness's file-tool names and path
+  fields, so a new file tool is an entry there.
+  Keep the rewrite **last** in both hook configs, in pi's handler and in grok's
+  `PRETOOLUSE_SCRIPTS` — a blocker that
   inspects the rewritten command refuses everything (see "Which command a guard sees" above).
 - **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
-  `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
+  `agent_open_tickets_stop_nudge.sh`): the scripts (claude, codex **and** grok) and the matching
   handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
-  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
+  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it. The
+  require-a-step script's read-only skip list carries claude's and grok's tool names; a new
+  read-only tool on either is an entry there.
 - **Workflow 8** (finish notification): no script on any harness. The rule is in `AGENTS.md`
   and the `notify-user` skill, which every harness reads (see P8 above for why the claude Stop
   hook was removed).
-- codex, pi and agy wiring lives in **this repo**: `.codex/hooks.json`,
-  `.pi/extensions/policy_guards.ts` and `system/scripts/agy_shim/bash`. A guard added to
-  `.claude/settings.json` needs the matching entry in all three, and nothing in mngr. For agy
-  and pi that entry is one line, because both run the claude script itself
-  (`agent_hook_wiring_test.py` checks pi's list against claude's). mngr's only contributions
-  are agy's PATH entry and seeding pi's project trust.
+- codex, pi, agy and grok wiring lives in **this repo**: `.codex/hooks.json`,
+  `.pi/extensions/policy_guards.ts`, `system/scripts/agy_shim/bash` and
+  `system/scripts/agent_grok_policy_guards.py` (wired by `.grok/hooks/policy.json`). A guard
+  added to `.claude/settings.json` needs the matching entry in all four, and nothing in mngr.
+  For agy, pi and grok that entry is one line, because they run the claude script itself
+  (`agent_hook_wiring_test.py` checks pi's list against claude's, and grok's list and order),
+  plus, for pi and grok, a prefilter regex that matches everything the script can refuse. mngr's
+  only contributions are agy's PATH entry and seeding pi's and grok's project trust.
 - The tk reminders are the one place pi carries copies: they ride pi events no shell script
   can answer (`tool_result`, `before_agent_start`), so `tk_workflow.ts` restates their text
   verbatim.
