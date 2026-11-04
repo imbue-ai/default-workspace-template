@@ -18,3 +18,8 @@ export function personFixture(key: string, displayName: string, overrides: Parti
     ...overrides,
   };
 }
+
+/** A shared workspace's roster for tests: its owner, Josh, and a visitor, Glenn. */
+export function ownerAndVisitorRosterFixture(): Participant[] {
+  return [personFixture("user:owner-1", "Josh", { is_owner: true }), personFixture("user:glenn-2", "Glenn")];
+}

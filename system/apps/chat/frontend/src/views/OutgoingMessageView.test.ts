@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { addOutgoing } from "../models/OutgoingMessages";
 import { setParticipantsForTesting } from "../models/Participants";
-import { personFixture } from "../models/participantFixture";
+import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 import { OTHER_BUBBLE_CLASS, USER_BUBBLE_CLASS } from "./user-message-display";
 
@@ -53,10 +53,7 @@ describe("the optimistic outgoing bubble", () => {
 });
 
 describe("a not-yet-delivered message in a shared workspace", () => {
-  const roster = [
-    personFixture("user:owner-1", "Josh", { is_owner: true }),
-    personFixture("user:glenn-2", "Glenn"),
-  ];
+  const roster = ownerAndVisitorRosterFixture();
 
   afterEach(() => {
     setParticipantsForTesting(null, []);

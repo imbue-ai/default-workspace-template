@@ -16,7 +16,7 @@ import type { ChatSnapshot, HeldSend, ProvisionalChat } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { setParticipantsForTesting } from "../models/Participants";
-import { personFixture } from "../models/participantFixture";
+import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { appendEvents } from "../models/Response";
 import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
@@ -206,10 +206,7 @@ describe("the held-send bubbles in a shared workspace", () => {
   });
 
   it("draws a switch's and a new chat's held sends under their senders on the owner's page", () => {
-    setParticipantsForTesting("user:owner-1", [
-      personFixture("user:owner-1", "Josh", { is_owner: true }),
-      personFixture("user:glenn-2", "Glenn"),
-    ]);
+    setParticipantsForTesting("user:owner-1", ownerAndVisitorRosterFixture());
     const switching = `agent-switching-${Math.random()}`;
     chats.set(switching, chatSnapshotFixture(switching, { handoff: handoffStateFixture({ held_sends: heldSends }) }));
     const creating = `agent-creating-${Math.random()}`;
