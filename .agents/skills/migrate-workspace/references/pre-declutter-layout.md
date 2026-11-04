@@ -94,7 +94,7 @@ libraries:
 
 | Old | New |
 |---|---|
-| `libs/browser/` | `system/apps/browser/` |
+| `libs/browser/` | `system/apps/screen/` (the browser is a launch path of the Screen; the browser app is gone) |
 | `libs/app_watcher/` | `system/services/app_watcher/` |
 | `libs/cloudflare_tunnel/` | `system/services/cloudflare_tunnel/` |
 | `libs/host_backup/` | `system/services/host_backup/` |
@@ -154,11 +154,11 @@ often assumes the old substrate.
   automation must pass
   `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly, or the
   launch fails.
-- **The uv workspace uses member globs.** `members` was an explicit list of every
-  package; it is now `["system/libs/*", "system/services/*", "system/apps/*"]`, so
-  a migrated app joins the workspace without a `members` edit -- it still needs its
-  `[project].dependencies` + `[tool.uv.sources]` entries in the root
-  `pyproject.toml`.
+- **User packages are standalone projects.** The root `members` names only the
+  built-in packages. A migrated app, service or library is not added to it, nor
+  to the root `[project].dependencies` or `[tool.uv.sources]`: it becomes its own uv
+  project with its own lock and venv through `migrate_workspace.py
+  convert-packages` (see the skill's "Creations").
 - **The `runtime-sync` branch is retired.** GitHub sync used to ship the whole
   `runtime/` tree to an orphan `runtime-sync` branch on the workspace's private
   repo. Now only git commits are synced, and workspace data under `data/` is
@@ -266,7 +266,7 @@ broken" without checking the events log.
 ## Two gotchas specific to this crossing
 
 - **The AI-integration helper moved *and* changed shape.** `claude_p.py` now lives
-  at `.agents/skills/use-ai-integration/scripts/claude_p.py`. More importantly,
+  at `.agents/skills/use-ai-integration/python/use_ai_integration_skill/claude_p.py`. More importantly,
   credentials now resolve through `read_workspace_ai_credentials()` -- the
   `data/.secrets/anthropic.env` snapshot first, then the Claude account's settings,
   then the process env -- rather than from the process environment. A migrated call

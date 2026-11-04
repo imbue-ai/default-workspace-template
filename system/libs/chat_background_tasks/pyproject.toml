@@ -3,7 +3,7 @@ name = "chat-background-tasks"
 version = "0.1.0"
 description = "The marker files recording the background tasks each chat waits on, and their readers. Stdlib-only so the hooks and the skills' bare python3 can import it."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]

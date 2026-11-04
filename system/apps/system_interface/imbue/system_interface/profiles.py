@@ -7,8 +7,17 @@ connector serves publicly at ``GET {broker_url}/users/{user_id}/profile``. The b
 workspace is shared (read fresh on every miss; absent means no profiles are available). Each
 answer -- and each failure -- is cached for five minutes under ``profiles/<user_id>.json``, so a
 connector outage costs one failed fetch per user per five minutes and never a hung request.
+
+The picture itself is served from the shell's own origin (the multiplayer spec, section 4.2): the pages'
+content security policy admits images from the workspace alone, so the roster points at the shell's
+picture route and the shell fetches the bytes from the profile's URL once, keeping them beside the
+profile under ``profiles/<user_id>.picture.json`` until the profile names another URL; a fetch that
+fails is remembered there for the same five minutes, so a dead picture host costs one fetch per
+person per five minutes too.
 """
 
+import base64
+import hashlib
 import re
 import time
 from collections.abc import Sequence
@@ -16,6 +25,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Final
+from typing import Self
 
 import httpx
 from loguru import logger
@@ -23,11 +33,13 @@ from pydantic import AwareDatetime
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import model_validator
 from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
@@ -41,8 +53,16 @@ PROFILES_DIRECTORY_NAME: Final[str] = "profiles"
 
 PROFILE_CACHE_TTL: Final[timedelta] = timedelta(minutes=5)
 PROFILE_REQUEST_TIMEOUT_SECONDS: Final[float] = 2.0
+PICTURE_REQUEST_TIMEOUT_SECONDS: Final[float] = 5.0
+# A picture larger than this is refused rather than cached: the connector validates uploads well under it.
+MAX_PROFILE_PICTURE_BYTES: Final[int] = 4 * 1024 * 1024
+_PICTURE_CACHE_SUFFIX: Final[str] = ".picture.json"
+# How many hex digits of the picture URL's digest name its version in the shell's route: enough that two
+# pictures of one person never share one, short enough for a query value.
+_PICTURE_VERSION_LENGTH: Final[int] = 16
 # A fetch slower than this is logged: the connector is degrading before it is down.
 _SLOW_PROFILE_FETCH_SECONDS: Final[float] = 1.0
+_SLOW_PICTURE_FETCH_SECONDS: Final[float] = 2.0
 
 # One ``KEY=value`` line of share.env, with or without a leading ``export`` and with optional quotes.
 _ENV_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -56,6 +76,54 @@ class UserProfile(FrozenModel):
     user_id: str = Field(description="The account the profile belongs to")
     display_name: str | None = Field(description="The name the account chose, when it has one")
     profile_picture_url: str | None = Field(description="The profile picture URL, when the account has one")
+
+
+class ProfilePicture(FrozenModel):
+    """A profile picture's bytes and media type, as the shell serves them from its own origin, and the version its
+    route carries (``picture_version_of`` the URL they came from)."""
+
+    media_type: str = Field(description="The image's media type, as the connector served it")
+    content: bytes = Field(description="The image bytes")
+    version: str = Field(
+        description="The digest of the URL the bytes came from, which the shell's route is versioned by"
+    )
+
+
+class _CachedPicture(FrozenModel):
+    """One ``profiles/<user_id>.picture.json``: the last fetch of the URL the profile named, its bytes or its failure,
+    so a new picture is fetched afresh and a failed one not before the TTL."""
+
+    url: str = Field(description="The profile picture URL that was asked")
+    fetched_at: AwareDatetime = Field(description="When that URL was last asked")
+    is_fetch_failed: bool = Field(description="Whether that ask failed (the entry then holds no bytes)")
+    media_type: str | None = Field(default=None, description="The image's media type; None for a failure")
+    content_base64: str | None = Field(default=None, description="The image bytes, base64; None for a failure")
+
+    @model_validator(mode="after")
+    def _check_bytes_follow_the_outcome(self) -> Self:
+        has_bytes = self.media_type is not None and self.content_base64 is not None
+        if has_bytes == self.is_fetch_failed:
+            raise InvalidShellValueError("a picture cache entry holds bytes exactly when its fetch succeeded")
+        return self
+
+
+@pure
+def picture_version_of(profile_picture_url: str) -> str:
+    """The version a picture URL carries in the shell's own picture route: a digest of the connector's URL, which
+    changes with the picture's content hash, so a page's cached copy is never shown for a newer picture."""
+    return hashlib.sha256(profile_picture_url.encode()).hexdigest()[:_PICTURE_VERSION_LENGTH]
+
+
+@pure
+def _picture_of(cached: _CachedPicture) -> ProfilePicture:
+    """The picture a successful cache entry holds."""
+    if cached.media_type is None or cached.content_base64 is None:
+        raise InvalidShellValueError("a failed picture cache entry holds no picture")
+    return ProfilePicture(
+        media_type=cached.media_type,
+        content=base64.b64decode(cached.content_base64),
+        version=picture_version_of(cached.url),
+    )
 
 
 class _ProfileWire(FrozenModel):
@@ -156,8 +224,70 @@ class ProfileResolver(MutableModel):
                 profile_by_user_id[str(user_id)] = profile
         return profile_by_user_id
 
+    def resolve_picture(self, user_id: UserId, now: datetime) -> ProfilePicture | None:
+        """The user's profile picture, or None when their profile names none (or cannot be resolved): the cached
+        bytes while the profile still names the URL they came from, else fetched from that URL and cached. A fetch
+        that fails is cached as a miss for the TTL, as a profile fetch is: the page draws a monogram meanwhile."""
+        profile = self.resolve(user_id, now)
+        if profile is None or profile.profile_picture_url is None:
+            return None
+        url = profile.profile_picture_url
+        cached = self._read_cached_picture(user_id)
+        if cached is not None and cached.url == url:
+            if not cached.is_fetch_failed:
+                return _picture_of(cached)
+            if now - cached.fetched_at < self.cache_ttl:
+                return None
+        fetched = self._fetch_picture(url, user_id)
+        self._write_cached_picture(
+            user_id,
+            _CachedPicture(
+                url=url,
+                fetched_at=now,
+                is_fetch_failed=fetched is None,
+                media_type=fetched.media_type if fetched is not None else None,
+                content_base64=base64.b64encode(fetched.content).decode() if fetched is not None else None,
+            ),
+        )
+        return fetched
+
     def _cache_path(self, user_id: UserId) -> Path:
         return self.cache_directory / f"{user_id}.json"
+
+    def _picture_cache_path(self, user_id: UserId) -> Path:
+        return self.cache_directory / f"{user_id}{_PICTURE_CACHE_SUFFIX}"
+
+    def _read_cached_picture(self, user_id: UserId) -> _CachedPicture | None:
+        document = read_json_object(self._picture_cache_path(user_id))
+        if document is None:
+            return None
+        try:
+            return _CachedPicture.model_validate(document)
+        except ValidationError as e:
+            logger.warning("Skipped an unreadable picture cache entry for {}: {}", user_id, e.errors()[0]["msg"])
+            return None
+
+    def _write_cached_picture(self, user_id: UserId, cached: _CachedPicture) -> None:
+        # A cache that cannot be written costs a fetch per request, not the request itself.
+        try:
+            write_json_atomic(self._picture_cache_path(user_id), cached.model_dump(mode="json"))
+        except ShellStateError as e:
+            logger.warning("Could not cache the profile picture of {}: {}", user_id, e)
+
+    def _fetch_picture(self, url: str, user_id: UserId) -> ProfilePicture | None:
+        response = self._get(
+            url, user_id, "profile picture", PICTURE_REQUEST_TIMEOUT_SECONDS, _SLOW_PICTURE_FETCH_SECONDS
+        )
+        if response is None:
+            return None
+        if len(response.content) > MAX_PROFILE_PICTURE_BYTES:
+            logger.warning("Refused the profile picture of {}: {} bytes", user_id, len(response.content))
+            return None
+        media_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+        if not media_type.startswith("image/"):
+            logger.warning("Refused the profile picture of {}: its type is {!r}", user_id, media_type)
+            return None
+        return ProfilePicture(media_type=media_type, content=response.content, version=picture_version_of(url))
 
     def _read_cached(self, user_id: UserId) -> _CachedProfile | None:
         document = read_json_object(self._cache_path(user_id))
@@ -176,27 +306,39 @@ class ProfileResolver(MutableModel):
         except ShellStateError as e:
             logger.warning("Could not cache the profile of {}: {}", cached.user_id, e)
 
-    def _fetch(self, broker_url: str, user_id: UserId) -> UserProfile | None:
-        url = f"{broker_url}/users/{user_id}/profile"
+    def _get(
+        self, url: str, user_id: UserId, subject: str, timeout_seconds: float, slow_seconds: float
+    ) -> httpx.Response | None:
+        """The answer ``url`` gives for a user's ``subject`` (their profile, their picture), or None, warned about,
+        when the request fails or answers anything but 200; an answer slower than ``slow_seconds`` is warned about
+        too, since the host is degrading before it is down."""
         started_at = time.monotonic()
-        client = httpx.Client(transport=self.transport, timeout=self.request_timeout_seconds)
+        client = httpx.Client(transport=self.transport, timeout=timeout_seconds)
         with client:
             try:
                 response = client.get(url)
             except httpx.HTTPError as e:
-                logger.warning("Failed to fetch the profile of {} from {}: {}", user_id, url, e)
+                logger.warning("Failed to fetch the {} of {} from {}: {}", subject, user_id, url, e)
                 return None
         elapsed_seconds = time.monotonic() - started_at
-        if elapsed_seconds > _SLOW_PROFILE_FETCH_SECONDS:
-            logger.warning("Fetched the profile of {} slowly ({:.1f}s)", user_id, elapsed_seconds)
+        if elapsed_seconds > slow_seconds:
+            logger.warning("Fetched the {} of {} slowly ({:.1f}s)", subject, user_id, elapsed_seconds)
         if response.status_code != httpx.codes.OK:
-            logger.warning("Fetching the profile of {} answered HTTP {}", user_id, response.status_code)
+            logger.warning("Fetching the {} of {} answered HTTP {}", subject, user_id, response.status_code)
+            return None
+        return response
+
+    def _fetch(self, broker_url: str, user_id: UserId) -> UserProfile | None:
+        url = f"{broker_url}/users/{user_id}/profile"
+        response = self._get(url, user_id, "profile", self.request_timeout_seconds, _SLOW_PROFILE_FETCH_SECONDS)
+        if response is None:
             return None
         try:
             wire = _ProfileWire.model_validate_json(response.content)
         except ValidationError as e:
             logger.warning("Ignored an unreadable profile answer for {}: {}", user_id, e.errors()[0]["msg"])
             return None
+        # An empty URL is no picture: the pages draw a monogram for None, and an <img src=""> renders broken.
         return UserProfile(
-            user_id=wire.user_id, display_name=wire.display_name, profile_picture_url=wire.profile_picture_url
+            user_id=wire.user_id, display_name=wire.display_name, profile_picture_url=wire.profile_picture_url or None
         )

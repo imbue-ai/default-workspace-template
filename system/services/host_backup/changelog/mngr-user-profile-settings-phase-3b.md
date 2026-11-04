@@ -1,0 +1,1 @@
+`data/system/backup.toml` gains a `verification_disabled` key (default `false`): the per-workspace "backup verification off" flag the Imbue Studio app used to keep on each computer now lives in the workspace itself, so every computer agrees on it (user-profile-state spec, phase 3B). The backup service reads the key tolerantly and ignores it; backups run either way.

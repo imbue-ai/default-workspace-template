@@ -17,6 +17,7 @@ const HANDSHAKE: ShellHandshake = {
   app: "chat",
   path: "/",
   opensLocalFiles: false,
+  isViewing: false,
 };
 
 let container: HTMLElement;
@@ -42,7 +43,14 @@ function visibleChatIds(): string[] {
 /** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. ``posted`` is
  *  what the root posts to the page. */
 function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi | "posted"]: ReturnType<typeof vi.fn> } {
-  const api = { shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn(), focus: vi.fn() };
+  const api = {
+    shown: vi.fn(),
+    hidden: vi.fn(),
+    prependDraft: vi.fn(),
+    hintComposer: vi.fn(),
+    setCompact: vi.fn(),
+    focus: vi.fn(),
+  };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);

@@ -201,7 +201,10 @@ class DesktopsDocument(FrozenModel):
     """The whole of ``desktops.json``."""
 
     version: int = Field(description="The file format version")
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
+    desktops: tuple[Desktop, ...] = Field(
+        description="Every desktop, in display order (creation order, as the order route rearranged it); the first is "
+        "the fallback"
+    )
 
 
 class DesktopThemesDocument(FrozenModel):
@@ -275,9 +278,16 @@ class PageShowRequest(FrozenModel):
 class LaunchTarget(FrozenModel):
     """Where a launch's page goes (post-launch-paths plan section 3.3)."""
 
-    kind: LaunchTargetKind = Field(description="A new window, a window already at the path, or a named window")
+    kind: LaunchTargetKind = Field(
+        description="A new window, a window already at the path, a named window, or the show op's choice"
+    )
     window_id: WindowId | None = Field(
         default=None, description="The window this client points at the page; required for the window kind"
+    )
+    beside: WindowId | None = Field(
+        default=None,
+        description="For the show kind, a window of the desktop the shown window is snapped beside (the multiplayer "
+        "spec, section 9.2); none lays nothing out",
     )
     sends_window_path: bool = Field(
         default=True,
@@ -286,9 +296,13 @@ class LaunchTarget(FrozenModel):
     )
 
     @model_validator(mode="after")
-    def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
+    def _check_fields_fit_the_kind(self) -> "LaunchTarget":
         if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
             raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        if self.beside is not None and self.kind is not LaunchTargetKind.SHOW:
+            raise InvalidShellValueError(
+                "only a launch target of the 'show' kind lays the shown window out beside one"
+            )
         if not self.sends_window_path and self.kind is not LaunchTargetKind.WINDOW:
             raise InvalidShellValueError("only a launch target of the 'window' kind has a window path to withhold")
         return self
@@ -334,6 +348,19 @@ class ClientDesktopView(FrozenModel):
     seen_windows: tuple[Window, ...] = Field(description="The desktop's windows as the client sees them")
 
 
+class ShownWindow(FrozenModel):
+    """What showing a path came to for one client (the ``show`` op's rule applied): the desktop the window is on,
+    the window, how it was put on screen, and whether that was a raise of a pulled-out window's own desktop window."""
+
+    desktop: Desktop = Field(description="The desktop the shown window is on, as it stands after the show")
+    window_id: WindowId = Field(description="The window showing the path")
+    outcome: ShowOutcome = Field(description="Raised, navigated, the pinned window navigated, or opened")
+    is_raised_in_own_window: bool = Field(
+        description="The window was pulled out into a desktop window of the embedder's own, so that was raised and "
+        "nothing on the desktop moved"
+    )
+
+
 class ShowChoice(FrozenModel):
     """What a ``show`` op settled on: how it shows the path, on which desktop, and the window (none for an open)."""
 
@@ -367,7 +394,7 @@ class DesktopChangeOutcome(FrozenModel):
 class DesktopsChangeOutcome(FrozenModel):
     """What an edit over every desktop that may change nothing came to: the desktops, and whether they were written."""
 
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in creation order")
+    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in display order")
     is_written: bool = Field(description="Whether the edit changed a desktop and the file was written")
 
 

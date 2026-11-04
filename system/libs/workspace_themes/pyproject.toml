@@ -3,7 +3,7 @@ name = "workspace-themes"
 version = "0.1.0"
 description = "Workspace themes: the theme folder's models, discovery, validation, serving, and icon tools"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     # The route-table entry for the theme route, which every app serving it publishes in its API document.

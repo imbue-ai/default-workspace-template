@@ -14,9 +14,20 @@ The shell pushes the connected set over its WebSocket whenever it changes: a
 heartbeat that brings someone in announces it at once, and a periodic sweep
 notices a silent departure (a closed tab whose heartbeats stopped).
 
-A request whose identity has no user id (the owner of an unshared workspace,
-or one that came through no proxy at all) is never recorded: there is nobody
-to name.
+A request whose identity has no user id is the owner of a workspace that has not
+shared (or one that came through no proxy at all, which is read the same way):
+it is recorded under the synthetic ``owner`` key (the multiplayer spec, S12),
+so the owner's heartbeats count whether or not they have revealed who they
+are. That record is left out of the ``presence_updated`` push, which names
+accounts; the roster carries it instead. A visiting agent never heartbeats:
+its presence is the last-seen record the share gateway keeps, which the roster
+reads beside these files.
+
+Each heartbeat may also carry how long ago the page last saw keyboard or pointer
+input, which the store stamps against its own clock and keeps in the file beside the
+identity snapshot (``last_input_at``), never moving it backwards; it is what tells an
+active person from an idle one. A heartbeat that moves it is reported as such, so the
+shell can announce the roster that carries it (the multiplayer spec, section 4.3).
 """
 
 import os
@@ -36,6 +47,10 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY_VALUE
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -46,7 +61,6 @@ from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -74,6 +88,18 @@ class PresentUser(FrozenModel):
     owner: bool = Field(description="Whether this user owns the workspace")
     first_seen: str = Field(description="ISO timestamp of the heartbeat that created this record")
     last_seen: str = Field(description="ISO timestamp of the latest heartbeat (the file's mtime)")
+    last_input_at: str | None = Field(
+        default=None, description="ISO timestamp of the newest keyboard or pointer input a page of theirs reported"
+    )
+
+    @property
+    def is_anonymous_owner(self) -> bool:
+        """Whether this is the owner recorded under the synthetic ``owner`` key rather than an account."""
+        return self.user_id == OWNER_PARTICIPANT_KEY_VALUE
+
+    @property
+    def participant(self) -> ParticipantKey:
+        return OWNER_PARTICIPANT_KEY if self.is_anonymous_owner else ParticipantKey(f"user:{self.user_id}")
 
 
 class _StoredPresence(FrozenModel):
@@ -85,14 +111,22 @@ class _StoredPresence(FrozenModel):
     email: str = Field(description="The verified email as last stamped by a proxy")
     owner: bool = Field(description="Whether this user owns the workspace")
     first_seen: str = Field(description="ISO timestamp of the heartbeat that created the file")
+    last_input_at: str | None = Field(
+        default=None, description="ISO timestamp of the newest input a page reported, when any did"
+    )
 
 
 class PresenceOutcome(FrozenModel):
-    """What a heartbeat or a sweep found: the connected set now, and whether it differs from the last one announced."""
+    """What a heartbeat or a sweep found: the connected set now, whether it differs from the last one announced, and
+    whether the heartbeat moved the requester's newest input time."""
 
     users: tuple[PresentUser, ...] = Field(description="Every connected user now, by user id")
     is_membership_changed: bool = Field(
         description="Whether the connected set differs from the one last reported as changed (what the shell broadcasts on)"
+    )
+    is_input_changed: bool = Field(
+        default=False,
+        description="Whether the heartbeat moved the requester's stored newest input time (a sweep never does)",
     )
 
 
@@ -122,15 +156,18 @@ def present_user_wire_json(user: PresentUser, profile: UserProfile | None) -> di
         "owner": user.owner,
         "first_seen": user.first_seen,
         "last_seen": user.last_seen,
+        "last_input_at": user.last_input_at,
     }
 
 
 def present_users_wire_json(
     users: Sequence[PresentUser], profiles: ProfileResolver, now: datetime
 ) -> list[dict[str, Any]]:
-    """The connected users as the wire carries them, each with the profile the resolver has for it."""
-    profile_by_user_id = profiles.resolve_many([UserId(user.user_id) for user in users], now)
-    return [present_user_wire_json(user, profile_by_user_id.get(user.user_id)) for user in users]
+    """The connected accounts as the wire carries them, each with the profile the resolver has for it; the owner
+    recorded under the ``owner`` key names no account and is left to the roster."""
+    accounts = [user for user in users if not user.is_anonymous_owner]
+    profile_by_user_id = profiles.resolve_many([UserId(user.user_id) for user in accounts], now)
+    return [present_user_wire_json(user, profile_by_user_id.get(user.user_id)) for user in accounts]
 
 
 class PresenceStore(MutableModel):
@@ -150,9 +187,13 @@ class PresenceStore(MutableModel):
     def users_directory(self) -> Path:
         return self.directory / USERS_DIRECTORY_NAME
 
-    def heartbeat(self, identity: RequestIdentity, now: datetime) -> PresenceOutcome:
-        """Record one heartbeat: write the user's file on first sight (or when their email or owner flag changed),
-        and touch its mtime to ``now``."""
+    def heartbeat(
+        self, identity: RequestIdentity, now: datetime, last_input_at: datetime | None = None
+    ) -> PresenceOutcome:
+        """Record one heartbeat: write the user's file on first sight (or when their email, owner flag, or newest
+        input changed), and touch its mtime to ``now``. The owner of a workspace that has not shared is recorded
+        under the ``owner`` key. The input time is taken no later than ``now`` (a page's clock is not the shell's)
+        and never moves backwards; the outcome says whether it moved."""
         user_id = _require_user_id(identity)
         with self._lock:
             path = self._user_path(str(user_id))
@@ -162,11 +203,13 @@ class PresenceStore(MutableModel):
                 email=identity.email or "",
                 owner=identity.owner,
                 first_seen=existing.first_seen if existing is not None else _format_timestamp(now),
+                last_input_at=_newest_input(existing, _no_later_than(last_input_at, now)),
             )
             if snapshot != existing:
                 write_json_atomic(path, snapshot.model_dump())
             self._touch(path, now)
-            return self._outcome(now)
+            is_input_changed = snapshot.last_input_at != (existing.last_input_at if existing is not None else None)
+            return self._outcome(now, is_input_changed)
 
     def sweep(self, now: datetime) -> PresenceOutcome:
         """The connected set now, flagged changed when someone has silently gone (or come) since the last report."""
@@ -176,6 +219,20 @@ class PresenceStore(MutableModel):
     def connected_users(self, now: datetime) -> list[PresentUser]:
         """Every user whose last heartbeat is within the connected window, by user id."""
         return [user for user in self.all_users() if now - _parse_timestamp(user.last_seen) < self.connected_window]
+
+    def presence_by_participant(self, now: datetime) -> dict[ParticipantKey, "ParticipantPresence"]:
+        """What the files say of each participant that has ever heartbeated: whether they are connected now, and
+        when they were last here and last typed or clicked."""
+        return {
+            user.participant: ParticipantPresence(
+                is_connected=now - _parse_timestamp(user.last_seen) < self.connected_window,
+                last_seen=user.last_seen,
+                last_input_at=user.last_input_at,
+                owner=user.owner,
+                email=user.email,
+            )
+            for user in self.all_users()
+        }
 
     def all_users(self) -> list[PresentUser]:
         """Everyone with a presence file, connected or not (the "last here" records), by user id."""
@@ -194,13 +251,15 @@ class PresenceStore(MutableModel):
                     users.append(user)
             return users
 
-    def _outcome(self, now: datetime) -> PresenceOutcome:
+    def _outcome(self, now: datetime, is_input_changed: bool = False) -> PresenceOutcome:
         connected = tuple(self.connected_users(now))
         connected_user_ids = frozenset(user.user_id for user in connected)
         is_membership_changed = connected_user_ids != self._announced_user_ids
         if is_membership_changed:
             self._announced_user_ids = connected_user_ids
-        return PresenceOutcome(users=connected, is_membership_changed=is_membership_changed)
+        return PresenceOutcome(
+            users=connected, is_membership_changed=is_membership_changed, is_input_changed=is_input_changed
+        )
 
     def _user_path(self, user_id: str) -> Path:
         return self.users_directory / f"{user_id}.json"
@@ -230,6 +289,7 @@ class PresenceStore(MutableModel):
             owner=stored.owner,
             first_seen=stored.first_seen,
             last_seen=_format_timestamp(_moment_of_nanoseconds(modified_at_nanoseconds)),
+            last_input_at=stored.last_input_at,
         )
 
     def _touch(self, path: Path, now: datetime) -> None:
@@ -248,9 +308,54 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 def _require_user_id(identity: RequestIdentity) -> UserId:
-    if identity.user_id is None:
-        raise InvalidShellValueError("presence needs a signed-in requester (the identity carries no user id)")
-    return UserId(identity.user_id)
+    """The file a requester's presence is kept under: their user id, or ``owner`` for the owner of a workspace
+    that has not shared (S12); a visiting agent never heartbeats, so it has no file here."""
+    if identity.agent_id is not None:
+        raise InvalidShellValueError("presence needs a person (the identity names a visiting agent)")
+    if identity.user_id is not None:
+        return UserId(identity.user_id)
+    return UserId(OWNER_PARTICIPANT_KEY_VALUE)
+
+
+@pure
+def reported_input_moment(
+    now: datetime, input_age_seconds: float | None, last_input_at: datetime | None
+) -> datetime | None:
+    """When a heartbeat says the page last saw input, on the shell's clock: ``now`` less the age the page reported,
+    which no clock skew can move; a page from before the age was sent reports a moment by its own clock instead,
+    which is taken as it is (the store clamps it to ``now``); None when the page has seen none."""
+    if input_age_seconds is not None:
+        return now - timedelta(seconds=input_age_seconds)
+    return last_input_at
+
+
+@pure
+def _no_later_than(moment: datetime | None, now: datetime) -> datetime | None:
+    """A reported moment, clamped to the shell's now: a clock ahead of the shell's cannot pin a person active."""
+    if moment is None:
+        return None
+    return min(moment, now)
+
+
+@pure
+def _newest_input(existing: _StoredPresence | None, reported: datetime | None) -> str | None:
+    """The newest input time of the record and the report: a late heartbeat never moves it backwards."""
+    reported_text = _format_timestamp(reported) if reported is not None else None
+    if existing is None or existing.last_input_at is None:
+        return reported_text
+    if reported_text is None:
+        return existing.last_input_at
+    return max(existing.last_input_at, reported_text)
+
+
+class ParticipantPresence(FrozenModel):
+    """What presence knows of one participant: whether they are here now, and when they were last here and active."""
+
+    is_connected: bool = Field(description="Whether their last heartbeat is within the connected window")
+    last_seen: str = Field(description="ISO timestamp of their last heartbeat")
+    last_input_at: str | None = Field(description="ISO timestamp of their newest reported input, when any")
+    owner: bool = Field(description="Whether the record says they own the workspace")
+    email: str = Field(description="The email their last heartbeat carried; empty for the anonymous owner")
 
 
 def utc_now() -> datetime:
@@ -268,6 +373,9 @@ class PresenceSweep(MutableModel):
     )
     announce: Callable[[Sequence[PresentUser]], None] = Field(
         frozen=True, description="How a changed connected set reaches the windows"
+    )
+    announce_roster: Callable[[], None] = Field(
+        frozen=True, description="How the roster, which a changed connected set changes too, reaches the windows"
     )
 
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -293,6 +401,7 @@ class PresenceSweep(MutableModel):
         outcome = self.store.sweep(now)
         if outcome.is_membership_changed:
             self.announce(outcome.users)
+            self.announce_roster()
         return outcome.is_membership_changed
 
     def _run(self) -> None:
@@ -305,12 +414,17 @@ class PresenceSweep(MutableModel):
 
 
 def build_presence_sweep(
-    store: PresenceStore, profiles: ProfileResolver, broadcaster: WebSocketBroadcaster
+    store: PresenceStore,
+    profiles: ProfileResolver,
+    broadcaster: WebSocketBroadcaster,
+    announce_roster: Callable[[], None],
 ) -> PresenceSweep:
-    """A sweep that announces the connected set to every window, each user carrying their profile."""
+    """A sweep that announces the connected set to every window, each user carrying their profile, and the roster
+    after it."""
     return PresenceSweep(
         store=store,
         announce=lambda users: broadcaster.broadcast_presence_updated(
             present_users_wire_json(users, profiles, utc_now())
         ),
+        announce_roster=announce_roster,
     )
