@@ -129,6 +129,23 @@ class ScreenSize(FrozenModel):
     rate: int = Field(description="Refresh rate in Hz")
 
 
+class VideoCodec(UpperCaseStrEnum):
+    """The codec neko encodes the WebRTC video in (spec section 8.1)."""
+
+    H264 = auto()
+    VP8 = auto()
+
+
+class DisplaySettings(FrozenModel):
+    """What a Screen's environment decides about its picture for the service's life (spec section 8.1 and 7.2)."""
+
+    video_codec: VideoCodec = Field(default=VideoCodec.H264, description="The codec of the WebRTC video")
+    fixed_size: ScreenSize | None = Field(
+        default=None,
+        description="The display's one mode, which viewers' size reports do not change; None to follow them",
+    )
+
+
 class AddedMode(FrozenModel):
     """A RANDR mode the service added this stack life (spec section 7.2)."""
 

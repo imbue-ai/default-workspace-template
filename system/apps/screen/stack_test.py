@@ -14,6 +14,7 @@ from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
 from screen.connect_info import ConnectInfoAggregator
+from screen.data_types import DisplaySettings
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -337,7 +338,7 @@ def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
 
 def test_secrets_are_read_back_from_a_rendered_neko_yaml() -> None:
     secrets = NekoSecrets(user_password=SecretStr("u"), admin_password=SecretStr("a"), api_token=SecretStr("t"))
-    read_back = secrets_from_neko_yaml(render_neko_yaml(secrets))
+    read_back = secrets_from_neko_yaml(render_neko_yaml(secrets, DisplaySettings()))
     assert read_back.user_password.get_secret_value() == "u"
     assert read_back.admin_password.get_secret_value() == "a"
     assert read_back.api_token.get_secret_value() == "t"

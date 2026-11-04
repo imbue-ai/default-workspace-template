@@ -118,10 +118,14 @@ def cvt_modeline(width: int, height: int) -> Modeline:
 
 
 @pure
-def render_xorg_conf() -> str:
-    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes, neko's touchscreen as
-    the one configured input device (mouse and keyboard arrive over XTEST), no VT, no PCI probing."""
-    modelines = [cvt_modeline(width, height) for width, height in SEEDED_MODES]
+def render_xorg_conf(fixed_mode: tuple[int, int] | None) -> str:
+    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes (led by a fixed
+    ``(width, height)``, so the server starts at it), neko's touchscreen as the one configured input device (mouse
+    and keyboard arrive over XTEST), no VT, no PCI probing."""
+    sizes = list(SEEDED_MODES)
+    if fixed_mode is not None:
+        sizes = [fixed_mode, *(size for size in sizes if size != fixed_mode)]
+    modelines = [cvt_modeline(width, height) for width, height in sizes]
     modes_list = " ".join(f'"{modeline.name}"' for modeline in modelines)
     modeline_lines = "\n".join(f"  {modeline.render()}" for modeline in modelines)
     return f"""Section "ServerFlags"

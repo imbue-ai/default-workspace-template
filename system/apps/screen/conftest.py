@@ -21,6 +21,7 @@ from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
 from screen.cdp_proxy import ProxyServer
 from screen.connect_info import ConnectInfoAggregator
+from screen.data_types import DisplaySettings
 from screen.owner_gate import OwnerGate
 from screen.proxy import NekoProxy
 from screen.routes import build_app
@@ -120,8 +121,16 @@ def proxy_server() -> ProxyServer:
 
 
 @pytest.fixture
+def display_settings() -> DisplaySettings:
+    """The ``service`` fixture's display settings, a workspace's by default; a test parametrizes this name to fix the
+    size or change the codec."""
+    return DisplaySettings()
+
+
+@pytest.fixture
 def service(
     tmp_path: Path,
+    display_settings: DisplaySettings,
     fake_supervisor: FakeSupervisor,
     fake_neko: FakeNeko,
     fake_display_modes: FakeDisplayModes,
@@ -147,6 +156,7 @@ def service(
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         connectivity=ConnectInfoAggregator(brokers=fake_brokers, deadline_seconds=1.0),
+        display_settings=display_settings,
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,
@@ -185,6 +195,7 @@ def service(
         on_running=built.on_running,
         set_api_token=built.set_api_token,
         on_stopping=fleet.prepare_for_stack_stop,
+        display_settings=display_settings,
     )
     built.attach_stack(stack)
     built.start()

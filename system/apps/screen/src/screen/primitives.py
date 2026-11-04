@@ -16,6 +16,7 @@ from screen.browser_names import is_valid_browser_name
 from screen.errors import InvalidBrowserNameError
 from screen.errors import InvalidDroppedFileNameError
 from screen.errors import InvalidRunCommandError
+from screen.errors import InvalidScreenSizeError
 from screen.errors import InvalidStartUrlError
 from screen.errors import WindowToolError
 
@@ -183,6 +184,15 @@ class BrowserName(str):
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+@pure
+def parse_size_argument(value: str) -> tuple[int, int]:
+    """``WxH``, as the ``screen size`` command and ``SCREEN_FIXED_SIZE`` take it."""
+    width_text, separator, height_text = value.lower().partition("x")
+    if not separator or not width_text.isdigit() or not height_text.isdigit():
+        raise InvalidScreenSizeError(f"a size is WIDTHxHEIGHT, such as 1280x720, not {value!r}")
+    return int(width_text), int(height_text)
 
 
 @pure

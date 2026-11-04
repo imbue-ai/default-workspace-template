@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from screen.data_types import DisplaySettings
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -137,6 +138,9 @@ class ScreenStack(MutableModel):
     )
     download_dir: Path = Field(frozen=True, description="Chromium's download folder, named beside it")
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
+    display_settings: DisplaySettings = Field(
+        default_factory=DisplaySettings, frozen=True, description="The codec and any fixed size the config renders"
+    )
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
     input_socket_path: Path = Field(
         default=Path(INPUT_SOCKET_PATH), frozen=True, description="The input driver's socket, bound by Xorg"
@@ -302,12 +306,14 @@ class ScreenStack(MutableModel):
     def _render_configuration(self, new_secrets: NekoSecrets) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (self.state_dir / XORG_CONF_FILENAME).write_text(render_xorg_conf())
+        fixed_size = self.display_settings.fixed_size
+        fixed_mode = (fixed_size.width, fixed_size.height) if fixed_size is not None else None
+        (self.state_dir / XORG_CONF_FILENAME).write_text(render_xorg_conf(fixed_mode))
         (self.state_dir / PULSE_SCRIPT_FILENAME).write_text(render_pulse_script())
         neko_yaml = self.state_dir / NEKO_YAML_FILENAME
         neko_yaml.touch(mode=0o600, exist_ok=True)
         neko_yaml.chmod(0o600)
-        neko_yaml.write_text(render_neko_yaml(new_secrets))
+        neko_yaml.write_text(render_neko_yaml(new_secrets, self.display_settings))
         write_browser_helper_files(self.home)
         write_xfdesktop_channel(self.home)
         write_user_dirs(self.home, self.desktop_dir, self.download_dir)

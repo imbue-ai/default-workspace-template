@@ -414,7 +414,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy, 
     @app.post("/api/screen-size")
     def screen_size() -> ResponseReturnValue:
         """Resize the Screen to the controller's stage size (``width`` and ``height`` in CSS pixels); a report from a
-        session that does not control the Screen is not applied."""
+        session that does not control the Screen, or any report while the Screen's size is fixed, is not applied."""
         body = parse_request_body(ScreenSizeRequest)
         width, height = body.width, body.height
         if service.stack.lifecycle != Lifecycle.RUNNING:
@@ -430,11 +430,18 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy, 
             refusal = describe_visitor_refusal(service, session_id)
             if refusal is not None:
                 return _error(refusal, HTTP_FORBIDDEN)
-        if session_id is not None and not service.is_controller_session(session_id):
+        reason: str | None = None
+        if service.display_settings.fixed_size is not None:
+            reason = "fixed size"
+        elif session_id is not None and not service.is_controller_session(session_id):
+            reason = "not the controller"
+        else:
+            pass
+        if reason is not None:
             return model_response(
                 ScreenSizeAnswer(
                     applied=False,
-                    reason="not the controller",
+                    reason=reason,
                     screen_size=ScreenSizeDocument.model_validate(current.model_dump()) if current else None,
                 )
             )

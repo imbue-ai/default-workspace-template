@@ -179,7 +179,7 @@ class ScreenSizeAnswer(FrozenModel):
     """Whether the size was applied, why not, and the mode that stands."""
 
     applied: bool = Field(description="Whether the display was resized (or already had the size)")
-    reason: str | None = Field(description="Why a report was not applied (``not the controller``)")
+    reason: str | None = Field(description="Why a report was not applied (``not the controller``, ``fixed size``)")
     screen_size: ScreenSizeDocument | None = Field(description="The mode that stands, while running")
 
 

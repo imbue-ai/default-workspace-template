@@ -213,19 +213,22 @@ The session runs as the workspace user with `HOME` the workspace home, so XFCE a
 - The service rounds width and height down to multiples of 16, clamps to `[640x480, 1920x1080]`, and if the size differs from the current one: adds a mode named `<w>x<h>_60` with `xrandr --newmode` (a `cvt`-computed modeline) and `--addmode` on the dummy output when it is not already there, then `POST /neko/api/room/screen` with it.
   Neko restarts the capture and broadcasts `screen/updated`; viewers letterbox the new aspect.
 - Added modes are kept for the stack's life; they cost nothing.
+- A Screen whose environment fixes its size (`SCREEN_FIXED_SIZE=WxH`, a size the rules above would produce; the auth sandbox's 1360x864, which fits latchkey's login window, Playwright's 1280x720 viewport) starts at that mode (`xorg.conf` lists it first and `neko.yaml` names it) and answers every report `{"applied": false, "reason": "fixed size"}` without resizing.
 - Every viewer draws the video at its intrinsic aspect, centred, letterboxed in the stage.
 
 ## 8. Video profiles, visibility and audio
 
 ### 8.1 Profiles
 
-Three pipelines in neko's config, all H.264 constrained baseline from x264 with `tune=zerolatency`, `byte-stream=true`, keyframe interval one second:
+Three pipelines in neko's config, keyframe interval one second, in the codec `SCREEN_VIDEO_CODEC` names: by default H.264 constrained baseline from x264 with `tune=zerolatency`, `byte-stream=true`, and with `vp8` libvpx in realtime CBR at the same rates (the auth sandbox's, section 11):
 
 | id | fps | bitrate | preset | threads |
 |---|---|---|---|---|
 | `idle` | 5 | 800 kbps | ultrafast | 1 |
 | `watch` | 20 | 2500 kbps | veryfast | 4 |
 | `control` | 30 | 4000 kbps | veryfast | 4 |
+
+The preset column is x264's; VP8 runs every profile at `cpu-used=8`.
 
 The service chooses one profile for everyone from aggregate state: `control` while a human holds control and has sent input in the last 10 seconds, `idle` while nobody has sent input for 60 seconds and no agent holds the lease, `watch` otherwise.
 It announces the choice on its own WebSocket (section 10.2), and every viewer selects it with `signal/video`, so neko runs one encoder.
@@ -335,7 +338,7 @@ It speaks neko's events directly (section 2.3) for signaling, input, cursors, cl
 Keys are mapped from `KeyboardEvent.code` to X keysyms with neko's own table, copied under its Apache-2.0 notice into `system/libs/workspace_ui`.
 They are read from a hidden text input inside the stage, which takes the focus the stage is given: a browser extension that binds letters as commands (Vimium and its kin) stands down for an editable element and for nothing else, so keys typed at the stage itself never reached the Screen.
 Input is sent only while this viewer's session is the controller and the viewer is visible.
-Neko's constrained-baseline H.264 decodes natively over WebRTC in every browser Studio supports, so the viewer needs no WebCodecs and nothing of the browser app's decoding path.
+The video decodes natively over WebRTC, so the viewer needs no WebCodecs and nothing of the browser app's decoding path. Neko's constrained-baseline H.264 decodes so in Chromium-based browsers and Safari, and in Firefox only with Cisco's OpenH264 plugin, which Mozilla's builds download on their own but which a build or a profile may lack; without it neko cannot start the video track ("codec is not supported by remote") and no WebRTC picture arrives. A workspace's Screen keeps H.264; the auth sandbox, viewed from whatever browser the user signs in with, sets `SCREEN_VIDEO_CODEC=vp8`, which every browser decodes over WebRTC.
 
 ## 12. The three fullscreen layers
 

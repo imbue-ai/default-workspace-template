@@ -35,6 +35,7 @@ from screen.data_types import AddedMode
 from screen.data_types import ChromiumView
 from screen.data_types import ControlView
 from screen.data_types import Controller
+from screen.data_types import DisplaySettings
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -180,6 +181,11 @@ class ScreenService(MutableModel):
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
     connectivity: ConnectInfoAggregator = Field(
         frozen=True, description="Answers connect-info from the brokers (spec section 5.2)"
+    )
+    display_settings: DisplaySettings = Field(
+        default_factory=DisplaySettings,
+        frozen=True,
+        description="The codec and any fixed size, which size reports then leave alone (spec section 7.2)",
     )
     broadcaster: ViewerBroadcaster = Field(default_factory=ViewerBroadcaster, description="The viewers' event fan-out")
     is_event_subscription_enabled: bool = Field(

@@ -52,7 +52,9 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   `session_id` is not the controlling human's answers `{"applied": false, "reason":
   "not the controller"}`; a report with no session is the `screen size` command's and
   is applied. Added modes are recorded in `data/.state/screen/modes.json` for the
-  stack's life and forgotten when it ends.
+  stack's life and forgotten when it ends. While the size is fixed (`SCREEN_FIXED_SIZE`,
+  below) every report answers `{"applied": false, "reason": "fixed size"}` and nothing is
+  resized, and `screen size WxH` exits 1 naming the size that stands.
 - `POST /api/input-seen`, body `{"session_id"}`: the viewer's input relay reporting
   activity (throttled to one per two seconds client-side), the profile chooser's clock.
 - `POST /api/clipboard/image`, multipart `session_id` and `image` (an `image/...` part; the whole
@@ -107,6 +109,17 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 
 The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
 another address, which it refuses to do outside gate mode.
+
+Two more variables, read once at service start, change the picture; a workspace sets neither,
+and the auth sandbox sets both (`system/libs/auth_sandbox/README.md`). A value the service
+cannot use stops it at start.
+
+- `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
+  profiles in (see "Profiles, visibility and audio").
+- `SCREEN_FIXED_SIZE`: `WxH`, the display's one mode. It must already be a size a report could
+  produce (multiples of 16, or the cap, within 640x480 and 1920x1080). `xorg.conf` lists it
+  first, so the X server starts at it, `neko.yaml` names it as neko's screen, and
+  `POST /api/screen-size` no longer resizes; the viewer scales the picture to its frame.
 
 ### Gate mode
 
@@ -249,10 +262,19 @@ the seconds after. The sweep only ever raises, so repeating it writes nothing mo
 
 ## Profiles, visibility and audio
 
-Three H.264 pipelines in `neko.yaml` (spec section 8.1): `idle` 5 fps 800 kbps
-ultrafast one thread, `watch` 20 fps 2500 kbps veryfast four threads, `control` 30 fps
-4000 kbps veryfast four threads, all constrained baseline with `tune=zerolatency`, a
-one-second keyframe interval and `show_pointer` off. The service chooses one for
+Three pipelines in `neko.yaml` (spec section 8.1): `idle` 5 fps 800 kbps one thread,
+`watch` 20 fps 2500 kbps four threads, `control` 30 fps 4000 kbps four threads, each with a
+one-second keyframe interval and `show_pointer` off. In H.264, the default, they are x264
+constrained baseline with `tune=zerolatency`, `idle` at the ultrafast preset and the others at
+veryfast. Firefox decodes H.264 over WebRTC only with Cisco's OpenH264 plugin, which Mozilla's
+own builds download on their own but other builds may lack; without it neko cannot start the
+video track ("codec is not supported by remote") and no WebRTC picture arrives. With `SCREEN_VIDEO_CODEC=vp8`
+they are libvpx realtime (`deadline=1`, `cpu-used=8`, no lag) in CBR at the same bitrates, with
+WebRTC's rate-control buffer (1000 ms, 500 initial, 600 optimal), 95% undershoot and the
+quantizer held to 4..48 so small text stays legible while the picture moves. neko evaluates
+each `gst_params` value as an expression and prints the result with Go's `%v`, so a number of a
+million or more would reach the encoder in exponent form (`3e+06`); vp8enc's bitrate, in bits
+per second, is written `round(2500 * 1000)`, which evaluates to an integer. The service chooses one for
 everyone from the lease and the input clock: `control` while a human holds control and
 input arrived in the last ten seconds, `idle` while nothing has arrived for a minute
 and no agent holds the lease, `watch` otherwise (a stack start counts as input, so a

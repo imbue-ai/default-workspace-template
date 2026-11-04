@@ -25,6 +25,7 @@ from screen.primitives import APP_NAME
 from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import SERVICE_HOST
 from screen.primitives import SERVICE_PORT
+from screen.primitives import parse_size_argument
 from workspace_layout.client import ShellLayoutClient
 from workspace_layout.client import requester_from_environment
 from workspace_layout.errors import ShellOpError
@@ -272,15 +273,6 @@ def shot(quality: int, out_path: Path | None) -> None:
     _out(str(target))
 
 
-@pure
-def parse_size_argument(value: str) -> tuple[int, int]:
-    """``WxH`` as the command takes it."""
-    width_text, separator, height_text = value.lower().partition("x")
-    if not separator or not width_text.isdigit() or not height_text.isdigit():
-        raise InvalidScreenSizeError(f"a size is WIDTHxHEIGHT, such as 1280x720, not {value!r}")
-    return int(width_text), int(height_text)
-
-
 @main.command()
 @click.argument("size", required=False)
 def size(size: str | None) -> None:
@@ -304,7 +296,11 @@ def size(size: str | None) -> None:
         if not isinstance(applied, dict):
             _err("the service answered no size")
             raise SystemExit(EXIT_ERROR)
-        _out(f"{applied.get('width')}x{applied.get('height')}@{applied.get('rate')}")
+        standing = f"{applied.get('width')}x{applied.get('height')}@{applied.get('rate')}"
+        if answer.body.get("applied") is False:
+            _err(f"the Screen stays {standing}: {answer.body.get('reason')}")
+            raise SystemExit(EXIT_ERROR)
+        _out(standing)
         return
     answer = request_service("GET", "/api/state", None, is_identity_required=False)
     if answer.status != 200:
