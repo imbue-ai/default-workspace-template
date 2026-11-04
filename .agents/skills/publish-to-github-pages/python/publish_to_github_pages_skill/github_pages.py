@@ -33,6 +33,7 @@ on disk, or in git config.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -201,7 +202,10 @@ def push(site: Path, repo: str, message: str) -> str:
         raise GitHubPagesError(f"--repo {repo!r} must be <owner>/<repo>")
     if not site.is_dir():
         raise GitHubPagesError(f"{site} does not exist")
-    if lint_site(site) != 0:
+    # stdout carries only the pushed commit, for the caller to read.
+    with contextlib.redirect_stdout(sys.stderr):
+        lint_status = lint_site(site)
+    if lint_status != 0:
         raise GitHubPagesError(
             "the site did not pass `check_site.py lint`; fix it before publishing"
         )
