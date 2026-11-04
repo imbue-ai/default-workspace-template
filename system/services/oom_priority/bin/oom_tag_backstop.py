@@ -42,7 +42,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
-# import-path: no-venv -- supervisord runs it as the event listener that backstops every program's memory band, so it must keep tagging when the venv is missing or broken
+# import-path: no-venv -- its only import beyond the standard library is the stdlib-only `oom_priority`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import app_registry, bands

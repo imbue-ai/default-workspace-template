@@ -1034,8 +1034,8 @@ Remove each edit by installing the package it reaches for in the venv that runs 
 and run a shell script's python through that venv. You may restructure the code involved,
 even when it is not the code you came to change (.agents/shared/references/running-python.md).
 An edit that has to stay takes `# import-path: <reason> -- <why>` in the comment lines
-directly above it, with <reason> one of: {reasons}, and a <why> naming what runs this
-code and what would break otherwise. Name every marker you add in your report.
+directly above it, with <reason> one of: {reasons}, and a <why> as running-python.md
+describes it. Name every marker you add in your report.
 Never edit this test to let a site through.
 """
 

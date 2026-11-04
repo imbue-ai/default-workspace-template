@@ -9,7 +9,7 @@ app_registration's source on sys.path, which only an entry file may do.
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- app program lines run it before their app starts, and update-self and agents run it by path, so registering an app never waits on the venv
+# import-path: no-venv -- the program lines of apps users scaffolded, outside this release, run it as `python3 <path>`
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "libs" / "app_registration" / "src")
 )

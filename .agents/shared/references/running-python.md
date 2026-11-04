@@ -78,17 +78,24 @@ or `PYTHONSAFEPATH` set.
 The code runs under one of two interpreters, and what it imports decides which:
 
 - **Bare tier**: code whose imports are all standard library -- the bare
-  packages (`workspace_bare_scripts`, update-self's) count as standard library
-  here -- runs under the system `python3` with no venv. It pays nothing for an
-  environment it does not use. This also covers code that must work when the
-  venv is missing or broken, that something outside this release calls by
-  path, or that sits in a long-running program's launch chain: the agent
-  hooks, the bug-report collector, the pre-sync build steps, the scripts the
-  Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
-  (`with_secrets.py`, `run_in_background.py`, ...), the stdlib-only libraries
-  such as `app_registration` (which `system/scripts/forward_port.py` runs), and
-  stdlib-only modules of other packages such as `notify_user.py` and
-  `request_secret.py`.
+  packages (`workspace_bare_scripts`, update-self's) and the stdlib-only
+  libraries (`oom_priority`, `app_registration`, `chat_background_tasks`,
+  `tk_command_parsing`) count as standard library here -- runs under the
+  system `python3` with no venv. It gains nothing from the venv and would pay
+  for it on every start: from the venv, `notify_user.py` took 120 ms against
+  61 ms under `python3`. That matters most for what runs often, such as the
+  agent hooks on every tool call. Some code must run with no venv whatever it
+  imports, so it stays in this tier:
+  - no venv exists where it runs: the build steps before `uv sync`
+    (`build_workspace.sh`), publish-template's tools after their worktree
+    reset removes `.venv`;
+  - the venv may be broken or mid-change: update-self, and the boot's recovery
+    of an interrupted update;
+  - the venv installs another copy of it: update-self's staged copy of the
+    target release;
+  - something outside this release runs it as `python3 <path>`: Imbue Studio,
+    minds_evals and minds_admin (`background_tasks.py`), and the program lines
+    of apps users scaffolded (`forward_port.py`).
 - **Venv tier**: code that imports a third-party package, or a venv-tier
   package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
@@ -124,7 +131,7 @@ check reads.
 Start a process only when the call needs one of its own:
 
 - the code is the other tier's: bare code calling venv-tier code, or a step
-  that must still run when the venv is missing or broken;
+  that must still run when an update may have broken the venv;
 - the work must outlive its caller (a detached run, a rollback that restarts
   the caller), or be cut off at a deadline without taking the caller with it;
 - the code to run is another tree's: the target release's staged copy, or the
@@ -168,14 +175,16 @@ imports: the bare tier, or `uv run --no-project`) or `other-tree` (it loads
 code from a tree known only at run time).
 
 The why answers what a reviewer of this one site asks: why it cannot be an
-import, or why this code runs with no venv. Name what runs it and what would
-break otherwise -- `claude's SessionStart and Stop hooks run it to record the
-chat's background tasks, which a missing or unsynced venv must not stop` --
-not the reason in other words: `the system python3 runs this with no venv`
-says only what `no-venv` already says. A why copied unchanged into another
-file is usually one of these. When the only reason is the tier rule, the why
-names the stdlib-only packages the code imports beyond the standard library;
-who runs it as `python3 <path>` follows from its tier and is no reason.
+import, or why this code runs with no venv. For bare code that is the tier
+rule, so the why names the stdlib-only packages it imports beyond the
+standard library (`its only import beyond the standard library is the
+stdlib-only oom_priority`); who runs it as `python3 <path>` follows from its
+tier and is no reason. Code that must run with no venv whatever it imports
+names what runs it and why no venv is usable there (`update-self and Imbue
+Studio's update dispatcher run it, in place and from the staged copy, and an
+update must run when the venv is what it broke`). A why that only restates
+the reason -- `the system python3 runs this with no venv` -- says nothing
+`no-venv` does not.
 
 A marked site passes, and a marked `sys.path` edit may add a directory
 outside the bare search paths, except in code the system `python3` runs, where
