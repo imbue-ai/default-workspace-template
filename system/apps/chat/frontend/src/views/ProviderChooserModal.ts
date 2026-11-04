@@ -232,7 +232,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
     let fallback: LaneMethod | null = null;
     try {
-      // The CLI draws its callback port at random, so a port something on the user's machine
+      // Claude's CLI draws its callback port at random, so a port something on the user's machine
       // already answers on is drawn again by starting the sign-in again, a few times at most.
       for (let portDraw = 1; ; portDraw += 1) {
         await startFlow(chosen.id, chosenMethod.id, options.accountId);

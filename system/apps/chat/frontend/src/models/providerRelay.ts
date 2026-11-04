@@ -7,7 +7,7 @@
  * opens the page in the user's chosen browser. It answers whether it is doing so. A plain
  * browser, or a chrome that cannot bind the port, answers no or not at all -- and then the
  * chooser offers a way to sign in that needs no relay. A port that is only taken by something
- * else on the user's machine is said apart, since the CLI draws a fresh one each run.
+ * else on the user's machine is said apart, since Claude's CLI draws a fresh one each run.
  */
 
 import {
