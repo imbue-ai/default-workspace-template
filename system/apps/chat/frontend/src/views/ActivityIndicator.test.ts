@@ -15,7 +15,7 @@ import {
 import { addOutgoing, clearOutgoing, getOutgoingMessages, noteBackendArrivals } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
-import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
@@ -598,6 +598,13 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
         { message_id: "m-2", text: "and this" },
       ],
     });
+    landedHeldSends.count = 1;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+
+    // A rebind hands its confirming message to the same agent as the next turn's own message.
+    handoffState.handoff = rebindStateFixture();
+    landedHeldSends.count = 0;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
     landedHeldSends.count = 1;
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
 
