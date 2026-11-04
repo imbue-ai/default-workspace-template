@@ -159,18 +159,18 @@ def _svg_size(text: str) -> tuple[int, int] | None:
     viewbox_match = _SVG_VIEWBOX_RE.search(tag)
     width = float(width_match.group(1)) if width_match else None
     height = float(height_match.group(1)) if height_match else None
-    if viewbox_match is not None:
-        viewbox_width, viewbox_height = float(viewbox_match.group(1)), float(viewbox_match.group(2))
-        if viewbox_width > 0 and viewbox_height > 0:
-            if width is None and height is None:
-                width, height = viewbox_width, viewbox_height
-            elif height is None and width is not None:
-                height = width * viewbox_height / viewbox_width
-            elif width is None and height is not None:
-                width = height * viewbox_width / viewbox_height
-    if width is None or height is None:
+    if width is not None and height is not None:
+        return _positive(round(width), round(height))
+    if viewbox_match is None:
         return None
-    return _positive(round(width), round(height))
+    viewbox_width, viewbox_height = float(viewbox_match.group(1)), float(viewbox_match.group(2))
+    if viewbox_width <= 0 or viewbox_height <= 0:
+        return None
+    if width is not None:
+        return _positive(round(width), round(width * viewbox_height / viewbox_width))
+    if height is not None:
+        return _positive(round(height * viewbox_width / viewbox_height), round(height))
+    return _positive(round(viewbox_width), round(viewbox_height))
 
 
 @pure
