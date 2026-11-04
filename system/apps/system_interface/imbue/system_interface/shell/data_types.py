@@ -237,8 +237,8 @@ class DefaultShortcutsOfferedDocument(FrozenModel):
     )
 
 
-# CLEANUP: drop ``AppsOfferedDocument`` and its read in ``DesktopStore._read_offered_unlocked`` around February 2027,
-# once every workspace has rewritten its record in the targets format (the first shell read after the update does).
+# CLEANUP: drop ``AppsOfferedDocument`` and its read in ``DesktopStore._read_offered_unlocked`` once every workspace
+# has taken the release after minds-v0.10.0; the first shell read after that update rewrites the record.
 class AppsOfferedDocument(FrozenModel):
     """``default_shortcuts_offered.json`` as it was while an app had at most one default shortcut: the apps offered."""
 

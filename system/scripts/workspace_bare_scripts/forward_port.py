@@ -202,9 +202,10 @@ _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]
 # ``actions`` are keys no manifest declares any more (the tabbed shell's), and
 # ``default_shortcut`` is the one table ``default_shortcuts`` replaced; they stay
 # here so a registration clears them off a row an older release wrote.
-# CLEANUP: drop the three tabbed-shell keys around late October 2026, and
-# ``default_shortcut`` around February 2027, once every workspace has
-# re-registered its apps under the release that retired it.
+# CLEANUP: drop the three tabbed-shell keys around late October 2026, once
+# every workspace has re-registered its apps under the release that retired
+# them, and ``default_shortcut`` once no registry row predates the
+# ``default_shortcuts`` key; every app rewrites its row when it next starts.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
     "description",

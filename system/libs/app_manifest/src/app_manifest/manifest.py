@@ -379,7 +379,7 @@ class DefaultShortcut(FrozenModel):
     mode: ShortcutMode = Field(description="focus or new")
 
 
-def as_default_shortcut_list(value: Any) -> Any:
+def as_default_shortcut_list(value: object) -> object:
     """A ``default_shortcut`` value as the list it stands for: one table is a list of one; anything else is left for
     validation to judge."""
     return [value] if isinstance(value, dict) else value
@@ -590,7 +590,7 @@ class AppManifest(FrozenModel):
 
     @field_validator("default_shortcuts", mode="before")
     @classmethod
-    def _read_one_default_shortcut_as_a_list(cls, value: Any) -> Any:
+    def _read_one_default_shortcut_as_a_list(cls, value: object) -> object:
         listed = as_default_shortcut_list(value)
         if isinstance(listed, list) and not listed:
             raise InvalidManifestValueError("default_shortcut, when declared, names at least one shortcut")

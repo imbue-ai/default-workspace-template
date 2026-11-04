@@ -3,7 +3,6 @@ import sys
 import time
 import tomllib
 from pathlib import Path
-from typing import Any
 from typing import Final
 
 from loguru import logger
@@ -148,9 +147,8 @@ class RegistryRow(FrozenModel):
         description="Whether the shell may stop the app's program once no window shows it",
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    # CLEANUP: drop the ``default_shortcut`` alias once no registry row is older than the ``default_shortcuts`` key
-    # (every supervised app re-registers on its next start; a row of an app that never starts again keeps the old
-    # key), around February 2027.
+    # CLEANUP: drop the ``default_shortcut`` alias once no registry row predates the ``default_shortcuts`` key; every
+    # app rewrites its row when it next starts.
     default_shortcuts: tuple[DefaultShortcut, ...] = Field(
         default=(),
         validation_alias=AliasChoices("default_shortcuts", "default_shortcut"),
@@ -188,7 +186,7 @@ class RegistryRow(FrozenModel):
 
     @field_validator("default_shortcuts", mode="before")
     @classmethod
-    def _read_one_default_shortcut_as_a_list(cls, value: Any) -> Any:
+    def _read_one_default_shortcut_as_a_list(cls, value: object) -> object:
         return as_default_shortcut_list(value)
 
 
