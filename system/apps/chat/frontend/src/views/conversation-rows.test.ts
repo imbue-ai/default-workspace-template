@@ -534,12 +534,13 @@ describe("a stretch of the agent's output", () => {
         tkMsg("t2", "tk start cod-step-aaa", "c1"),
         result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Install the update"),
         toolMsg("t3", "c2", "Run the installer"),
-        // A permission request lifted out of the step: the card is not a chip, the call beside it is.
+        // A permission and a secret request lifted out of the step: the cards are not chips, the call beside them is.
         {
           ...toolMsg("t3b", "c6", "Read the settings"),
           tool_calls: [
             { tool_call_id: "c6", tool_name: "Bash", input_chars: 24, action_note: "Read the settings" },
             { tool_call_id: "c7", tool_name: "Bash", input_chars: 96, display: "permission_request" },
+            { tool_call_id: "c8", tool_name: "Bash", input_chars: 96, display: "secret_request" },
           ],
         },
         tkMsg("t4", 'tk close cod-step-aaa "Installed"', "c3"),

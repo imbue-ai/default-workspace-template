@@ -281,7 +281,11 @@ function isSubagentCardCall(toolCall: ToolCall): boolean {
  *  Naming the rule once keeps {@link isChipOnlyEvent} from drifting away from
  *  what appendEventParts actually does with a call. */
 function rendersAsCard(toolCall: ToolCall, result: ToolResultEvent | null): boolean {
-  return isSubagentCardCall(toolCall) || isFiledPermissionRequest(toolCall, result);
+  return (
+    isSubagentCardCall(toolCall) ||
+    isFiledPermissionRequest(toolCall, result) ||
+    isFiledSecretRequest(toolCall, result)
+  );
 }
 
 /** Whether a call joins a chip row rather than standing as a card. */
