@@ -118,6 +118,7 @@ members = [
     "system/libs/app_schema",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
+    "system/libs/event_streams",
     "system/libs/github_sync",
     "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
@@ -160,6 +161,7 @@ pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
 share-grants = { workspace = true }
+event-streams = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 workspace-themes = { workspace = true }
