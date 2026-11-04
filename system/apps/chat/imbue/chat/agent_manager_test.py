@@ -2448,6 +2448,7 @@ class _RecordingSwitchAgentManager(AgentManager):
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         self.switches.append((str(chat_id), account_id, message, model_pick))
         return TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING, ""
