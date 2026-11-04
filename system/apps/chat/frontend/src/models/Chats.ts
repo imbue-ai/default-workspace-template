@@ -90,7 +90,7 @@ export interface DisplayDecision {
 }
 
 /** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will
- *  be (a user_message's fields of the same names); null for the owner's. */
+ *  be (a user_message's fields of the same names; the backend's ``MessageAuthorFields``); null for the owner's. */
 export interface MessageAuthor {
   author?: string | null;
   author_name?: string | null;

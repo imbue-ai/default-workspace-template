@@ -191,6 +191,7 @@ from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import NoProviderAccountError
+from imbue.chat.models import MessageAuthorFields
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.models import ProvisionalChatPhase
@@ -606,8 +607,11 @@ def _with_display_decision(message: _DecidedT, decision: MessageDisplay | None) 
     )
 
 
+_AuthoredT = TypeVar("_AuthoredT", bound=MessageAuthorFields)
+
+
 @pure
-def _with_author(message: _DecidedT, author: tuple[ParticipantKey, str] | None) -> _DecidedT:
+def _with_author(message: _AuthoredT, author: tuple[ParticipantKey, str] | None) -> _AuthoredT:
     """``message`` carrying the author its turn will be stamped with; unchanged for the owner's (None)."""
     if author is None:
         return message

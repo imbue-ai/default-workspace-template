@@ -354,17 +354,22 @@ class HandoffError(ValueError):
 
 class DisplayDecisionFields(FrozenModel):
     """The render decision a not-yet-delivered message's text would get as a transcript user_message
-    (``harnesses.message_display``), and the author its turn will be stamped with (``authors.py``), so the page
-    draws it as the row it will become."""
+    (``harnesses.message_display``), so the page draws it as the row it will become."""
 
     display: DisplayKind | None = Field(default=None, description="The decision's kind; None for a plain message")
     display_label: str | None = Field(default=None, description="The decision's chip or notice label")
     display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
+
+
+class MessageAuthorFields(FrozenModel):
+    """The author a not-yet-delivered message's turn will be stamped with (``authors.py``), so the page draws it under
+    its sender."""
+
     author: ParticipantKey | None = Field(default=None, description="Who sent it; None for the owner")
     author_name: str | None = Field(default=None, description="What the sender was called when they sent it")
 
 
-class QueuedMessageState(DisplayDecisionFields):
+class QueuedMessageState(DisplayDecisionFields, MessageAuthorFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -515,7 +520,7 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(DisplayDecisionFields):
+class HeldSendSnapshot(DisplayDecisionFields, MessageAuthorFields):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
