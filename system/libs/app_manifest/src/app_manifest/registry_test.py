@@ -126,7 +126,6 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     )
 
 
-
 def test_a_row_registered_before_the_shortcut_list_reads_its_one_default_shortcut(tmp_path: Path) -> None:
     """A row an older registration wrote carries one ``default_shortcut`` table; it reads as a list of one."""
     registry = tmp_path / "apps.toml"
