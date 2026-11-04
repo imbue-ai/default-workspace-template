@@ -26,15 +26,17 @@ async function pickDevice(spec: EngineSpec, preferred: Device | null): Promise<D
   return "wasm";
 }
 
-interface ConnectablePort extends HostPort {
+export interface ConnectablePort extends HostPort {
   onmessage: ((event: MessageEvent<PageMessage>) => void) | null;
   start?(): void;
 }
 
 // The worker libs' types clash with the DOM's program-wide, so the scope is duck-typed, as Sculptor's worker is.
-interface WorkerScopeLike extends ConnectablePort {
+export interface WorkerScopeLike {
   onconnect?: ((event: { ports: ConnectablePort[] }) => void) | null;
-  postMessage(message: unknown): void;
+  onmessage: ((event: MessageEvent<PageMessage>) => void) | null;
+  postMessage?(message: unknown): void;
+  window?: unknown;
 }
 
 const host = createWorkerHost({ loadEngine: loadTransformersEngine, pickDevice });
@@ -45,11 +47,15 @@ function attach(port: ConnectablePort): void {
   port.start?.();
 }
 
-const scope = globalThis as unknown as WorkerScopeLike & { window?: unknown };
-if (typeof scope.window === "undefined" && typeof scope.postMessage === "function") {
+/** Wire ``scope`` up as the worker it is: a shared one takes each page's port as it connects, a dedicated one is
+ *  its page's port itself; a window (a test importing this module) is neither. */
+export function attachWorkerScope(scope: WorkerScopeLike): void {
+  if (typeof scope.window !== "undefined") return;
   if ("onconnect" in scope) {
     scope.onconnect = (event) => attach(event.ports[0]);
-  } else {
-    attach(scope);
+  } else if (typeof scope.postMessage === "function") {
+    attach(scope as ConnectablePort);
   }
 }
+
+attachWorkerScope(globalThis as unknown as WorkerScopeLike);
