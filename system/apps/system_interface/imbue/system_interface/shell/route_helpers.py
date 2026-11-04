@@ -54,13 +54,9 @@ def require_loopback() -> ResponseReturnValue | None:
     return None
 
 
-# What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
-# app's stop and start reach supervisord, the update notice's verbs act on the live apply's
-# rollback point, the embedder-message relay posts to live apps, and the Web Push verbs reach the
-# owner's live devices with the copied signing key. Everything else a preview offers (opening,
-# placing, and closing windows, a refresh, the interface reload, the avatar) edits the preview's
-# own state or reaches only the preview's own windows, so it stays live for the person judging the
-# change.
+# What a preview shell answers to a verb whose effect would land outside its own copy of the state.
+# A verb that edits only the preview's state or reaches only its own windows stays live, for the
+# person judging the change.
 PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 
 
