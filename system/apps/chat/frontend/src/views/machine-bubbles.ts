@@ -5,7 +5,7 @@
  *
  * A stretch runs until a person speaks or another agent takes over. Its prose is a grey bubble per message; what it
  * did between them -- tool calls, steps, notices, the working dot -- sits on the chat on the bubbles' text edge, and
- * its cards line up with the bubbles. One line threads the stretch's pieces (see agent-rail), all 12px apart.
+ * its cards line up with the bubbles. One line threads the stretch's pieces (see agent-rail).
  */
 
 import m from "mithril";

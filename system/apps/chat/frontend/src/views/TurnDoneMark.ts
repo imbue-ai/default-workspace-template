@@ -49,7 +49,7 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
     view(vnode) {
       const label = turnDoneLabel(vnode.attrs.chatId, vnode.attrs.events);
       if (label === null) return null;
-      // A quiet receipt tucked 6px under the stretch it closes, off the line, on the bubbles' text edge.
+      // A quiet receipt tucked just under the stretch it closes, off the line, on the bubbles' text edge.
       return m(
         "div",
         {

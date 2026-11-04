@@ -8,8 +8,7 @@
  * own grouped events; expanding a step reveals that grouped work. The wrap-up
  * reply renders below the timeline. Every piece stands on the stretch's line
  * (see agent-rail), which runs through the step bullets as it does through the
- * chip icons between them: a run of steps sits 18px apart, and 18px from the
- * pieces around it, which sit the stretch's 12px apart.
+ * chip icons between them.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
@@ -184,7 +183,6 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     view(vnode) {
       const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
-      // Only the block's first piece can open its stretch.
       const isHead = (index: number): boolean => vnode.attrs.isStretchHead === true && index === 0;
 
       // Consecutive nodes on the timeline (steps and handoffs) stand together as one run of steps.
