@@ -45,8 +45,8 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
     Each upload gets its own subdirectory so two files with the same name never
     collide. An image's subdirectory also carries the size it is drawn at
     (``<id>-<width>x<height>``), so a chat bubble naming it can hold its space
-    before it loads (frontend/src/markdown.ts reads it back). Raises
-    AttachmentError if the file cannot be written.
+    before it loads (``uploadedImageSize`` in frontend/src/models/attachments.ts
+    reads it back). Raises AttachmentError if the file cannot be written.
     """
     unique_id = uuid.uuid4().hex
     safe_name = sanitize_upload_filename(original_filename)
