@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from event_streams.archive import compress_staged_streams
 from event_streams.archive import stage_oversized_stream
+from event_streams.archive import staged_streams
 
 from share_gateway.log import log
 
@@ -177,8 +178,9 @@ class RequestCounter:
             for record in records:
                 events_file.write(json.dumps(record, sort_keys=True) + "\n")
         # Appends run on the flusher thread (or the runner's stop path), never a request thread, so the staged
-        # stream is gzipped right here once the new stream exists.
-        if is_staged:
+        # stream is gzipped right here once the new stream exists. A stream a gateway staged but died before
+        # compressing is finished here too, rather than waiting for the next stream to grow past the threshold.
+        if is_staged or staged_streams(events_path):
             try:
                 compress_staged_streams(events_path, KEPT_ARCHIVE_COUNT)
             except OSError as exc:

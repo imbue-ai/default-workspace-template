@@ -184,6 +184,26 @@ def test_an_oversized_stream_is_archived_before_the_next_write(tmp_path: Path) -
     assert gzip.decompress(archives[0].read_bytes()) == oversized
 
 
+def test_a_stream_staged_by_a_gateway_that_died_is_archived_by_the_next_flush(tmp_path: Path) -> None:
+    clock = _Clock(_MINUTE_START + 5)
+    counter = _counter(tmp_path, clock)
+    events_path = counter.events_path
+    assert events_path is not None
+    events_path.parent.mkdir(parents=True)
+    # Left behind by a gateway stopped after staging a stream but before compressing it; the new stream is small.
+    staged_path = events_path.with_name("events.jsonl.20260501000000000000.archiving")
+    staged_path.write_bytes(b'{"type": "old"}\n')
+    events_path.write_bytes(b'{"type": "current"}\n')
+    counter.record("web", REQUESTER_KIND_OWNER, "", METHOD_CLASS_READ, OUTCOME_ALLOWED)
+
+    counter.flush(is_final=True)
+
+    assert not staged_path.exists()
+    archive_path = events_path.with_name("events.jsonl.20260501000000000000.gz")
+    assert gzip.decompress(archive_path.read_bytes()) == b'{"type": "old"}\n'
+    assert [r.get("type") for r in _records(events_path)] == ["current", EVENT_TYPE]
+
+
 def test_the_flusher_writes_everything_when_stopped(tmp_path: Path) -> None:
     clock = _Clock(_MINUTE_START + 5)
     counter = _counter(tmp_path, clock)
