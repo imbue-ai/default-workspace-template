@@ -179,8 +179,8 @@ code from a tree known only at run time).
 
 The why answers what a reviewer of this one site asks: why it cannot be an
 import, or why this code runs with no venv. For a process, or an
-`other-tree` edit, the why names what runs the site and what an import would
-break (`the boot re-syncs the venv after this process started, so an import
+`other-tree` edit, the why says what an import would break or could not do
+(`the boot re-syncs the venv after this process started, so an import
 would load the venv as it was at start`). For bare code, no venv is the tier
 rule, so the why names the stdlib-only packages it imports beyond the
 standard library (`its only import beyond the standard library is the
