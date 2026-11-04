@@ -227,7 +227,9 @@ describe("while uploading", () => {
       Object.assign(class extends URL {}, { createObjectURL: () => "blob:preview-4", revokeObjectURL: vi.fn() }),
     );
     uploadAnswers.push(() =>
-      Promise.resolve(new Response(JSON.stringify({ path: "/w/data/uploads/x/removed.png", size: 6 }), { status: 201 })),
+      Promise.resolve(
+        new Response(JSON.stringify({ path: "/w/data/uploads/x/removed.png", size: 6 }), { status: 201 }),
+      ),
     );
     uploadFilesToComposer(chatId, [new File(["pixels"], "removed.png", { type: "image/png" })]);
     const [staged] = getComposerAttachments(chatId);
@@ -244,7 +246,9 @@ describe("while uploading", () => {
       Object.assign(class extends URL {}, { createObjectURL: () => "blob:preview-5", revokeObjectURL }),
     );
     uploadAnswers.push(() =>
-      Promise.resolve(new Response(JSON.stringify({ path: "/w/data/uploads/y/cleared.png", size: 6 }), { status: 201 })),
+      Promise.resolve(
+        new Response(JSON.stringify({ path: "/w/data/uploads/y/cleared.png", size: 6 }), { status: 201 }),
+      ),
     );
     uploadFilesToComposer(chatId, [new File(["pixels"], "cleared.png", { type: "image/png" })]);
     const [staged] = getComposerAttachments(chatId);
