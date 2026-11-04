@@ -96,20 +96,24 @@ live loop:
 
 ## One native subagent per requested change
 
-Give every change the user requests to its own native subagent (the `Agent`
-tool), as soon as the request arrives, including the first one. A list of
-changes in one message is several requests, so each change in the list gets its
-own subagent. Start each of these building subagents with `model: "sonnet"`, and
-leave its `isolation` unset, so every subagent edits the live app directly.
-Subagents run in the background, so starting one returns at once and you stay
-free to read the next message. They work under your service lease (below) and do
+Subagents are here to keep you responsive and get the work done faster: while
+they build, you stay free to read the user's next message and reply. Do every
+task through a subagent, whether a new one or one already running: each
+requested change, each follow-up on a change, and each fix. Hand each request to
+a subagent as soon as it arrives, including the first one: start a new native
+subagent (the `Agent` tool) for a new change, or send it to the subagent already
+building that change if it adds to that change. A list of changes in one message
+is several requests, so each change in the list gets its own subagent. Start each
+building subagent with `model: "sonnet"`, and leave its `isolation` unset, so
+every subagent edits the live app directly. Subagents run in the background, so
+starting one returns at once. They work under your service lease (below) and do
 not take their own. Keep each brief short: the user's request word for word and
 the app's location; leave the design to the subagent. Building subagents only
 build their change and send back a short report; they do not test it in a
 browser or wait for each other. Start one verification subagent that checks the
 changes as they land, grouping its checks however is fastest, and sends you a
-short report. This is separate from `launch-task`, which starts a
-background worker on its own branch.
+short report. This is separate from `launch-task`, which starts a background
+worker on its own branch.
 
 ## One editor at a time: the service lease
 
