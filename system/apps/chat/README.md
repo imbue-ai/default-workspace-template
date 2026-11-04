@@ -960,6 +960,33 @@ exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
 
+## Dictation
+
+The composer dictates (the workspace-voice-input spec in the mngr repository):
+a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
+the chat page, turn speech into text on the user's own device. The speech model
+(Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
+a pinned commit, checked against its size and SHA-256, and run in a SharedWorker
+every chat page of the workspace shares, released after two minutes idle; the
+page keeps no copy of it, and the workspace stores and runs nothing for voice.
+Silero VAD splits speech into utterances, and a bounded streaming window keeps
+every inference job short, so dictation has no length limit. The words land at
+the caret, fitted to the sentence around them; the unfinished tail is rewritten
+in place, and only final words reach the saved draft. The box is read-only while
+listening; Enter or Send finishes the words first and then sends; Escape drops
+the words that are not yet final. The mic carries every state (a ring while the
+model downloads, a spinner while starting and stopping, the neutral pressed tint
+with its capsule filling to the input level while listening), and a problem is
+told in a notice over the composer. The library is `system/libs/workspace_voice/`
+(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
+mic and the notice, and `MessageInput.ts` drives the dictation and writes its
+words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
+and Hugging Face's hosts (see `create_application`), the manifest declares
+`uses_microphone`, and the root's inner frames allow the microphone. For a
+side-by-side evaluation, a browser's `localStorage` may name another registered
+engine under `workspace-voice:engine` and insist on a device (`webgpu` or
+`wasm`) under `workspace-voice:device`.
+
 ## Development
 
 ```bash

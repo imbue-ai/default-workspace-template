@@ -10,9 +10,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Plugin } from "vite";
-
-/** Where the files sit under an app's served assets; the page resolves it under its base path. */
-export const VOICE_ASSETS_PATH = "assets/voice/";
+import { VOICE_ASSETS_PATH } from "./support";
 
 interface RuntimeAsset {
   /** The path under ``VOICE_ASSETS_PATH``. */
@@ -27,17 +25,16 @@ const CONTENT_TYPES: Record<string, string> = {
   ".onnx": "application/octet-stream",
 };
 
+/** Each package's ``dist/`` directory, found from the entry file ``require`` resolves (the packages export no
+ *  ``package.json``), and checked to hold the files named. */
 function runtimeAssets(): RuntimeAsset[] {
   const require = createRequire(import.meta.url);
-  const transformersDist = path.join(path.dirname(require.resolve("@huggingface/transformers/package.json")), "dist");
-  const vadWebPackage = require.resolve("@ricky0123/vad-web/package.json");
-  const vadWebDist = path.join(path.dirname(vadWebPackage), "dist");
+  const transformersDist = path.dirname(require.resolve("@huggingface/transformers"));
+  const vadWebEntry = require.resolve("@ricky0123/vad-web");
+  const vadWebDist = path.dirname(vadWebEntry);
   // The detector's own ONNX Runtime, wherever the package manager put it relative to the detector.
-  const vadOrtDist = path.join(
-    path.dirname(createRequire(vadWebPackage).resolve("onnxruntime-web/package.json")),
-    "dist",
-  );
-  return [
+  const vadOrtDist = path.dirname(createRequire(vadWebEntry).resolve("onnxruntime-web"));
+  const assets: RuntimeAsset[] = [
     {
       served: "transformers-ort/ort-wasm-simd-threaded.jsep.mjs",
       source: path.join(transformersDist, "ort-wasm-simd-threaded.jsep.mjs"),
@@ -51,6 +48,14 @@ function runtimeAssets(): RuntimeAsset[] {
     { served: "vad/vad.worklet.bundle.min.js", source: path.join(vadWebDist, "vad.worklet.bundle.min.js") },
     { served: "vad/silero_vad_v5.onnx", source: path.join(vadWebDist, "silero_vad_v5.onnx") },
   ];
+  for (const asset of assets) {
+    if (!fs.existsSync(asset.source)) {
+      throw new Error(
+        `The voice runtime file ${asset.served} is not at ${asset.source}; has the package's layout changed?`,
+      );
+    }
+  }
+  return assets;
 }
 
 export function voiceRuntimeAssets(): Plugin {

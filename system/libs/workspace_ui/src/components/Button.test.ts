@@ -94,6 +94,22 @@ describe("Button selected option", () => {
   });
 });
 
+describe("Button pressed option", () => {
+  it("holds the ghost's own pressed tint in the text colour, with no accent and no hover utilities", () => {
+    const element = renderButton({ variant: "ghost", pressed: true });
+    expect(element.classList.contains("bg-fill-active")).toBe(true);
+    expect(element.classList.contains("text-primary")).toBe(true);
+    expect(element.classList.contains("bg-accent-light")).toBe(false);
+    expect(Array.from(element.classList).filter((name) => name.includes("hover:"))).toEqual([]);
+  });
+
+  it("wins over selected", () => {
+    const element = renderButton({ variant: "ghost", pressed: true, selected: true });
+    expect(element.classList.contains("bg-fill-active")).toBe(true);
+    expect(element.classList.contains("bg-accent-light")).toBe(false);
+  });
+});
+
 describe("Button theme part", () => {
   it("marks the button as the contract's button part, with its variant and shape", () => {
     const text = renderButton({ variant: "primary" });
