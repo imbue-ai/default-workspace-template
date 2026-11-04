@@ -1,4 +1,4 @@
-Desktop shortcuts of an app that is no longer registered are removed. A workspace updated off the old browser app kept its Browser shortcut on every desktop, and opening it said "browser is not registered". On every read of the desktops the shell now drops the shortcuts of any app the app registry does not list. Only the update removes a registry entry, for an app the release retired. A registry with no entries drops nothing.
+Desktop shortcuts of an app that is no longer registered are removed. A workspace updated off the old browser app kept its Browser shortcut on every desktop, and opening it said "browser is not registered". On every read of the desktops the shell now drops the shortcuts of any app the app registry does not list, such as an app a release retired, whose entry the update removed. A registry with no entries drops nothing.
 
 An app can now have several default desktop shortcuts. The Screen gets both a Screen and a Browser shortcut, matching its two launcher entries.
 

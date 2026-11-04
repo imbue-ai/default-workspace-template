@@ -779,8 +779,8 @@ def default_shortcut_targets_on(desktop: Desktop, rows: Sequence[RegistryRow]) -
 
 @pure
 def without_shortcuts_of_unregistered_apps(desktop: Desktop, rows: Sequence[RegistryRow]) -> Desktop:
-    """The desktop without the shortcuts of every app no row registers: nothing runs them, since an app leaves the
-    registry only when the update that retired it removes its row. The same object when it holds none."""
+    """The desktop without the shortcuts of every app no row registers, since nothing runs them (an app a release
+    retired, whose row the update removed, or a torn-down preview). The same object when it holds none."""
     registered = {row.name for row in rows}
     kept = tuple(shortcut for shortcut in desktop.shortcuts if shortcut.target.app in registered)
     if len(kept) == len(desktop.shortcuts):
