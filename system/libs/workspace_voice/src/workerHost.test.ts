@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelDownloadError } from "./download";
+import type { DownloadOptions } from "./download";
 import type { EngineSpec, PinnedFile } from "./engines";
 import { engineSpec, engineVariant, variantFiles } from "./engines";
 import type { SpeechEngine, TranscriptionResult } from "./speechEngine";
+import type { PinnedFileStore } from "./fileStore";
 import { createWorkerHost } from "./workerHost";
 import type { EngineLoader, HostPort } from "./workerHost";
 import type { WorkerMessage } from "./workerProtocol";
@@ -21,11 +23,7 @@ class FakePort implements HostPort {
 }
 
 /** A download that answers every file at once, reporting one progress step per file. */
-function instantDownload(
-  spec: EngineSpec,
-  files: readonly PinnedFile[],
-  options: { onProgress?: (l: number, t: number) => void } = {},
-) {
+function instantDownload(spec: EngineSpec, files: readonly PinnedFile[], options: DownloadOptions = {}) {
   const total = files.reduce((sum, file) => sum + file.bytes, 0);
   let loaded = 0;
   const map = new Map<string, ArrayBuffer>();
@@ -35,6 +33,16 @@ function instantDownload(
     map.set(file.path, new ArrayBuffer(1));
   }
   return Promise.resolve(map);
+}
+
+function recordingStore(): PinnedFileStore & { pruned: [string, string[]][] } {
+  const pruned: [string, string[]][] = [];
+  return {
+    pruned,
+    read: async () => null,
+    write: async () => undefined,
+    prune: async (prefix, keep) => void pruned.push([prefix, [...keep].sort()]),
+  };
 }
 
 function fakeEngine(
@@ -57,9 +65,11 @@ afterEach(() => {
 });
 
 describe("the engine worker host", () => {
-  it("downloads the variant for the picked device, loads it, and tells every port", async () => {
+  it("gets the picked device's variant through the store, loads it, prunes the store to it, and tells every port", async () => {
     const loadEngine = vi.fn<EngineLoader>(async () => fakeEngine());
-    const host = createWorkerHost({ loadEngine, pickDevice: async () => "webgpu", download: instantDownload });
+    const store = recordingStore();
+    const download = vi.fn(instantDownload);
+    const host = createWorkerHost({ loadEngine, pickDevice: async () => "webgpu", download, store });
     const first = new FakePort();
     const second = new FakePort();
     const handleFirst = host.connect(first);
@@ -70,6 +80,15 @@ describe("the engine worker host", () => {
     expect(variant.device).toBe("webgpu");
     expect([...files.keys()]).toEqual(variantFiles(spec, variant).map((file) => file.path));
     expect(options).toEqual({ assetBase: ASSET_BASE });
+    expect(download.mock.calls[0][2]?.store).toBe(store);
+    expect(store.pruned).toEqual([
+      [
+        `https://huggingface.co/${SPEC.repo}/`,
+        variantFiles(spec, variant)
+          .map((file) => `https://huggingface.co/${SPEC.repo}/resolve/${SPEC.commit}/${file.path}`)
+          .sort(),
+      ],
+    ]);
     expect(first.messages[first.messages.length - 1]).toEqual({ type: "ready", engineId: SPEC.id, device: "webgpu" });
     expect(first.types().filter((type) => type === "progress").length).toBe(variantFiles(spec, variant).length);
     // The engine's load, which reports no progress, is announced once the download is over.
@@ -189,27 +208,24 @@ describe("the engine worker host", () => {
     expect(port.messages).toEqual([{ type: "transcribe-error", id: 2, message: "decoder exploded" }]);
   });
 
-  it("releases the engine after it has sat idle and tells every port, so the next load downloads again", async () => {
+  it("keeps the engine loaded however long it sits, so the next dictation starts at once", async () => {
     const engine = fakeEngine();
     const download = vi.fn(instantDownload);
     const host = createWorkerHost({
       loadEngine: async () => engine,
       pickDevice: async () => "wasm",
       download,
-      idleUnloadMs: 1000,
+      store: recordingStore(),
     });
     const port = new FakePort();
     const handle = host.connect(port);
     await handle({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
-    await vi.advanceTimersByTimeAsync(900);
-    await handle({ type: "transcribe", id: 1, audio: new Float32Array(16).buffer });
-    // The transcription pushed the release back.
-    await vi.advanceTimersByTimeAsync(900);
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(engine.dispose).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(200);
-    expect(engine.dispose).toHaveBeenCalledTimes(1);
-    expect(port.messages[port.messages.length - 1]).toEqual({ type: "unloaded" });
+    expect(port.types()).not.toContain("unloaded");
+    port.messages.length = 0;
     await handle({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
-    expect(download).toHaveBeenCalledTimes(2);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(port.messages).toEqual([{ type: "ready", engineId: SPEC.id, device: "wasm" }]);
   });
 });

@@ -13,15 +13,19 @@ is the one surface that uses it.
   at, each file's size and SHA-256, a variant per device (WebGPU or
   WebAssembly), the most audio one call may carry, and its licence. Moonshine
   Base is the default and, so far, the only engine.
-- `src/download.ts`: the download of an engine's pinned files, straight from
-  Hugging Face, each checked against its size and hash before the engine sees
-  it, and kept only in memory.
+- `src/download.ts` and `src/fileStore.ts`: getting an engine's pinned files:
+  from the store the last load kept them in when they check out, else straight
+  from Hugging Face, each checked against its size and hash before the engine
+  sees it and kept for next time. The store is the browser's own Cache Storage
+  on the workspace's origin, one entry per pinned URL, pruned to the variant in
+  use, evicted by the browser under storage pressure like any site's, and never
+  trusted: every file read back is checked again.
 - `src/workerProtocol.ts`, `src/workerHost.ts`, `src/workerClient.ts`,
   `src/engineWorker.ts`: the engine worker. One SharedWorker per workspace
   origin and engine (a dedicated worker where the browser has none), which
-  every chat page connects to; it downloads the files once, picks the device,
-  loads the engine, transcribes one job at a time in arrival order, and
-  releases the engine after two minutes idle.
+  every chat page connects to; it gets the files, picks the device, loads the
+  engine, transcribes one job at a time in arrival order, and keeps the engine
+  loaded for as long as a page of the workspace is open.
 - `src/transformersEngine.ts`: the transformers.js adapter the worker loads an
   engine with, its caches off; imported by the worker alone, since it carries
   the speech runtime.

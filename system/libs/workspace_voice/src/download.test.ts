@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { ModelDownloadError, downloadPinnedFiles } from "./download";
+import { describe, expect, it, vi } from "vitest";
+import { ModelDownloadError, downloadPinnedFiles, isPinnedFile } from "./download";
 import type { EngineSpec, PinnedFile } from "./engines";
 import { engineSpec } from "./engines";
+import type { PinnedFileStore } from "./fileStore";
 
 const SPEC: EngineSpec = engineSpec("moonshine-base");
 
@@ -32,6 +33,19 @@ function fetchFrom(bodies: Map<string, Uint8Array>, requested: string[] = []) {
 
 function urlOf(file: PinnedFile): string {
   return `https://huggingface.co/${SPEC.repo}/resolve/${SPEC.commit}/${file.path}`;
+}
+
+/** A store over a map, with every call recorded. */
+function mapStore(initial: [string, Uint8Array][] = []) {
+  const entries = new Map<string, ArrayBuffer>(
+    initial.map(([url, bytes]) => [url, bytes.slice().buffer as ArrayBuffer]),
+  );
+  const store: PinnedFileStore = {
+    read: vi.fn(async (url: string) => entries.get(url) ?? null),
+    write: vi.fn(async (url: string, bytes: ArrayBuffer) => void entries.set(url, bytes)),
+    prune: vi.fn(async () => undefined),
+  };
+  return { store, entries };
 }
 
 describe("downloadPinnedFiles", () => {
@@ -77,6 +91,40 @@ describe("downloadPinnedFiles", () => {
     await expect(
       downloadPinnedFiles(SPEC, [long], { fetch: fetchFrom(new Map([[urlOf(long), body]])) }),
     ).rejects.toThrow(/longer than its pinned 11 bytes/);
+  });
+
+  it("takes a kept file that checks out without fetching, and keeps what it downloads", async () => {
+    const kept = await pinned("config.json", '{"kept": true}');
+    const fresh = await pinned("tokenizer.json", "downloaded");
+    const { store, entries } = mapStore([[urlOf(kept.file), kept.body]]);
+    const requested: string[] = [];
+    const progress: [number, number][] = [];
+    const files = await downloadPinnedFiles(SPEC, [kept.file, fresh.file], {
+      store,
+      fetch: fetchFrom(new Map([[urlOf(fresh.file), fresh.body]]), requested),
+      onProgress: (loaded, total) => progress.push([loaded, total]),
+    });
+    expect(requested).toEqual([urlOf(fresh.file)]);
+    expect(new TextDecoder().decode(files.get("config.json"))).toBe('{"kept": true}');
+    expect(new TextDecoder().decode(entries.get(urlOf(fresh.file)))).toBe("downloaded");
+    // The kept file counts as loaded at once.
+    expect(progress[0]).toEqual([kept.file.bytes, kept.file.bytes + fresh.file.bytes]);
+  });
+
+  it("downloads afresh over a kept file that does not check out", async () => {
+    const { file, body } = await pinned("config.json", "the real file");
+    const { store, entries } = mapStore([[urlOf(file), new TextEncoder().encode("the real fil")]]);
+    const requested: string[] = [];
+    await downloadPinnedFiles(SPEC, [file], { store, fetch: fetchFrom(new Map([[urlOf(file), body]]), requested) });
+    expect(requested).toEqual([urlOf(file)]);
+    expect(new TextDecoder().decode(entries.get(urlOf(file)))).toBe("the real file");
+  });
+
+  it("checks a file's size and hash", async () => {
+    const { file, body } = await pinned("config.json", "exact");
+    expect(await isPinnedFile(file, body.buffer as ArrayBuffer)).toBe(true);
+    expect(await isPinnedFile(file, new TextEncoder().encode("exacu").buffer as ArrayBuffer)).toBe(false);
+    expect(await isPinnedFile(file, new TextEncoder().encode("exact!").buffer as ArrayBuffer)).toBe(false);
   });
 
   it("reports an unreachable host and an HTTP failure as a download error naming the file", async () => {

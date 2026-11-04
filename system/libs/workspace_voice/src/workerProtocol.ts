@@ -21,7 +21,7 @@ export type WorkerMessage =
   | { type: "ready"; engineId: EngineId; device: Device }
   /** The load failed; ``filePath`` names the file when a download did. */
   | { type: "load-error"; message: string; filePath: string | null }
-  /** The engine was released after sitting idle; the next load downloads it again. */
+  /** The engine was let go, for another to load in its place. */
   | { type: "unloaded" }
   | { type: "result"; id: number; text: string; words: readonly TimedWord[] | null }
   | { type: "transcribe-error"; id: number; message: string };

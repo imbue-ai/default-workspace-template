@@ -198,9 +198,14 @@ export function variantBytes(spec: EngineSpec, variant: EngineVariant): number {
   return variantFiles(spec, variant).reduce((total, file) => total + file.bytes, 0);
 }
 
+/** Where every file of the engine, at any commit, is downloaded from. */
+export function engineFileUrlPrefix(spec: EngineSpec): string {
+  return `https://huggingface.co/${spec.repo}/`;
+}
+
 /** The URL a file is downloaded from: the repository at the engine's commit, never a moving branch. */
 export function pinnedFileUrl(spec: EngineSpec, file: PinnedFile): string {
-  return `https://huggingface.co/${spec.repo}/resolve/${spec.commit}/${file.path}`;
+  return `${engineFileUrlPrefix(spec)}resolve/${spec.commit}/${file.path}`;
 }
 
 /** The window the streaming turn keeps for an engine: cut at a pause past the soft cap, and by force at the hard

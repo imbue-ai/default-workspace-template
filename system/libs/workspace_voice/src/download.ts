@@ -1,12 +1,13 @@
 /**
- * Downloading an engine's pinned files (the workspace-voice-input spec, D6): straight from Hugging Face at the
- * engine's commit, each file checked against its pinned size and SHA-256 before anything is handed to the engine,
- * and kept only in memory for the engine to load. Runs in the engine worker, where ``fetch`` and ``crypto.subtle``
- * are the worker's own.
+ * Getting an engine's pinned files (the workspace-voice-input spec, D6): from the store the last load kept them
+ * in when they are there and check out, else straight from Hugging Face at the engine's commit, each file checked
+ * against its pinned size and SHA-256 before anything is handed to the engine, and kept for next time. Runs in
+ * the engine worker, where ``fetch``, ``crypto.subtle`` and the store are the worker's own.
  */
 
 import type { EngineSpec, PinnedFile } from "./engines";
 import { pinnedFileUrl } from "./engines";
+import type { PinnedFileStore } from "./fileStore";
 
 export type FetchLike = (url: string) => Promise<Response>;
 export type DigestLike = (data: ArrayBuffer) => Promise<ArrayBuffer>;
@@ -14,7 +15,10 @@ export type DigestLike = (data: ArrayBuffer) => Promise<ArrayBuffer>;
 export interface DownloadOptions {
   fetch?: FetchLike;
   digest?: DigestLike;
-  /** Called as bytes arrive, with the bytes of every file so far against the bytes of every file. */
+  /** Where files are read from before the network and kept after it; none keeps nothing. */
+  store?: PinnedFileStore;
+  /** Called as bytes arrive (or are found kept), with the bytes of every file so far against the bytes of every
+   *  file. */
   onProgress?: (loadedBytes: number, totalBytes: number) => void;
 }
 
@@ -33,6 +37,15 @@ const digestWithSubtle: DigestLike = (data) => crypto.subtle.digest("SHA-256", d
 
 function hexOf(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Whether ``bytes`` are ``file``: its pinned size and SHA-256. */
+export async function isPinnedFile(
+  file: PinnedFile,
+  bytes: ArrayBuffer,
+  digest: DigestLike = digestWithSubtle,
+): Promise<boolean> {
+  return bytes.byteLength === file.bytes && hexOf(await digest(bytes)) === file.sha256;
 }
 
 async function readExactly(
@@ -67,9 +80,9 @@ async function readExactly(
 }
 
 /**
- * Download ``files`` of ``spec`` one after another; answers each file's bytes by its path. A file that cannot be
- * fetched, is not its pinned size, or does not hash to its pinned SHA-256 raises ``ModelDownloadError`` naming it,
- * and nothing downloaded so far is kept.
+ * Get ``files`` of ``spec`` one after another; answers each file's bytes by its path. A file the store holds that
+ * checks out is taken from it; any other is downloaded, checked, and kept in the store. A file that cannot be
+ * fetched, is not its pinned size, or does not hash to its pinned SHA-256 raises ``ModelDownloadError`` naming it.
  */
 export async function downloadPinnedFiles(
   spec: EngineSpec,
@@ -83,6 +96,13 @@ export async function downloadPinnedFiles(
   const downloaded = new Map<string, ArrayBuffer>();
   for (const file of files) {
     const url = pinnedFileUrl(spec, file);
+    const kept = options.store === undefined ? null : await options.store.read(url);
+    if (kept !== null && (await isPinnedFile(file, kept, digest))) {
+      loadedBytes += file.bytes;
+      options.onProgress?.(loadedBytes, totalBytes);
+      downloaded.set(file.path, kept);
+      continue;
+    }
     let response: Response;
     try {
       response = await fetchFile(url);
@@ -100,6 +120,7 @@ export async function downloadPinnedFiles(
     if (actual !== file.sha256) {
       throw new ModelDownloadError(file, `${file.path} does not match its pinned SHA-256`);
     }
+    await options.store?.write(url, buffer);
     downloaded.set(file.path, buffer);
   }
   return downloaded;

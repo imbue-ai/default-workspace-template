@@ -1,13 +1,17 @@
 /**
  * The engine worker's side of the protocol (``workerProtocol.ts``): it holds one loaded engine for every page of
- * the workspace that connects, downloads the engine's pinned files once, picks the device, transcribes one job
- * at a time in the order jobs arrive, and releases the engine after it has sat idle. Pure of the worker scope:
- * ``engineWorker.ts`` wires ports to it, and the engine loader and the device pick are injected.
+ * the workspace that connects, gets the engine's pinned files (from the store the last load kept them in, else
+ * downloaded and kept), picks the device, and transcribes one job at a time in the order jobs arrive. The engine
+ * stays loaded for as long as the worker lives, which is as long as a page of the workspace is open: the user's
+ * device has the memory, and a reload would cost the wait. Pure of the worker scope: ``engineWorker.ts`` wires
+ * ports to it, and the engine loader, the device pick and the store are injected.
  */
 
 import { downloadPinnedFiles, ModelDownloadError, describeError } from "./download";
 import type { Device, EngineSpec, EngineVariant } from "./engines";
-import { engineSpec, engineVariant, variantFiles } from "./engines";
+import { engineFileUrlPrefix, engineSpec, engineVariant, pinnedFileUrl, variantFiles } from "./engines";
+import type { PinnedFileStore } from "./fileStore";
+import { defaultPinnedFileStore } from "./fileStore";
 import type { SpeechEngine } from "./speechEngine";
 import type { PageMessage, WorkerMessage } from "./workerProtocol";
 
@@ -30,12 +34,9 @@ export interface WorkerHostOptions {
   loadEngine: EngineLoader;
   pickDevice: DevicePicker;
   download?: typeof downloadPinnedFiles;
-  /** How long the engine stays loaded after its last transcription. */
-  idleUnloadMs?: number;
+  /** Where the checked files are kept between loads; this realm's Cache Storage unless given. */
+  store?: PinnedFileStore;
 }
-
-/** The engine stays for two minutes of silence, then goes, so a workspace that stopped dictating holds no model. */
-export const DEFAULT_IDLE_UNLOAD_MS = 120_000;
 
 interface LoadedEngine {
   spec: EngineSpec;
@@ -50,24 +51,15 @@ export interface WorkerHost {
 
 export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   const download = options.download ?? downloadPinnedFiles;
-  const idleUnloadMs = options.idleUnloadMs ?? DEFAULT_IDLE_UNLOAD_MS;
+  const store = options.store ?? defaultPinnedFileStore();
   const ports = new Set<HostPort>();
   let loaded: LoadedEngine | null = null;
   let loading: { engineId: string; promise: Promise<LoadedEngine> } | null = null;
   // One job at a time, in arrival order across every port.
   let lane: Promise<unknown> = Promise.resolve();
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const broadcast = (message: WorkerMessage): void => {
     for (const port of ports) port.postMessage(message);
-  };
-
-  const armIdleTimer = (): void => {
-    if (idleTimer !== null) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      idleTimer = null;
-      void unload();
-    }, idleUnloadMs);
   };
 
   const unload = async (): Promise<void> => {
@@ -83,11 +75,16 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   };
 
   const loadVariant = async (spec: EngineSpec, variant: EngineVariant, assetBase: string): Promise<SpeechEngine> => {
-    const files = await download(spec, variantFiles(spec, variant), {
+    const pinned = variantFiles(spec, variant);
+    const files = await download(spec, pinned, {
+      store,
       onProgress: (loadedBytes, totalBytes) => broadcast({ type: "progress", loadedBytes, totalBytes }),
     });
     broadcast({ type: "loading" });
-    return options.loadEngine(spec, variant, files, { assetBase });
+    const engine = await options.loadEngine(spec, variant, files, { assetBase });
+    // The store keeps one variant of the engine, the one this device runs, at the commit the registry pins.
+    await store.prune(engineFileUrlPrefix(spec), new Set(pinned.map((file) => pinnedFileUrl(spec, file))));
+    return engine;
   };
 
   const load = async (engineId: string, preferredDevice: Device | null, assetBase: string): Promise<LoadedEngine> => {
@@ -117,7 +114,6 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   const handleLoad = async (port: HostPort, message: Extract<PageMessage, { type: "load" }>): Promise<void> => {
     if (loaded !== null && loaded.spec.id === message.engineId) {
       port.postMessage({ type: "ready", engineId: loaded.spec.id, device: loaded.device });
-      armIdleTimer();
       return;
     }
     if (loading !== null && loading.engineId === message.engineId) {
@@ -129,7 +125,6 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     try {
       loaded = await promise;
       broadcast({ type: "ready", engineId: loaded.spec.id, device: loaded.device });
-      armIdleTimer();
     } catch (error) {
       broadcast({
         type: "load-error",
@@ -153,8 +148,6 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         port.postMessage({ type: "result", id: message.id, text: result.text, words: result.words });
       } catch (error) {
         port.postMessage({ type: "transcribe-error", id: message.id, message: describeError(error) });
-      } finally {
-        if (loaded === engine) armIdleTimer();
       }
     };
     const next = lane.then(job, job);

@@ -39,9 +39,9 @@ Retro Diffusion and the Routines icons by hand.
 
 The chat's dictation (`system/libs/workspace_voice/`) runs two models on the
 user's own device. Neither is copied into this tree: the speech model is
-downloaded by the page from Hugging Face at a pinned commit each time it loads,
-and the detector's model ships with the chat's build out of the npm package
-that carries it.
+downloaded by the page from Hugging Face at a pinned commit and kept in the
+browser's own storage for the workspace, and the detector's model ships with
+the chat's build out of the npm package that carries it.
 
 - Moonshine Base, by Useful Sensors (<https://github.com/usefulsensors/moonshine>),
   MIT-licensed, as exported to ONNX at
