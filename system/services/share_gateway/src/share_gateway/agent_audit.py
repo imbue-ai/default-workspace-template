@@ -9,26 +9,22 @@ any file the workspace keeps, so nothing kept here records what agents ran.
 """
 
 import json
-import os
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from uuid import uuid4
 
+from share_gateway import agent_events
+from share_gateway.agent_events import EVENTS_FILENAME
 from share_gateway.log import log
 
 EVENT_SOURCE = "agent_access"
-EVENTS_FILENAME = "events.jsonl"
 
 
-def events_dir_from_environ(
-    environ: "os._Environ[str] | dict[str, str]",
-) -> Path | None:
-    state_dir = environ.get("MNGR_AGENT_STATE_DIR", "")
-    if not state_dir:
-        return None
-    return Path(state_dir) / "events" / EVENT_SOURCE
+def events_dir_from_environ(environ: Mapping[str, str]) -> Path | None:
+    return agent_events.events_dir_from_environ(environ, EVENT_SOURCE)
 
 
 def _nanosecond_timestamp() -> str:
