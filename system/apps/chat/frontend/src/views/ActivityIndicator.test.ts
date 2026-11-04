@@ -566,7 +566,7 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
   });
 
-  it("puts a send made behind an earlier one still on its way below the row of the turn that one opens", () => {
+  it("keeps the row under every send until the one that opened the turn lands, then above the send behind it", () => {
     addOutgoing(CHAT_ID, "hello");
     addOutgoing(CHAT_ID, "and another thing");
     agentState.activity_state = "THINKING";
