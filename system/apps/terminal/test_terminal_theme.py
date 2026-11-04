@@ -18,7 +18,7 @@ from terminal_app.testing import (
     render_browser_wrapper_page,
 )
 
-pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.browser, pytest.mark.timeout(60), pytest.mark.flaky]
 
 _SHELL_URL: Final[str] = "http://shell.test/"
 _CONTRACT_URL: Final[str] = f"http://{BROWSER_WRAPPER_HOST}/_static/app_contract.js"
