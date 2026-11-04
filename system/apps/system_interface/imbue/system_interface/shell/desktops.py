@@ -415,7 +415,7 @@ class DesktopStore(MutableModel):
         dropped leaves the record, so it is offered its defaults again if it registers again; an app the user had
         already taken off every desktop stays offered, so that removal sticks. desktops.json is written only when a
         desktop changed. A registry with no rows is one nothing has registered in yet, never one every app left, so it
-        drops nothing."""
+        drops nothing and leaves the record as it is."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             desktops = document.desktops if document is not None else ()
@@ -435,7 +435,7 @@ class DesktopStore(MutableModel):
             if changed_count:
                 self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=reconciled))
             newly_offered = default_shortcut_targets(rows) - offered
-            if offered | newly_offered != recorded:
+            if rows and offered | newly_offered != recorded:
                 self._write_offered_unlocked(offered | newly_offered)
         if dropped_apps:
             logger.info("Removed the desktop shortcuts of {}, which no app registry row names", sorted(dropped_apps))

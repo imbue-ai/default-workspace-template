@@ -254,6 +254,13 @@ def test_a_registry_with_no_rows_drops_no_shortcut(tmp_path: Path) -> None:
     assert outcome.is_written is False
     assert store.list_desktops() == seeded
     assert offered_targets_recorded(tmp_path / "state") == recorded
+    # With no record either, it writes none, so the next reconcile with rows counts the desktops' apps as offered.
+    offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+    offered_path.unlink()
+    store.reconcile_shortcuts_with([])
+    assert not offered_path.exists()
+    assert store.reconcile_shortcuts_with(with_chat).is_written is False
+    assert offered_targets_recorded(tmp_path / "state") == recorded
 
 
 @pytest.mark.parametrize(
