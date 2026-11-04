@@ -3,8 +3,8 @@
  * and provisional chats the chat app streams, so the list is testable without a DOM.
  *
  * The workspace's main chat (the welcome chat) always leads. The rest is ordered by recency: the
- * chat most recently messaged leads, one never messaged trails, except one started from this root,
- * which leads until its first message. A chat
+ * chat most recently active (the user's last message to it, or its agent's last finished turn) leads,
+ * one never active trails, except one started from this root, which leads until its first message. A chat
  * another agent started (a worker, labelled ``agent_created`` and ``lead_agent`` by
  * ``create_worker.py``) is filed under the chat that owns the agent the lead label names, one
  * level deep, and the pair moves together.
@@ -65,7 +65,7 @@ export function rowsFromSnapshots(
     status: chat.kind === "room" ? roomStatus(chat, chats) : chat.status,
     labels: chat.labels,
     agentIds: chat.agent_ids,
-    lastActiveMs: chat.last_messaged_at === null ? null : chat.last_messaged_at * 1000,
+    lastActiveMs: chat.last_active_at === null ? null : chat.last_active_at * 1000,
     isMain: chat.chat_id === mainChatId,
     hasMention: mentionedChatIds.has(chat.chat_id),
     participants: chat.participants ?? [],

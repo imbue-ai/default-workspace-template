@@ -1,8 +1,10 @@
-"""When each chat was last messaged, kept by the chat app for the memory prioritizer's restart seed.
+"""When each chat was last messaged, and when its agent last finished a turn, kept by the chat app.
 
-The prioritizer's recency state is in memory, so without a durable stamp a restart of this
-process would hand every chat a fresh grace period before it can be shed. The stamps are
-chat-owned state (contracts.md section 17), so they live under ``data/.apps/chat/``.
+The message stamps seed the memory prioritizer on restart: its recency state is in memory, so
+without a durable stamp a restart of this process would hand every chat a fresh grace period
+before it can be shed. The reply stamps, with the message stamps, are when each chat was last
+active, which the chat list orders on and shows. The stamps are chat-owned state (contracts.md
+section 17), so they live under ``data/.apps/chat/``.
 """
 
 import json
@@ -21,15 +23,18 @@ from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 
 STAMPS_FILENAME: Final[str] = "last_messaged.json"
+REPLY_STAMPS_FILENAME: Final[str] = "last_replied.json"
 # The on-disk key predates the chat-versus-agent split: its entries are keyed by chat id, which
 # is the first agent's id, so the historical name still reads every existing file.
-_STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
+STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
+REPLY_STAMPS_KEY: Final[str] = "last_replied_at_by_chat_id"
 
 
 class MessageStampStore(MutableModel):
-    """Epoch seconds of each chat's most recent message, in one small JSON file; ``None`` keeps them in memory only."""
+    """Epoch seconds of one moment per chat, in one small JSON file; ``None`` keeps them in memory only."""
 
     path: Path | None = Field(frozen=True, description="The stamps file, or None for memory only (tests)")
+    key: str = Field(default=STAMPS_KEY, frozen=True, description="The file's top-level key the stamps live under")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _stamps: dict[ChatId, float] = PrivateAttr(default_factory=dict)
 
@@ -46,7 +51,7 @@ class MessageStampStore(MutableModel):
         except (OSError, ValueError) as e:
             logger.opt(exception=e).warning("Ignored an unreadable message-stamps file at {}", self.path)
             return {}
-        stamps = raw.get(_STAMPS_KEY) if isinstance(raw, dict) else None
+        stamps = raw.get(self.key) if isinstance(raw, dict) else None
         if not isinstance(stamps, dict):
             logger.warning("Ignored a message-stamps file of the wrong shape at {}", self.path)
             return {}
@@ -62,7 +67,7 @@ class MessageStampStore(MutableModel):
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self.path.with_name(f"{self.path.name}.tmp-{uuid4().hex}")
-            temp_path.write_text(json.dumps({_STAMPS_KEY: dict(self._stamps)}), encoding="utf-8")
+            temp_path.write_text(json.dumps({self.key: dict(self._stamps)}), encoding="utf-8")
             os.replace(temp_path, self.path)
         except OSError as e:
             logger.opt(exception=e).warning("Failed to write the message stamps at {}", self.path)

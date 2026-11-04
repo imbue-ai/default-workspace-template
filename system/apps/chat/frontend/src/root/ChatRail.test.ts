@@ -128,6 +128,31 @@ describe("ChatRail participant photos", () => {
   });
 });
 
+describe("ChatRail last-message age", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("writes how long ago each chat was last active at the row's end, and nothing for one never active", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-27T12:00:00Z"));
+    const rail = mount([
+      chatRowFixture("agent-recent", { lastActiveMs: Date.parse("2026-10-26T13:00:00Z") }),
+      chatRowFixture("agent-old", { lastActiveMs: Date.parse("2026-10-24T12:00:00Z") }),
+      chatRowFixture("agent-never"),
+    ]);
+
+    const ageOf = (chatId: string) => rail.querySelector(`[data-chat-id="${chatId}"] .chat-rail-age`);
+    expect(ageOf("agent-recent")?.textContent).toBe("23h");
+    expect(ageOf("agent-old")?.textContent).toBe("3d");
+    expect(ageOf("agent-never")).toBeNull();
+    const titleThenAge = [...(rail.querySelector('[data-chat-id="agent-old"]')?.children ?? [])].map(
+      (child) => child.className.split(" ")[0],
+    );
+    expect(titleThenAge.indexOf("chat-rail-age")).toBe(titleThenAge.indexOf("chat-rail-title") + 1);
+  });
+});
+
 describe("ChatRail main chat", () => {
   it("sets the main chat alone above the rest, its helpers right under the rule, and marks its row", () => {
     const helper = chatRowFixture("agent-helper", { labels: { agent_created: "true", lead_agent: "agent-welcome" } });
