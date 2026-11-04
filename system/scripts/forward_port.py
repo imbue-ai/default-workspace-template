@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Entry point for :mod:`app_registration.forward_port`.
 
-Kept as a stub: Imbue Studio and minds_evals run this path, and so does the supervisord
-program of every app, including the ones users' own apps were scaffolded with. It puts
-app_registration's source on sys.path, which only an entry file may do.
+Kept as a stub: app program lines run this path with ``python3``, including those of apps
+users scaffolded, which no release rewrites, and update-self and agents run it to remove an
+app. It puts app_registration's source on sys.path, which only an entry file may do.
 """
 
 import sys

@@ -11,9 +11,9 @@ Usage:
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
     python3 system/scripts/forward_port.py --remove --name terminal
 
-This script is deliberately standard-library only: every supervisord program
-line runs it under a plain ``python3`` before the program's own command, so
-registration must never depend on the root venv being intact. It reads TOML
+This module is deliberately standard-library only, so it runs under a plain
+``python3``: app program lines run it that way before their own command,
+including the ones users scaffolded, which no release rewrites. It reads TOML
 with ``tomllib`` and writes the registry's flat ``[[apps]]`` shape with the
 private writer below.
 

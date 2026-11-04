@@ -12,10 +12,9 @@ token in ``DATALIB_TOKEN``.
 Usage (the ``datalib`` program line, from the repo root):
     python3 system/apps/datalib/launch_datalib_http.py
 
-Standard-library only, like forward_port.py: the program line runs it under a
-plain ``python3``, so the app never depends on the root venv being intact. The
-imports beyond the standard library are the stdlib-only ``oom_priority`` and
-``app_registration`` packages, by path, the way ``oom_tag_service.py`` imports
+The program line runs it under a plain ``python3``: its only imports beyond the
+standard library are the stdlib-only ``oom_priority`` and ``app_registration``
+packages, which it puts on ``sys.path`` the way ``oom_tag_service.py`` imports
 ``oom_priority``.
 """
 

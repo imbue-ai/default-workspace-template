@@ -23,8 +23,8 @@ listed from then on.
 
 The app is a manifest, an icon, and that launcher; it is not a Python package,
 and it is excluded from the uv workspace in the root
-`pyproject.toml`. The launcher uses only the standard library, so the app does
-not depend on the root venv being intact.
+`pyproject.toml`. The launcher imports only the standard library and stdlib-only
+packages, so it runs under the system `python3` with no venv.
 
 The server is `datalib-http` from the datalib release pinned in
 `.agents/skills/datalib/scripts/install_datalib.sh` (the same pin as the
