@@ -172,21 +172,17 @@ class RequestCounter:
         if events_path is None:
             return
         events_path.parent.mkdir(parents=True, exist_ok=True)
-        if stage_oversized_stream(events_path, ARCHIVE_THRESHOLD_BYTES):
-            threading.Thread(
-                target=self._compress_staged, name="share-gateway-request-counts-archive", daemon=True
-            ).start()
+        is_staged = stage_oversized_stream(events_path, ARCHIVE_THRESHOLD_BYTES)
         with events_path.open("a", encoding="utf-8") as events_file:
             for record in records:
                 events_file.write(json.dumps(record, sort_keys=True) + "\n")
-
-    def _compress_staged(self) -> None:
-        if self.events_path is None:
-            return
-        try:
-            compress_staged_streams(self.events_path, KEPT_ARCHIVE_COUNT)
-        except OSError as exc:
-            log(f"Could not archive the staged gateway request counts beside {self.events_path}: {exc}")
+        # Appends run on the flusher thread (or the runner's stop path), never a request thread, so the staged
+        # stream is gzipped right here once the new stream exists.
+        if is_staged:
+            try:
+                compress_staged_streams(events_path, KEPT_ARCHIVE_COUNT)
+            except OSError as exc:
+                log(f"Could not archive the staged gateway request counts beside {events_path}: {exc}")
 
 
 class RequestCountFlusher:

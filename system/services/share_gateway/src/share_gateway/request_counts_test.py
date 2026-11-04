@@ -6,7 +6,6 @@ from share_gateway.request_counts import ARCHIVE_THRESHOLD_BYTES
 from share_gateway.request_counts import DENIED_NO_GRANT
 from share_gateway.request_counts import EVENT_SOURCE
 from share_gateway.request_counts import EVENT_TYPE
-from share_gateway.request_counts import KEPT_ARCHIVE_COUNT
 from share_gateway.request_counts import MAX_KEYS_PER_WINDOW
 from share_gateway.request_counts import METHOD_CLASS_READ
 from share_gateway.request_counts import METHOD_CLASS_WEBSOCKET
@@ -178,13 +177,11 @@ def test_an_oversized_stream_is_archived_before_the_next_write(tmp_path: Path) -
     counter.record("web", REQUESTER_KIND_OWNER, "", METHOD_CLASS_READ, OUTCOME_ALLOWED)
 
     counter.flush(is_final=True)
-    counter._compress_staged()
 
     assert [r["request_count"] for r in _records(events_path)] == [1]
     archives = sorted(events_path.parent.glob("events.jsonl.*"))
     assert [path.suffix for path in archives] == [".gz"]
     assert gzip.decompress(archives[0].read_bytes()) == oversized
-    assert KEPT_ARCHIVE_COUNT >= 1
 
 
 def test_the_flusher_writes_everything_when_stopped(tmp_path: Path) -> None:
