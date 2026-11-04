@@ -2038,14 +2038,13 @@ def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_deliv
     ) as server:
         manager = server.chat_state.agent_manager
 
-        def push_and_hold(sent: str) -> None:
+        def hold_delivery(sent: str) -> None:
             if sent not in is_delivering:
                 return
-            manager._broadcast_chats_updated()
             is_delivering[sent].set()
             is_released[sent].wait(timeout=60.0)
 
-        messenger.during_send.append(push_and_hold)
+        messenger.during_send.append(hold_delivery)
         try:
             _open_fixture_chat(page, server)
             chat = _chat(page)

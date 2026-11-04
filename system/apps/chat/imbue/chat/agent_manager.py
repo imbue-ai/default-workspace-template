@@ -3541,7 +3541,8 @@ class AgentManager:
 
     def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
         """Pop the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
-        once none remain.
+        once none remain. Either way the chat's snapshot is pushed: the page reads which listed sends are delivered off
+        it, to stand each down once its turn lands.
 
         A finished rebind on a chat of one agent takes its record with it: a record exists only
         for a chat that has had a handoff, and the agent's ``account`` label is the truth again.
@@ -3550,15 +3551,15 @@ class AgentManager:
             record = self._require_transition_locked(self._chat_record_by_id.get(chat_id), chat_id, transition_id)
             transition = record.converging
             assert transition is not None, "_require_transition_locked returned a record with a switch"
-            if transition.held_sends:
+            taken = transition.held_sends[0] if transition.held_sends else None
+            if taken is not None:
                 self._write_record_locked(record.with_converging(transition.with_oldest_held_send_delivered()))
-                return transition.held_sends[0]
-            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
+            elif isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
                 self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
         self._broadcast_chats_updated()
-        return None
+        return taken
 
     def _note_agent_relabeled(self, agent_id: str, labels: Mapping[str, str]) -> None:
         """Reflect labels a switch wrote before the observe stream relists the agent."""

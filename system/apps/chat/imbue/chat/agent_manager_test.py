@@ -7441,8 +7441,9 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The switch takes each held send off its list as it delivers it, before its turn can reach the transcript, so
-    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done. A send that did not
-    land has no turn to wait for, so it stops being listed."""
+    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done, and is pushed as each
+    send is taken, so the page knows which are delivered. A send that did not land has no turn to wait for, so it stops
+    being listed."""
     sent: list[tuple[str, str, str]] = []
     manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
     first = f"agent-{uuid4().hex}"
@@ -7453,12 +7454,17 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
     is_delivering_last = threading.Event()
     is_last_retried = threading.Event()
     listed_while_delivering: dict[str, list[tuple[str, bool]]] = {}
+    q = broadcaster.register()
+    pushed: list[dict[str, Any]] = []
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-        state = manager.get_handoff_state(chat_id)
-        listed_while_delivering[message_id] = (
-            [] if state is None else [(held.message_id, held.is_delivered) for held in state.held_sends]
-        )
+        latest = _last_chats_updated(_drain(q))
+        if latest is not None:
+            pushed[:] = [latest]
+        [snapshot] = [chat for chat in pushed[0]["chats"] if chat["chat_id"] == chat_id]
+        listed_while_delivering[message_id] = [
+            (held["message_id"], held["is_delivered"]) for held in snapshot["handoff"]["held_sends"]
+        ]
         if message_id == "m-1":
             is_delivering_trigger.set()
             is_follow_up_held.wait(timeout=10.0)
