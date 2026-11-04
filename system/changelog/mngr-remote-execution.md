@@ -1,0 +1,1 @@
+The mngr pin moves to the public export of the `mngr/remote-execution` branch, which adds the `remote-execution` latchkey request type that the `run-on-users-computer` skill asks for; a workspace built from this template can therefore request, and once the user approves, use Imbue Studio's remote-execution route.
