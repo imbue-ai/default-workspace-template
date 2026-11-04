@@ -1,15 +1,17 @@
 /**
  * The status row at the live end of the transcript -- the harness-common shell. It sits where
  * the reply will appear, so it is where the user is already looking once they send: just under
- * their own message while that waits on the agent, and under the latest reply while the agent
- * works (``turnStatusPlacement`` says which).
+ * their own message while that waits on the agent, and as the last piece of the agent's latest stretch, on its line,
+ * while the agent works (``turnStatusPlacement`` says which).
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
  * the ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
- *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
+ *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness; nothing while that call's
+ *                         chip in the same stretch shows it running (``isRunningCallInline``), though the row
+ *                         still ticks the chip's clock
  *   - COMPACTING       -> "Compacting…", named for who started it ("Compacting while idle…"),
  *                         and "…, then replying…" once a message is queued behind it
  * and, once a turn has run for `ELAPSED_SHOWN_AFTER_MS`, how long it has run so far: from the
