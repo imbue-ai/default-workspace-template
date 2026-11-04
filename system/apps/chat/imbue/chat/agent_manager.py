@@ -187,11 +187,11 @@ from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendSnapshot
+from imbue.chat.models import MessageAuthorFields
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import NoProviderAccountError
-from imbue.chat.models import MessageAuthorFields
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.models import ProvisionalChatPhase
