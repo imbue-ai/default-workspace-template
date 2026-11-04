@@ -1,6 +1,8 @@
 """Unit tests for the chat-attachment storage helpers."""
 
 import io
+import re
+import struct
 from pathlib import Path
 
 import pytest
@@ -49,6 +51,33 @@ def test_store_uploaded_file_writes_content_under_unique_subdir(tmp_path: Path) 
     assert stored_path.read_bytes() == b"image-bytes"
     assert stored_path.name == "photo.png"
     assert stored_path.parent.parent == uploads_directory
+
+
+def test_an_image_upload_names_its_subdirectory_after_the_size_it_is_drawn_at(tmp_path: Path) -> None:
+    uploads_directory = tmp_path / "uploads"
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", 1600, 900)
+        + b"\x08\x06\x00\x00\x00"
+    )
+
+    stored_path = store_uploaded_file(uploads_directory, "photo.png", _file_storage(png, "photo.png"))
+
+    assert re.fullmatch(r"[0-9a-f]{32}-1600x900", stored_path.parent.name)
+    assert stored_path.read_bytes() == png
+    assert [path.name for path in uploads_directory.iterdir()] == [stored_path.parent.name]
+    relative_path = f"{stored_path.parent.name}/{stored_path.name}"
+    assert resolve_upload_path(uploads_directory, relative_path) == stored_path.resolve()
+
+
+def test_a_file_with_no_readable_size_keeps_a_plain_subdirectory(tmp_path: Path) -> None:
+    uploads_directory = tmp_path / "uploads"
+
+    stored_path = store_uploaded_file(uploads_directory, "report.pdf", _file_storage(b"%PDF-1.7", "report.pdf"))
+
+    assert re.fullmatch(r"[0-9a-f]{32}", stored_path.parent.name)
 
 
 def test_store_uploaded_file_keeps_same_named_files_separate(tmp_path: Path) -> None:

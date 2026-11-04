@@ -122,42 +122,38 @@ export function parseMessageAttachments(content: string): { visibleText: string;
   return { visibleText, attachmentBlock: match[1] };
 }
 
-/** An image this document uploaded, held locally so a message naming it draws at once and at its
- *  own size instead of waiting on the served copy. */
-export interface LocalImage {
-  /** A blob URL of the picked file. */
-  url: string;
-  /** The decoded size, once known. */
-  width?: number;
-  height?: number;
+// A stored image's subdirectory carries the size it is drawn at (``<id>-<width>x<height>``, named by
+// the backend's ``store_uploaded_file``), so its box can be held before it loads.
+const UPLOADED_IMAGE_SIZE_RE = /\/uploads\/[0-9a-f]{32}-(\d+)x(\d+)\//;
+
+/** The size an uploaded image is drawn at, read off its path; null for a path that carries none
+ *  (an upload from before sizes were recorded, or a file whose size could not be read). */
+export function uploadedImageSize(path: string): { width: number; height: number } | null {
+  const match = path.match(UPLOADED_IMAGE_SIZE_RE);
+  if (match === null) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-const _localImagesByPath = new Map<string, LocalImage>();
+// Blob URLs of the images this document uploaded, by stored path.
+const _localImageUrlsByPath = new Map<string, string>();
 
-/** Hold ``url`` (a blob URL of the file uploaded to ``path``) for drawing that path, and read its size. */
+/** Hold ``url`` (a blob URL of the file uploaded to ``path``), so a message naming that path draws at
+ *  once instead of waiting on the served copy. */
 export function rememberLocalImage(path: string, url: string): void {
-  const local: LocalImage = { url };
-  _localImagesByPath.set(path, local);
-  if (typeof Image === "undefined") return;
-  const probe = new Image();
-  probe.onload = () => {
-    local.width = probe.naturalWidth;
-    local.height = probe.naturalHeight;
-  };
-  probe.src = url;
+  _localImageUrlsByPath.set(path, url);
 }
 
 /** The local copy of the image uploaded to ``path``, when this document uploaded it. */
-export function localImageAt(path: string): LocalImage | undefined {
-  return _localImagesByPath.get(path);
+export function localImageUrl(path: string): string | undefined {
+  return _localImageUrlsByPath.get(path);
 }
 
 /** Release the local copy of ``path`` (its upload was removed from the draft). */
 export function forgetLocalImage(path: string): void {
-  const local = _localImagesByPath.get(path);
-  if (local === undefined) return;
-  _localImagesByPath.delete(path);
-  URL.revokeObjectURL(local.url);
+  const url = _localImageUrlsByPath.get(path);
+  if (url === undefined) return;
+  _localImageUrlsByPath.delete(path);
+  URL.revokeObjectURL(url);
 }
 
 export function formatFileSize(bytes: number): string {

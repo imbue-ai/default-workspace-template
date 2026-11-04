@@ -1,0 +1,112 @@
+"""Unit tests for reading an image's size from its header."""
+
+import struct
+from pathlib import Path
+
+import pytest
+
+from imbue.chat.image_sizes import read_image_size
+
+
+def _png(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x06\x00\x00\x00"
+    )
+
+
+def _gif(width: int, height: int) -> bytes:
+    return b"GIF89a" + struct.pack("<HH", width, height) + b"\x00" * 8
+
+
+def _bmp(width: int, height: int) -> bytes:
+    return b"BM" + b"\x00" * 16 + struct.pack("<ii", width, height) + b"\x00" * 28
+
+
+def _webp(chunk: bytes, payload: bytes) -> bytes:
+    body = b"WEBP" + chunk + struct.pack("<I", len(payload)) + payload
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def _exif(orientation: int) -> bytes:
+    tiff = (
+        b"MM\x00\x2a"
+        + struct.pack(">I", 8)
+        + struct.pack(">H", 1)
+        + struct.pack(">HHIH", 0x0112, 3, 1, orientation)
+        + b"\x00\x00"
+        + struct.pack(">I", 0)
+    )
+    segment = b"Exif\x00\x00" + tiff
+    return b"\xff\xe1" + struct.pack(">H", len(segment) + 2) + segment
+
+
+def _jpeg(width: int, height: int, *, orientation: int | None = None) -> bytes:
+    frame = struct.pack(">BHHB", 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+    exif = _exif(orientation) if orientation is not None else b""
+    # A JFIF segment and fill bytes ahead of the frame, as real files carry.
+    jfif = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    return (
+        b"\xff\xd8" + jfif + exif + b"\xff\xff" + b"\xff\xc0" + struct.pack(">H", len(frame) + 2) + frame + b"\xff\xd9"
+    )
+
+
+def _write(tmp_path: Path, name: str, content: bytes) -> Path:
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "expected"),
+    [
+        ("a.png", _png(1600, 900), (1600, 900)),
+        ("a.gif", _gif(320, 240), (320, 240)),
+        ("a.bmp", _bmp(64, 48), (64, 48)),
+        ("top-down.bmp", _bmp(64, -48), (64, 48)),
+        ("lossy.webp", _webp(b"VP8 ", b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", 800, 600)), (800, 600)),
+        (
+            "lossless.webp",
+            _webp(b"VP8L", b"\x2f" + ((800 - 1) | ((600 - 1) << 14)).to_bytes(4, "little")),
+            (800, 600),
+        ),
+        (
+            "extended.webp",
+            _webp(b"VP8X", b"\x00" * 4 + (1999).to_bytes(3, "little") + (999).to_bytes(3, "little")),
+            (2000, 1000),
+        ),
+        ("a.jpg", _jpeg(4032, 3024), (4032, 3024)),
+        ("upright.jpg", _jpeg(4032, 3024, orientation=1), (4032, 3024)),
+    ],
+)
+def test_reads_the_size_from_each_inline_format(
+    tmp_path: Path, name: str, content: bytes, expected: tuple[int, int]
+) -> None:
+    assert read_image_size(_write(tmp_path, name, content)) == expected
+
+
+def test_a_phone_photo_turned_on_its_side_reports_the_size_it_is_drawn_at(tmp_path: Path) -> None:
+    """A portrait phone photo is stored landscape with an orientation tag (6: turn clockwise), and
+    a browser draws it portrait, so its box must be portrait too."""
+    assert read_image_size(_write(tmp_path, "portrait.jpg", _jpeg(4032, 3024, orientation=6))) == (3024, 4032)
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("notes.txt", b"just some text, nothing to measure"),
+        ("empty.png", b""),
+        ("truncated.png", b"\x89PNG\r\n\x1a\n\x00\x00"),
+        ("zero.png", _png(0, 0)),
+        ("no-frame.jpg", b"\xff\xd8\xff\xd9"),
+    ],
+)
+def test_a_file_that_is_not_a_readable_image_has_no_size(tmp_path: Path, name: str, content: bytes) -> None:
+    assert read_image_size(_write(tmp_path, name, content)) is None
+
+
+def test_a_missing_file_has_no_size(tmp_path: Path) -> None:
+    assert read_image_size(tmp_path / "gone.png") is None

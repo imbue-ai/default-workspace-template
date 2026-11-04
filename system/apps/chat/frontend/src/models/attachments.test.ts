@@ -12,6 +12,7 @@ import {
   formatFileSize,
   isImagePath,
   parseMessageAttachments,
+  uploadedImageSize,
 } from "./attachments";
 
 const IMAGE_PATH = "/code/uploads/aaa/diagram.png";
@@ -119,6 +120,23 @@ describe("parseMessageAttachments", () => {
     const parsed = parseMessageAttachments(content);
     expect(parsed.visibleText).toBe(content);
     expect(parsed.attachmentBlock).toBeNull();
+  });
+});
+
+describe("uploadedImageSize", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+
+  it("reads the size an upload's subdirectory records", () => {
+    expect(uploadedImageSize(`/home/user/workspace/data/uploads/${ID}-1600x900/photo.png`)).toEqual({
+      width: 1600,
+      height: 900,
+    });
+  });
+
+  it("finds no size on an upload stored before sizes were recorded, or on any other path", () => {
+    expect(uploadedImageSize(`/home/user/workspace/data/uploads/${ID}/photo.png`)).toBeNull();
+    expect(uploadedImageSize("/home/user/workspace/data/images/chart-1600x900/photo.png")).toBeNull();
+    expect(uploadedImageSize("https://example.com/pic.png")).toBeNull();
   });
 });
 

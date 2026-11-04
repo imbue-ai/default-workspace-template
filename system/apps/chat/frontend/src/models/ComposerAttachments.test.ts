@@ -15,7 +15,7 @@ import {
   uploadDescribedFileToComposer,
   uploadFilesToComposer,
 } from "./ComposerAttachments";
-import { localImageAt } from "./attachments";
+import { localImageUrl } from "./attachments";
 
 const STORAGE_KEY_PREFIX = "composer-attachments:";
 
@@ -189,10 +189,10 @@ describe("while uploading", () => {
     const ready = getComposerAttachments(chatId)[0];
     expect(ready).toMatchObject({ status: "ready", previewUrl: undefined });
     expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(localImageAt(ready.uploaded!.path)?.url).toBe("blob:preview-1");
+    expect(localImageUrl(ready.uploaded!.path)).toBe("blob:preview-1");
     removeComposerAttachment(chatId, ready.localId);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-1");
-    expect(localImageAt(ready.uploaded!.path)).toBeUndefined();
+    expect(localImageUrl(ready.uploaded!.path)).toBeUndefined();
   });
 
   it("lets an image's own pixels go when its upload fails", async () => {

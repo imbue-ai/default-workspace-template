@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("./lightbox", () => ({ openImageLightbox: vi.fn() }));
 
 import { MarkdownContent, renderMarkdown, requestedAtUrl } from "./markdown";
-import { forgetLocalImage, localImageAt, rememberLocalImage } from "./models/attachments";
+import { forgetLocalImage, localImageUrl, rememberLocalImage } from "./models/attachments";
 
 function mountMarkdown(content: string, requestedAt?: string): HTMLImageElement {
   const root = document.createElement("div");
@@ -201,24 +201,39 @@ describe("MarkdownContent images", () => {
     expect(image.classList.contains("is-loading")).toBe(false);
   });
 
-  it("draws an image this document uploaded from its local copy, at its own size, with no placeholder", () => {
-    const path = "/code/uploads/abc/photo.png";
+  it("holds an upload's box at the size its path records, so it does not jump when it loads", () => {
+    const path = `/code/uploads/${"a".repeat(32)}-1600x900/photo.png`;
+
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+
+    expect(image.getAttribute("width")).toBe("1600");
+    expect(image.getAttribute("height")).toBe("900");
+    expect(image.classList.contains("is-loading")).toBe(true);
+  });
+
+  it("leaves an upload whose path records no size to the fixed-shape box", () => {
+    const path = `/code/uploads/${"b".repeat(32)}/photo.png`;
+
+    const image = mountMarkdown(`![${path}](${path})`, "ts-1");
+
+    expect(image.hasAttribute("width")).toBe(false);
+    expect(image.classList.contains("is-loading")).toBe(true);
+  });
+
+  it("draws an image this document uploaded from its local copy, at the size its path records", () => {
+    const path = `/code/uploads/${"c".repeat(32)}-800x600/photo.png`;
     rememberLocalImage(path, "blob:local-photo");
-    const local = localImageAt(path)!;
-    local.width = 800;
-    local.height = 600;
 
     const image = mountMarkdown(`![${path}](${path})`, "ts-1");
 
     expect(image.getAttribute("src")).toBe("blob:local-photo");
     expect(image.getAttribute("width")).toBe("800");
     expect(image.getAttribute("height")).toBe("600");
-    expect(image.classList.contains("is-loading")).toBe(false);
     const revokeObjectURL = vi.fn();
     vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
     forgetLocalImage(path);
     vi.unstubAllGlobals();
-    expect(localImageAt(path)).toBeUndefined();
+    expect(localImageUrl(path)).toBeUndefined();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:local-photo");
   });
 });
