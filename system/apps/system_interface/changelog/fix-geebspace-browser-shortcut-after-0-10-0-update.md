@@ -8,6 +8,8 @@ An app can now have several default desktop shortcuts. The Screen gets both a Sc
 
 - The app list in `GET /api/inventory` carries `default_shortcuts` (a list) in place of `default_shortcut`.
 
+- An app's second and later default shortcuts are labeled with their launch path ("Browser"), not the app's name, so the two Screen shortcuts can be told apart.
+
 - Right-clicking any of an app's shortcut entries in the launcher offers to add or remove that shortcut.
 
 - A focus-mode shortcut always runs a POST launch path (such as the Screen's Browser) in the app's existing window, instead of only raising the window, so the Browser shortcut always opens the browser.

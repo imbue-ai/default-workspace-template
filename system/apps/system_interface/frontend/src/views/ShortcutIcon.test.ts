@@ -28,6 +28,27 @@ describe("shortcutLabel", () => {
     expect(shortcutLabel({ ...shortcut, mode: "new" }, docs)).toBe("Docs");
     expect(shortcutLabel(shortcut, undefined)).toBe("docs");
   });
+
+  it("reads an app's later default shortcuts by their launch path's label, and any other shortcut by the app's name", () => {
+    const screen = appRecord("screen", {
+      launch_paths: [
+        launchPathRecord({ id: "screen", label: "Screen", path: "/" }),
+        launchPathRecord({ id: "browser", label: "Browser", path: "/launch/browser", method: "POST" }),
+        launchPathRecord({ id: "spare", label: "Spare", path: "/spare" }),
+      ],
+      default_shortcuts: [
+        { launch: "screen", mode: "focus" },
+        { launch: "browser", mode: "focus" },
+      ],
+    });
+    const of = (launch: string): DesktopShortcut => ({
+      ...shortcut,
+      target: { kind: "launch", app: "screen", launch },
+    });
+    expect(shortcutLabel(of("screen"), screen)).toBe("Screen");
+    expect(shortcutLabel(of("browser"), screen)).toBe("Browser");
+    expect(shortcutLabel(of("spare"), screen)).toBe("Screen");
+  });
 });
 
 describe("shortcutTooltip", () => {
