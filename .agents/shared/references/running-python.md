@@ -173,9 +173,9 @@ break otherwise -- `claude's SessionStart and Stop hooks run it to record the
 chat's background tasks, which a missing or unsynced venv must not stop` --
 not the reason in other words: `the system python3 runs this with no venv`
 says only what `no-venv` already says. A why copied unchanged into another
-file is usually one of these. When the only answer is the tier rule
-(everything the code imports is standard-library only), say that, and name
-its caller.
+file is usually one of these. When the only reason is the tier rule, the why
+names the stdlib-only packages the code imports beyond the standard library;
+who runs it as `python3 <path>` follows from its tier and is no reason.
 
 A marked site passes, and a marked `sys.path` edit may add a directory
 outside the bare search paths, except in code the system `python3` runs, where

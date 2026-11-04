@@ -42,7 +42,7 @@ from typing import Any
 # Run by its path, the module puts the bare packages' directory on sys.path; imported as
 # part of its package, the venv already has it.
 if not __package__:
-    # import-path: no-venv -- the connect-external-service skill runs it as `python3 <path>`, and everything it imports is standard-library only
+    # import-path: no-venv -- its only import beyond the standard library is `workspace_bare_scripts`
     sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))
 
 from workspace_bare_scripts import message_chat
