@@ -216,10 +216,16 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
   };
   item.uploadSettled = uploadAttachment(file)
     .then((uploaded) => {
-      // A chip removed mid-upload has already revoked its preview.
+      // A chip that left the composer mid-upload (removed, or dropped by a clear or a rollback) names no
+      // message, so its preview is let go.
       const isStillStaged = getComposerAttachments(chatId).some((attachment) => attachment.localId === localId);
       _patchAttachment(chatId, localId, { status: "ready", uploaded, previewUrl: undefined });
-      if (item.previewUrl !== undefined && isStillStaged) rememberLocalImage(uploaded.path, item.previewUrl);
+      if (item.previewUrl === undefined) return;
+      if (isStillStaged) {
+        rememberLocalImage(uploaded.path, item.previewUrl);
+      } else {
+        releasePreview();
+      }
     })
     .catch((error: unknown) => {
       // Logged as well as marked: a document that stages for another (the root, for a page not

@@ -236,4 +236,22 @@ describe("while uploading", () => {
     await staged.uploadSettled;
     expect(localImageUrl("/w/data/uploads/x/removed.png")).toBeUndefined();
   });
+
+  it("lets the pixels go of a chip a clear dropped before its upload finished", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      Object.assign(class extends URL {}, { createObjectURL: () => "blob:preview-5", revokeObjectURL }),
+    );
+    uploadAnswers.push(() =>
+      Promise.resolve(new Response(JSON.stringify({ path: "/w/data/uploads/y/cleared.png", size: 6 }), { status: 201 })),
+    );
+    uploadFilesToComposer(chatId, [new File(["pixels"], "cleared.png", { type: "image/png" })]);
+    const [staged] = getComposerAttachments(chatId);
+    // A send clears the composer while this file is still on its way up.
+    clearComposerAttachments(chatId);
+    await staged.uploadSettled;
+    expect(localImageUrl("/w/data/uploads/y/cleared.png")).toBeUndefined();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-5");
+  });
 });
