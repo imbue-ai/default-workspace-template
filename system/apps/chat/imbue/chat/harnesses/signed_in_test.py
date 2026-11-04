@@ -290,6 +290,6 @@ def test_the_grok_probe_does_not_carry_the_servers_own_credentials_endpoints_or_
     env = seen["env"]
     assert env["GROK_HOME"] == str(tmp_path)
     assert env["GROK_AUTH_PATH"] == str(tmp_path / "auth.json")
-    assert env["GROK_MANAGED_CONFIG"] == "0", "the account's pinned home keeps its requirements.toml"
+    assert env["GROK_CHANGELOG_OFFLINE"] == "1", "the probe runs on mngr's pinned environment"
     assert (set(server_variables) - {"GROK_HOME", "GROK_AUTH_PATH"}).isdisjoint(env)
     assert env["PATH"] == "/usr/bin:/bin", "the ambient env is layered under, not replaced"

@@ -264,7 +264,7 @@ def test_grok_models_runs_bound_to_the_account_without_the_servers_own_grok_vari
 
     assert env["GROK_HOME"] == str(tmp_path)
     assert env["GROK_AUTH_PATH"] == str(tmp_path / "auth.json")
-    assert env["GROK_MANAGED_CONFIG"] == "0"
+    assert env["GROK_CHANGELOG_OFFLINE"] == "1"
     assert {"XAI_API_KEY", "GROK_AUTH_PROVIDER_COMMAND", "GROK_MODELS_BASE_URL"}.isdisjoint(env)
     assert env["PATH"] == "/usr/bin:/bin"
 

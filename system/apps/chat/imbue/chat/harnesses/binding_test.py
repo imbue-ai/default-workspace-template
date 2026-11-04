@@ -61,13 +61,12 @@ def test_every_harness_but_grok_scopes_through_exactly_one_variable(tmp_path: Pa
 
 def test_grok_runs_on_the_account_as_its_home_and_credential_file_under_mngrs_pins(tmp_path: Path) -> None:
     """A sign-in, a probe or a listing keeps its state in the account folder and reads the account's credential,
-    on the same privacy and isolation pins an agent runs with."""
+    on the same isolation pins an agent runs with."""
     binding = build_account_binding(HarnessType.GROK)
     scope = {"GROK_HOME": str(tmp_path), "GROK_AUTH_PATH": str(tmp_path / "auth.json")}
     assert binding.account_env(tmp_path) == scope
     assert binding.cli_env(tmp_path) == {**build_pinned_grok_environment(), **scope}
-    assert binding.cli_env(tmp_path)["GROK_MANAGED_CONFIG"] == "0"
-    assert binding.account_process_env(tmp_path)["GROK_MANAGED_CONFIG"] == "0"
+    assert build_pinned_grok_environment().items() <= binding.account_process_env(tmp_path).items()
 
 
 def test_a_harness_no_account_runs_has_no_binding_to_build() -> None:
@@ -180,8 +179,7 @@ def test_seeding_grok_pins_the_home_and_keeps_its_consent_answers(tmp_path: Path
     binding = build_account_binding(HarnessType.GROK)
     binding.seed_account(account, tmp_path)
     config = tomllib.loads((account / "config.toml").read_text())
-    assert config["features"]["telemetry"] is False
-    assert (account / "requirements.toml").is_file()
+    assert config["harness"]["disable_codebase_upload"] is True
 
     answer = '\n[consent.answers.terms-2026]\nversion = 3\naccount = "user@example.com"\nacked = true\n'
     (account / "config.toml").write_text((account / "config.toml").read_text() + answer)
