@@ -1,8 +1,7 @@
 """What a labeled preview frame says the page inside it is.
 
-Kept in the bare package so both sides of a frame can type it: ``serve_isolated_instance``
-records and passes it, and ``preview_wrapper_server`` picks its banner by it, and both run
-under the system ``python3`` with no venv.
+Kept in the bare package so the frame code that runs under the system ``python3``, with
+no venv, can import it.
 """
 
 from enum import StrEnum
