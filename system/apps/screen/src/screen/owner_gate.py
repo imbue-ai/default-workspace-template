@@ -3,10 +3,13 @@ share gateway in front of it to vouch for the requester, so the service admits a
 boot script, the watcher, the commands) or carries the owner session that the owner token opened
 (``system/libs/auth_sandbox/README.md``).
 
-Gate mode is on exactly when ``SCREEN_OWNER_TOKEN_SHA256`` is set. The connector mints the token, passes only its
-SHA-256 at sandbox create, and hands the plaintext to the hosted chrome once; the chrome frames the Screen at
-``/?owner_token=<token>``, and the gate trades the token for the session cookies and redirects to the same URL without
-it. Every other request needs one of those cookies, WebSocket upgrades and the neko proxy included.
+Gate mode is on exactly when ``SCREEN_OWNER_TOKEN_SHA256_FILE`` is set. The file it names holds the owner token's
+SHA-256 and is read on every request that is not loopback: a pooled sandbox's Screen starts before anyone has claimed
+it, and the sandbox writes the digest only once the connector claims it for a user. Until then (no file, or an empty
+one) and whenever the file does not hold a digest, the gate admits loopback alone. The connector mints the token and
+hands the plaintext to the hosted chrome once; the chrome frames the Screen at ``/?owner_token=<token>``, and the gate
+trades the token for the session cookies and redirects to the same URL without it. Every other request needs one of
+those cookies, WebSocket upgrades and the neko proxy included.
 
 The session is set twice, under two names, for the reasons the share gateway's ``session_cookie.py`` gives: a
 ``SameSite=Lax`` copy for a top-level visit and a ``SameSite=None; Partitioned`` copy for the chrome's cross-site
@@ -22,12 +25,14 @@ import re
 import secrets
 import urllib.parse
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final
 
 from flask import Flask
 from flask import Response
 from flask import request
 from flask.typing import ResponseReturnValue
+from loguru import logger
 from pydantic import Field
 from pydantic import SecretBytes
 from werkzeug.datastructures import MultiDict
@@ -37,7 +42,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from screen.errors import ScreenConfigurationError
 
-OWNER_TOKEN_SHA256_ENV_VAR: Final[str] = "SCREEN_OWNER_TOKEN_SHA256"
+OWNER_TOKEN_SHA256_FILE_ENV_VAR: Final[str] = "SCREEN_OWNER_TOKEN_SHA256_FILE"
 FRAME_ANCESTORS_ENV_VAR: Final[str] = "SCREEN_FRAME_ANCESTORS"
 
 OWNER_TOKEN_QUERY_PARAMETER: Final[str] = "owner_token"
@@ -71,28 +76,46 @@ class OwnerGate(FrozenModel):
     """What gate mode admits a request with: the owner token's digest, the session secret, and who may frame the
     Screen."""
 
-    owner_token_sha256: str = Field(description="The lower-case hex SHA-256 of the owner token")
+    owner_token_sha256_path: Path = Field(
+        description="The file holding the lower-case hex SHA-256 of the owner token, absent until the sandbox is claimed"
+    )
     frame_ancestors: str = Field(description="The frame-ancestors source list every response carries")
     session_secret: SecretBytes = Field(description="The owner session's HMAC key, generated at start")
 
 
 def owner_gate_from_environ(environ: Mapping[str, str]) -> OwnerGate | None:
-    """The gate the environment asks for with a fresh session secret, or None when it names no owner token digest."""
-    token_sha256 = environ.get(OWNER_TOKEN_SHA256_ENV_VAR, "")
-    if not token_sha256:
+    """The gate the environment asks for with a fresh session secret, or None when it names no owner token file."""
+    token_sha256_path = environ.get(OWNER_TOKEN_SHA256_FILE_ENV_VAR, "")
+    if not token_sha256_path:
         return None
-    if _SHA256_HEX_PATTERN.fullmatch(token_sha256) is None:
-        raise ScreenConfigurationError(f"{OWNER_TOKEN_SHA256_ENV_VAR} must be 64 lower-case hex digits")
     frame_ancestors = environ.get(FRAME_ANCESTORS_ENV_VAR, "").strip()
     if not frame_ancestors:
         raise ScreenConfigurationError(f"{FRAME_ANCESTORS_ENV_VAR} must name who may frame a gated Screen")
     if any(character in _FRAME_ANCESTORS_FORBIDDEN_CHARACTERS for character in frame_ancestors):
         raise ScreenConfigurationError(f"{FRAME_ANCESTORS_ENV_VAR} must be one source list, with no ';' or ','")
     return OwnerGate(
-        owner_token_sha256=token_sha256,
+        owner_token_sha256_path=Path(token_sha256_path),
         frame_ancestors=frame_ancestors,
         session_secret=SecretBytes(secrets.token_bytes(_SESSION_SECRET_BYTES)),
     )
+
+
+def read_owner_token_sha256(gate: OwnerGate) -> str | None:
+    """The owner token's digest as the file holds it now, or None when no one but loopback may be admitted: no file
+    or an empty one (the sandbox is not claimed yet), or one that cannot be read or is not a digest (logged)."""
+    try:
+        text = gate.owner_token_sha256_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        logger.error("The owner token digest at {} cannot be read: {}", gate.owner_token_sha256_path, e)
+        return None
+    if not text:
+        return None
+    if _SHA256_HEX_PATTERN.fullmatch(text) is None:
+        logger.error("The owner token digest at {} is not 64 lower-case hex digits", gate.owner_token_sha256_path)
+        return None
+    return text
 
 
 @pure
@@ -101,9 +124,9 @@ def is_loopback_address(remote_address: str | None) -> bool:
 
 
 @pure
-def is_owner_token(gate: OwnerGate, token: str) -> bool:
+def is_owner_token(owner_token_sha256: str, token: str) -> bool:
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return hmac.compare_digest(digest, gate.owner_token_sha256)
+    return hmac.compare_digest(digest, owner_token_sha256)
 
 
 @pure
@@ -179,8 +202,9 @@ def _set_owner_session_cookies(response: Response, gate: OwnerGate) -> None:
 
 
 def _trade_owner_token_for_session(gate: OwnerGate) -> Response:
+    owner_token_sha256 = read_owner_token_sha256(gate)
     tokens = request.args.getlist(OWNER_TOKEN_QUERY_PARAMETER)
-    if not all(is_owner_token(gate, token) for token in tokens):
+    if owner_token_sha256 is None or not all(is_owner_token(owner_token_sha256, token) for token in tokens):
         return error_response(OWNER_TOKEN_REFUSED, HTTP_UNAUTHORIZED)
     location = location_without_owner_token(request.path, tuple(request.args.items(multi=True)))
     response = Response(status=HTTP_FOUND, headers={"Location": location, "Cache-Control": "no-store"})
@@ -201,7 +225,9 @@ def install_owner_gate(app: Flask, gate: OwnerGate) -> None:
     def admit_only_the_owner() -> ResponseReturnValue | None:
         if request.method == "GET" and OWNER_TOKEN_QUERY_PARAMETER in request.args:
             return _trade_owner_token_for_session(gate)
-        if is_loopback_address(request.remote_addr) or has_owner_session(gate, request.cookies):
+        if is_loopback_address(request.remote_addr):
+            return None
+        if read_owner_token_sha256(gate) is not None and has_owner_session(gate, request.cookies):
             return None
         return error_response(OWNER_SESSION_REQUIRED, HTTP_UNAUTHORIZED)
 

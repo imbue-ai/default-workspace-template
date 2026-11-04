@@ -112,10 +112,17 @@ another address, which it refuses to do outside gate mode.
 
 An auth sandbox (`system/libs/auth_sandbox/README.md`) serves the Screen on every interface,
 reached over Modal's TLS with no share gateway in front of it, so nothing vouches for the
-requester. Its boot script sets `SCREEN_OWNER_TOKEN_SHA256` (the lower-case hex SHA-256 of an
-owner token the connector minted and gave the hosted chrome) and `SCREEN_FRAME_ANCESTORS` (the
-chrome's origin), which turns gate mode on (`owner_gate.py`); with the first unset the service
-behaves as above, and with the first set the second is required.
+requester. Its boot script sets `SCREEN_OWNER_TOKEN_SHA256_FILE` (the path of a file that will
+hold the lower-case hex SHA-256 of an owner token the connector minted and gave the hosted
+chrome) and `SCREEN_FRAME_ANCESTORS` (the chrome's origin), which turns gate mode on
+(`owner_gate.py`); with the first unset the service behaves as above, and with the first set the
+second is required.
+
+The file is read on every request that is not loopback. A pooled sandbox starts its Screen
+before anyone claims it, and the sandbox writes the digest only at the claim, so until then (no
+file, or an empty one) the gate admits loopback alone: no token opens a session and no session
+cookie is accepted. A file that does not hold 64 lower-case hex digits, or cannot be read, is
+logged and treated the same way.
 
 - A request from loopback (`127.0.0.1`, `::1`) is the owner, as everywhere: the boot script's
   `/health` and `/api/start`, the watcher, the commands.

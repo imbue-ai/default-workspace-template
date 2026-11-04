@@ -218,9 +218,17 @@ def owner_token() -> str:
 
 
 @pytest.fixture
-def owner_gate(owner_token: str) -> OwnerGate:
+def owner_token_sha256_path(tmp_path: Path, owner_token: str) -> Path:
+    """The claimed sandbox's digest file, with a trailing newline as a shell's write leaves one."""
+    path = tmp_path / "screen_token_sha256"
+    path.write_text(hashlib.sha256(owner_token.encode("utf-8")).hexdigest() + "\n")
+    return path
+
+
+@pytest.fixture
+def owner_gate(owner_token_sha256_path: Path) -> OwnerGate:
     return OwnerGate(
-        owner_token_sha256=hashlib.sha256(owner_token.encode("utf-8")).hexdigest(),
+        owner_token_sha256_path=owner_token_sha256_path,
         frame_ancestors="https://chrome.example.test",
         session_secret=SecretBytes(uuid4().bytes),
     )

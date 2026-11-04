@@ -26,7 +26,7 @@ from screen.launch import DetachedProcessLauncher
 from screen.launch import screen_process_environment
 from screen.messenger import ChatAgentMessenger
 from screen.neko_client import NekoClient
-from screen.owner_gate import OWNER_TOKEN_SHA256_ENV_VAR
+from screen.owner_gate import OWNER_TOKEN_SHA256_FILE_ENV_VAR
 from screen.owner_gate import OwnerGate
 from screen.owner_gate import is_loopback_address
 from screen.owner_gate import owner_gate_from_environ
@@ -191,7 +191,7 @@ def main(
     """Run the Screen service: the workspace's streamed desktop as a window."""
     owner_gate = owner_gate_from_environ(os.environ)
     if owner_gate is None and not is_loopback_address(host):
-        raise ScreenConfigurationError(f"serving on {host} needs the owner gate ({OWNER_TOKEN_SHA256_ENV_VAR})")
+        raise ScreenConfigurationError(f"serving on {host} needs the owner gate ({OWNER_TOKEN_SHA256_FILE_ENV_VAR})")
     arguments = ScreenServiceArguments(
         manifest_path=manifest_path,
         app_url=AppUrl(f"http://localhost:{port}"),

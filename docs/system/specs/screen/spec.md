@@ -186,7 +186,8 @@ Gate mode (section 6.5) replaces this rule.
 ### 6.5 Gate mode
 
 An auth sandbox serves the Screen on every interface over Modal's TLS, with no gateway in front of it to vouch for the requester.
-Its boot script sets `SCREEN_OWNER_TOKEN_SHA256` (the hash of an owner token its connector minted) and `SCREEN_FRAME_ANCESTORS` (the hosted chrome's origin), which turns gate mode on.
+Its boot script sets `SCREEN_OWNER_TOKEN_SHA256_FILE` (a file that holds the hash of an owner token its connector minted, once the sandbox is claimed) and `SCREEN_FRAME_ANCESTORS` (the hosted chrome's origin), which turns gate mode on.
+The service reads the file on every request that is not loopback; while it is absent, empty or not a hash, only loopback is admitted.
 In gate mode `X-Imbue-Identity` is ignored and every admitted request is the owner: a loopback request is admitted as is, a GET carrying the matching `?owner_token=` sets an owner session cookie and redirects to the same URL without it, and every other request, WebSocket included, needs that session or is refused with 401.
 Every response carries `frame-ancestors` naming the chrome's origin.
 The README's "Gate mode" gives the cookies and their checks.

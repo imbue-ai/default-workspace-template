@@ -1,10 +1,10 @@
 """Gate mode (an auth sandbox's Screen, reached over Modal's TLS): loopback is the owner, every other request needs
 the owner session the owner token opens, on every route, the WebSockets and the neko proxy included."""
 
-import hashlib
 import http.client
 import json
 import logging
+from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 from flask import Flask
 from flask.testing import FlaskClient
+from loguru import logger
 from pydantic import SecretBytes
 from werkzeug.datastructures import MultiDict
 from werkzeug.test import TestResponse
@@ -42,7 +43,6 @@ _WEBSOCKET_UPGRADE: Final[dict[str, str]] = {
     "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
     "Sec-WebSocket-Version": "13",
 }
-_DIGEST: Final[str] = hashlib.sha256(b"a-token").hexdigest()
 
 
 def _owner_cookie(owner_gate: OwnerGate, name: str = OWNER_SESSION_COOKIE_NAME) -> dict[str, str]:
@@ -53,23 +53,24 @@ def _set_cookies_by_name(response: TestResponse) -> dict[str, str]:
     return {header.split("=", 1)[0]: header for header in response.headers.getlist("Set-Cookie")}
 
 
-def test_gate_mode_is_off_without_a_digest_and_refuses_a_malformed_setting() -> None:
+def test_gate_mode_is_off_without_a_digest_file_and_refuses_a_malformed_setting(tmp_path: Path) -> None:
     assert owner_gate_from_environ({}) is None
+    digest_path = tmp_path / "absent-until-claimed"
     gate = owner_gate_from_environ(
-        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": " https://c.test "}
+        {"SCREEN_OWNER_TOKEN_SHA256_FILE": str(digest_path), "SCREEN_FRAME_ANCESTORS": " https://c.test "}
     )
     assert gate is not None
-    assert gate.owner_token_sha256 == _DIGEST
+    assert gate.owner_token_sha256_path == digest_path
     assert gate.frame_ancestors == "https://c.test"
     # Each start keys its sessions afresh.
-    again = owner_gate_from_environ({"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": "https://c.test"})
+    again = owner_gate_from_environ(
+        {"SCREEN_OWNER_TOKEN_SHA256_FILE": str(digest_path), "SCREEN_FRAME_ANCESTORS": "https://c.test"}
+    )
     assert again is not None
     assert owner_session_cookie_value(again) != owner_session_cookie_value(gate)
     for bad_environ in (
-        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST.upper(), "SCREEN_FRAME_ANCESTORS": "https://c.test"},
-        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST[:-1], "SCREEN_FRAME_ANCESTORS": "https://c.test"},
-        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST},
-        {"SCREEN_OWNER_TOKEN_SHA256": _DIGEST, "SCREEN_FRAME_ANCESTORS": "https://c.test; script-src *"},
+        {"SCREEN_OWNER_TOKEN_SHA256_FILE": str(digest_path)},
+        {"SCREEN_OWNER_TOKEN_SHA256_FILE": str(digest_path), "SCREEN_FRAME_ANCESTORS": "https://c.test; script-src *"},
     ):
         with pytest.raises(ScreenConfigurationError):
             owner_gate_from_environ(bad_environ)
@@ -77,7 +78,7 @@ def test_gate_mode_is_off_without_a_digest_and_refuses_a_malformed_setting() -> 
 
 def test_the_service_refuses_to_serve_beyond_loopback_without_the_gate() -> None:
     result = CliRunner().invoke(
-        main, [], env={"SCREEN_LISTEN_HOST": "0.0.0.0", "SCREEN_OWNER_TOKEN_SHA256": None}, catch_exceptions=True
+        main, [], env={"SCREEN_LISTEN_HOST": "0.0.0.0", "SCREEN_OWNER_TOKEN_SHA256_FILE": None}, catch_exceptions=True
     )
     assert isinstance(result.exception, ScreenConfigurationError)
     assert "serving on 0.0.0.0 needs the owner gate" in str(result.exception)
@@ -142,6 +143,55 @@ def test_the_owner_token_sets_both_session_cookies_and_redirects_without_itself(
     again = gated_client.get(f"/api/state?owner_token={owner_token}", environ_base=_TUNNEL)
     assert again.status_code == 302
     assert again.headers["Location"] == "/api/state"
+
+
+@pytest.mark.parametrize("unclaimed_content", [None, "", "\n"])
+def test_an_unclaimed_screen_admits_loopback_alone(
+    gated_client: FlaskClient,
+    owner_gate: OwnerGate,
+    owner_token: str,
+    owner_token_sha256_path: Path,
+    unclaimed_content: str | None,
+) -> None:
+    claimed_digest = owner_token_sha256_path.read_text()
+    if unclaimed_content is None:
+        owner_token_sha256_path.unlink()
+    else:
+        owner_token_sha256_path.write_text(unclaimed_content)
+
+    assert gated_client.get("/health").status_code == 200
+    assert gated_client.get("/health", headers=_owner_cookie(owner_gate), environ_base=_TUNNEL).status_code == 401
+    traded = gated_client.get(f"/?owner_token={owner_token}", environ_base=_TUNNEL)
+    assert traded.status_code == 401
+    assert traded.headers.getlist("Set-Cookie") == []
+
+    # The digest is read per request: the claim's write admits the owner with no restart.
+    owner_token_sha256_path.write_text(claimed_digest)
+    assert gated_client.get(f"/?owner_token={owner_token}", environ_base=_TUNNEL).status_code == 302
+    assert gated_client.get("/health", headers=_owner_cookie(owner_gate), environ_base=_TUNNEL).status_code == 200
+
+
+@pytest.mark.parametrize("malformed", ["A" * 64, "0" * 63, "not a digest"])
+def test_a_malformed_digest_file_admits_loopback_alone_and_is_logged(
+    gated_client: FlaskClient,
+    owner_gate: OwnerGate,
+    owner_token: str,
+    owner_token_sha256_path: Path,
+    malformed: str,
+) -> None:
+    owner_token_sha256_path.write_text(malformed)
+    errors: list[str] = []
+    handle = logger.add(lambda message: errors.append(message.record["message"]), level="ERROR")
+    try:
+        session = gated_client.get("/health", headers=_owner_cookie(owner_gate), environ_base=_TUNNEL)
+        traded = gated_client.get(f"/?owner_token={owner_token}", environ_base=_TUNNEL)
+        loopback = gated_client.get("/health")
+    finally:
+        logger.remove(handle)
+    assert session.status_code == 401
+    assert traded.status_code == 401
+    assert loopback.status_code == 200
+    assert errors == [f"The owner token digest at {owner_token_sha256_path} is not 64 lower-case hex digits"] * 2
 
 
 def test_a_wrong_owner_token_opens_no_session(gated_client: FlaskClient, owner_token: str) -> None:
