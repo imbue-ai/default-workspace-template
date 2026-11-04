@@ -1,5 +1,5 @@
-"""The "Bring in your chats" card's state: what the import-chats skill has imported, and whether the user put the
-card away.
+"""The "Bring in your chats" card's state: what the import-chats skill has imported, whether the user put the card
+away, and whether the import is offered at all (only to the accounts in Imbue's trusted inner circle, for now).
 
 The skill's script (``.agents/skills/import-chats/scripts/import_chats.py``) records each source it imports in
 ``data/.skills/import-chats/status.json``; this module only reads that file. A source the file says is still
@@ -20,6 +20,8 @@ from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_profile.snapshot import is_owner_in_inner_circle
+from workspace_profile.snapshot import load_workspace_profile_snapshot
 
 from getting_started.state_files import read_json_object
 from getting_started.state_files import write_json_atomic
@@ -134,9 +136,11 @@ class ChatImportSourceView(FrozenModel):
 
 
 class ChatImportResponse(FrozenModel):
-    """What the chat import routes answer: each recorded source, and whether the user put the card away."""
+    """What the chat import routes answer: each recorded source, whether the user put the card away, and whether
+    the import is offered."""
 
     is_dismissed: bool = Field(description="Whether the user put the card away")
+    is_offered: bool = Field(description="Whether the card may offer an import the workspace has not started")
     sources: dict[str, ChatImportSourceView] = Field(description="Each source the import has recorded, by key")
 
 
@@ -145,6 +149,7 @@ class ChatImportStore(FrozenModel):
 
     status_path: Path = Field(description="The import-chats skill's status file")
     dismissal_path: Path = Field(description="Where the app records that the user put the card away")
+    workspace_root: Path = Field(description="The workspace whose profile snapshot says who may be offered the import")
 
     def is_dismissed(self) -> bool:
         document = read_json_object(self.dismissal_path)
@@ -157,6 +162,7 @@ class ChatImportStore(FrozenModel):
         """The card's state as ``GET /api/chat-import`` answers it."""
         return ChatImportResponse(
             is_dismissed=self.is_dismissed(),
+            is_offered=is_owner_in_inner_circle(load_workspace_profile_snapshot(self.workspace_root)),
             sources={
                 key: ChatImportSourceView.model_validate(source.model_dump(exclude={"pid"}))
                 for key, source in read_chat_import_sources(self.status_path).items()

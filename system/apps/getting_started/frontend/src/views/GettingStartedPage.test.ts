@@ -56,7 +56,7 @@ function typeQuery(root: HTMLElement, query: string): void {
 
 describe("the Getting Started page", () => {
   it("offers the chat import above the tiles at rest, and leaves it out of search results", () => {
-    const { root, started } = render(LOADED, { is_dismissed: false, sources: {} });
+    const { root, started } = render(LOADED, { is_dismissed: false, is_offered: true, sources: {} });
     const card = root.querySelector('[data-section="chat-import"]')!;
     expect(card.compareDocumentPosition(root.querySelector('[data-section="start-something"]')!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,

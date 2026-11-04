@@ -1,7 +1,7 @@
 /**
  * The "Bring in your chats" card's state, as the app serves it at ``GET /api/chat-import``: what
- * the import-chats skill has imported from each source, and whether the user put the card away
- * (``src/getting_started/chat_import.py``).
+ * the import-chats skill has imported from each source, whether the user put the card away, and
+ * whether the import is offered (``src/getting_started/chat_import.py``).
  *
  * Fetched once per page load and again when the window regains focus; while a source is still
  * importing it is polled, so the card counts up as the import runs. A fetch that fails keeps what
@@ -26,6 +26,8 @@ export interface ChatImportSource {
 
 export interface ChatImport {
   is_dismissed: boolean;
+  /** Whether the card may offer an import the workspace has not started. */
+  is_offered: boolean;
   sources: Record<string, ChatImportSource>;
 }
 
@@ -46,7 +48,7 @@ export const SOURCE_LABELS: ReadonlyArray<readonly [string, string]> = [
 export function cardPhase(chatImport: ChatImport | null): ChatImportCardPhase {
   if (chatImport === null || chatImport.is_dismissed) return "hidden";
   const states = Object.values(chatImport.sources).map((source) => source.state);
-  if (states.length === 0) return "offer";
+  if (states.length === 0) return chatImport.is_offered ? "offer" : "hidden";
   if (states.includes("importing")) return "importing";
   if (states.some((state) => state === "needs_sign_in" || state === "failed")) return "attention";
   return "imported";

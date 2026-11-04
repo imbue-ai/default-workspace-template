@@ -87,14 +87,18 @@ def test_process_liveness() -> None:
 
 def test_the_card_stays_put_away_once_dismissed(tmp_path: Path) -> None:
     store = ChatImportStore(
-        status_path=tmp_path / "status.json", dismissal_path=tmp_path / "state" / "chat_import.json"
+        status_path=tmp_path / "status.json",
+        dismissal_path=tmp_path / "state" / "chat_import.json",
+        workspace_root=tmp_path,
     )
     assert store.is_dismissed() is False
 
     store.dismiss()
 
     assert store.is_dismissed() is True
-    view = ChatImportStore(status_path=store.status_path, dismissal_path=store.dismissal_path).view()
+    view = ChatImportStore(
+        status_path=store.status_path, dismissal_path=store.dismissal_path, workspace_root=tmp_path
+    ).view()
     assert (view.is_dismissed, view.sources) == (True, {})
 
 
@@ -105,7 +109,9 @@ def test_a_running_imports_fetch_progress_reaches_the_card(tmp_path: Path) -> No
         {"chatgpt": {"state": "importing", "conversations": 40, "pid": os.getpid(), "fetched": 166, "to_fetch": 582}},
     )
 
-    view = ChatImportStore(status_path=status_path, dismissal_path=tmp_path / "chat_import.json").view()
+    view = ChatImportStore(
+        status_path=status_path, dismissal_path=tmp_path / "chat_import.json", workspace_root=tmp_path
+    ).view()
 
     assert (view.sources["chatgpt"].fetched, view.sources["chatgpt"].to_fetch) == (166, 582)
 

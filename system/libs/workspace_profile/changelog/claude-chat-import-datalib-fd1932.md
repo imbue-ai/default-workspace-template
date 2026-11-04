@@ -1,0 +1,1 @@
+The snapshot reader understands a new setting, `is_inner_circle`: `is_owner_in_inner_circle` says whether the workspace's owning account is in Imbue's trusted inner circle, so an app can keep a not-yet-public feature to those accounts. A workspace with no snapshot, or one from a client that does not write the key, is outside it.

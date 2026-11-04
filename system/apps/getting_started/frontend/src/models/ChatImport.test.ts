@@ -6,7 +6,7 @@ import type { ChatImport, ChatImportSource } from "./ChatImport";
 import { cardPhase, dismissChatImport, getChatImport, importedSummary, refreshChatImport } from "./ChatImport";
 
 function chatImport(sources: Record<string, ChatImportSource>, isDismissed = false): ChatImport {
-  return { is_dismissed: isDismissed, sources };
+  return { is_dismissed: isDismissed, is_offered: true, sources };
 }
 
 describe("the chat import card's phase", () => {

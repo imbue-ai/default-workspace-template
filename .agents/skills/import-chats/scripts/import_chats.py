@@ -17,7 +17,7 @@ site refused the request itself, which a sign-in does not fix).
 each named source to the datalib store's config if it is not there yet, and runs one
 ``datalib-dag`` sync of the named sources' downloads. It records each source's progress in the
 status file as it goes, prints the final status, and exits 0 only when every named source imported.
-A sync of a large account takes a while: run it through ``system/scripts/run_in_background.py``.
+A sync of a large account takes a while: run it through ``system/scripts/workspace_bare_scripts/run_in_background.py``.
 
 ``status`` prints the status file.
 

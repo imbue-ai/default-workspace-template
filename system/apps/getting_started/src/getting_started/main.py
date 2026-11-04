@@ -27,6 +27,8 @@ from imbue.imbue_common.logging import log_span
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/getting_started/app.toml")
+# Supervisord runs the app from the workspace root.
+WORKSPACE_ROOT: Final[Path] = Path(".")
 APP_NAME: Final[AppName] = AppName("getting-started")
 # The frontend's build output, inside the package.
 DEFAULT_STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
@@ -58,7 +60,9 @@ def build_pages_app(arguments: GettingStartedArguments) -> Flask:
                 catalog_url=arguments.catalog_url, state_directory=arguments.state_dir, fetcher=None
             ),
             chat_import=ChatImportStore(
-                status_path=CHAT_IMPORT_STATUS_PATH, dismissal_path=arguments.state_dir / DISMISSAL_FILENAME
+                status_path=CHAT_IMPORT_STATUS_PATH,
+                dismissal_path=arguments.state_dir / DISMISSAL_FILENAME,
+                workspace_root=WORKSPACE_ROOT,
             ),
             contract_path=SHELL_APP_CONTRACT_PATH,
         )

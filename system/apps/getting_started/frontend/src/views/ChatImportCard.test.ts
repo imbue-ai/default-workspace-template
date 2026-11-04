@@ -29,11 +29,27 @@ function click(root: HTMLElement, action: string): void {
 describe("the chat import card", () => {
   it("renders nothing before its state loads or once put away", () => {
     expect(render(null).root.querySelector('[data-section="chat-import"]')).toBeNull();
-    expect(render({ is_dismissed: true, sources: {} }).root.querySelector('[data-section="chat-import"]')).toBeNull();
+    expect(
+      render({ is_dismissed: true, is_offered: true, sources: {} }).root.querySelector('[data-section="chat-import"]'),
+    ).toBeNull();
+  });
+
+  it("offers nothing to an account outside the inner circle, but keeps following an import it has", () => {
+    const hidden = render({ is_dismissed: false, is_offered: false, sources: {} });
+    expect(hidden.root.querySelector('[data-section="chat-import"]')).toBeNull();
+
+    const running = render({
+      is_dismissed: false,
+      is_offered: false,
+      sources: {
+        claude: { state: "importing", conversations: 3, updated_at: "", detail: "" },
+      },
+    });
+    expect(running.root.querySelector('[data-chat-import-phase="importing"]')).not.toBeNull();
   });
 
   it("offers the import, whose action starts the import chat and whose other puts it away", () => {
-    const { root, started, dismissals } = render({ is_dismissed: false, sources: {} });
+    const { root, started, dismissals } = render({ is_dismissed: false, is_offered: true, sources: {} });
     expect(root.querySelector('[data-chat-import-phase="offer"]')).not.toBeNull();
     click(root, "import");
     expect(started).toEqual([IMPORT_PROMPT]);
@@ -44,6 +60,7 @@ describe("the chat import card", () => {
   it("counts each source up while the import runs, with nothing to click", () => {
     const { root } = render({
       is_dismissed: false,
+      is_offered: true,
       sources: { chatgpt: source("importing", 12), claude: source("imported", 30) },
     });
     expect(root.querySelector('[data-chat-import-phase="importing"]')).not.toBeNull();
@@ -57,6 +74,7 @@ describe("the chat import card", () => {
   it("shows how many of its conversations a source has fetched, with a bar, when it reports a total", () => {
     const { root } = render({
       is_dismissed: false,
+      is_offered: true,
       sources: { chatgpt: source("importing", 40, { fetched: 166, to_fetch: 582 }), claude: source("importing", 7) },
     });
     expect(Array.from(root.querySelectorAll("[data-chat-import-source]")).map((line) => line.textContent)).toEqual([
@@ -71,6 +89,7 @@ describe("the chat import card", () => {
   it("counts conversations downloaded instead when a source has nothing new to fetch", () => {
     const { root } = render({
       is_dismissed: false,
+      is_offered: true,
       sources: { chatgpt: source("importing", 312, { fetched: 0, to_fetch: 0 }) },
     });
     expect(root.querySelector('[data-chat-import-source="chatgpt"]')!.textContent).toBe("ChatGPT: 312 so far");
@@ -80,6 +99,7 @@ describe("the chat import card", () => {
   it("says which source needs the user and resumes the import of that source from a chat", () => {
     const { root, started } = render({
       is_dismissed: false,
+      is_offered: true,
       sources: { claude: source("imported", 30), chatgpt: source("needs_sign_in") },
     });
     expect(root.querySelector('[data-chat-import-source="chatgpt"]')!.textContent).toBe(
@@ -94,6 +114,7 @@ describe("the chat import card", () => {
   it("shows what came in and offers to look for new chats", () => {
     const { root, started } = render({
       is_dismissed: false,
+      is_offered: true,
       sources: { claude: source("imported", 30), chatgpt: source("imported", 4) },
     });
     expect(root.querySelector('[data-section="chat-import"]')!.textContent).toContain(
@@ -106,7 +127,11 @@ describe("the chat import card", () => {
   });
 
   it("looks for new chats only in the sources that were imported", () => {
-    const { root, started } = render({ is_dismissed: false, sources: { claude: source("imported", 30) } });
+    const { root, started } = render({
+      is_dismissed: false,
+      is_offered: true,
+      sources: { claude: source("imported", 30) },
+    });
     click(root, "update");
     expect(started).toEqual(["Check my Claude chats for new conversations and bring them into this workspace."]);
   });

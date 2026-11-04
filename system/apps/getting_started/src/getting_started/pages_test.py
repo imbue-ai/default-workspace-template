@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
@@ -33,7 +34,9 @@ def _client(
     )
     app = Flask("getting-started-under-test", static_folder=None)
     chat_import = ChatImportStore(
-        status_path=tmp_path / "import-chats" / "status.json", dismissal_path=tmp_path / "chat_import.json"
+        status_path=tmp_path / "import-chats" / "status.json",
+        dismissal_path=tmp_path / "chat_import.json",
+        workspace_root=tmp_path,
     )
     app.register_blueprint(build_pages_blueprint(static_directory, store, chat_import, contract_path))
     return app.test_client()
@@ -122,7 +125,7 @@ def test_the_contract_module_is_served_from_this_origin_once_the_shell_has_built
 
 def test_the_chat_import_route_answers_what_was_imported_until_the_card_is_put_away(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    assert client.get("/api/chat-import").get_json() == {"is_dismissed": False, "sources": {}}
+    assert client.get("/api/chat-import").get_json() == {"is_dismissed": False, "is_offered": False, "sources": {}}
 
     status_path = tmp_path / "import-chats" / "status.json"
     status_path.parent.mkdir(parents=True)
@@ -137,6 +140,7 @@ def test_the_chat_import_route_answers_what_was_imported_until_the_card_is_put_a
     )
     assert client.get("/api/chat-import").get_json() == {
         "is_dismissed": False,
+        "is_offered": False,
         "sources": {
             "claude": {
                 "state": "imported",
@@ -162,6 +166,19 @@ def test_putting_the_chat_import_card_away_where_it_cannot_be_recorded_says_why(
 
     assert response.status_code == 500
     assert "cannot write state file" in response.get_json()["detail"]
+
+
+def test_the_chat_import_route_offers_the_import_only_when_the_snapshot_says_so(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    assert client.get("/api/chat-import").get_json()["is_offered"] is False
+
+    snapshot_path = tmp_path / SNAPSHOT_RELATIVE_PATH
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(json.dumps({"account_id": "user-1", "is_inner_circle": True}))
+    assert client.get("/api/chat-import").get_json()["is_offered"] is True
+
+    snapshot_path.write_text(json.dumps({"account_id": "user-1", "is_inner_circle": False}))
+    assert client.get("/api/chat-import").get_json()["is_offered"] is False
 
 
 def test_the_app_describes_its_api_the_way_its_manifest_says(tmp_path: Path) -> None:

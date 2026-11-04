@@ -90,7 +90,7 @@ Run one sync for every connected source, in the background so the user can keep 
 while it runs (a large account takes many minutes):
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Import chats" --keep-host-awake -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Import chats" --keep-host-awake -- \
   python3 .agents/skills/import-chats/scripts/import_chats.py sync --source claude --source chatgpt
 ```
 
@@ -178,7 +178,7 @@ which is why an import leaves it off. For each source they want it for (`claude_
 export PATH="$HOME/.local/bin:$PATH"
 CONFIG=data/.skills/datalib/Default/config.toml
 datalib-dag turn-on "$CONFIG" claude_chats/render_markdown
-python3 system/scripts/run_in_background.py --description "Make Claude chats searchable" --keep-host-awake -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Make Claude chats searchable" --keep-host-awake -- \
   datalib-dag "$CONFIG" --sync claude_chats/render_markdown --by "${MINDS_CHAT_ID:-import-chats}"
 ```
 
