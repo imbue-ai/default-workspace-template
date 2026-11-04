@@ -127,9 +127,15 @@ export function parseMessageAttachments(content: string): { visibleText: string;
 // the backend's ``store_uploaded_file``), so its box can be held before it loads.
 const UPLOADED_IMAGE_SIZE_RE = /\/uploads\/[0-9a-f]{32}-(\d+)x(\d+)\//;
 
+/** The width and height an image is drawn at, in CSS pixels. */
+export interface ImageSize {
+  width: number;
+  height: number;
+}
+
 /** The size an uploaded image is drawn at, read off its path; null for a path that carries none
  *  (an upload from before sizes were recorded, or a file whose size could not be read). */
-export function uploadedImageSize(path: string): { width: number; height: number } | null {
+export function uploadedImageSize(path: string): ImageSize | null {
   const match = path.match(UPLOADED_IMAGE_SIZE_RE);
   if (match === null) return null;
   return { width: Number(match[1]), height: Number(match[2]) };
