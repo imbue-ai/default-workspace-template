@@ -922,7 +922,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # them, the confirming message included, that did not land has no turn to wait for.
     others = transition.shown_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
+        (
+            _held_send_snapshot(
+                transition.trigger_message_id,
+                split_author_prefix(transition.trigger_text)[1],
+                transition.is_delivered(transition.trigger_message_id),
+            ),
+        )
         if transition.is_trigger_listed()
         else ()
     )
@@ -938,7 +944,12 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         # non-owner's send carries; the record keeps the delivered text for the successor.
         held_sends=(
             *trigger,
-            *(_held_send_snapshot(held.message_id, split_author_prefix(held.text)[1]) for held in others),
+            *(
+                _held_send_snapshot(
+                    held.message_id, split_author_prefix(held.text)[1], transition.is_delivered(held.message_id)
+                )
+                for held in others
+            ),
         ),
         model_pick=transition.model_pick,
         error=transition.error,
@@ -948,9 +959,9 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
+def _held_send_snapshot(message_id: str, text: str, is_delivered: bool) -> HeldSendSnapshot:
     """One held send on the wire, carrying the render decision its text would get in the transcript."""
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text, is_delivered=is_delivered), text)
 
 
 @pure

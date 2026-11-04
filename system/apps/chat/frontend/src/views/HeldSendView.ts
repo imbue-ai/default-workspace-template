@@ -6,23 +6,40 @@
  * uses (the user bubble, or the notice a background-task report becomes), drawn as an ordinary
  * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). The snapshot
  * keeps listing a send the switch has delivered until the switch is done, so a reloaded page shows
- * them too; each stands down earlier once its real form is on the transcript: the confirming message
- * once the switch marker that carries it is (the successor's opening turn), and the others, oldest
- * first, as the turns the agent took during the switch land (``heldSendsLandedDuringSwitch``).
+ * them too; each stands down earlier once its real form is on the page: the confirming message once
+ * the switch marker that carries it is (the successor's opening turn), and the delivered others,
+ * oldest first, as the agent's turns for them land or queue (``heldSendsShownElsewhere``). A send the
+ * switch still holds always shows.
  */
 
 import m from "mithril";
 import { getChatById, getProvisionalChat } from "../models/Chats";
-import { getOutgoingMessages, heldSendsLandedDuringSwitch } from "../models/OutgoingMessages";
-import { isMessageCarriedBySwitch } from "../models/Response";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
+import { countSentTurnsSince, isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
+
+/** How many of a switching chat's delivered held sends the page already shows in their real form: the user turns its
+ *  agent has taken since the switch began, in the transcript or in the agent's queue. Read from what any page loads,
+ *  so a page opened partway through the switch counts the same; 0 while the chat is not switching. */
+export function heldSendsShownElsewhere(chatId: string): number {
+  const chat = getChatById(chatId);
+  if (chat === undefined || chat.handoff === null) return 0;
+  return (
+    countSentTurnsSince(chatId, chat.active_agent.agent_id, chat.handoff.started_at) +
+    chat.active_agent.queued_messages.length
+  );
+}
 
 export function renderHeldSends(chatId: string): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
-  const standing = chat.handoff.held_sends
-    .filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id))
-    .slice(heldSendsLandedDuringSwitch(chatId));
+  let shownElsewhere = heldSendsShownElsewhere(chatId);
+  const standing = chat.handoff.held_sends.filter((held) => {
+    if (isMessageCarriedBySwitch(chatId, held.message_id)) return false;
+    if (held.is_delivered !== true || shownElsewhere === 0) return true;
+    shownElsewhere -= 1;
+    return false;
+  });
   return standing.map((held) =>
     renderNotYetRealBubble({
       key: `held-${held.message_id}`,

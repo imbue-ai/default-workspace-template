@@ -39,11 +39,10 @@ vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff, status: chatState.status }),
   getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
-// How many of the switching chat's held sends have landed, which the tracker counts from the chats it is pushed.
+// How many of the switching chat's delivered held sends already show in their real form.
 const landedHeldSends = vi.hoisted(() => ({ count: 0 }));
-vi.mock("../models/OutgoingMessages", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../models/OutgoingMessages")>()),
-  heldSendsLandedDuringSwitch: () => landedHeldSends.count,
+vi.mock("./HeldSendView", () => ({
+  heldSendsShownElsewhere: () => landedHeldSends.count,
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),

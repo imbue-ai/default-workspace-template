@@ -14,7 +14,6 @@ import {
   addOutgoing,
   dropOutgoingByMessageId,
   getOutgoingMessages,
-  heldSendsLandedDuringSwitch,
   noteBackendArrivals,
   trackBackendArrivals,
 } from "./OutgoingMessages";
@@ -23,10 +22,17 @@ function push(chats: unknown[]): void {
   for (const listener of listeners) listener(chats);
 }
 
+// How many turns users' messages opened for the agent since the switch began, as the page's transcript holds them.
+let sentTurnsSinceSwitch = 0;
+
 describe("the bubbles of a chat switching harness", () => {
   beforeEach(() => {
     listeners.length = 0;
-    trackBackendArrivals();
+    sentTurnsSinceSwitch = 0;
+    trackBackendArrivals(
+      () => false,
+      () => sentTurnsSinceSwitch,
+    );
   });
 
   it("drops a bubble by its send-time id, leaving bubbles without one alone", () => {
@@ -89,65 +95,58 @@ describe("the bubbles of a chat switching harness", () => {
     ]);
   });
 
-  it("consumes the returning bubbles with the successor's items that landed while the sends were still held", () => {
-    // The backend delivers the held sends before it clears the switch, so the prompt's turn (the
-    // confirming message's real form) and a held send's queued entry can land while the
-    // snapshot still holds the sends: they must not leave stale bubbles under the real ones.
+  it("brings back none of the delivered sends the page already shows, in the transcript or the agent's queue", () => {
     const chat = `a-${Math.random()}`;
     const heldSends = [
-      { message_id: "trigger-1", text: "Carry on in Codex" },
-      { message_id: "m-2", text: "and this" },
+      { message_id: "trigger-1", text: "Carry on on the other account", is_delivered: true },
+      { message_id: "m-2", text: "and this", is_delivered: true },
     ];
     push([
       chatSnapshotFixture(chat, {
-        active_agent: { agent_id: "agent-old" },
-        handoff: handoffStateFixture({ held_sends: heldSends }),
+        active_agent: { agent_id: "agent-same" },
+        handoff: rebindStateFixture({ held_sends: heldSends }),
       }),
     ]);
+    sentTurnsSinceSwitch = 1;
     push([
       chatSnapshotFixture(chat, {
         active_agent: {
-          agent_id: "agent-new",
-          queued_messages: [{ queued_id: "q-2", content: "and this", timestamp: "2026-09-13T12:00:00Z" }],
+          agent_id: "agent-same",
+          queued_messages: [{ queued_id: "q-2", content: "and this", timestamp: "2026-09-14T12:00:05Z" }],
         },
-        handoff: handoffStateFixture({ phase: "switching", held_sends: heldSends }),
       }),
     ]);
-    noteBackendArrivals(chat, ["u-prompt"]);
-    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
     expect(getOutgoingMessages(chat)).toEqual([]);
   });
 
-  it("leaves standing the held sends whose items have not landed by the time the switch ends", () => {
+  it("brings back the delivered sends whose turns have not landed, and every send still held", () => {
     const chat = `a-${Math.random()}`;
     const heldSends = [
-      { message_id: "trigger-1", text: "Carry on in Codex" },
-      { message_id: "m-2", text: "and this" },
+      { message_id: "trigger-1", text: "Carry on on the other account", is_delivered: true },
+      { message_id: "m-2", text: "and this", is_delivered: true },
+      { message_id: "m-3", text: "and that", is_delivered: false },
     ];
     push([
       chatSnapshotFixture(chat, {
-        active_agent: { agent_id: "agent-old" },
-        handoff: handoffStateFixture({ held_sends: heldSends }),
+        active_agent: { agent_id: "agent-same" },
+        handoff: rebindStateFixture({ held_sends: heldSends }),
       }),
     ]);
+    // More turns than delivered sends (one from another window, say) never take a send still held.
+    sentTurnsSinceSwitch = 3;
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-same" } })]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and that"]);
+
+    const other = `a-${Math.random()}`;
+    sentTurnsSinceSwitch = 1;
     push([
-      chatSnapshotFixture(chat, {
-        active_agent: { agent_id: "agent-new" },
-        handoff: handoffStateFixture({ phase: "switching", held_sends: heldSends }),
+      chatSnapshotFixture(other, {
+        active_agent: { agent_id: "agent-same" },
+        handoff: rebindStateFixture({ held_sends: heldSends }),
       }),
     ]);
-    noteBackendArrivals(chat, ["u-prompt"]);
-    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
-    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
-    // Nothing carries over to a later switch of the same chat.
-    push([
-      chatSnapshotFixture(chat, {
-        active_agent: { agent_id: "agent-third" },
-        handoff: handoffStateFixture({ phase: "switching", held_sends: [{ message_id: "m-3", text: "once more" }] }),
-      }),
-    ]);
-    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-third" } })]);
-    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this", "once more"]);
+    push([chatSnapshotFixture(other, { active_agent: { agent_id: "agent-same" } })]);
+    expect(getOutgoingMessages(other).map((o) => o.content)).toEqual(["and this", "and that"]);
   });
 
   it("leaves the confirming message to the switch marker that carries it, and the others to their own turns", () => {
@@ -222,31 +221,25 @@ describe("the bubbles of a chat switching harness", () => {
     },
   );
 
-  it("counts the same agent's arrivals during a rebind, since its held sends land in its own transcript", () => {
-    // A rebind keeps the agent, so nothing names a successor; the held sends still reach the
-    // transcript before the switch clears, and those turns must consume the returning bubbles.
+  it("leaves the turn to a landed first send, so the next one back waits behind it", () => {
     const chat = `a-${Math.random()}`;
     addOutgoing(chat, "Carry on on the other account", "trigger-1");
-    const converging = chatSnapshotFixture(chat, {
-      active_agent: { agent_id: "agent-same" },
-      handoff: rebindStateFixture({
-        held_sends: [
-          { message_id: "trigger-1", text: "Carry on on the other account" },
-          { message_id: "m-2", text: "and this" },
-        ],
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-same" },
+        handoff: rebindStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on on the other account", is_delivered: true },
+            { message_id: "m-2", text: "and this", is_delivered: true },
+          ],
+        }),
       }),
-    });
-    push([converging]);
+    ]);
     expect(getOutgoingMessages(chat)).toEqual([]);
-    expect(heldSendsLandedDuringSwitch(chat)).toBe(0);
     noteBackendArrivals(chat, ["u-trigger"]);
-    // The snapshot still lists the delivered confirming message, whose turn has landed.
-    expect(heldSendsLandedDuringSwitch(chat)).toBe(1);
-    // The rebind cleared on the same agent: the confirming message's turn already arrived, so
-    // only the other held send comes back as a bubble.
+    sentTurnsSinceSwitch = 1;
     push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-same" } })]);
-    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
-    expect(heldSendsLandedDuringSwitch(chat)).toBe(0);
+    expect(getOutgoingMessages(chat).map((o) => [o.content, o.opensTurn])).toEqual([["and this", false]]);
   });
 
   it("lets the first held send back from a fresh start open the successor's turn, and only that one", () => {

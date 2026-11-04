@@ -157,6 +157,10 @@ class ChatTransitionRecord(FrozenModel):
         """The sends the switch has delivered and those it still holds, in order."""
         return (*self.delivered_sends, *self.held_sends)
 
+    def is_delivered(self, message_id: str) -> bool:
+        """Whether the switch has delivered the send under ``message_id``."""
+        return any(held.message_id == message_id for held in self.delivered_sends)
+
     def held_send_for(self, message_id: str) -> HeldSend | None:
         """The send under ``message_id`` the switch holds or has delivered, or None."""
         return next((held for held in self.shown_sends() if held.message_id == message_id), None)

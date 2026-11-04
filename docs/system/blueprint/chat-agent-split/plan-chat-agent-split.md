@@ -523,6 +523,7 @@ Cancel is refused with 409 in `switching` and later.
   It rode the new agent's `mngr create --message-file` together with the handoff prompt until phase 8, which made the create silent: the prompt now carries the message at its end and goes through the send path (5.8), and the others follow it once the agent is ready.
 - Delivery pops one held send at a time under the same lock the message route appends under, and the `handoff` entry is cleared only once the list is empty, so a send that arrives during delivery is delivered by the same loop rather than overtaking one still held.
   A popped send moves to the entry's `delivered_sends`, and the snapshot's `held_sends` lists those after the confirming message until the entry is cleared: its turn reaches the transcript only after delivery, so the page keeps showing it from the snapshot until then.
+  Each listed send says whether it has been delivered (`is_delivered`): the page stands a delivered one down, oldest first, as the agent's turns since the switch began reach its transcript or queue, and never one still held.
 - A cancel returns the trigger message to the composer and delivers the other held sends to the old agent (5.6).
 - Held sends survive a chat-app restart because they are persisted on the record's `handoff` entry.
 

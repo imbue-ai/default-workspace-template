@@ -7452,11 +7452,13 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
     is_follow_up_held = threading.Event()
     is_delivering_last = threading.Event()
     is_last_retried = threading.Event()
-    listed_while_delivering: dict[str, list[str]] = {}
+    listed_while_delivering: dict[str, list[tuple[str, bool]]] = {}
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         state = manager.get_handoff_state(chat_id)
-        listed_while_delivering[message_id] = [] if state is None else [held.message_id for held in state.held_sends]
+        listed_while_delivering[message_id] = (
+            [] if state is None else [(held.message_id, held.is_delivered) for held in state.held_sends]
+        )
         if message_id == "m-1":
             is_delivering_trigger.set()
             is_follow_up_held.wait(timeout=10.0)
@@ -7486,9 +7488,9 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
         _wait_until_settled(store, chat_id)
         assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
         assert listed_while_delivering == {
-            "m-1": ["m-1"],
-            "m-2": ["m-1", "m-2", "m-3"],
-            "m-3": ["m-1", "m-3"],
+            "m-1": [("m-1", True)],
+            "m-2": [("m-1", True), ("m-2", True), ("m-3", False)],
+            "m-3": [("m-1", True), ("m-3", True)],
         }
         assert manager.get_handoff_state(chat_id) is None
     finally:
