@@ -30,7 +30,7 @@ const state: {
   flow: unknown;
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
-const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<RelayAnswer> => "relaying"));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 const abortFlow = vi.hoisted(() => vi.fn());
@@ -559,6 +559,7 @@ describe("a sign-in finished in the browser", () => {
     for (const port of ports) {
       startFlow.mockImplementationOnce(async () => {
         state.flow = startedFlow("url_then_code", claudeRelayUrl(port));
+        return true;
       });
     }
   }
@@ -580,7 +581,7 @@ describe("a sign-in finished in the browser", () => {
   it("says it is preparing the sign-in, not opening the browser, while it draws a fresh port", async () => {
     requestProviderRelay.mockResolvedValueOnce("port_taken");
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
-    startFlow.mockResolvedValueOnce(undefined).mockImplementationOnce(() => new Promise(() => undefined));
+    startFlow.mockResolvedValueOnce(true).mockImplementationOnce(() => new Promise(() => undefined));
 
     const root = document.createElement("div");
     const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
@@ -614,8 +615,8 @@ describe("a sign-in finished in the browser", () => {
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     let started: () => void = () => undefined;
     startFlow
-      .mockResolvedValueOnce(undefined)
-      .mockImplementationOnce(() => new Promise<undefined>((resolve) => (started = () => resolve(undefined))));
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (started = () => resolve(true))));
     const root = await clickLane("anthropic");
 
     (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
@@ -627,6 +628,25 @@ describe("a sign-in finished in the browser", () => {
     expect(requestProviderRelay).toHaveBeenCalledOnce();
     // The sign-in that started after Back belongs to nobody, so the chooser ends it.
     expect(abortFlow).toHaveBeenCalledOnce();
+  });
+
+  it("ends no sign-in after going back when a newer start, perhaps another chooser's, overtook its own", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    let overtaken: () => void = () => undefined;
+    startFlow
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (overtaken = () => resolve(false))));
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    abortFlow.mockClear();
+    overtaken();
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledTimes(2);
+    expect(requestProviderRelay).toHaveBeenCalledOnce();
+    expect(abortFlow).not.toHaveBeenCalled();
   });
 
   it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
@@ -808,6 +828,7 @@ describe("a sign-in finished in the browser", () => {
     requestProviderRelay.mockClear();
     startFlow.mockImplementationOnce(async () => {
       state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      return true;
     });
 
     (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();

@@ -219,8 +219,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   ): Promise<HandOff> {
     const takenPorts = new Set<string>();
     for (let portDraw = 1; ; portDraw += 1) {
-      await startFlow(chosen.id, chosenMethod.id, options.accountId);
-      if (attempt !== generation) return "stood_down";
+      const isLive = await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      // A start a newer one overtook (here, or in a chooser opened since this one closed) has
+      // nothing left of its own to hand over or end.
+      if (attempt !== generation || !isLive) return "stood_down";
       // Back and Close clear the lane without superseding this attempt, and the sign-in just
       // started is then nobody's.
       if (lane !== chosen) {
