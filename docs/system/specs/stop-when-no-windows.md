@@ -201,7 +201,7 @@ On every pass of the lifecycle sweep, for each app that is stoppable, whose row 
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
 - with at least one window, or not `internal` and with a per-app share grant (decision 12), clear the app's idle mark;
-- with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
+- with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset or was set for another process of the program (supervisord's `pid` changed: the program was started again, so a restart gets the whole grace period), and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
 The idle mark lives in the manager's memory: a shell restart starts the 60 seconds over, which is the safe direction.

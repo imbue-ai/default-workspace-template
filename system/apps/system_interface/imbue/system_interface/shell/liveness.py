@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Final
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 
 # The socket supervisord's ``[unix_http_server]`` section binds (see
@@ -46,6 +48,16 @@ _RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({SUPERVISOR_RUNNING_STAT
 SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset(
     {SUPERVISOR_STOPPED_STATENAME, "EXITED", SUPERVISOR_FATAL_STATENAME, "UNKNOWN"}
 )
+
+
+class SupervisorProgramState(FrozenModel):
+    """One supervised program as getAllProcessInfo reports it."""
+
+    statename: str = Field(description="Supervisord's state name for the program (RUNNING, STARTING, STOPPED, ...)")
+    pid: int = Field(
+        description="The process supervisord last spawned for the program, so a new value means the program was "
+        "started again; 0 when supervisord has none"
+    )
 
 
 def supervisor_socket_path() -> Path:
@@ -126,14 +138,14 @@ def stop_supervisor_program(program: str, socket_path: Path) -> None:
 def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None:
     """Every supervised program's up/down state in one getAllProcessInfo RPC; None when supervisord cannot be
     reached, so the caller keeps what it last knew rather than presenting a guess as supervisord's answer."""
-    statename_by_program = fetch_supervisor_program_statenames(socket_path)
-    if statename_by_program is None:
+    state_by_program = fetch_supervisor_programs(socket_path)
+    if state_by_program is None:
         return None
-    return {program: statename in _RUNNING_STATE_NAMES for program, statename in statename_by_program.items()}
+    return {program: state.statename in _RUNNING_STATE_NAMES for program, state in state_by_program.items()}
 
 
-def fetch_supervisor_program_statenames(socket_path: Path) -> dict[str, str] | None:
-    """Every supervised program's ``statename`` in one getAllProcessInfo RPC.
+def fetch_supervisor_programs(socket_path: Path) -> dict[str, SupervisorProgramState] | None:
+    """Every supervised program's ``statename`` and ``pid`` in one getAllProcessInfo RPC.
 
     Returns None when supervisord cannot be reached (or answers with something
     unmarshallable). Keys are bare program names --
@@ -152,25 +164,28 @@ def fetch_supervisor_program_statenames(socket_path: Path) -> dict[str, str] | N
         return None
     if not isinstance(process_infos, list):
         return None
-    statename_by_program: dict[str, str] = {}
+    state_by_program: dict[str, SupervisorProgramState] = {}
     for process_info in process_infos:
         if not isinstance(process_info, dict):
             continue
-        # Read the two keys by iteration: the proxy stub's inferred dict
+        # Read the keys by iteration: the proxy stub's inferred dict
         # variants make every keyed access an overload mismatch, while an
         # argument-free ``items()`` walk types cleanly on all of them.
         program_name = ""
         statename = ""
+        pid = 0
         for key, value in process_info.items():
             if key == "name":
                 program_name = str(value)
             elif key == "statename":
                 statename = str(value)
+            elif key == "pid" and isinstance(value, int):
+                pid = value
             else:
                 pass
         if program_name:
-            statename_by_program[program_name] = statename
-    return statename_by_program
+            state_by_program[program_name] = SupervisorProgramState(statename=statename, pid=pid)
+    return state_by_program
 
 
 def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
