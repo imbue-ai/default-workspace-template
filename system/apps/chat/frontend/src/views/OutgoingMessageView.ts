@@ -42,16 +42,20 @@ export interface NotYetRealBubble {
   extraRowClass?: string;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
-  /** The bubble carries on a run of the viewer's own turns, so it wears no "You" over it, as the turn it becomes
-   *  will not. */
-  isContinued?: boolean;
+}
+
+/** The viewer's run of bubbles as pending sends are drawn down the page: open while the last thing drawn is a bubble
+ *  of theirs, so the next one carries on its run and wears no "You", as the turn it becomes will not. Each send drawn
+ *  moves it on: a bubble opens it, a notice (the agent's line, not the viewer's words) closes it. */
+export interface OwnBubbleRun {
+  isOpen: boolean;
 }
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
  *  one-line notice when the backend decided its text renders as one (a background-task report).
  *  Every not-yet-delivered message renders through here (optimistic, held by a switch, re-sent by
  *  a tap), so they look the same and the handoff to the real turn is invisible. */
-export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
+export function renderNotYetRealBubble(bubble: NotYetRealBubble, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode {
   const cls = classifyDecidedMessage(bubble.content, bubble.displayDecision);
   const isNotice = cls.kind === UserMessageKind.Notice;
   const [baseClass, spacingClass] = isNotice
@@ -61,9 +65,11 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     .filter((part) => part !== null)
     .join(" ");
   if (isNotice) {
+    ownRun.isOpen = false;
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
-  const isContinued = bubble.isContinued === true;
+  const isContinued = ownRun.isOpen;
+  ownRun.isOpen = true;
   return m("div", { class: rowClass, key: bubble.key }, [
     isContinued ? null : renderOwnSpeakerLabel(),
     m("div", { class: isContinued ? USER_BUBBLE_CONTINUED_CLASS : USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
@@ -72,16 +78,13 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
   ]);
 }
 
-/** The optimistic outgoing bubbles for a chat, in send order. Returns [] when
- *  there are none. `isAfterOwnTurn`: the viewer's own turn is drawn just above, so
- *  the first carries on its run. */
-export function renderOutgoingMessages(chatId: string, isAfterOwnTurn = false): m.Vnode[] {
-  return getOutgoingMessages(chatId).map((outgoing: OutgoingMessage, index) =>
-    renderNotYetRealBubble({
-      key: outgoing.id,
-      content: outgoing.content,
-      displayDecision: outgoing.displayDecision,
-      isContinued: isAfterOwnTurn || index > 0,
-    }),
+/** The optimistic outgoing bubbles for a chat, in send order, drawn down `ownRun`. Returns [] when
+ *  there are none. */
+export function renderOutgoingMessages(chatId: string, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode[] {
+  return getOutgoingMessages(chatId).map((outgoing: OutgoingMessage) =>
+    renderNotYetRealBubble(
+      { key: outgoing.id, content: outgoing.content, displayDecision: outgoing.displayDecision },
+      ownRun,
+    ),
   );
 }

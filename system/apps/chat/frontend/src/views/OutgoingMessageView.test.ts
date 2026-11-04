@@ -50,4 +50,26 @@ describe("the optimistic outgoing bubble", () => {
     expect(root.querySelector(".message-notice")?.textContent).toBe("Background task: Build (finished)");
     expect(root.querySelector(".message-user-bubble")).toBeNull();
   });
+
+  it("names the viewer once over a run of their sends, and again past a notice, as the turns they become", () => {
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    addOutgoing(chatId, "first");
+    addOutgoing(chatId, "second");
+    addOutgoing(
+      chatId,
+      "<background-task-report>\n<summary>Build (finished)</summary>\nbuilt\n</background-task-report>",
+      "m-report",
+      { display: "notice", display_label: "Background task", display_body: "Build (finished)" },
+    );
+    addOutgoing(chatId, "third");
+    const root = document.createElement("div");
+
+    // Under the viewer's own turn, the first send carries on its run.
+    m.render(root, renderOutgoingMessages(chatId, { isOpen: true }));
+
+    const named = Array.from(root.querySelectorAll(".outgoing-message")).map(
+      (row) => row.querySelector(".message-you") !== null,
+    );
+    expect(named).toEqual([false, false, true]);
+  });
 });

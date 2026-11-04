@@ -85,7 +85,7 @@ import type { TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { renderOutgoingMessages, type OwnBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
@@ -492,13 +492,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   }
 
   /** The viewer's sends not yet on the transcript, in the order they show: what the agent has queued, what the chat
-   *  app holds through a switch, then this page's own. The first wears "You" unless it carries on the viewer's turn
-   *  drawn above. */
+   *  app holds through a switch, then this page's own. The first bubble wears "You" unless it carries on the viewer's
+   *  turn drawn above. */
   function renderPendingSends(chatId: string, isAfterOwnTurn: boolean): m.Vnode[] {
-    const queued = renderQueuedMessages(chatId, isAfterOwnTurn);
-    const held = renderHeldSends(chatId, isAfterOwnTurn || queued.length > 0);
-    const outgoing = renderOutgoingMessages(chatId, isAfterOwnTurn || queued.length > 0 || held.length > 0);
-    return [...queued, ...held, ...outgoing];
+    const ownRun: OwnBubbleRun = { isOpen: isAfterOwnTurn };
+    return [
+      ...renderQueuedMessages(chatId, ownRun),
+      ...renderHeldSends(chatId, ownRun),
+      ...renderOutgoingMessages(chatId, ownRun),
+    ];
   }
 
   /** Messages already on their way to a chat with no transcript yet, with the row saying where they are. */
@@ -514,10 +516,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  agent lands (see MessageInput), and shows from its record on any page. */
   function renderStarting(chatId: string): m.Vnode {
     lastStartingChatId = chatId;
-    const held = renderProvisionalHeldSends(chatId);
+    const ownRun: OwnBubbleRun = { isOpen: false };
     return renderEmptyConversation(
       "message-list-creating",
-      withTurnStatus(chatId, [...held, ...renderOutgoingMessages(chatId, held.length > 0)]),
+      withTurnStatus(chatId, [
+        ...renderProvisionalHeldSends(chatId, ownRun),
+        ...renderOutgoingMessages(chatId, ownRun),
+      ]),
       STARTING_STATUS,
     );
   }

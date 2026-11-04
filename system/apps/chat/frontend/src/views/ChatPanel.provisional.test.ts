@@ -98,8 +98,8 @@ vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
 vi.mock("./OutgoingMessageView", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./OutgoingMessageView")>()),
-  renderOutgoingMessages: (_chatId: string, isAfterOwnTurn?: boolean) => {
-    mocks.outgoingAfterOwnTurn.push(isAfterOwnTurn);
+  renderOutgoingMessages: (_chatId: string, ownRun?: { isOpen: boolean }) => {
+    mocks.outgoingAfterOwnTurn.push(ownRun?.isOpen);
     return mocks.outgoingBubbles;
   },
 }));
