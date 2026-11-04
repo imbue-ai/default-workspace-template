@@ -22,6 +22,11 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
+# The extensions a bubble draws inline (``IMAGE_EXTENSION_RE`` in frontend/src/models/attachments.ts --
+# keep the two in step). Any other file is shown as a link, so its size is never read, even when its
+# bytes happen to start like an image's.
+_INLINE_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".svg", ".ico"})
+
 # Enough of the file for every header below but a JPEG's.
 _HEAD_BYTES = 64
 # A JPEG's size sits after its metadata segments, which (each capped at 64 KiB) can hold an Exif
@@ -78,6 +83,8 @@ class ImageSize(FrozenModel):
 
 def read_image_size(path: Path) -> ImageSize | None:
     """The width and height ``path`` is drawn at, or None when it is not an image read here."""
+    if path.suffix.lower() not in _INLINE_IMAGE_SUFFIXES:
+        return None
     try:
         with path.open("rb") as image_file:
             if path.suffix.lower() == ".svg":

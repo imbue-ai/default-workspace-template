@@ -152,6 +152,7 @@ def test_a_phone_photo_turned_on_its_side_reports_the_size_it_is_drawn_at(tmp_pa
     ("name", "content"),
     [
         ("notes.txt", b"just some text, nothing to measure"),
+        ("bitmap-bytes.txt", _bmp(64, 48)),
         ("empty.png", b""),
         ("truncated.png", b"\x89PNG\r\n\x1a\n\x00\x00"),
         ("zero.png", _png(0, 0)),
