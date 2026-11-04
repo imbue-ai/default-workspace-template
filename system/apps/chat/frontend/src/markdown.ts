@@ -93,6 +93,19 @@ export function requestedAtUrl(value: string, requestedAt: string): string | nul
 }
 
 const IMAGE_LOADING_CLASS = "is-loading";
+const IMAGE_ARRIVING_CLASS = "is-arriving";
+
+function revealLoadedImage(event: Event): void {
+  const image = event.target as HTMLElement;
+  image.classList.remove(IMAGE_LOADING_CLASS);
+  image.classList.add(IMAGE_ARRIVING_CLASS);
+  // With reduced motion there is no fade, and so no end of one to wait for.
+  if (getComputedStyle(image).animationName === "none") {
+    image.classList.remove(IMAGE_ARRIVING_CLASS);
+    return;
+  }
+  image.addEventListener("animationend", () => image.classList.remove(IMAGE_ARRIVING_CLASS), { once: true });
+}
 
 function clearImageLoading(event: Event): void {
   (event.target as HTMLElement).classList.remove(IMAGE_LOADING_CLASS);
@@ -101,7 +114,8 @@ function clearImageLoading(event: Event): void {
 /**
  * Point each image at what draws it soonest and keep its space while it loads. An image this document
  * uploaded draws from its local copy at its own size; any other is tagged with ``requestedAt`` and
- * holds a placeholder box until it loads, so a message that is only an image never shows as an empty bubble.
+ * holds a placeholder box until it loads, so a message that is only an image never shows as an empty bubble,
+ * then fades in over that box.
  */
 function prepareImages(container: HTMLElement, requestedAt: string | undefined): void {
   for (const image of Array.from(container.querySelectorAll("img"))) {
@@ -120,7 +134,7 @@ function prepareImages(container: HTMLElement, requestedAt: string | undefined):
     }
     if (image.complete) continue;
     image.classList.add(IMAGE_LOADING_CLASS);
-    image.addEventListener("load", clearImageLoading, { once: true });
+    image.addEventListener("load", revealLoadedImage, { once: true });
     image.addEventListener("error", clearImageLoading, { once: true });
   }
 }

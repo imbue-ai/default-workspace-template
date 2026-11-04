@@ -172,6 +172,27 @@ describe("MarkdownContent images", () => {
     expect(image.classList.contains("is-loading")).toBe(false);
   });
 
+  it("fades a loaded image in over the box, then lets the box go", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
+    // jsdom applies no stylesheet, so stand in for the fade the chat's style gives an arriving image.
+    image.style.animationName = "image-arrive";
+
+    image.dispatchEvent(new Event("load"));
+    expect(image.classList.contains("is-arriving")).toBe(true);
+
+    image.dispatchEvent(new Event("animationend"));
+    expect(image.classList.contains("is-arriving")).toBe(false);
+  });
+
+  it("does not wait on a fade that reduced motion turned off", () => {
+    const image = mountMarkdown("![chart](/home/user/workspace/data/chart.png)", "ts-1");
+    image.style.animationName = "none";
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(image.classList.contains("is-arriving")).toBe(false);
+  });
+
   it("drops the placeholder when the image fails to load as well", () => {
     const image = mountMarkdown("![chart](/home/user/workspace/data/missing.png)");
 
