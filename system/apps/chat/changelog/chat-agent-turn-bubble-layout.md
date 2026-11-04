@@ -6,7 +6,7 @@ The agent's side of the chat follows the multiplayer-chat prototype.
 
 - Tool calls, the step timeline and system notices sit between the bubbles on their text edge, 12px apart. A thin line runs through their icons, bullets and ticks.
 
-- The call the agent is running shows in its own chip, with the working dot and the turn's clock, in place of the status line. The status line joins the line as the stretch's last piece. The done mark is a small receipt just under the stretch.
+- The call the agent is running shows in its own chip on the line, with the working dot and the turn's clock, in place of the status line. A call inside a step's work is said by the status line, which joins the line as the stretch's last piece. The done mark is a small receipt just under the stretch.
 
 - "You" shows over the first of a run of your own messages. Another person's name and picture show once per run of theirs.
 
