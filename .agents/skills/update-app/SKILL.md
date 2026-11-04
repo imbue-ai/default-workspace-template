@@ -103,9 +103,8 @@ requested change, each follow-up on a change, and each fix. Hand each request to
 a subagent as soon as it arrives, including the first one: start a new native
 subagent (the `Agent` tool) for a new change, or send it to the subagent already
 building that change if it adds to that change. A list of changes in one message
-is several requests, so each change in the list gets its own subagent. Start each
-building subagent with `model: "sonnet"`, and leave its `isolation` unset, so
-every subagent edits the live app directly. Subagents run in the background, so
+is several requests, so each change in the list gets its own subagent. Leave each
+building subagent's `isolation` unset, so every subagent edits the live app directly. Subagents run in the background, so
 starting one returns at once. They work under your service lease (below) and do
 not take their own. Keep each brief short: the user's request word for word and
 the app's location; leave the design to the subagent. Building subagents only
