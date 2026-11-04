@@ -112,15 +112,13 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
-# Run by its path, the module puts the bare packages' directory and its own package's on
-# sys.path; imported as part of its package, the venv already has both.
+# Run by its path, the module puts the bare packages' directory on sys.path; imported as
+# part of its package, the venv already has it.
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from workspace_bare_scripts import forward_port, run_in_background
-
-from agents_shared.preview_wrapper_server import FrameKind
+from workspace_bare_scripts.frame_kind import FrameKind
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and

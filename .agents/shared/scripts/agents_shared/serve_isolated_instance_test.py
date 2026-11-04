@@ -28,6 +28,7 @@ from typing import Callable, Sequence
 
 import pytest
 from workspace_bare_scripts import forward_port
+from workspace_bare_scripts.frame_kind import FrameKind
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
@@ -1278,7 +1279,7 @@ def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> N
     page = wrapper_mod.build_wrapper_html(
         "inbox",
         "Inbox",
-        kind=wrapper_mod.FrameKind.MOCK,
+        kind=FrameKind.MOCK,
         note="<b>Refresh</b> is not wired up",
     )
     preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
@@ -1386,7 +1387,7 @@ def _frame(
         frame_service_name=_FRAME_NAME,
         title="Inbox",
         display_name="Inbox (mock)",
-        kind=wrapper_mod.FrameKind.MOCK,
+        kind=FrameKind.MOCK,
         note=note,
         runner=runner or _RecordingRunner(),
         registry=registry or _RecordingRegistry(),
@@ -1597,7 +1598,7 @@ def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
         frame_service_name=_FRAME_NAME,
         title="Inbox",
         display_name="Inbox (mock)",
-        kind=wrapper_mod.FrameKind.MOCK,
+        kind=FrameKind.MOCK,
         note="Sample data; refresh does not work yet.",
         inner_path="/",
     )

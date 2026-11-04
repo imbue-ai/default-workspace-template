@@ -47,9 +47,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents_shared import preview_wrapper_server, serve_isolated_instance
+from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError, RegistryReadError
 from workspace_bare_scripts import forward_port
+from workspace_bare_scripts.frame_kind import FrameKind
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
 FRAME_SUFFIX = "-mock"
@@ -95,7 +96,7 @@ class Frames:
             frame_service_name=frame_name(app.name),
             title=app.display_name,
             display_name=frame_display_name(app.display_name),
-            kind=preview_wrapper_server.FrameKind.MOCK,
+            kind=FrameKind.MOCK,
             note=note,
             inner_path=inner_path,
             runner=serve_isolated_instance.Runner(),
