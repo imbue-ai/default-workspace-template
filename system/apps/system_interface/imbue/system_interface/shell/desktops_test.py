@@ -308,6 +308,27 @@ def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_
     assert offered_targets_recorded(tmp_path / "state") == [("chat", "root")]
 
 
+def test_a_desktop_added_before_the_registry_is_read_leaves_a_missing_offered_record_for_the_next_reconcile(
+    tmp_path: Path,
+) -> None:
+    """With no rows there is nothing to start the record over from, so the next reconcile with rows still counts the
+    desktops' apps as offered and a shortcut the user removed from one desktop stays removed."""
+    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None, with_chat)
+    store.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
+    offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+    offered_path.unlink()
+
+    store.create_desktop("Alpha", "#222222", 2, (), (), None, ())
+
+    assert not offered_path.exists()
+    home, _, alpha = store.reconcile_shortcuts_with(with_chat).desktops
+    assert "chat" not in shortcut_apps_on(home)
+    assert alpha.shortcuts == ()
+
+
 def _delete_file(path: Path) -> None:
     path.unlink()
 

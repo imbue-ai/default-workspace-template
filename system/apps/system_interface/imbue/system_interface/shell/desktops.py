@@ -370,9 +370,12 @@ class DesktopStore(MutableModel):
     ) -> None:
         """Add ``targets``, whose default shortcuts the desktops write that follows places, to the offered record; with
         no record yet, or no desktop before that write, the record starts over from what the desktops before it count
-        as offered. It is written first, so a failure between the two never leaves the record of replaced desktops
-        beside new ones."""
+        as offered. With no record, desktops before, and no rows to read their apps' defaults from, it stays unwritten
+        for the next reconcile with rows. It is written first, so a failure between the two never leaves the record of
+        replaced desktops beside new ones."""
         recorded = self._read_offered_unlocked(rows)
+        if recorded is None and desktops_before and not rows:
+            return
         kept = (
             recorded
             if recorded is not None and desktops_before
