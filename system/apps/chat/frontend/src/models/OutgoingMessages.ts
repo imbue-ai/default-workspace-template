@@ -224,14 +224,13 @@ export function opensTurnWithHeldSends(handoff: HandoffState): boolean {
  *
  * A chat switching harness holds its sends on the backend instead, and the snapshot lists them
  * (``handoff.held_sends``): a bubble whose id the list carries stands down for the snapshot's
- * own rendering. When the switch ends, the held messages leave the snapshot before their turns
- * reach the transcript, so they come back as bubbles here and drop by the arrivals that follow.
- * The successor's items that landed before then (the backend delivers the held sends before it
- * clears the switch) consume them at that point instead. A cancelled switch returns its
- * confirming message to the composer, so that one is skipped; so is a confirming message the
- * switch marker already shows (``isCarriedBySwitch``), whose turn is the marker itself. Only the
- * first to come back opens the agent's next turn, and only when the switch hands its held sends
- * over as that turn's own messages.
+ * own rendering. When the switch ends, the messages it listed leave the snapshot, those it already
+ * delivered included, so they come back as bubbles here: the agent's items that landed while they
+ * were listed consume them at that point, oldest first, and the arrivals that follow drop the
+ * rest. A cancelled switch returns its confirming message to the composer, so that one is
+ * skipped; so is a confirming message the switch marker already shows (``isCarriedBySwitch``),
+ * whose turn is the marker itself. Only the first to come back opens the agent's next turn, and
+ * only when the switch hands its held sends over as that turn's own messages.
  */
 export function trackBackendArrivals(
   isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
