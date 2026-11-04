@@ -1827,8 +1827,9 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     # The confirming message is the first the chat's next agent receives, so it is attributed for that agent's
-    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix. The annotation
-    # is recorded once the switch has begun, since the manager may still refuse it.
+    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix, under the
+    # sender its annotation names. The annotation is recorded once the manager has let the switch begin, which may
+    # still refuse it, and before any page is told of the switch.
     attributed = (
         _attributed_send(
             state,
@@ -1840,6 +1841,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         if switch_request.message
         else None
     )
+    annotation = attributed.annotation if attributed is not None else None
     try:
         kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
@@ -1849,13 +1851,12 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
             kind=switch_request.kind,
+            on_begun=None if annotation is None else lambda: state.authors.record(ChatId(chat_id), annotation),
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
     except HandoffError as e:
         return error_response(str(e), 400)
-    if attributed is not None and attributed.annotation is not None:
-        state.authors.record(ChatId(chat_id), attributed.annotation)
     record_client_message_activity(state.shell, ChatId(chat_id), switch_request, state.is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)

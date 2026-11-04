@@ -2819,6 +2819,7 @@ class AgentManager:
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         """Continue a chat on ``account_id``, or as a room when ``kind`` says so: a rebind when the account is on
         the chat's own harness and lane and that harness can be rebound, else a handoff (spec 5.2).
@@ -2827,7 +2828,8 @@ class AgentManager:
         text draining returned for the composer. ``model_pick`` is the model the chat runs on
         once the switch lands, applied before ``message``: a handoff's successor, which starts on
         its harness's default without one, or a rebind's restarted agent, which keeps its own
-        model without one. Raises ``ChatConvergingError`` for a chat already converging and
+        model without one. ``on_begun`` runs once the switch is written, before any page is told
+        of it. Raises ``ChatConvergingError`` for a chat already converging and
         ``HandoffError`` for a chat with no active agent, an unknown account, or the chat's own
         account.
         """
@@ -2835,9 +2837,13 @@ class AgentManager:
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         if is_rebind_target(agent_state, target):
-            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin, model_pick)
+            phase, returned_block = self.begin_rebind(
+                chat_id, account_id, message, message_id, origin, model_pick, on_begun=on_begun
+            )
             return TransitionKind.REBIND, phase, returned_block
-        phase, returned_block = self.begin_handoff(chat_id, account_id, message, message_id, origin, model_pick, kind)
+        phase, returned_block = self.begin_handoff(
+            chat_id, account_id, message, message_id, origin, model_pick, kind, on_begun=on_begun
+        )
         return TransitionKind.HANDOFF, phase, returned_block
 
     def begin_handoff(
@@ -2849,6 +2855,7 @@ class AgentManager:
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat to ``account_id`` on a new agent, or to a room when ``kind`` says so: write the
         handoff, drain the retiring agent, and run the rest.
@@ -2859,7 +2866,8 @@ class AgentManager:
         applied before that message. A retiring agent that never received a user turn makes
         the handoff a fresh start: no summary is asked for and no prompt is written, so the
         successor begins as a new chat would, and so does a switch to a room, which takes no prompt (the
-        multiplayer spec, section 7.6). Raises ``ChatConvergingError`` for a chat already converging and
+        multiplayer spec, section 7.6). ``on_begun`` runs once the handoff is written, before any page is told of
+        it. Raises ``ChatConvergingError`` for a chat already converging and
         ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, or a model is
         named beside a room (which runs on none). ``begin_switch`` decides between this and a rebind.
         """
@@ -2880,6 +2888,8 @@ class AgentManager:
             handoff = self._open_handoff_locked(
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick, is_fresh_start
             )
+        if on_begun is not None:
+            on_begun()
         self._broadcast_chats_updated()
         if target.account is not None:
             _record_mru(target.account.id)
@@ -2909,13 +2919,15 @@ class AgentManager:
         message_id: str,
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat's agent to ``account_id`` in place (spec 6): write the rebind, drain the agent,
         and restart it on its own thread.
 
         Returns the phase the chat is in once draining is done and the queued text draining
         returned for the composer. ``model_pick`` is the model the agent runs on once it is back,
-        applied before ``message``; without one it keeps its own. Raises ``ChatConvergingError``
+        applied before ``message``; without one it keeps its own. ``on_begun`` runs once the rebind
+        is written, before any page is told of it. Raises ``ChatConvergingError``
         and ``HandoffError`` as ``begin_handoff`` does, plus ``HandoffError`` when the account is
         not one the agent can be rebound to (another harness or lane, or a harness that cannot be).
         """
@@ -2933,6 +2945,8 @@ class AgentManager:
             rebind = self._open_rebind_locked(
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick
             )
+        if on_begun is not None:
+            on_begun()
         self._broadcast_chats_updated()
         _record_mru(target.account_id)
         _loguru_logger.info(

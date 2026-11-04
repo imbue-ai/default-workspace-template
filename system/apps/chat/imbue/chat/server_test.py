@@ -134,6 +134,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import drain_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
@@ -6768,12 +6769,14 @@ def test_a_visitors_create_with_a_message_hands_the_agent_the_prefix_and_annotat
 
 def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_to(tmp_path: Path) -> None:
     """The confirming message of a switch is the next agent's first (section 5.1): a switch to a room holds the
-    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them."""
+    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them under
+    the visitor from the first push that tells the pages of the switch."""
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
     # Stopped, so the switch has nothing to drain off it.
     _register_agent(app, first, "Chat-1", "STOPPED")
+    pushes = state_of(app).agent_manager.broadcaster.register()
 
     response = client.post(
         f"/api/chats/{first}/handoff",
@@ -6791,6 +6794,16 @@ def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_
     assert annotation.text_sha256 == text_sha256("let's make this a room")
     listed = [chat for chat in client.get("/api/chats").get_json()["chats"] if chat["chat_id"] == first]
     assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
+    first_switch_push = next(
+        chat
+        for push in drain_pushes(pushes)
+        if push["type"] == "chats_updated"
+        for chat in push["chats"]
+        if chat["chat_id"] == first and chat["handoff"] is not None
+    )
+    assert [(held["author"], held["author_name"]) for held in first_switch_push["handoff"]["held_sends"]] == [
+        (_VISITOR_KEY, "bob")
+    ]
 
 
 def test_a_switch_the_manager_refuses_annotates_nothing(tmp_path: Path) -> None:
