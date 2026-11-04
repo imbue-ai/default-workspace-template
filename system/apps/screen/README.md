@@ -137,8 +137,11 @@ file, or an empty one) the gate admits loopback alone: no token opens a session 
 cookie is accepted. A file that does not hold 64 lower-case hex digits, or cannot be read, is
 logged and treated the same way.
 
-- A request from loopback (`127.0.0.1`, `::1`) is the owner, as everywhere: the boot script's
-  `/health` and `/api/start`, the watcher, the commands.
+- A request from loopback (`127.0.0.1`, `::1`) whose `Host` names loopback (`127.0.0.1`,
+  `localhost` or `[::1]`, any port) is the owner, as everywhere: the boot script's `/health` and
+  `/api/start`, the watcher, the commands. A page that reaches loopback through a name of its own
+  (a rebound or wildcard DNS name, over plain http, where the browser sends no fetch metadata)
+  names that host, so it needs the owner session like any other request.
 - A GET carrying `?owner_token=<token>` whose SHA-256 matches sets the owner session and answers
   302 to the same path and query without `owner_token`; a token that does not match answers 401.
   The token stays good for the sandbox's life, so an iframe reload may present it again.

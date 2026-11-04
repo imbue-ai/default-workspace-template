@@ -15,7 +15,9 @@ Every ``*.modal.host`` page is same-site with the Screen, so its cookies ride th
 therefore also refuses a request its browser marks (``Sec-Fetch-Site``) as coming from a page of another origin,
 other than a GET or HEAD navigation: the chrome's frame of the Screen and the tab it opens are such navigations, and
 the Screen's own pages call it from its own origin. This holds for loopback too, since a page the sandbox's sign-in
-browser shows can reach the Screen there.
+browser shows can reach the Screen there. A browser sends no fetch metadata to a plain http URL, so loopback is the
+owner only under a loopback ``Host``: a page that reaches loopback through a name of its own (a rebound or wildcard DNS
+name) names that host instead.
 
 The session is set twice, under two names, for the reasons the share gateway's ``session_cookie.py`` gives: a
 ``SameSite=Lax`` copy for a top-level visit and a ``SameSite=None; Partitioned`` copy for the chrome's cross-site
@@ -68,6 +70,7 @@ HTTP_UNAUTHORIZED: Final[int] = 401
 HTTP_FORBIDDEN: Final[int] = 403
 
 _LOOPBACK_ADDRESSES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1"})
+_LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 _FETCH_SITE_HEADER: Final[str] = "Sec-Fetch-Site"
 _FETCH_MODE_HEADER: Final[str] = "Sec-Fetch-Mode"
 _OWN_ORIGIN_FETCH_SITES: Final[frozenset[str]] = frozenset({"same-origin", "none"})
@@ -134,6 +137,16 @@ def read_owner_token_sha256(gate: OwnerGate) -> str | None:
 @pure
 def is_loopback_address(remote_address: str | None) -> bool:
     return remote_address in _LOOPBACK_ADDRESSES
+
+
+@pure
+def is_loopback_host(host: str) -> bool:
+    """Whether a request's ``Host`` (with or without its port) names loopback by address or as ``localhost``."""
+    try:
+        hostname = urllib.parse.urlsplit(f"//{host}").hostname
+    except ValueError:
+        return False
+    return hostname in _LOOPBACK_HOSTNAMES
 
 
 @pure
@@ -251,7 +264,7 @@ def install_owner_gate(app: Flask, gate: OwnerGate) -> None:
             return error_response(OTHER_ORIGIN_REFUSED, HTTP_FORBIDDEN)
         if request.method == "GET" and OWNER_TOKEN_QUERY_PARAMETER in request.args:
             return _trade_owner_token_for_session(gate)
-        if is_loopback_address(request.remote_addr):
+        if is_loopback_address(request.remote_addr) and is_loopback_host(request.host):
             return None
         if read_owner_token_sha256(gate) is not None and has_owner_session(gate, request.cookies):
             return None

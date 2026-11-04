@@ -23,6 +23,7 @@ from screen.owner_gate import OWNER_SESSION_COOKIE_NAME
 from screen.owner_gate import OwnerGate
 from screen.owner_gate import PARTITIONED_OWNER_SESSION_COOKIE_NAME
 from screen.owner_gate import has_owner_session
+from screen.owner_gate import is_loopback_host
 from screen.owner_gate import location_without_owner_token
 from screen.owner_gate import merge_frame_ancestors
 from screen.owner_gate import owner_gate_from_environ
@@ -146,6 +147,22 @@ def test_a_loopback_request_from_another_origin_is_refused(gated_client: FlaskCl
     answer = gated_client.post("/api/run", data='{"command": ["true"]}', headers=cross_site)
     assert answer.status_code == 403
     assert answer.get_json() == {"detail": "only the Screen's own pages may call it"}
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8090", "localhost:8090", "[::1]:8090", "LOCALHOST", "127.0.0.1"])
+def test_a_loopback_request_naming_loopback_is_the_owner(gated_client: FlaskClient, host: str) -> None:
+    assert gated_client.get("/health", headers={"Host": host}).status_code == 200
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1.nip.io:8090", "rebound.example:8090", "[::1:8090"])
+def test_a_loopback_request_under_another_name_needs_the_session(
+    gated_client: FlaskClient, owner_gate: OwnerGate, host: str
+) -> None:
+    # A plain http page that reaches loopback through a name of its own sends no fetch metadata.
+    answer = gated_client.post("/api/run", data='{"command": ["true"]}', headers={"Host": host})
+    assert answer.status_code == 401
+    assert answer.get_json() == {"detail": "an owner session is required"}
+    assert gated_client.get("/health", headers={"Host": host, **_owner_cookie(owner_gate)}).status_code == 200
 
 
 def test_own_origin_requests_and_navigations_from_elsewhere_are_admitted(
@@ -377,3 +394,13 @@ def test_the_access_log_never_shows_the_owner_token(
     assert response.status == 302
     assert "GET /?owner_token=REDACTED&x=1 HTTP/1.1" in caplog.text
     assert owner_token not in caplog.text
+
+
+def test_is_loopback_host_reads_the_name_without_its_port() -> None:
+    assert is_loopback_host("127.0.0.1:8090")
+    assert is_loopback_host("[::1]")
+    assert is_loopback_host("Localhost:1")
+    assert not is_loopback_host("127.0.0.1.nip.io")
+    assert not is_loopback_host("localhost.example:8090")
+    assert not is_loopback_host("[::1")
+    assert not is_loopback_host("")
