@@ -1,21 +1,25 @@
-"""The transfer commands against the real latchkey CLI (the one setup_system.sh installs in the image):
-the sandbox-side import and export of spec 6.2 and 6.4, and the VM-side merge they feed."""
+"""The session's key against the real latchkey CLI (the one setup_system.sh installs in the image): prepare lands the
+machine's browser state under the dialog's key K, a credential the sandbox stores under K is printed as its account,
+and the files the chrome carries to the VM merge there with K as the source key, as the VM's apply-state does."""
 
 import base64
 import json
 import os
 import secrets
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 from auth_sandbox.cli import (
-    EXIT_REFUSED,
-    export_command,
-    import_browser_state_command,
+    prepare_command,
     render_config_command,
+    set_credentials_command,
 )
+from auth_sandbox.environment import sandbox_identity, sign_in_environment
 from auth_sandbox.runtime_files import SandboxPaths
+from auth_sandbox.session import SessionSettings
+from auth_sandbox.store_queries import store_environment
 from auth_sandbox.testing import (
     fabricate_browser_state,
     latchkey_on_path,
@@ -23,11 +27,16 @@ from auth_sandbox.testing import (
     read_browser_state,
     store_credential,
 )
-from auth_sandbox.transfer import reencrypt_argv, reencrypt_environment
 from click.testing import CliRunner
 from pydantic import SecretStr
 
 _STATE: dict[str, object] = {"cookies": [{"name": "sid", "value": "1"}], "origins": []}
+# What the chrome reads from the sandbox's latchkey directory and hands the VM.
+_TRANSFERRED_FILES = (
+    "credentials.json.enc",
+    "data-format-version",
+    "browser_state.json.enc",
+)
 
 
 def _key() -> SecretStr:
@@ -43,16 +52,11 @@ def latchkey_binary() -> str:
 
 
 @pytest.fixture
-def booted_sandbox(
-    tmp_path: Path, latchkey_binary: str, monkeypatch: pytest.MonkeyPatch
-) -> SandboxPaths:
-    """A booted sandbox's runtime dir before any sign-in: the keys and the template config, no store."""
+def booted_sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SandboxPaths:
+    """A booted sandbox's runtime dir before the session: the template config, no key, no store."""
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     paths = SandboxPaths(runtime_dir=tmp_path / "run")
-    paths.incoming_dir.mkdir(parents=True)
-    paths.latchkey_directory.mkdir()
-    paths.latchkey_key_path.write_text(_key().get_secret_value() + "\n")
-    paths.transfer_key_path.write_text(_key().get_secret_value() + "\n")
+    paths.latchkey_directory.mkdir(parents=True)
     result = CliRunner().invoke(
         render_config_command,
         [
@@ -65,181 +69,168 @@ def booted_sandbox(
     return paths
 
 
-@pytest.fixture
-def sandbox(booted_sandbox: SandboxPaths, latchkey_binary: str) -> SandboxPaths:
-    """The booted sandbox with a sign-in's worth of credentials stored."""
-    sandbox_key = _sandbox_key(booted_sandbox)
-    store_credential(
-        latchkey_binary, booted_sandbox.latchkey_directory, sandbox_key, "github", None
+def _prepare(
+    paths: SandboxPaths,
+    latchkey_binary: str,
+    key: SecretStr,
+    browser_state: bytes | None,
+    service: str,
+) -> dict[str, object]:
+    session_file = paths.runtime_dir / "session.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "latchkey_key": key.get_secret_value(),
+                "browser_state": None
+                if browser_state is None
+                else base64.b64encode(browser_state).decode("ascii"),
+                "workspace_host_id": "host-" + "b" * 32,
+                "timezone": "Europe/Paris",
+            }
+        )
     )
-    store_credential(
-        latchkey_binary,
-        booted_sandbox.latchkey_directory,
-        sandbox_key,
-        "slack",
-        "me@example.com",
-    )
-    return booted_sandbox
-
-
-def _transfer_key(paths: SandboxPaths) -> SecretStr:
-    return SecretStr(paths.transfer_key_path.read_text().strip())
-
-
-def _sandbox_key(paths: SandboxPaths) -> SecretStr:
-    return SecretStr(paths.latchkey_key_path.read_text().strip())
-
-
-def test_import_lands_the_machines_browser_state_in_the_sandbox_store_under_the_sandbox_key(
-    sandbox: SandboxPaths, latchkey_binary: str
-) -> None:
-    fabricate_browser_state(
-        latchkey_binary, sandbox.incoming_dir, _transfer_key(sandbox), _STATE
-    )
-
     result = CliRunner().invoke(
-        import_browser_state_command,
+        prepare_command,
         [
+            "--session-file",
+            str(session_file),
+            "--describe",
+            service,
             "--runtime-dir",
-            str(sandbox.runtime_dir),
+            str(paths.runtime_dir),
             "--latchkey-binary",
             latchkey_binary,
         ],
     )
-
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "browser_state": str(sandbox.latchkey_browser_state_path)
-    }
+    assert not session_file.exists()
+    # The chrome parses the whole of stdout as the description.
+    assert result.stdout.count("\n") == 1
+    return json.loads(result.stdout)
+
+
+def _machine_browser_state(
+    latchkey_binary: str, tmp_path: Path, key: SecretStr
+) -> bytes:
+    """The workspace machine's browser state as the VM's read-state hands it over: encrypted under K."""
+    return fabricate_browser_state(
+        latchkey_binary, tmp_path / "machine-state", key, _STATE
+    ).read_bytes()
+
+
+def test_prepare_lands_the_machines_browser_state_under_the_session_key_and_describes_the_service(
+    booted_sandbox: SandboxPaths, latchkey_binary: str, tmp_path: Path
+) -> None:
+    key = _key()
+
+    described = _prepare(
+        booted_sandbox,
+        latchkey_binary,
+        key,
+        _machine_browser_state(latchkey_binary, tmp_path, key),
+        "slack",
+    )
+
+    auth_options = described["authOptions"]
+    assert isinstance(auth_options, list)
+    assert "browser" in auth_options
+    assert described["credentials"] == {}
+    assert booted_sandbox.latchkey_key_path.read_text() == key.get_secret_value() + "\n"
     assert (
         read_browser_state(
-            latchkey_binary, sandbox.latchkey_browser_state_path, _sandbox_key(sandbox)
+            latchkey_binary, booted_sandbox.latchkey_browser_state_path, key
         )
         == _STATE
     )
-    # The credentials the sign-in stored beside it are untouched by the merge.
-    assert list_accounts(
-        latchkey_binary, sandbox.latchkey_directory, _sandbox_key(sandbox)
-    ) == {
-        "github": [""],
-        "slack": ["me@example.com"],
-    }
+    # latchkey opens the store directory under K with the state in it, and holds no credential yet.
+    assert list_accounts(latchkey_binary, booted_sandbox.latchkey_directory, key) == {}
 
 
-def test_import_into_a_store_less_sandbox_then_sign_in_then_export_as_every_real_sign_in_does(
+def test_prepare_answers_nothing_for_a_service_latchkey_does_not_know(
     booted_sandbox: SandboxPaths, latchkey_binary: str
 ) -> None:
-    # Spec 6.2: the import runs before any sign-in, into a directory holding only the template config.
-    fabricate_browser_state(
-        latchkey_binary,
-        booted_sandbox.incoming_dir,
-        _transfer_key(booted_sandbox),
-        _STATE,
-    )
-    assert sorted(
-        path.name for path in booted_sandbox.latchkey_directory.iterdir()
-    ) == ["config.json"]
-
-    imported = CliRunner().invoke(
-        import_browser_state_command,
-        [
-            "--runtime-dir",
-            str(booted_sandbox.runtime_dir),
-            "--latchkey-binary",
-            latchkey_binary,
-        ],
-    )
-
-    assert imported.exit_code == 0, imported.output
     assert (
-        read_browser_state(
-            latchkey_binary,
-            booted_sandbox.latchkey_browser_state_path,
-            _sandbox_key(booted_sandbox),
-        )
-        == _STATE
+        _prepare(booted_sandbox, latchkey_binary, _key(), None, "no-such-service") == {}
     )
-
-    # The sign-in then stores the service's credential beside the imported state, and the export
-    # carries both.
-    store_credential(
-        latchkey_binary,
-        booted_sandbox.latchkey_directory,
-        _sandbox_key(booted_sandbox),
-        "slack",
-        "me@example.com",
-    )
-    exported = CliRunner().invoke(
-        export_command,
-        [
-            "slack",
-            "--runtime-dir",
-            str(booted_sandbox.runtime_dir),
-            "--latchkey-binary",
-            latchkey_binary,
-        ],
-    )
-
-    assert exported.exit_code == 0, exported.output
-    assert json.loads(exported.output)["browser_state"] == str(
-        booted_sandbox.exported_browser_state_path
-    )
-    assert list_accounts(
-        latchkey_binary, booted_sandbox.export_dir, _transfer_key(booted_sandbox)
-    ) == {"slack": ["me@example.com"]}
+    assert not booted_sandbox.latchkey_browser_state_path.exists()
 
 
-def test_export_writes_one_services_bundle_the_machine_merges_under_its_own_key(
-    sandbox: SandboxPaths, latchkey_binary: str, tmp_path: Path
+def test_a_credential_stored_under_the_session_key_is_printed_and_merges_into_the_vms_store(
+    booted_sandbox: SandboxPaths, latchkey_binary: str, tmp_path: Path
 ) -> None:
-    fabricate_browser_state(
-        latchkey_binary, sandbox.latchkey_directory, _sandbox_key(sandbox), _STATE
+    key = _key()
+    _prepare(
+        booted_sandbox,
+        latchkey_binary,
+        key,
+        _machine_browser_state(latchkey_binary, tmp_path, key),
+        "slack",
+    )
+    values_file = booted_sandbox.runtime_dir / "values.json"
+    values_file.write_text(json.dumps({"values": {"token": "xoxc-typed"}}))
+    # The command puts the sign-in environment into this process; naming those variables in `env` has the
+    # runner restore each of them afterwards.
+    sign_in_variables = sign_in_environment(
+        {},
+        sandbox_identity({}, SessionSettings(workspace_host_id=None, timezone=None)),
+        booted_sandbox.latchkey_directory,
+        key,
     )
 
-    result = CliRunner().invoke(
-        export_command,
+    stored = CliRunner().invoke(
+        set_credentials_command,
         [
             "slack",
             "--account",
             "me@example.com",
+            "--values-file",
+            str(values_file),
             "--runtime-dir",
-            str(sandbox.runtime_dir),
+            str(booted_sandbox.runtime_dir),
             "--latchkey-binary",
             latchkey_binary,
         ],
+        env=dict.fromkeys(sign_in_variables),
     )
 
-    assert result.exit_code == 0, result.output
-    answer = json.loads(result.output)
-    assert answer == {
-        "credentials": str(sandbox.exported_credentials_path),
-        "data_format_version": str(sandbox.exported_data_format_version_path),
-        "browser_state": str(sandbox.exported_browser_state_path),
+    assert stored.exit_code == 0, stored.output
+    # The chrome reads the last non-empty line of stdout: the service's own account map, keyed by account.
+    last_line = [line for line in stored.stdout.splitlines() if line.strip()][-1]
+    assert json.loads(last_line) == {
+        "accounts": {
+            "me@example.com": {
+                "credentialType": "rawCurl",
+                "credentialStatus": "unknown",
+            }
+        }
     }
-    assert list_accounts(
-        latchkey_binary, sandbox.export_dir, _transfer_key(sandbox)
-    ) == {"slack": ["me@example.com"]}
-    assert (
-        read_browser_state(
-            latchkey_binary, sandbox.exported_browser_state_path, _transfer_key(sandbox)
-        )
-        == _STATE
-    )
+    assert key.get_secret_value() not in stored.output
 
-    # The VM side (spec 6.4 step 3): the bundle under the transfer key merges into a machine store that already
-    # holds a credential under the machine's own key, which then reads everything.
+    # The chrome carries three files of the sandbox's directory to the VM, which merges them into its own store
+    # (under the machine's key, holding a credential already) with K as the source key.
+    transferred = tmp_path / "transferred"
+    transferred.mkdir()
+    for name in _TRANSFERRED_FILES:
+        shutil.copy2(booted_sandbox.latchkey_directory / name, transferred / name)
     machine_key = _key()
     machine = tmp_path / "machine"
     store_credential(latchkey_binary, machine, machine_key, "linear", None)
     merged = subprocess.run(
-        reencrypt_argv(latchkey_binary, machine, ("slack",), True, None),
-        env=reencrypt_environment(
-            os.environ, sandbox.export_dir, _transfer_key(sandbox)
-        ),
+        [
+            latchkey_binary,
+            "auth",
+            "re-encrypt",
+            str(machine),
+            "--services",
+            "slack",
+            "--browser-state",
+        ],
+        env=store_environment(os.environ, transferred, key),
         input=machine_key.get_secret_value() + "\n",
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     assert merged.returncode == 0, merged.stderr
     assert list_accounts(latchkey_binary, machine, machine_key) == {
@@ -252,38 +243,3 @@ def test_export_writes_one_services_bundle_the_machine_merges_under_its_own_key(
         )
         == _STATE
     )
-
-
-def test_export_without_a_browser_state_answers_null_and_an_unknown_service_is_refused(
-    sandbox: SandboxPaths, latchkey_binary: str
-) -> None:
-    runner = CliRunner()
-    exported = runner.invoke(
-        export_command,
-        [
-            "github",
-            "--runtime-dir",
-            str(sandbox.runtime_dir),
-            "--latchkey-binary",
-            latchkey_binary,
-        ],
-    )
-    assert exported.exit_code == 0, exported.output
-    assert json.loads(exported.output)["browser_state"] is None
-    assert list_accounts(
-        latchkey_binary, sandbox.export_dir, _transfer_key(sandbox)
-    ) == {"github": [""]}
-
-    refused = runner.invoke(
-        export_command,
-        [
-            "gitlab",
-            "--runtime-dir",
-            str(sandbox.runtime_dir),
-            "--latchkey-binary",
-            latchkey_binary,
-        ],
-    )
-    assert refused.exit_code == EXIT_REFUSED
-    assert "gitlab" in refused.output
-    assert _transfer_key(sandbox).get_secret_value() not in refused.output

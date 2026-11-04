@@ -7,10 +7,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr_latchkey.core import LatchkeyServiceInfo
 from pydantic import Field
 
+from auth_sandbox.errors import AuthSandboxError
 from auth_sandbox.image_build import BuildSandboxInterface
 from auth_sandbox.interfaces import (
+    ClockInterface,
     FinishedCommand,
-    ReencryptRunnerInterface,
+    LatchkeyRunnerInterface,
     SignInLatchkeyInterface,
 )
 
@@ -65,66 +67,69 @@ class FakeLatchkey(SignInLatchkeyInterface):
 
 
 class RecordedRun(FrozenModel):
-    """One re-encrypt invocation as the fake saw it."""
+    """One latchkey invocation as the fake saw it."""
 
     argv: tuple[str, ...] = Field(description="The command line")
     environment: dict[str, str] = Field(description="Its environment")
-    stdin_text: str = Field(description="What was on its stdin")
-    working_directory: Path = Field(description="Where it ran")
 
 
-class FakeReencryptRunner(ReencryptRunnerInterface):
-    """Stands in for the CLI: records the run and writes the files a real re-encrypt would into the destination.
+class FakeLatchkeyRunner(LatchkeyRunnerInterface):
+    """Stands in for the CLI: records each run and answers what the test configured."""
 
-    The destination is the argument after ``re-encrypt``; the files written are the store, its format stamp, and
-    the browser state when ``--browser-state`` was asked for and ``has_browser_state`` says the source holds one.
-    """
-
-    returncode: int = Field(default=0, description="The exit code to answer")
-    stderr: str = Field(default="", description="What the fake prints on stderr")
-    has_browser_state: bool = Field(
-        default=True, description="Whether the source store carries a browser state"
-    )
-    is_output_written: bool = Field(
-        default=True,
-        description="Whether a run that exits 0 writes its files (False: it reports success and writes nothing)",
+    answer: FinishedCommand = Field(
+        default=FinishedCommand(returncode=0, stdout="{}", stderr=""),
+        description="What every run answers",
     )
     runs: list[RecordedRun] = Field(
         default_factory=list, description="Every run, in order"
     )
 
     def run(
-        self,
-        argv: Sequence[str],
-        environment: Mapping[str, str],
-        stdin_text: str,
-        working_directory: Path,
+        self, argv: Sequence[str], environment: Mapping[str, str]
     ) -> FinishedCommand:
-        self.runs.append(
-            RecordedRun(
-                argv=tuple(argv),
-                environment=dict(environment),
-                stdin_text=stdin_text,
-                working_directory=working_directory,
+        self.runs.append(RecordedRun(argv=tuple(argv), environment=dict(environment)))
+        return self.answer
+
+
+class ScheduledWrite(FrozenModel):
+    """A file the fake clock writes once its time comes, as the connector would."""
+
+    at: float = Field(description="Unix seconds")
+    path: Path = Field(description="Where")
+    text: str = Field(description="What")
+
+
+class FakeClockExhaustedError(AuthSandboxError):
+    """The code under test kept waiting after the fake clock had nothing left to happen."""
+
+
+class FakeClock(ClockInterface):
+    """A clock that a pause advances, writing each scheduled file when its time comes; it refuses to pause past
+    ``limit`` so a wait that would never end fails the test instead of hanging it."""
+
+    current: float = Field(default=1_000_000.0, description="Unix seconds now")
+    limit: float = Field(
+        default=1_000_000.0 + 86_400, description="The time no pause may pass"
+    )
+    scheduled: list[ScheduledWrite] = Field(
+        default_factory=list, description="Writes still to happen"
+    )
+    pauses: list[float] = Field(default_factory=list, description="Every pause asked")
+
+    def now(self) -> float:
+        return self.current
+
+    def pause(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+        if self.current + seconds > self.limit:
+            raise FakeClockExhaustedError(
+                f"paused past {self.limit} with nothing left to happen"
             )
-        )
-        if self.returncode != 0:
-            return FinishedCommand(
-                returncode=self.returncode, stdout="", stderr=self.stderr
-            )
-        if not self.is_output_written:
-            return FinishedCommand(returncode=0, stdout="", stderr="")
-        destination = Path(argv[list(argv).index("re-encrypt") + 1])
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "credentials.json.enc").write_bytes(
-            b"enc:" + stdin_text.encode("utf-8")
-        )
-        (destination / "data-format-version").write_text("4")
-        if "--browser-state" in argv and self.has_browser_state:
-            (destination / "browser_state.json.enc").write_bytes(
-                b"state:" + stdin_text.encode("utf-8")
-            )
-        return FinishedCommand(returncode=0, stdout="", stderr="")
+        self.current += seconds
+        due = [write for write in self.scheduled if write.at <= self.current]
+        self.scheduled = [write for write in self.scheduled if write.at > self.current]
+        for write in due:
+            write.path.write_text(write.text)
 
 
 class FakeBuildSandbox(BuildSandboxInterface):

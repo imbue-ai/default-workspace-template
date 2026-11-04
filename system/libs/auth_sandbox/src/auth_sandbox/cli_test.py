@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 
@@ -9,17 +10,26 @@ from auth_sandbox.cli import (
     EXIT_MISSING_MATERIAL,
     EXIT_REFUSED,
     _finish,
-    export_command,
-    import_browser_state_command,
+    prepare_command,
     render_config_command,
     set_credentials_command,
     sign_in_command,
 )
-from auth_sandbox.environment import identity_from_environ, sign_in_environment
+from auth_sandbox.environment import sandbox_identity, sign_in_environment
+from auth_sandbox.session import SessionSettings
 from auth_sandbox.sign_in import SignInOutcome
 
+_KEY = base64.b64encode(bytes(32)).decode("ascii")
+_NO_SETTINGS = '{"workspace_host_id": null, "timezone": null}'
 
-def test_sign_in_without_a_sandbox_key_names_the_missing_file_and_runs_nothing(
+
+def _prepared(runtime_dir: Path) -> None:
+    """What auth-sandbox-prepare leaves for the sign-in commands."""
+    (runtime_dir / "session_settings.json").write_text(_NO_SETTINGS)
+    (runtime_dir / "latchkey_key").write_text("key\n")
+
+
+def test_sign_in_before_prepare_names_the_missing_key_and_runs_nothing(
     tmp_path: Path,
 ) -> None:
     result = CliRunner().invoke(
@@ -43,11 +53,14 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
     # A binary that is absent is a defect of the sandbox no retry in it cures, so it must not share
     # the refusal's code, which the chrome retries in the same sandbox.
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
-    (tmp_path / "latchkey_key").write_text("key\n")
+    _prepared(tmp_path)
     # The command puts the sign-in environment into this process; naming those variables in `env` has the
     # runner restore each of them afterwards, set or not before.
     sign_in_variables = sign_in_environment(
-        {}, identity_from_environ({}), tmp_path, SecretStr("key")
+        {},
+        sandbox_identity({}, SessionSettings(workspace_host_id=None, timezone=None)),
+        tmp_path,
+        SecretStr("key"),
     )
     result = CliRunner().invoke(
         sign_in_command,
@@ -67,7 +80,7 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
 def test_a_sandbox_directory_that_cannot_be_written_is_missing_material_not_a_refusal(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "latchkey_key").write_text("key\n")
+    _prepared(tmp_path)
     # A file where the sandbox's latchkey directory goes: no retry in the sandbox makes it writable.
     (tmp_path / "latchkey").write_text("not a directory")
     result = CliRunner().invoke(
@@ -111,7 +124,7 @@ def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> N
     assert usage_error == 2
     assert usage_error != EXIT_MISSING_MATERIAL
     (tmp_path / "v.json").write_text("not json")
-    (tmp_path / "latchkey_key").write_text("key\n")
+    _prepared(tmp_path)
     result = runner.invoke(
         set_credentials_command,
         [
@@ -131,49 +144,82 @@ def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> N
     assert not (tmp_path / "v.json").exists()
 
 
-def test_import_and_export_report_missing_materials_before_touching_latchkey(
-    tmp_path: Path,
-) -> None:
-    runner = CliRunner()
-    imported = runner.invoke(
-        import_browser_state_command,
-        ["--runtime-dir", str(tmp_path), "--latchkey-binary", "/nonexistent/latchkey"],
-    )
-    assert imported.exit_code == EXIT_MISSING_MATERIAL
-    assert "transfer_key" in imported.output
-    exported = runner.invoke(
-        export_command,
-        [
-            "slack",
-            "--runtime-dir",
-            str(tmp_path),
-            "--latchkey-binary",
-            "/nonexistent/latchkey",
-        ],
-    )
-    assert exported.exit_code == EXIT_MISSING_MATERIAL
-    assert "transfer_key" in exported.output
-
-
-def test_import_and_export_with_a_latchkey_they_cannot_run_are_missing_material(
+def test_a_sign_in_whose_session_settings_are_missing_or_malformed_is_missing_material(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "latchkey_key").write_text("key\n")
-    (tmp_path / "transfer_key").write_text("transfer\n")
-    (tmp_path / "incoming").mkdir()
-    (tmp_path / "incoming" / "browser_state.json.enc").write_bytes(b"state")
-    runner = CliRunner()
-    binary_options = [
+    arguments = [
+        "slack",
         "--runtime-dir",
         str(tmp_path),
         "--latchkey-binary",
         "/nonexistent/latchkey",
     ]
-    imported = runner.invoke(import_browser_state_command, binary_options)
-    exported = runner.invoke(export_command, ["slack", *binary_options])
-    for result in (imported, exported):
-        assert result.exit_code == EXIT_MISSING_MATERIAL, result.output
-        assert "/nonexistent/latchkey" in result.output
+    missing = CliRunner().invoke(sign_in_command, arguments)
+    assert missing.exit_code == EXIT_MISSING_MATERIAL
+    assert "session_settings.json" in missing.output
+    (tmp_path / "session_settings.json").write_text("[]")
+    malformed = CliRunner().invoke(sign_in_command, arguments)
+    assert malformed.exit_code == EXIT_MISSING_MATERIAL
+    assert "malformed" in malformed.output
+
+
+def test_prepare_without_a_session_file_or_with_a_malformed_one_installs_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    session_file = runtime_dir / "session.json"
+    arguments = [
+        "--session-file",
+        str(session_file),
+        "--describe",
+        "slack",
+        "--runtime-dir",
+        str(runtime_dir),
+        "--latchkey-binary",
+        "/nonexistent/latchkey",
+    ]
+    absent = CliRunner().invoke(prepare_command, arguments)
+    assert absent.exit_code == EXIT_MISSING_MATERIAL
+    assert "no session file" in absent.output
+
+    session_file.write_text(json.dumps({"latchkey_key": "short"}))
+    malformed = CliRunner().invoke(prepare_command, arguments)
+    assert malformed.exit_code == EXIT_MISSING_MATERIAL
+    assert "latchkey_key" in malformed.output
+    assert not session_file.exists()
+    assert sorted(path.name for path in runtime_dir.iterdir()) == []
+
+
+def test_prepare_installs_the_session_before_it_asks_latchkey(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    session_file = runtime_dir / "session.json"
+    session_file.write_text(json.dumps({"latchkey_key": _KEY, "browser_state": None}))
+    result = CliRunner().invoke(
+        prepare_command,
+        [
+            "--session-file",
+            str(session_file),
+            "--describe",
+            "slack",
+            "--runtime-dir",
+            str(runtime_dir),
+            "--latchkey-binary",
+            "/nonexistent/latchkey",
+        ],
+    )
+    # A latchkey that cannot run is missing material; what prepare installs is in place for a retry's sign-in.
+    assert result.exit_code == EXIT_MISSING_MATERIAL
+    assert "/nonexistent/latchkey" in result.output
+    assert (runtime_dir / "latchkey_key").read_text() == _KEY + "\n"
+    assert json.loads((runtime_dir / "session_settings.json").read_text()) == {
+        "workspace_host_id": None,
+        "timezone": None,
+    }
+    assert not session_file.exists()
+    assert _KEY not in result.output
 
 
 def test_render_config_writes_the_template_with_the_browser_entry(

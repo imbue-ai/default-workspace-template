@@ -8,15 +8,11 @@ from auth_sandbox.environment import (
     RegionGeo,
     fingerprint_seed,
     geo_for_region,
-    identity_from_environ,
+    sandbox_identity,
     sign_in_environment,
 )
-from auth_sandbox.primitives import (
-    COUNTRY_ENV_VAR,
-    REGION_ENV_VAR,
-    TIMEZONE_ENV_VAR,
-    WORKSPACE_HOST_ID_ENV_VAR,
-)
+from auth_sandbox.primitives import REGION_ENV_VAR
+from auth_sandbox.session import SessionSettings
 
 
 @pytest.mark.parametrize(
@@ -49,27 +45,30 @@ def test_fingerprint_seed_is_a_stable_decimal_per_workspace() -> None:
     assert fingerprint_seed(None).isdigit()
 
 
-def test_identity_from_environ_reads_the_connectors_variables_and_honours_overrides() -> (
+def test_sandbox_identity_takes_the_sessions_timezone_and_seed_and_the_regions_country() -> (
     None
 ):
-    environ = {
-        REGION_ENV_VAR: "us-west-2",
-        WORKSPACE_HOST_ID_ENV_VAR: "host-abc",
-        "PATH": "/usr/bin",
-    }
-    identity = identity_from_environ(environ)
+    environ = {REGION_ENV_VAR: "us-west-2", "PATH": "/usr/bin"}
+    identity = sandbox_identity(
+        environ,
+        SessionSettings(workspace_host_id="host-abc", timezone="Europe/Paris"),
+    )
     assert identity.region == "us-west-2"
     assert identity.workspace_host_id == "host-abc"
-    assert identity.geo == RegionGeo(timezone="America/Los_Angeles", country="US")
+    assert identity.geo == RegionGeo(timezone="Europe/Paris", country="US")
 
-    overridden = identity_from_environ(
-        {**environ, TIMEZONE_ENV_VAR: "Europe/Paris", COUNTRY_ENV_VAR: "FR"}
+    without_timezone = sandbox_identity(
+        environ, SessionSettings(workspace_host_id=None, timezone=None)
     )
-    assert overridden.geo == RegionGeo(timezone="Europe/Paris", country="FR")
+    assert without_timezone.workspace_host_id is None
+    assert without_timezone.geo == RegionGeo(
+        timezone="America/Los_Angeles", country="US"
+    )
 
-    bare = identity_from_environ({REGION_ENV_VAR: "", WORKSPACE_HOST_ID_ENV_VAR: ""})
+    bare = sandbox_identity(
+        {REGION_ENV_VAR: ""}, SessionSettings(workspace_host_id=None, timezone=None)
+    )
     assert bare.region is None
-    assert bare.workspace_host_id is None
     assert bare.geo == DEFAULT_GEO
 
 
@@ -81,8 +80,9 @@ def test_sign_in_environment_pins_the_launcher_and_the_sandbox_store_and_drops_t
         "LATCHKEY_GATEWAY": "http://host.docker.internal:1989",
         "LATCHKEY_GATEWAY_PASSWORD": "inherited",
     }
-    identity = identity_from_environ(
-        {REGION_ENV_VAR: "eu-west-1", WORKSPACE_HOST_ID_ENV_VAR: "host-abc"}
+    identity = sandbox_identity(
+        {REGION_ENV_VAR: "eu-west-1"},
+        SessionSettings(workspace_host_id="host-abc", timezone=None),
     )
 
     environment = sign_in_environment(

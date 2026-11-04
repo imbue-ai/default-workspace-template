@@ -1,9 +1,8 @@
-"""The two things the commands do through something injectable: drive latchkey's sign-in flows, and run its
-``auth re-encrypt``."""
+"""The three things the commands do through something injectable: drive latchkey's sign-in flows, run one of its
+read-only queries for the JSON it prints, and tell the time and wait."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -41,18 +40,23 @@ class FinishedCommand(FrozenModel):
     stderr: str = Field(description="What it printed on stderr")
 
 
-class ReencryptRunnerInterface(MutableModel, ABC):
-    """Runs one ``latchkey auth re-encrypt`` invocation.
-
-    The destination key travels on stdin and the source key in the environment, so neither reaches ``argv``.
-    """
+class LatchkeyRunnerInterface(MutableModel, ABC):
+    """Runs one ``latchkey`` invocation; the store's key travels in the environment, never in ``argv``."""
 
     @abstractmethod
     def run(
-        self,
-        argv: Sequence[str],
-        environment: Mapping[str, str],
-        stdin_text: str,
-        working_directory: Path,
+        self, argv: Sequence[str], environment: Mapping[str, str]
     ) -> FinishedCommand:
-        """Run ``argv`` to completion with ``stdin_text`` on its stdin."""
+        """Run ``argv`` to completion with no stdin."""
+
+
+class ClockInterface(MutableModel, ABC):
+    """The wall clock the claim watcher reads the session's expiry against, and its pause between polls."""
+
+    @abstractmethod
+    def now(self) -> float:
+        """Unix seconds."""
+
+    @abstractmethod
+    def pause(self, seconds: float) -> None:
+        """Wait about ``seconds``."""

@@ -1,22 +1,29 @@
 """Names shared by the sandbox's commands, its boot script, the image build and the connector that mints it.
 
 The paths and variable names here are a contract with two other parties: the Imbue Studio web chrome, which
-runs the commands over owner-exec and writes the files they read, and the connector, which creates the sandbox
-with the ``AUTH_SANDBOX_*`` environment (the web latchkey auth sandbox spec, sections 5 and 6).
+runs the commands over owner-exec and writes the session file they read, and the connector, which creates the
+sandbox with the ``AUTH_SANDBOX_*`` environment and claims it for a user with the claim file (the web latchkey
+auth sandbox spec, and the warm pool's contract).
 """
 
 from pathlib import Path
 from typing import Final
 
 # Everything user-specific the flow writes lives under this tmpfs, which dies with the sandbox and is never
-# snapshotted: the sandbox's own latchkey key, the dialog's transfer key, the incoming browser state and the
-# export the chrome reads back.
+# snapshotted: the session's latchkey key, its fingerprint settings, the Screen's owner token digest and the
+# latchkey directory the chrome reads the credentials back from.
 RUNTIME_DIR: Final[Path] = Path("/run/auth-sandbox")
 LATCHKEY_KEY_FILENAME: Final[str] = "latchkey_key"
-TRANSFER_KEY_FILENAME: Final[str] = "transfer_key"
-INCOMING_DIRNAME: Final[str] = "incoming"
-EXPORT_DIRNAME: Final[str] = "export"
+SESSION_FILENAME: Final[str] = "session.json"
+SESSION_SETTINGS_FILENAME: Final[str] = "session_settings.json"
+SCREEN_TOKEN_SHA256_FILENAME: Final[str] = "screen_token_sha256"
 LATCHKEY_DIRNAME: Final[str] = "latchkey"
+
+# The connector writes the claim when it hands the sandbox to a user, which for a sandbox made on demand may be
+# before the boot script has created RUNTIME_DIR, so it lives outside it, as the connect-info file does.
+CLAIM_PATH: Final[Path] = Path("/run/auth-sandbox-claim.json")
+# The whole of owner-exec's authorized_keys: empty from boot until the claim names the user's key.
+AUTHORIZED_KEYS_PATH: Final[Path] = Path("/home/user/.ssh/authorized_keys")
 
 # What the image build installs, outside the workspace tree so the sandbox's command is a fixed path.
 INSTALL_DIR: Final[Path] = Path("/opt/auth-sandbox")
@@ -42,20 +49,13 @@ SCREEN_SERVICE_URL: Final[str] = "http://127.0.0.1:8090"
 # neko's ICE mux) and the Screen reads on every connect-info request; outside RUNTIME_DIR, which is root-only.
 CONNECT_INFO_PATH: Final[Path] = Path("/run/auth-sandbox-connect-info.json")
 
-# The non-secret environment the connector passes at sandbox create (spec 5.2) that the boot script and
-# the commands read from the process environment.
+# The non-secret environment the connector passes at sandbox create that the boot script and the commands read
+# from the process environment: owner-exec's audience is ``container:<host id>``, the sign-in pins the browser's
+# country (and, without a timezone from the session, its timezone) from the region, and the hosted chrome's
+# origin is owner-exec's CORS origin and the Screen's frame-ancestors.
 HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_HOST_ID"
 REGION_ENV_VAR: Final[str] = "AUTH_SANDBOX_REGION"
-WORKSPACE_HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_WORKSPACE_HOST_ID"
-# What the boot script lays the sandbox out from: the owner's OpenSSH public key line (the whole of
-# authorized_keys), the hosted chrome's origin (owner-exec's CORS origin and the Screen's frame-ancestors)
-# and the lower-case hex SHA-256 of the Screen's owner token (the Screen's gate).
-AUTHORIZED_KEY_ENV_VAR: Final[str] = "AUTH_SANDBOX_AUTHORIZED_KEY"
 CHROME_ORIGIN_ENV_VAR: Final[str] = "AUTH_SANDBOX_CHROME_ORIGIN"
-SCREEN_TOKEN_SHA256_ENV_VAR: Final[str] = "AUTH_SANDBOX_SCREEN_TOKEN_SHA256"
-# Optional overrides of what the region implies for the launcher's geo pins.
-TIMEZONE_ENV_VAR: Final[str] = "AUTH_SANDBOX_TIMEZONE"
-COUNTRY_ENV_VAR: Final[str] = "AUTH_SANDBOX_COUNTRY"
 # Which ``latchkey`` the commands run; the npm global on PATH unless set.
 LATCHKEY_BINARY_ENV_VAR: Final[str] = "AUTH_SANDBOX_LATCHKEY_BINARY"
 DEFAULT_LATCHKEY_BINARY: Final[str] = "latchkey"

@@ -28,11 +28,12 @@ from auth_sandbox.primitives import (
 
 # The commands owner-exec runs on the chrome's behalf, linked onto PATH from the workspace venv's console scripts.
 COMMAND_NAMES: Final[tuple[str, ...]] = (
+    "auth-sandbox-prepare",
     "auth-sandbox-sign-in",
     "auth-sandbox-set-credentials",
-    "auth-sandbox-import-browser-state",
-    "auth-sandbox-export",
 )
+# The boot script runs it from the venv; owner-exec has no use for it, so it is not linked onto PATH.
+CLAIM_WATCHER_COMMAND: Final[str] = "auth-sandbox-await-claim"
 # Where this library keeps the boot script and the sandbox's supervisord config, relative to the workspace root.
 SANDBOX_SOURCE_DIR: Final[Path] = Path("system/libs/auth_sandbox/sandbox")
 BOOT_SCRIPT_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "boot.sh"
@@ -178,6 +179,7 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
                 f" && install -m 0755 {root}/{BOOT_SCRIPT_SOURCE} {boot_script}"
                 f" && install -m 0644 {root}/{SUPERVISORD_CONF_SOURCE} {supervisord_conf}"
                 f" && bash -n {boot_script}"
+                f" && test -x {root}/.venv/bin/{CLAIM_WATCHER_COMMAND}"
                 f" && {link_commands}"
             ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,

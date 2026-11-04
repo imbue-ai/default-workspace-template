@@ -1,10 +1,10 @@
-"""What the sandbox knows about itself from the environment the connector gave it, and the environment a
-sign-in runs under.
+"""Who the sign-in's browser says it is, and the environment a sign-in runs under.
 
-The connector passes nothing secret at create (D4): the sandbox id, the connector URL, the sandbox's host id,
-its region and the workspace's host id come as ``AUTH_SANDBOX_*`` variables. The sign-in's Fortress launcher
-needs a timezone and a country pinned from the region (so no geo lookup sits on the critical path) and a
-fingerprint seed derived from the workspace, which is what this module derives.
+The sign-in's Fortress launcher needs a timezone and a country pinned (so no geo lookup sits on the critical path)
+and a fingerprint seed, which this module derives: the seed from the workspace being signed in and the timezone
+from the user's own zone, both from the session's settings, and the country (and the timezone, when the session
+named none) from the region the connector created the sandbox in (``AUTH_SANDBOX_REGION``). A pooled sandbox is
+created before anyone claims it, so nothing about the user can come in its environment.
 """
 
 import hashlib
@@ -18,7 +18,6 @@ from imbue.mngr_latchkey.encryption_key import LATCHKEY_ENCRYPTION_KEY_ENV_VAR
 from pydantic import Field, SecretStr
 
 from auth_sandbox.primitives import (
-    COUNTRY_ENV_VAR,
     DISPLAY_ENV_VAR,
     LATCHKEY_DIRECTORY_ENV_VAR,
     LATCHKEY_DISABLE_COUNTING_ENV_VAR,
@@ -32,10 +31,9 @@ from auth_sandbox.primitives import (
     TILION_NO_ACTIVATE_ENV_VAR,
     TILION_SEED_ENV_VAR,
     TILION_TZ_ENV_VAR,
-    TIMEZONE_ENV_VAR,
-    WORKSPACE_HOST_ID_ENV_VAR,
     XDG_RUNTIME_DIR_ENV_VAR,
 )
+from auth_sandbox.session import SessionSettings
 
 
 class RegionGeo(FrozenModel):
@@ -76,7 +74,7 @@ _SEED_DIGEST_BYTES: Final[int] = 4
 
 
 class SandboxIdentity(FrozenModel):
-    """What the sign-in needs to know about this sandbox, read from the connector's environment."""
+    """What the sign-in pins the browser's fingerprint from."""
 
     region: str | None = Field(
         description="The region the connector created the sandbox in, if it said"
@@ -108,18 +106,18 @@ def fingerprint_seed(workspace_host_id: str | None) -> str:
 
 
 @pure
-def identity_from_environ(environ: Mapping[str, str]) -> SandboxIdentity:
-    """Read the connector's environment; an explicit timezone or country override beats what the region implies."""
+def sandbox_identity(
+    environ: Mapping[str, str], settings: SessionSettings
+) -> SandboxIdentity:
+    """The session's timezone when it named one, else the region's; the country is always the region's."""
     region = environ.get(REGION_ENV_VAR) or None
     implied = geo_for_region(region)
-    geo = RegionGeo(
-        timezone=environ.get(TIMEZONE_ENV_VAR) or implied.timezone,
-        country=environ.get(COUNTRY_ENV_VAR) or implied.country,
-    )
     return SandboxIdentity(
         region=region,
-        workspace_host_id=environ.get(WORKSPACE_HOST_ID_ENV_VAR) or None,
-        geo=geo,
+        workspace_host_id=settings.workspace_host_id,
+        geo=RegionGeo(
+            timezone=settings.timezone or implied.timezone, country=implied.country
+        ),
     )
 
 

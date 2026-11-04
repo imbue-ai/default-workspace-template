@@ -1,22 +1,24 @@
-"""The real implementations: ``imbue.mngr_latchkey.core.Latchkey`` behind the sign-in interface, and a subprocess
-behind the re-encrypt runner."""
+"""The real implementations: ``imbue.mngr_latchkey.core.Latchkey`` behind the sign-in interface, a subprocess behind
+the latchkey runner, and the machine's clock."""
 
 import subprocess
+import threading
+import time
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 from imbue.mngr_latchkey.core import Latchkey, LatchkeyServiceInfo
 from pydantic import Field
 
 from auth_sandbox.errors import LatchkeyCommandError, MissingMaterialError
 from auth_sandbox.interfaces import (
+    ClockInterface,
     FinishedCommand,
-    ReencryptRunnerInterface,
+    LatchkeyRunnerInterface,
     SignInLatchkeyInterface,
 )
 
-# ``auth re-encrypt`` is a local file rewrite; the desktop budgets five seconds for one and this is generous.
-_REENCRYPT_TIMEOUT_SECONDS = 60.0
+# The queries read a local store offline; the desktop budgets a few seconds for one and this is generous.
+_QUERY_TIMEOUT_SECONDS = 60.0
 
 
 class LatchkeyAdapter(SignInLatchkeyInterface):
@@ -46,26 +48,21 @@ class LatchkeyAdapter(SignInLatchkeyInterface):
         return self.latchkey.auth_set_credentials(service_name, argv)
 
 
-class SubprocessReencryptRunner(ReencryptRunnerInterface):
+class SubprocessLatchkeyRunner(LatchkeyRunnerInterface):
     """Runs the CLI as a child process: a binary that cannot start is a missing material, and a child that outlives
     its budget is a command error."""
 
     def run(
-        self,
-        argv: Sequence[str],
-        environment: Mapping[str, str],
-        stdin_text: str,
-        working_directory: Path,
+        self, argv: Sequence[str], environment: Mapping[str, str]
     ) -> FinishedCommand:
         try:
             completed = subprocess.run(
                 list(argv),
-                input=stdin_text,
                 env=dict(environment),
-                cwd=working_directory,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=_REENCRYPT_TIMEOUT_SECONDS,
+                timeout=_QUERY_TIMEOUT_SECONDS,
                 check=False,
             )
         except OSError as e:
@@ -77,3 +74,13 @@ class SubprocessReencryptRunner(ReencryptRunnerInterface):
             stdout=completed.stdout,
             stderr=completed.stderr,
         )
+
+
+class SystemClock(ClockInterface):
+    """The machine's clock; a pause is an uncontested wait on an event nobody sets."""
+
+    def now(self) -> float:
+        return time.time()
+
+    def pause(self, seconds: float) -> None:
+        threading.Event().wait(seconds)

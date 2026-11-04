@@ -1,6 +1,7 @@
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from auth_sandbox.errors import ImageBuildError
 from auth_sandbox.image_build import (
     BOOT_SCRIPT_SOURCE,
+    CLAIM_WATCHER_COMMAND,
     COMMAND_NAMES,
     SIGN_IN_PACKAGES_CHECK,
     SUPERVISORD_CONF_SOURCE,
@@ -62,6 +64,7 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         in install
     )
     assert "bash -n /opt/auth-sandbox/boot.sh" in install
+    assert f"test -x /home/user/workspace/.venv/bin/{CLAIM_WATCHER_COMMAND}" in install
     for name in COMMAND_NAMES:
         assert (
             f"ln -sfn /home/user/workspace/.venv/bin/{name} /usr/local/bin/{name}"
@@ -78,6 +81,19 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
 def test_build_steps_install_files_this_library_ships() -> None:
     for source in (BOOT_SCRIPT_SOURCE, SUPERVISORD_CONF_SOURCE):
         assert (_REPO_ROOT / source).is_file(), source
+
+
+def test_the_linked_commands_and_the_claim_watcher_are_this_librarys_console_scripts() -> (
+    None
+):
+    scripts = tomllib.loads(
+        (_REPO_ROOT / "system/libs/auth_sandbox/pyproject.toml").read_text()
+    )["project"]["scripts"]
+    assert set(scripts) == {
+        *COMMAND_NAMES,
+        CLAIM_WATCHER_COMMAND,
+        "auth-sandbox-render-config",
+    }
 
 
 def test_run_build_runs_every_step_in_order_then_snapshots() -> None:

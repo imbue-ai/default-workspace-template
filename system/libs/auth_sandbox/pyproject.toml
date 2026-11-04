@@ -1,7 +1,7 @@
 [project]
 name = "auth-sandbox"
 version = "0.1.0"
-description = "The web latchkey auth sandbox's commands: the browser sign-in, typed-credential entry, browser-state import and credential export the Imbue Studio web chrome drives over owner-exec, plus the sandbox image's build steps."
+description = "The web latchkey auth sandbox's commands: the session's preparation, the browser sign-in and typed-credential entry the Imbue Studio web chrome drives over owner-exec, the claim watcher the boot script runs, plus the sandbox image's build steps."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,10 +13,10 @@ dependencies = [
 ]
 
 [project.scripts]
+auth-sandbox-prepare = "auth_sandbox.cli:prepare_command"
 auth-sandbox-sign-in = "auth_sandbox.cli:sign_in_command"
 auth-sandbox-set-credentials = "auth_sandbox.cli:set_credentials_command"
-auth-sandbox-import-browser-state = "auth_sandbox.cli:import_browser_state_command"
-auth-sandbox-export = "auth_sandbox.cli:export_command"
+auth-sandbox-await-claim = "auth_sandbox.cli:await_claim_command"
 auth-sandbox-render-config = "auth_sandbox.cli:render_config_command"
 
 [build-system]

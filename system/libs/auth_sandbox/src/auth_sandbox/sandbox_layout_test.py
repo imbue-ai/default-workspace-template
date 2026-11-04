@@ -8,16 +8,20 @@ from pathlib import Path
 
 import pytest
 
-from auth_sandbox.image_build import BOOT_SCRIPT_SOURCE, SUPERVISORD_CONF_SOURCE
+from auth_sandbox.image_build import (
+    BOOT_SCRIPT_SOURCE,
+    CLAIM_WATCHER_COMMAND,
+    SUPERVISORD_CONF_SOURCE,
+)
 from auth_sandbox.primitives import (
-    AUTHORIZED_KEY_ENV_VAR,
+    AUTHORIZED_KEYS_PATH,
     CHROME_ORIGIN_ENV_VAR,
     CONNECT_INFO_PATH,
     HOST_ID_ENV_VAR,
     INSTALL_DIR,
     RUNTIME_DIR,
     SCREEN_SERVICE_URL,
-    SCREEN_TOKEN_SHA256_ENV_VAR,
+    SCREEN_TOKEN_SHA256_FILENAME,
     WORKSPACE_ROOT,
 )
 
@@ -93,13 +97,12 @@ def test_boot_script_parses_runs_strict_and_names_the_contract_paths() -> None:
     assert f'readonly RUNTIME_DIR="{RUNTIME_DIR}"' in text
     assert f'readonly INSTALL_DIR="{INSTALL_DIR}"' in text
     assert f'readonly SCREEN_URL="{SCREEN_SERVICE_URL}"' in text
-    for required in (
-        HOST_ID_ENV_VAR,
-        AUTHORIZED_KEY_ENV_VAR,
-        CHROME_ORIGIN_ENV_VAR,
-        SCREEN_TOKEN_SHA256_ENV_VAR,
-    ):
+    for required in (HOST_ID_ENV_VAR, CHROME_ORIGIN_ENV_VAR):
         assert f"${{{required}:?" in text
+    # Nothing about a user comes at create, and the boot generates no key: the session brings its own.
+    assert "AUTH_SANDBOX_AUTHORIZED_KEY" not in text
+    assert "AUTH_SANDBOX_SCREEN_TOKEN_SHA256" not in text
+    assert "openssl rand" not in text
     assert 'export MNGR_HOST_DIR="$RUNTIME_DIR/host"' in text
     assert 'supervisord -n -c "$INSTALL_DIR/supervisord.conf"' in text
     assert '-X POST "$SCREEN_URL/api/start"' in text
@@ -111,22 +114,35 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
     assert 'export SCREEN_LISTEN_HOST="0.0.0.0"' in exports
     assert 'export OWNER_EXEC_LISTEN_HOST="0.0.0.0"' in exports
     assert (
-        f'export SCREEN_OWNER_TOKEN_SHA256="${SCREEN_TOKEN_SHA256_ENV_VAR}"' in exports
+        f'export SCREEN_OWNER_TOKEN_SHA256_FILE="$RUNTIME_DIR/{SCREEN_TOKEN_SHA256_FILENAME}"'
+        in exports
     )
     assert f'export SCREEN_FRAME_ANCESTORS="${CHROME_ORIGIN_ENV_VAR}"' in exports
     assert f'readonly CONNECT_INFO_PATH="{CONNECT_INFO_PATH}"' in text
     assert 'export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"' in exports
     # The connector may write the connect-info file before the script runs: the script never touches it.
     assert text.count("$CONNECT_INFO_PATH") == 1
-    assert (
-        f'printf \'%s\\n\' "${AUTHORIZED_KEY_ENV_VAR}" > "$HOME/.ssh/authorized_keys"'
-        in text
-    )
+    # owner-exec starts refusing everyone; the claim watcher installs the user's key.
+    assert f'export HOME="{AUTHORIZED_KEYS_PATH.parent.parent}"' in exports
+    assert ': > "$HOME/.ssh/authorized_keys"' in exports
     # owner-exec only reads `export KEY=value` lines from share.env.
     assert (
         f"printf 'export SHARE_CHROME_ORIGIN=%s\\n' \"${CHROME_ORIGIN_ENV_VAR}\""
         ' > "$REPO_ROOT/data/.secrets/share.env"' in text
     )
+
+
+def test_boot_script_runs_the_claim_watcher_and_ends_the_sandbox_with_it() -> None:
+    text = (_REPO_ROOT / BOOT_SCRIPT_SOURCE).read_text()
+    assert (
+        f'readonly CLAIM_WATCHER="$REPO_ROOT/.venv/bin/{CLAIM_WATCHER_COMMAND}"' in text
+    )
+    # Started ahead of supervisord, so a claim written right after create is not waiting on the stack.
+    assert text.index('"$CLAIM_WATCHER" &') < text.index("supervisord -n")
+    assert 'wait -n "$CLAIM_WATCHER_PID" "$SUPERVISORD_PID"' in text
+    ending = text[text.index("wait -n") :]
+    assert 'kill -TERM "$CLAIM_WATCHER_PID" "$SUPERVISORD_PID"' in ending
+    assert ending.rstrip().endswith('exit "$EXIT_STATUS"')
 
 
 def test_owner_exec_listens_where_the_boot_script_says_and_on_loopback_otherwise() -> (
@@ -139,34 +155,21 @@ def test_owner_exec_listens_where_the_boot_script_says_and_on_loopback_otherwise
 
 _VALID_BOOT_ENVIRONMENT = {
     HOST_ID_ENV_VAR: "host-" + "a" * 32,
-    AUTHORIZED_KEY_ENV_VAR: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwner owner@example.com",
     CHROME_ORIGIN_ENV_VAR: "https://studio.example.com",
-    SCREEN_TOKEN_SHA256_ENV_VAR: "0" * 64,
 }
 
 
 @pytest.mark.parametrize(
     ("name", "value", "reason"),
     [
-        (AUTHORIZED_KEY_ENV_VAR, None, "must carry the owner OpenSSH public key line"),
+        (HOST_ID_ENV_VAR, None, "must carry the sandbox host id"),
         (CHROME_ORIGIN_ENV_VAR, None, "must carry the hosted chrome origin"),
-        (
-            SCREEN_TOKEN_SHA256_ENV_VAR,
-            None,
-            "must carry the SHA-256 of the Screen owner token",
-        ),
-        (
-            AUTHORIZED_KEY_ENV_VAR,
-            "ssh-ed25519 AAAA one\nssh-ed25519 AAAA two",
-            "must be one line",
-        ),
         (CHROME_ORIGIN_ENV_VAR, "https://studio.example.com/", "must be a bare origin"),
         (
             CHROME_ORIGIN_ENV_VAR,
             "https://studio.example.com\nexport X=1",
             "must be a bare origin",
         ),
-        (SCREEN_TOKEN_SHA256_ENV_VAR, "A" * 64, "must be 64 lower-case hex digits"),
         (
             HOST_ID_ENV_VAR,
             'host-1"\nlisten = "0',

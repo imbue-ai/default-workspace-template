@@ -1,11 +1,11 @@
-"""The commands owner-exec runs on the chrome's behalf, each a thin entry point over the modules beside it.
+"""The commands owner-exec runs on the chrome's behalf, and the claim watcher the boot script runs, each a thin entry
+point over the modules beside it.
 
-Exit codes: 0 when the command did what it says; 1 when latchkey refused (its reason, condensed, is the last
-line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (a key
-file, the incoming state, the values file, or the latchkey binary and its config themselves), or a file or
-directory of the sandbox's cannot be read or written (2 is click's own code for a usage error, which no retry in
-the sandbox cures). Nothing here prints a key, and no key is ever in
-an argument.
+Exit codes: 0 when the command did what it says; 1 when latchkey refused (its reason, condensed, is the last line on
+stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (the session file, the
+key and settings prepare keeps from it, the values file, or the latchkey binary and its config themselves), or a
+file or directory of the sandbox's cannot be read or written (2 is click's own code for a usage error, which no retry
+in the sandbox cures). Nothing here prints a key, and no key is ever in an argument.
 """
 
 import json
@@ -20,14 +20,22 @@ import click
 from imbue.mngr_latchkey.core import Latchkey, LatchkeyError
 from loguru import logger
 
-from auth_sandbox.environment import identity_from_environ, sign_in_environment
+from auth_sandbox.claim import CLAIM_POLL_INTERVAL_SECONDS, ClaimPaths, serve_claim
+from auth_sandbox.environment import sandbox_identity, sign_in_environment
 from auth_sandbox.errors import (
     LatchkeyCommandError,
     MissingMaterialError,
+    SessionFileError,
     ValuesFileError,
 )
-from auth_sandbox.latchkey_adapter import LatchkeyAdapter, SubprocessReencryptRunner
+from auth_sandbox.latchkey_adapter import (
+    LatchkeyAdapter,
+    SubprocessLatchkeyRunner,
+    SystemClock,
+)
 from auth_sandbox.primitives import (
+    AUTHORIZED_KEYS_PATH,
+    CLAIM_PATH,
     DEFAULT_LATCHKEY_BINARY,
     FORTRESS_LAUNCHER_PATH,
     LATCHKEY_BINARY_ENV_VAR,
@@ -35,13 +43,22 @@ from auth_sandbox.primitives import (
     RUNTIME_DIR,
 )
 from auth_sandbox.runtime_files import SandboxPaths, read_key
+from auth_sandbox.session import (
+    install_session,
+    read_and_remove_session_file,
+    read_session_settings,
+)
 from auth_sandbox.set_credentials import (
     read_and_remove_values_file,
     run_set_credentials,
 )
 from auth_sandbox.sign_in import SignInOutcome, run_sign_in
+from auth_sandbox.store_queries import (
+    describe_service,
+    store_environment,
+    stored_accounts,
+)
 from auth_sandbox.template_config import render_template_config
-from auth_sandbox.transfer import export_credentials, import_browser_state
 
 EXIT_REFUSED = 1
 EXIT_MISSING_MATERIAL = 3
@@ -51,7 +68,7 @@ _runtime_dir_option = click.option(
     type=click.Path(path_type=Path),
     default=RUNTIME_DIR,
     show_default=True,
-    help="The sandbox's tmpfs: the keys, the incoming state, the export and the latchkey directory.",
+    help="The sandbox's tmpfs: the session's key and settings, the owner token digest and the latchkey directory.",
 )
 _latchkey_binary_option = click.option(
     "--latchkey-binary",
@@ -77,12 +94,17 @@ def _apply_sign_in_environment(environment: Mapping[str, str]) -> None:
 
 
 def _build_latchkey(paths: SandboxPaths, latchkey_binary: str) -> LatchkeyAdapter:
-    """The desktop's wrapper over the sandbox's directory, with the sandbox's key in the environment."""
+    """The desktop's wrapper over the sandbox's directory, with the session's key and fingerprint in the
+    environment."""
     key = read_key(paths.latchkey_key_path)
+    settings = read_session_settings(paths.session_settings_path)
     paths.latchkey_directory.mkdir(parents=True, exist_ok=True)
     _apply_sign_in_environment(
         sign_in_environment(
-            os.environ, identity_from_environ(os.environ), paths.latchkey_directory, key
+            os.environ,
+            sandbox_identity(os.environ, settings),
+            paths.latchkey_directory,
+            key,
         )
     )
     return LatchkeyAdapter(
@@ -90,6 +112,16 @@ def _build_latchkey(paths: SandboxPaths, latchkey_binary: str) -> LatchkeyAdapte
             latchkey_binary=latchkey_binary, latchkey_directory=paths.latchkey_directory
         )
     )
+
+
+def _print_stored_accounts(latchkey_binary: str, service: str) -> None:
+    """What a sign-in command prints on success: the store's accounts for the service, which name the account the
+    chrome transfers. Run in the environment ``_build_latchkey`` put into this process."""
+    with _exit_on_sandbox_failure():
+        accounts = stored_accounts(
+            SubprocessLatchkeyRunner(), latchkey_binary, os.environ, service
+        )
+    click.echo(json.dumps({"accounts": accounts}))
 
 
 def _finish(outcome: SignInOutcome) -> None:
@@ -103,16 +135,22 @@ def _finish(outcome: SignInOutcome) -> None:
 def _exit_on_sandbox_failure() -> Generator[None, None, None]:
     """Turn a command's failure into the exit code of the module docstring, its message on stderr.
 
-    A material that is missing or malformed exits 3: a key file, the incoming state, the values file, and the
-    ``latchkey`` the desktop's wrapper cannot run (``Latchkey.initialize`` raises ``LatchkeyError`` for a binary
-    that is absent or too old and for a config it cannot parse; a refusal of its own it answers as a result, not
-    an exception). So does a file or directory of the sandbox's that cannot be read or written (an ``OSError``,
-    the config's included), which no retry in the sandbox cures either. A ``latchkey`` child that refused (a
-    re-encrypt of a service it has no store for) exits 1.
+    A material that is missing or malformed exits 3: the session file and what prepare keeps from it, the values
+    file, and the ``latchkey`` the desktop's wrapper cannot run (``Latchkey.initialize`` raises ``LatchkeyError``
+    for a binary that is absent or too old and for a config it cannot parse; a refusal of its own it answers as a
+    result, not an exception). So does a file or directory of the sandbox's that cannot be read or written (an ``OSError``,
+    the config's included), which no retry in the sandbox cures either. A ``latchkey`` query that failed (the
+    description, or the listing after a stored credential) exits 1 with its reason.
     """
     try:
         yield
-    except (MissingMaterialError, ValuesFileError, LatchkeyError, OSError) as e:
+    except (
+        MissingMaterialError,
+        ValuesFileError,
+        SessionFileError,
+        LatchkeyError,
+        OSError,
+    ) as e:
         click.echo(str(e), err=True)
         sys.exit(EXIT_MISSING_MATERIAL)
     except LatchkeyCommandError as e:
@@ -135,12 +173,14 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
 def sign_in_command(
     service: str, account: str | None, runtime_dir: Path, latchkey_binary: str
 ) -> None:
-    """Run latchkey's browser sign-in for SERVICE on the Screen, storing the credential in the sandbox."""
+    """Run latchkey's browser sign-in for SERVICE on the Screen, storing the credential in the sandbox; print the
+    store's accounts for SERVICE as {"accounts": ...}."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
     with _exit_on_sandbox_failure():
         outcome = run_sign_in(_build_latchkey(paths, latchkey_binary), service, account)
     _finish(outcome)
+    _print_stored_accounts(latchkey_binary, service)
 
 
 @click.command()
@@ -163,7 +203,8 @@ def set_credentials_command(
     runtime_dir: Path,
     latchkey_binary: str,
 ) -> None:
-    """Store typed credentials for SERVICE from a values file, as the desktop's credential form does."""
+    """Store typed credentials for SERVICE from a values file, as the desktop's credential form does; print the
+    store's accounts for SERVICE as {"accounts": ...}."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
     with _exit_on_sandbox_failure():
@@ -172,57 +213,77 @@ def set_credentials_command(
             _build_latchkey(paths, latchkey_binary), service, account, values
         )
     _finish(outcome)
+    _print_stored_accounts(latchkey_binary, service)
 
 
 @click.command()
-@_runtime_dir_option
-@_latchkey_binary_option
-def import_browser_state_command(runtime_dir: Path, latchkey_binary: str) -> None:
-    """Re-encrypt the incoming browser state (under the transfer key) into the sandbox's latchkey directory."""
-    _quiet_logging()
-    paths = SandboxPaths(runtime_dir=runtime_dir)
-    with _exit_on_sandbox_failure():
-        written = import_browser_state(
-            SubprocessReencryptRunner(), paths, latchkey_binary, os.environ
-        )
-    click.echo(json.dumps({"browser_state": str(written)}))
-
-
-@click.command()
-@click.argument("service")
 @click.option(
-    "--account",
-    default=None,
-    help="Export only this account's credentials for the service.",
+    "--session-file",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="The session file the chrome wrote (deleted once read).",
+)
+@click.option(
+    "--describe",
+    "service",
+    required=True,
+    help="The service whose `latchkey services info --offline` JSON to print.",
 )
 @_runtime_dir_option
 @_latchkey_binary_option
-def export_command(
-    service: str, account: str | None, runtime_dir: Path, latchkey_binary: str
+def prepare_command(
+    session_file: Path, service: str, runtime_dir: Path, latchkey_binary: str
 ) -> None:
-    """Re-encrypt SERVICE's credentials and the browser state under the transfer key; print the paths as JSON."""
+    """Install the session file's key, browser state and settings; print what latchkey knows of the service, or {}
+    when it knows no such service."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
     with _exit_on_sandbox_failure():
-        bundle = export_credentials(
-            SubprocessReencryptRunner(),
-            paths,
+        material = read_and_remove_session_file(session_file)
+        install_session(material, paths)
+        description = describe_service(
+            SubprocessLatchkeyRunner(),
             latchkey_binary,
-            os.environ,
+            store_environment(
+                os.environ, paths.latchkey_directory, material.latchkey_key
+            ),
             service,
-            account,
         )
-    click.echo(
-        json.dumps(
-            {
-                "credentials": str(bundle.credentials),
-                "data_format_version": str(bundle.data_format_version),
-                "browser_state": None
-                if bundle.browser_state is None
-                else str(bundle.browser_state),
-            }
-        )
+    click.echo(json.dumps(description))
+
+
+@click.command()
+@click.option(
+    "--claim-file",
+    type=click.Path(path_type=Path),
+    default=CLAIM_PATH,
+    show_default=True,
+    help="The claim the connector writes.",
+)
+@click.option(
+    "--authorized-keys",
+    type=click.Path(path_type=Path),
+    default=AUTHORIZED_KEYS_PATH,
+    show_default=True,
+    help="owner-exec's authorized_keys, which the claim's key replaces.",
+)
+@_runtime_dir_option
+def await_claim_command(
+    claim_file: Path, authorized_keys: Path, runtime_dir: Path
+) -> None:
+    """Wait for the connector's claim, admit the user it names, and return when their session expires (the boot
+    script then ends the sandbox)."""
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+    paths = ClaimPaths(
+        claim_path=claim_file,
+        authorized_keys_path=authorized_keys,
+        screen_token_sha256_path=SandboxPaths(
+            runtime_dir=runtime_dir
+        ).screen_token_sha256_path,
     )
+    with _exit_on_sandbox_failure():
+        serve_claim(paths, SystemClock(), CLAIM_POLL_INTERVAL_SECONDS)
 
 
 @click.command()
