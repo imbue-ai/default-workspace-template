@@ -21,6 +21,7 @@ vi.hoisted(() => {
 });
 
 import type { Lane, ProviderAccount } from "../models/Providers";
+import type { RelayAnswer } from "../models/providerRelay";
 
 const state: {
   lanes: Lane[];
@@ -30,7 +31,7 @@ const state: {
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
-const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<RelayAnswer> => "relaying"));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
@@ -56,7 +57,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
-import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
+import { MAX_SIGN_IN_PORT_DRAWS, PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -132,7 +133,7 @@ beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
   requestProviderRelay.mockReset();
-  requestProviderRelay.mockResolvedValue(true);
+  requestProviderRelay.mockResolvedValue("relaying");
   loadLanesAndAccountsWithRetry.mockReset();
   loadLanesAndAccountsWithRetry.mockResolvedValue(undefined);
   state.lanes = [lane()];
@@ -513,7 +514,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("shows Claude's paste-the-code steps when nothing relays", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
 
     const root = await clickLane("anthropic");
@@ -523,7 +524,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("falls back to ChatGPT's one-time code when nothing relays", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
 
@@ -534,7 +535,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("goes straight to ChatGPT's one-time code once nothing relays, rather than starting the browser login again", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
     const root = await clickLane("openai");
@@ -545,6 +546,44 @@ describe("a sign-in finished in the browser", () => {
     await settled();
 
     expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "device", "device"]);
+  });
+
+  it("starts the sign-in again when its callback port is taken, and waits on the browser once a port is free", async () => {
+    requestProviderRelay.mockResolvedValueOnce("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(startFlow.mock.calls).toEqual([
+      ["anthropic", "subscription", undefined],
+      ["anthropic", "subscription", undefined],
+    ]);
+    expect(requestProviderRelay).toHaveBeenCalledTimes(2);
+    expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
+  });
+
+  it("falls back to Claude's paste-the-code steps once every port it draws is taken", async () => {
+    requestProviderRelay.mockResolvedValue("port_taken");
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(startFlow).toHaveBeenCalledTimes(MAX_SIGN_IN_PORT_DRAWS);
+    expect(requestProviderRelay).toHaveBeenCalledTimes(MAX_SIGN_IN_PORT_DRAWS);
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+  });
+
+  it("falls back to ChatGPT's one-time code once every port it draws is taken", async () => {
+    requestProviderRelay.mockResolvedValue("port_taken");
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+
+    await clickLane("openai");
+
+    expect(startFlow.mock.calls.map((call) => call[1])).toEqual([
+      ...Array<string>(MAX_SIGN_IN_PORT_DRAWS).fill("chatgpt"),
+      "device",
+    ]);
   });
 
   it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {
@@ -593,7 +632,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("shows no note on the one-time code, which does not need the setting", async () => {
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
     state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };
 
@@ -617,7 +656,7 @@ describe("a sign-in finished in the browser", () => {
   it("moves to another way in when the desktop app can no longer open the page", async () => {
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
 
     (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
     await settled();
@@ -630,14 +669,14 @@ describe("a sign-in finished in the browser", () => {
   it("starts nothing when the desktop app's late answer to Try again comes after the user went back", async () => {
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
-    let answer: (isRelaying: boolean) => void = () => undefined;
-    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (answer = resolve)));
+    let answer: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (answer = resolve)));
 
     (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
     (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
     // What the real abortFlow does to the live flow.
     state.flow = null;
-    answer(false);
+    answer("unavailable");
     await settled();
 
     expect(startFlow).toHaveBeenCalledOnce();
@@ -647,14 +686,14 @@ describe("a sign-in finished in the browser", () => {
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
     const root = await clickLane("openai");
-    let cutShort: (isRelaying: boolean) => void = () => undefined;
-    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (cutShort = resolve)));
+    let cutShort: (relayAnswer: RelayAnswer) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<RelayAnswer>((resolve) => (cutShort = resolve)));
 
     const tryAgain = root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement;
     tryAgain.click();
     tryAgain.click();
     // What the real requestProviderRelay does to an ask a newer one replaced.
-    cutShort(false);
+    cutShort("unavailable");
     await settled();
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
@@ -666,7 +705,7 @@ describe("a sign-in finished in the browser", () => {
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
     const root = await clickLane("openai");
-    requestProviderRelay.mockResolvedValue(false);
+    requestProviderRelay.mockResolvedValue("unavailable");
 
     (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
     await settled();

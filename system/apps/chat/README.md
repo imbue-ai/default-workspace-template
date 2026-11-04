@@ -889,6 +889,12 @@ since claude sends the browser to its success page before its token exchange
 has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
 so the desktop app frees the port.
 
+The CLI draws its callback port at random, so the desktop app may find
+something on the user's machine already answering there (a Docker container's
+published SSH port, say). It then answers `reason: "port_taken"`, and the
+chooser starts the same sign-in again for a fresh port, up to three times
+before it falls back as below.
+
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
 the browser is out ("Finish signing in to <provider> in your browser", with

@@ -68,7 +68,7 @@ import {
   submitKey,
 } from "../models/Providers";
 import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import { requestProviderRelay } from "../models/providerRelay";
+import { type RelayAnswer, requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
@@ -79,6 +79,10 @@ type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 /** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
  *  advance whether the browser will end on a code instead. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
+
+/** How many sign-ins in a row may draw a callback port that is taken before the chooser stops
+ *  asking the desktop app and signs in without it. */
+export const MAX_SIGN_IN_PORT_DRAWS = 3;
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
@@ -161,15 +165,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
   }
 
-  /** Hand a started flow's page to the desktop app; whether it is relaying, or null when a newer
-   *  ask took its place before it was answered. */
-  async function relay(url: string, flowId: string): Promise<boolean | null> {
+  /** Hand a started flow's page to the desktop app; its answer, or null when a newer ask took its
+   *  place before it was answered. */
+  async function relay(url: string, flowId: string): Promise<RelayAnswer | null> {
     relayAsk += 1;
     const ask = relayAsk;
-    const isRelaying = await requestProviderRelay(url, flowId);
+    const answer = await requestProviderRelay(url, flowId);
     if (ask !== relayAsk) return null;
-    if (!isRelaying) isRelayUnavailable = true;
-    return isRelaying;
+    if (answer === "unavailable") isRelayUnavailable = true;
+    return answer;
   }
 
   async function copyToClipboard(value: string, kind: "link" | "code"): Promise<void> {
@@ -228,16 +232,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
     let fallback: LaneMethod | null = null;
     try {
-      await startFlow(chosen.id, chosenMethod.id, options.accountId);
-      if (attempt !== generation) return;
-      const started = getFlow();
-      if (started !== null && started.relay_url !== null && !isRelayUnavailable && !options.isRelaySkipped) {
+      // The CLI draws its callback port at random, so a port something on the user's machine
+      // already answers on is drawn again by starting the sign-in again, a few times at most.
+      for (let portDraw = 1; ; portDraw += 1) {
+        await startFlow(chosen.id, chosenMethod.id, options.accountId);
+        if (attempt !== generation) return;
+        const started = getFlow();
+        if (started === null || started.relay_url === null || isRelayUnavailable || options.isRelaySkipped) break;
         isOpeningBrowser = true;
         m.redraw();
-        const isRelaying = await relay(started.relay_url, started.flow_id);
+        const answer = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
+        if (answer === "port_taken" && portDraw < MAX_SIGN_IN_PORT_DRAWS) continue;
         isOpeningBrowser = false;
-        if (isRelaying === true) mode = "relay";
+        if (answer === "relaying") mode = "relay";
+        if (answer === "port_taken") isRelayUnavailable = true;
+        break;
       }
       if (mode !== "relay" && chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
@@ -830,8 +840,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             "data-e2e": "open-sign-in-again",
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
-              void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
-                if (isRelaying === null) return;
+              void relay(flow.relay_url, flow.flow_id).then((answer) => {
+                if (answer === null) return;
                 // The user may have gone back, closed the chooser, or finished meanwhile.
                 const live = getFlow();
                 const isStillWaiting =
@@ -839,7 +849,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   live !== null &&
                   live.flow_id === flow.flow_id &&
                   live.status.state === "pending";
-                if (!isRelaying && isStillWaiting)
+                if (answer !== "relaying" && isStillWaiting)
                   signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
               });
             },
