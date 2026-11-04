@@ -130,7 +130,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let awaitingVerdict = false;
   // The page is being handed to the desktop app, which has yet to answer.
   let isOpeningBrowser = false;
-  // Set once no desktop app answered a relay, so this chooser stops offering sign-ins that need one.
+  // Set once the desktop app cannot relay, or no callback port the sign-ins draw comes free, so
+  // this chooser stops offering sign-ins that need a relay.
   let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
