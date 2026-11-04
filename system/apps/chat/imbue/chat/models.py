@@ -365,7 +365,9 @@ class MessageAuthorFields(FrozenModel):
     """The author a not-yet-delivered message's turn will be stamped with (``authors.py``), so the page draws it under
     its sender."""
 
-    author: ParticipantKey | None = Field(default=None, description="Who sent it; None for the owner")
+    author: ParticipantKey | None = Field(
+        default=None, description="Who sent it; None for an unattributed message, which is the owner's"
+    )
     author_name: str | None = Field(default=None, description="What the sender was called when they sent it")
 
 

@@ -612,7 +612,8 @@ _AuthoredT = TypeVar("_AuthoredT", bound=MessageAuthorFields)
 
 @pure
 def _with_author(message: _AuthoredT, author: tuple[ParticipantKey, str] | None) -> _AuthoredT:
-    """``message`` carrying the author its turn will be stamped with; unchanged for the owner's (None)."""
+    """``message`` carrying the author its turn will be stamped with; unchanged for an unattributed one (None),
+    which is the owner's."""
     if author is None:
         return message
     return message.model_copy_update(
