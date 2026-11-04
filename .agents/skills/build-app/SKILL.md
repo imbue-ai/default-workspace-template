@@ -386,9 +386,10 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
 - **Show the mock inside the mock frame, never as the bare app.** A mock looks like
-  a finished app, so on its own it reads as one. The frame puts a "Mock" banner
-  around it and a note under the banner saying what is not real yet; the bare app
-  stays out of the launcher while it is up. Check the page, then
+  a finished app, so on its own it reads as one. The frame puts a "UI Sketch"
+  banner around it and a note under the banner saying what is not real yet; the
+  bare app stays out of the launcher while it is up. To the user it is a UI
+  sketch, the banner's word: never call it a mock in chat. Check the page, then
   frame it and open the frame beside the chat, in one call:
 
   ```bash

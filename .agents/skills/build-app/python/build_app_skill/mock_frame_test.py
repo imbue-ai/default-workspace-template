@@ -147,7 +147,7 @@ def test_up_frames_the_running_app_hidden_and_kept_alive_and_opens_the_mock_wind
         **plain_row,
         "stop_when_no_windows": False,
     }
-    assert layout.ops == [["open", "inbox-status-mock", "--beside"]]
+    assert layout.ops == [["open", "inbox-status-sketch", "--beside"]]
 
 
 def test_up_with_refresh_reloads_the_mock_window_rather_than_opening_another(
@@ -166,7 +166,7 @@ def test_up_with_refresh_reloads_the_mock_window_rather_than_opening_another(
     )
 
     assert code == 0
-    assert layout.ops == [["refresh", "--app", "inbox-status-mock"]]
+    assert layout.ops == [["refresh", "--app", "inbox-status-sketch"]]
 
 
 def test_a_frame_that_does_not_come_up_leaves_the_app_an_ordinary_app(
@@ -266,7 +266,7 @@ def test_refresh_after_a_restart_reframes_with_the_recorded_note_and_page(
         (_NOTE, "/inbox"),
     ]
     assert _row(registry) == framed_row
-    assert layout.ops == [["refresh", "--app", "inbox-status-mock"]]
+    assert layout.ops == [["refresh", "--app", "inbox-status-sketch"]]
 
 
 def test_refresh_with_no_frame_up_reloads_the_apps_own_windows(
@@ -330,7 +330,7 @@ def test_down_closes_the_mock_window_removes_the_frame_and_restores_the_app(
     code = mock_frame.down(_APP, tmp_path, frames=frames, layout=layout)
 
     assert code == 0
-    assert layout.ops == [["close", "inbox-status-mock"]]
+    assert layout.ops == [["close", "inbox-status-sketch"]]
     assert frames.downs == [_APP]
     assert _row(registry) == plain_row
 
@@ -369,7 +369,7 @@ def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
     code = mock_frame.down(_APP, tmp_path, frames=frames, layout=layout)
 
     assert code == 0
-    assert layout.ops == [["close", "inbox-status-mock"]]
+    assert layout.ops == [["close", "inbox-status-sketch"]]
     assert frames.downs == [_APP]
     rows = tomllib.loads(registry.read_text()).get("apps", [])
     assert [row["name"] for row in rows] == []
@@ -379,7 +379,7 @@ def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
 def test_the_frames_names_stay_within_the_registry_caps() -> None:
     long_name = "x" * forward_port.MAX_DISPLAY_NAME_LENGTH
     # The longest app name there can be, cut where the suffix would follow a hyphen.
-    long_app_name = "weekly-engineering-standup-notes"
+    long_app_name = "monthly-engineering-sync-reviews"
     assert len(long_app_name) == forward_port.MAX_SERVICE_NAME_LENGTH
 
     display_name = mock_frame.frame_display_name(long_name)
@@ -389,5 +389,5 @@ def test_the_frames_names_stay_within_the_registry_caps() -> None:
     assert forward_port.validate_display_name(display_name) is None
     assert display_name.endswith(mock_frame.DISPLAY_NAME_SUFFIX)
     assert forward_port.validate_service_name(service_name) is None
-    assert service_name == "weekly-engineering-standup-mock"
-    assert mock_frame.frame_name(_APP) == "inbox-status-mock"
+    assert service_name == "monthly-engineering-sync-sketch"
+    assert mock_frame.frame_name(_APP) == "inbox-status-sketch"

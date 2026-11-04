@@ -60,8 +60,8 @@ BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
         hint="Approve or request changes in chat",
     ),
     FrameKind.MOCK: BannerCopy(
-        tag="Mock",
-        description="early mock &mdash; not the finished app",
+        tag="UI Sketch",
+        description="early UI sketch &mdash; not the finished app",
         hint="Ask for changes in chat",
     ),
 }
@@ -266,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=list(FrameKind),
         default=FrameKind.CHANGE,
         help="What the banner says the framed page is: a proposed change to an "
-        "existing app (default), or an early mock of a new app.",
+        "existing app (default), or an early UI sketch of a new app.",
     )
     parser.add_argument(
         "--note",

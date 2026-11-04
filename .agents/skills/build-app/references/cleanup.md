@@ -1,7 +1,7 @@
 # Removing an app
 
 1. If the app is still framed as a mock, take the frame down first, which closes
-   the mock window and removes the `<name>-mock` app:
+   the mock window and removes the `<name>-sketch` app:
    `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py down --app <name>`.
 2. `python3 system/scripts/forward_port.py --name <name> --remove` (drops the
    entry from `data/.state/apps.toml`).

@@ -1284,7 +1284,7 @@ def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> N
     )
     preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
 
-    assert '<span class="tag">Mock</span>' in page
+    assert '<span class="tag">UI Sketch</span>' in page
     assert "&lt;b&gt;Refresh&lt;/b&gt; is not wired up" in page
     assert "<b>Refresh</b>" not in page
     assert '<span class="tag">Preview</span>' in preview_page
@@ -1368,7 +1368,7 @@ def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_scrip
 
 # frame only (a mock around an app something else runs)
 
-_FRAME_NAME = "inbox-mock"
+_FRAME_NAME = "inbox-sketch"
 
 
 def _frame(
@@ -1386,7 +1386,7 @@ def _frame(
         inner_service="inbox",
         frame_service_name=_FRAME_NAME,
         title="Inbox",
-        display_name="Inbox (mock)",
+        display_name="Inbox (UI sketch)",
         kind=FrameKind.MOCK,
         note=note,
         runner=runner or _RecordingRunner(),
@@ -1424,7 +1424,7 @@ def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
             _FRAME_NAME,
             f"http://localhost:{_wrapper_arg(wrapper_argv, '--port')}",
             internal=False,
-            display_name="Inbox (mock)",
+            display_name="Inbox (UI sketch)",
         )
     ]
     state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
@@ -1563,7 +1563,7 @@ def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry
         _FRAME_NAME,
         f"http://localhost:{_wrapper_arg(retry_argv, '--port')}",
         internal=False,
-        display_name="Inbox (mock)",
+        display_name="Inbox (UI sketch)",
     )
     assert _wrapper_arg(retry_argv, "--note") == recorded.note
     assert (
@@ -1597,7 +1597,7 @@ def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
         inner_service="inbox",
         frame_service_name=_FRAME_NAME,
         title="Inbox",
-        display_name="Inbox (mock)",
+        display_name="Inbox (UI sketch)",
         kind=FrameKind.MOCK,
         note="Sample data; refresh does not work yet.",
         inner_path="/",

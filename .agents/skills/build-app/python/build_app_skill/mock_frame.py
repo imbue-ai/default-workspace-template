@@ -2,9 +2,9 @@
 
 While an app built through ``build-app`` is still a mock -- hard-coded content, or a
 sample of real data that is not yet wired to its source, with some of it not working
--- the user sees it only inside the labeled preview frame, with a "Mock" banner and a
+-- the user sees it only inside the labeled preview frame, with a "UI Sketch" banner and a
 note saying what is not real yet. ``up`` frames the app's live program as the
-``<name>-mock`` app (nothing else is booted: the frame shows the app the agent is
+``<name>-sketch`` app (nothing else is booted: the frame shows the app the agent is
 editing), and re-registers the app itself from its manifest as internal and never
 stopped for want of a window. Internal keeps the bare app out of the launcher (a
 desktop shortcut the shell gave it when it was first registered stays); and since only
@@ -53,8 +53,8 @@ from workspace_bare_scripts import forward_port
 from workspace_bare_scripts.frame_kind import FrameKind
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
-FRAME_SUFFIX = "-mock"
-DISPLAY_NAME_SUFFIX = " (mock)"
+FRAME_SUFFIX = "-sketch"
+DISPLAY_NAME_SUFFIX = " (UI sketch)"
 # What the app's own registry row says while the frame is up: not an app to open (the
 # frame is), and not stopped when no window shows it (the frame's window does).
 FRAMED_APP_OVERRIDES: forward_port.ManifestOverrides = {
