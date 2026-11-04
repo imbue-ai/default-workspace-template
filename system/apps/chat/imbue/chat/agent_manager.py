@@ -3540,7 +3540,7 @@ class AgentManager:
             raise RebindCancelledError(str(e)) from e
 
     def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
-        """Pop the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
+        """Move the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
         once none remain. Either way the chat's snapshot is pushed: the page reads which listed sends are delivered off
         it, to stand each down once its turn lands.
 
