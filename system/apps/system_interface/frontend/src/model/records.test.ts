@@ -217,10 +217,14 @@ describe("parseAppRecord", () => {
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.stop_when_no_windows).toBe(false);
+    expect(app.uses_microphone).toBe(false);
     expect(app.pin).toBeNull();
     expect(
       parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true }).stop_when_no_windows,
     ).toBe(true);
+    expect(parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", uses_microphone: true }).uses_microphone).toBe(
+      true,
+    );
   });
 
   it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {

@@ -43,7 +43,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE } from "./livePages";
+import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE, PAGE_FRAME_ALLOW, pageFrameAllow } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -247,6 +247,12 @@ describe("creating and positioning", () => {
     // Placements: win-3 (missing, minimized) at 0, win-2 minimized at 1, win-1 focused at 2.
     expect(wrapper.style.zIndex).toBe("5");
     expect(wrapper.style.pointerEvents).toBe("auto");
+  });
+
+  it("hands the microphone to the frames of an app whose manifest listens, and to no other", () => {
+    expect(pageFrameAllow(appRecord("chat", { uses_microphone: true }))).toBe(`${PAGE_FRAME_ALLOW}; microphone`);
+    expect(pageFrameAllow(appRecord("docs"))).toBe(PAGE_FRAME_ALLOW);
+    expect(frameOf("win-1").getAttribute("allow")).not.toContain("microphone");
   });
 
   it("creates no page for a minimized window until it is restored", () => {

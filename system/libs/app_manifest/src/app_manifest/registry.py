@@ -138,6 +138,10 @@ class RegistryRow(FrozenModel):
         default=False,
         description="Whether the shell may stop the app's program once no window shows it",
     )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the shell delegates the microphone to the app's frames",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     default_shortcut: DefaultShortcut | None = Field(
         default=None, description="The shortcut a new desktop is seeded with"
