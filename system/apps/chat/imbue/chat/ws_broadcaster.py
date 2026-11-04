@@ -30,7 +30,7 @@ def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dic
     the page draws them."""
     return {
         "type": "provisional_chat_created",
-        **provisional.chat.model_dump(mode="json"),
+        **provisional.chat.model_dump(mode="json", exclude={"held_sends"}),
         "held_sends": [held.model_dump(mode="json") for held in provisional.held_sends],
     }
 

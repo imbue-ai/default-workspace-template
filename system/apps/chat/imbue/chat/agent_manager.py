@@ -958,7 +958,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
+        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
         if transition.trigger_text
         else ()
     )
@@ -970,12 +970,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        # The page draws a held send as the sender's own bubble, so it gets the words behind the author prefix a
-        # non-owner's send carries; the record keeps the delivered text for the successor.
-        held_sends=(
-            *trigger,
-            *(_held_send_snapshot(held.message_id, split_author_prefix(held.text)[1]) for held in others),
-        ),
+        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
@@ -984,9 +979,11 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
-    """One held send on the wire, carrying the render decision its text would get in the transcript."""
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), classify_user_message(text))
+def _held_send_snapshot(message_id: str, delivered_text: str) -> HeldSendSnapshot:
+    """One held send on the wire: the words behind the author prefix a non-owner's send carries (the record keeps the
+    delivered text for the agent), with the render decision they would get in the transcript."""
+    words = split_author_prefix(delivered_text)[1]
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=words), classify_user_message(words))
 
 
 @pure
@@ -1880,10 +1877,7 @@ class AgentManager:
     def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChatAsShown:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
-        # The held text is the delivered one, so the page is handed the words behind a non-owner's author prefix.
-        held_sends = tuple(
-            _held_send_snapshot(held.message_id, split_author_prefix(held.text)[1]) for held in provisional.held_sends
-        )
+        held_sends = tuple(_held_send_snapshot(held.message_id, held.text) for held in provisional.held_sends)
         return ProvisionalChatAsShown(
             chat=provisional
             if title is None
