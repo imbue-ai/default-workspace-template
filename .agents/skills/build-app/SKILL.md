@@ -36,9 +36,9 @@ Map of the flow:
   in business terms; a small plan; wait for approval.
 - **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
   service, serve a mock page from it and put that in front of the user (a page,
-  never a picture of one) inside the mock frame that labels it a mock, loop to
-  explicit confirmation of the look-and-feel. Hard gate. The frame stays until
-  the app is really hooked up to its data.
+  never a picture of one) inside the mock frame that labels it a UI sketch,
+  loop to explicit confirmation of the look-and-feel. Hard gate. The frame
+  stays until the app is really hooked up to its data.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
   *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
