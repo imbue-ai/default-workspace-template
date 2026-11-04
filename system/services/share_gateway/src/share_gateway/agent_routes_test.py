@@ -161,7 +161,9 @@ def test_join_answers_the_access_document_for_workspace_scope(tmp_path: Path) ->
         "source_url": helper_source_url(harness.context.repo_root),
         "sha256": hashlib.sha256(HELPER_PATH.read_bytes()).hexdigest(),
     }
-    assert document["helper"]["source_url"].endswith("/system/services/share_gateway/src/share_gateway/helper/wsvisit.cjs")
+    assert document["helper"]["source_url"].endswith(
+        "/system/services/share_gateway/src/share_gateway/helper/wsvisit.cjs"
+    )
     assert len(load_agent_grants(harness.context.paths.grants_path)) == 1
 
 
