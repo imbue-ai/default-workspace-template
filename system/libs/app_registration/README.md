@@ -7,8 +7,8 @@ rule, the icon markup, the value types); its module docstring describes the rule
 
 ## Consumers
 
-- `system/scripts/forward_port.py` -- the command every supervisord program line
-  runs before its own command, and that Imbue Studio and minds_evals run.
+- `system/scripts/forward_port.py` -- the command app program lines run before
+  their app starts, and that update-self and agents run by path to remove an app.
 - `app_manifest.registry.register_app` -- an app's entry point registering itself.
 - `system/apps/datalib/launch_datalib_http.py` -- Datalib's launcher.
 - The isolated-instance, preview and scaffold code under `.agents/`.
