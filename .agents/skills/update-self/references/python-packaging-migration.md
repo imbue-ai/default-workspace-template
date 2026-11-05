@@ -129,8 +129,10 @@ it runs today:
    It lists what it would change: the sources that become editable path
    sources, the dev dependency its tests get (and, when they type-check it,
    `ty` at the root's pin and a `[tool.ty]` table, so the check covers its own
-   directory), its removal from the root `pyproject.toml`, and the program line
-   and documents it rewrites.
+   directory), the root's dependency cooldown (`[tool.uv] exclude-newer`), which
+   a standalone project does not inherit, unless it sets its own, its removal
+   from the root `pyproject.toml`, and the program line and documents it
+   rewrites.
 2. **Migrate it**, seeding its lock from the shared lock it ran on before the
    merge (`<rollback point>` is the commit the workspace was on before this
    update's merge):
