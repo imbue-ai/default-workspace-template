@@ -1122,10 +1122,14 @@ def test_the_path_loading_scan_sees_each_form() -> None:
 
 
 def _user_package_scripts(repo_root: Path) -> dict[str, str]:
-    """Each user package's console scripts, by script name, mapped to its directory."""
+    """Each standalone package's console scripts (a user package's, or a built-in one the root
+    workspace excludes), by script name, mapped to its directory."""
     return {
         script: relative
-        for relative in user_packages.user_packages(repo_root)
+        for relative in (
+            *user_packages.user_packages(repo_root),
+            *user_packages.built_in_standalone_projects(repo_root),
+        )
         for script in user_packages.console_scripts(repo_root / relative)
     }
 
@@ -1189,6 +1193,29 @@ def test_a_root_venv_run_of_a_user_packages_command_is_caught(tmp_path: Path) ->
             ".agents/skills/report/SKILL.md",
             "Run `uv run --no-sync widget-report --today`.",
         )
+    ]
+
+
+def test_a_root_venv_run_of_an_excluded_built_in_packages_command_is_caught(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers = ["system/apps/chat"]\nexclude = ["system/libs/sandbox"]\n'
+    )
+    sandbox = tmp_path / "system" / "libs" / "sandbox"
+    sandbox.mkdir(parents=True)
+    (sandbox / "pyproject.toml").write_text(
+        '[project]\nname = "sandbox"\n\n[project.scripts]\nsandbox-prepare = "sandbox.cli:main"\n'
+    )
+    doc = tmp_path / "docs" / "sandbox.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text(
+        "Run `uv run --no-sync sandbox-prepare --describe slack`.\n"
+        "Or `uv run --no-sync --project system/libs/sandbox sandbox-prepare`.\n"
+    )
+
+    assert _root_venv_runs_of_user_scripts(tmp_path, [doc]) == [
+        ("docs/sandbox.md", "Run `uv run --no-sync sandbox-prepare --describe slack`.")
     ]
 
 

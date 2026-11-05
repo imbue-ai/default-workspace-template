@@ -6,6 +6,9 @@ The Imbue Studio web chrome frames the Screen, the user completes the login ther
 
 This package holds the commands owner-exec runs in the sandbox on the chrome's behalf, the claim watcher, the sandbox's boot script and supervisord configuration, and the steps that build the sandbox image.
 
+It is its own uv project, with its own `uv.lock` and venv, and not a member of the root workspace (the root `pyproject.toml` names it under `[tool.uv.workspace] exclude`): its `imbue-mngr-latchkey` dependency carries mngr plugins that a workspace's own mngr must not load, so only the auth sandbox image installs it, and no workspace syncs it.
+Its mngr packages stay on the root's pin: `system/scripts/set_mngr_pin.py` moves both pins, and its `--check` refuses a tree where they differ (relock with `uv lock --project system/libs/auth_sandbox` after a move).
+
 ## The sandbox's life
 
 Every auth sandbox is made the same way, whether the connector keeps it warm in its pool or makes it when a sign-in asks for one, and starts blank: nothing about a user is in it until the connector claims it.
@@ -62,7 +65,7 @@ When the sign-in has stored the credential, the chrome reads `credentials.json.e
 
 ## The commands
 
-The three the chrome runs over owner-exec are on `PATH` in the image (console scripts of this package, linked into `/usr/local/bin/`), and all of them read the sandbox's tmpfs at `/run/auth-sandbox/` (`--runtime-dir` moves it, for tests).
+The three the chrome runs over owner-exec are on `PATH` in the image (console scripts of this package in its environment at `/opt/auth-sandbox/venv`, linked into `/usr/local/bin/`), and all of them read the sandbox's tmpfs at `/run/auth-sandbox/` (`--runtime-dir` moves it, for tests).
 Keys travel in files and in a child's environment, never in an argument; nothing here prints a key.
 
 - `auth-sandbox-prepare --session-file PATH --describe SERVICE`: installs the session: writes `K` to `latchkey_key`, the browser state (when the file has one) as `browser_state.json.enc` in the latchkey directory, and `workspace_host_id` and `timezone` to `session_settings.json`, then deletes the session file (also when it is malformed).
@@ -77,7 +80,7 @@ On success each sign-in command prints the store's accounts for the service, `{"
 
 Exit codes: 0 done; 1 latchkey refused, its reason as the last line on stderr (a cancelled login, a refused permission under `--strict`, a service that needs typed credentials, or a `services info` or `auth list` that failed for a reason other than an unknown service); 3 a material the command needs is missing or malformed (the session file, the key and settings prepare keeps from it, the values file, or the `latchkey` binary and its config themselves, which the desktop's wrapper checks on every run), or a file or directory of the sandbox's cannot be read or written. 2 is click's usage-error code, which a malformed invocation exits with.
 
-Two more scripts are not for the chrome: `auth-sandbox-await-claim`, the claim watcher, which the boot script runs from the workspace venv (it exits 0 at the session's expiry and 3 when it cannot install the claim), and `auth-sandbox-render-config`, which runs at image build only and writes the template `config.json`.
+Two more scripts are not for the chrome: `auth-sandbox-await-claim`, the claim watcher, which the boot script runs from this package's environment (it exits 0 at the session's expiry and 3 when it cannot install the claim), and `auth-sandbox-render-config`, which runs at image build only and writes the template `config.json`.
 
 ## The tmpfs layout
 
@@ -121,11 +124,11 @@ The Screen reads it on every `GET /api/connect-info` (`SCREEN_CONNECT_INFO_PATH`
 
 ## The image
 
-`auth_sandbox.modal_image_build` builds the product `system/Dockerfile` into a Modal image, creates a sandbox from it, runs the steps of `image_build.py` (the first-boot seed and the Screen unit as the CI image does them, the pinned latchkey checked, the template `config.json` rendered and verified with `latchkey ensure-browser --source existing-config`, the boot script, the supervisord config and the commands installed, the claim watcher checked), snapshots the filesystem and prints the image id.
-Run it from the repo root with Modal credentials for the target workspace: `uv run --no-sync --with modal python -m auth_sandbox.modal_image_build` (`modal` is not a workspace dependency, so it comes in for the one run).
+`auth_sandbox.modal_image_build` builds the product `system/Dockerfile` into a Modal image, creates a sandbox from it, runs the steps of `image_build.py` (the first-boot seed and the Screen unit as the CI image does them, the pinned latchkey checked, this package installed from its own lock into `/opt/auth-sandbox/venv` on the workspace venv's Python, the template `config.json` rendered and verified with `latchkey ensure-browser --source existing-config`, the boot script, the supervisord config and the commands installed, the claim watcher checked), snapshots the filesystem and prints the image id.
+Run it from the repo root with Modal credentials for the target workspace, after `uv sync --locked --project system/libs/auth_sandbox`: `uv run --no-sync --project system/libs/auth_sandbox --with modal python -m auth_sandbox.modal_image_build` (`modal` is not a dependency, so it comes in for the one run).
 The steps are plain data over a small sandbox interface, and the tests run them over a fake.
 
 ## Tests
 
-`uv run --no-sync pytest system/libs/auth_sandbox` runs the unit tests over fakes (`mock_latchkey_test.py`).
+The suite runs from this directory in its own venv, as the template's CI runs it: `uv sync --locked`, then `uv run --no-sync pytest` (the root suite does not collect it). The unit tests run over fakes (`mock_latchkey_test.py`).
 `test_transfer_with_latchkey.py`, at the library's root with the ratchets, runs `auth-sandbox-prepare` and `auth-sandbox-set-credentials` against the real `latchkey` on `PATH` (the version `setup_system.sh` pins) with fabricated browser states, and merges what the chrome transfers into a machine store as the VM does; it skips when there is none.

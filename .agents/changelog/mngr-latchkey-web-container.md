@@ -1,0 +1,1 @@
+- update-self's copy of `user_packages.py` treats a package the root `pyproject.toml` names under `[tool.uv.workspace] exclude` (the auth sandbox library) as built-in, so an update neither syncs it nor treats it as the user's.

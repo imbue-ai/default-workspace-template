@@ -1,4 +1,6 @@
-- `pyproject.toml` pins `imbue-mngr-latchkey` and `imbue-mngr-forward` from the same mngr commit as every other mngr package, for the auth sandbox library's use of the desktop's sign-in wrapper.
+- The root `pyproject.toml` names `system/libs/auth_sandbox` under `[tool.uv.workspace] exclude`: the auth sandbox library is its own uv project with its own lock, which only the auth sandbox image installs, so a workspace's venv never carries its `imbue-mngr-latchkey` and `imbue-mngr-forward` (whose mngr plugins `system/config/mngr_plugins.toml` does not assign the workspace's mngr). `user_packages.py` treats an excluded package as built-in rather than a user package, so no workspace build or provisioning syncs it; the root suite skips it, and CI runs its suite from its own venv against the pinned latchkey CLI.
+
+- `system/scripts/set_mngr_pin.py` moves the mngr pin in an excluded package's `pyproject.toml` together with the root's, and `--check` refuses a tree where the two differ.
 
 - `system/scripts/register_vm_exec.sh` reads the container's default gateway from `/proc/net/route` when `ip` is absent, which it is in the product image: until now the script skipped registration on every slice ("no 'ip' command"), so no imbue-cloud workspace ever listed `vm-exec` in its service map and the web chrome could not provision the VM's latchkey gateway.
 

@@ -12,6 +12,7 @@ from auth_sandbox.image_build import (
     BOOT_SCRIPT_SOURCE,
     CLAIM_WATCHER_COMMAND,
     COMMAND_NAMES,
+    LIBRARY_SOURCE_DIR,
     SIGN_IN_PACKAGES_CHECK,
     SUPERVISORD_CONF_SOURCE,
     ImageBuildSettings,
@@ -52,9 +53,14 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         'd="$(mktemp -d)" && v="$(LATCHKEY_DIRECTORY="$d" LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"'
         ' LATCHKEY_DISABLE_COUNTING=1 latchkey --version)" && rm -rf "$d" && test "$v" = 3.19.3'
     )
-    assert commands[4].startswith("cd /home/user/workspace && .venv/bin/python -c ")
-    assert commands[4].endswith(" 3.19.3")
-    install = commands[5]
+    # The library comes from its own lock into its own environment, which no workspace venv carries.
+    assert commands[4] == (
+        "cd /home/user/workspace && UV_PROJECT_ENVIRONMENT=/opt/auth-sandbox/venv uv sync --locked --no-dev"
+        f" --no-editable --python .venv/bin/python --project {LIBRARY_SOURCE_DIR}"
+    )
+    assert commands[5].startswith("/opt/auth-sandbox/venv/bin/python -c ")
+    assert commands[5].endswith(" 3.19.3")
+    install = commands[6]
     assert (
         f"install -m 0755 /home/user/workspace/{BOOT_SCRIPT_SOURCE} /opt/auth-sandbox/boot.sh"
         in install
@@ -64,30 +70,32 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         in install
     )
     assert "bash -n /opt/auth-sandbox/boot.sh" in install
-    assert f"test -x /home/user/workspace/.venv/bin/{CLAIM_WATCHER_COMMAND}" in install
+    assert f"test -x /opt/auth-sandbox/venv/bin/{CLAIM_WATCHER_COMMAND}" in install
     for name in COMMAND_NAMES:
         assert (
-            f"ln -sfn /home/user/workspace/.venv/bin/{name} /usr/local/bin/{name}"
+            f"ln -sfn /opt/auth-sandbox/venv/bin/{name} /usr/local/bin/{name}"
             in install
         )
-    assert commands[6].endswith(
-        f"auth-sandbox-render-config --browser-executable {FORTRESS_LAUNCHER_PATH} /opt/auth-sandbox/config.json"
+    assert commands[7] == (
+        "/opt/auth-sandbox/venv/bin/auth-sandbox-render-config"
+        f" --browser-executable {FORTRESS_LAUNCHER_PATH} /opt/auth-sandbox/config.json"
     )
-    assert "latchkey ensure-browser --source existing-config" in commands[7]
-    assert "LATCHKEY_ENCRYPTION_KEY=" in commands[7]
-    assert len(commands) == 8
+    assert "latchkey ensure-browser --source existing-config" in commands[8]
+    assert "LATCHKEY_ENCRYPTION_KEY=" in commands[8]
+    assert len(commands) == 9
 
 
 def test_build_steps_install_files_this_library_ships() -> None:
     for source in (BOOT_SCRIPT_SOURCE, SUPERVISORD_CONF_SOURCE):
         assert (_REPO_ROOT / source).is_file(), source
+    assert (_REPO_ROOT / LIBRARY_SOURCE_DIR / "uv.lock").is_file()
 
 
 def test_the_linked_commands_and_the_claim_watcher_are_this_librarys_console_scripts() -> (
     None
 ):
     scripts = tomllib.loads(
-        (_REPO_ROOT / "system/libs/auth_sandbox/pyproject.toml").read_text()
+        (_REPO_ROOT / LIBRARY_SOURCE_DIR / "pyproject.toml").read_text()
     )["project"]["scripts"]
     assert set(scripts) == {
         *COMMAND_NAMES,

@@ -26,7 +26,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from workspace_bare_scripts import list_mngr_plugins, set_mngr_pin
+from workspace_bare_scripts import list_mngr_plugins, set_mngr_pin, user_packages
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PUBLIC_MNGR_REPO = "https://github.com/imbue-ai/mngr"
@@ -242,8 +242,18 @@ def _imported_mngr_modules() -> list[str]:
         capture_output=True,
         text=True,
     ).stdout.split()
+    # A standalone project's imports resolve in its own venv, which its own suite runs from.
+    standalone = tuple(
+        f"{directory.rstrip('/')}/"
+        for directory in (
+            *user_packages.user_packages(_REPO_ROOT),
+            *user_packages.built_in_standalone_projects(_REPO_ROOT),
+        )
+    )
     names: set[str] = set()
     for path in tracked:
+        if path.startswith(standalone):
+            continue
         names |= _imported_names((_REPO_ROOT / path).read_text(errors="replace"))
     return _module_names(names, own)
 
@@ -256,8 +266,10 @@ def test_every_imported_mngr_module_is_installed(module: str) -> None:
 
 
 _OTHER_REV = "fedcba9876543210fedcba9876543210fedcba98"
+_STANDALONE_PYPROJECTS = tuple(set_mngr_pin.standalone_pin_paths(_REPO_ROOT))
 _MAINTAINED_FILES = (
     "pyproject.toml",
+    *_STANDALONE_PYPROJECTS,
     set_mngr_pin.SETTINGS_PATH,
     set_mngr_pin.DOCKERFILE_PATH,
 )
@@ -311,25 +323,57 @@ def test_a_pin_move_to_the_other_repo_and_back_restores_the_tree(
     assert _texts(tmp_path) == original
 
 
-def test_a_pin_move_within_the_same_repo_touches_only_the_pyproject(
+def test_a_pin_move_within_the_same_repo_touches_only_the_pyprojects(
     tmp_path: Path,
 ) -> None:
     _copy_maintained_files(tmp_path)
     original = _texts(tmp_path)
     kind = set_mngr_pin.check_tree(tmp_path)
 
-    assert set_mngr_pin.set_pin(tmp_path, kind, _OTHER_REV) == ["pyproject.toml"]
+    assert set_mngr_pin.set_pin(tmp_path, kind, _OTHER_REV) == [
+        "pyproject.toml",
+        *_STANDALONE_PYPROJECTS,
+    ]
 
     moved = _texts(tmp_path)
     assert moved[set_mngr_pin.SETTINGS_PATH] == original[set_mngr_pin.SETTINGS_PATH]
     assert moved[set_mngr_pin.DOCKERFILE_PATH] == original[set_mngr_pin.DOCKERFILE_PATH]
     assert set_mngr_pin.check_tree(tmp_path) == kind
-    lock_sources = tomllib.loads(moved["pyproject.toml"])["tool"]["uv"]["sources"]
-    assert {
-        source["rev"]
-        for source in lock_sources.values()
-        if isinstance(source, dict) and source.get("git") in _MNGR_REPOS
-    } == {_OTHER_REV}
+    for path in ("pyproject.toml", *_STANDALONE_PYPROJECTS):
+        lock_sources = tomllib.loads(moved[path])["tool"]["uv"]["sources"]
+        assert {
+            source["rev"]
+            for source in lock_sources.values()
+            if isinstance(source, dict) and source.get("git") in _MNGR_REPOS
+        } == {_OTHER_REV}, path
+
+
+def test_the_auth_sandbox_library_is_a_standalone_project_the_pin_moves() -> None:
+    assert _STANDALONE_PYPROJECTS == ("system/libs/auth_sandbox/pyproject.toml",)
+
+
+def test_a_standalone_project_left_on_another_pin_fails_the_check(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    kind = set_mngr_pin.check_tree(tmp_path)
+    standalone = tmp_path / _STANDALONE_PYPROJECTS[0]
+    pin = list_mngr_plugins.read_mngr_source((tmp_path / "pyproject.toml").read_text())
+    standalone.write_text(
+        set_mngr_pin.rewrite_pin_sources(
+            standalone.read_text(), pin.git_url, _OTHER_REV
+        )
+    )
+
+    with pytest.raises(
+        set_mngr_pin.MngrPinTreeError,
+        match=f"{_STANDALONE_PYPROJECTS[0]} pins imbue-common, imbue-mngr-latchkey somewhere other",
+    ):
+        set_mngr_pin.check_tree(tmp_path)
+
+    set_mngr_pin.set_pin(tmp_path, kind, pin.rev)
+
+    assert set_mngr_pin.check_tree(tmp_path) == kind
 
 
 def test_a_pin_move_to_an_unknown_kind_is_refused_before_anything_is_written(

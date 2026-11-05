@@ -32,6 +32,8 @@ SUPERVISORD_CONF_PATH: Final[Path] = INSTALL_DIR / "supervisord.conf"
 # The template latchkey ``config.json``: minds' hidden built-ins and registered services, plus the browser entry
 # naming the Fortress launcher. The boot script copies it into the sandbox's latchkey directory.
 TEMPLATE_CONFIG_PATH: Final[Path] = INSTALL_DIR / "config.json"
+# This library's own environment, synced from its own lock: no workspace venv carries it.
+VENV_DIRNAME: Final[str] = "venv"
 WORKSPACE_ROOT: Final[Path] = Path("/home/user/workspace")
 
 # The Fortress launcher the Screen's env.d unit installs (system/scripts/env.d/2000-screen.sh); latchkey launches

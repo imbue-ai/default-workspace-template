@@ -23,19 +23,22 @@ from auth_sandbox.primitives import (
     INSTALL_DIR,
     SUPERVISORD_CONF_PATH,
     TEMPLATE_CONFIG_PATH,
+    VENV_DIRNAME,
     WORKSPACE_ROOT,
 )
 
-# The commands owner-exec runs on the chrome's behalf, linked onto PATH from the workspace venv's console scripts.
+# The commands owner-exec runs on the chrome's behalf, linked onto PATH from this library's environment.
 COMMAND_NAMES: Final[tuple[str, ...]] = (
     "auth-sandbox-prepare",
     "auth-sandbox-sign-in",
     "auth-sandbox-set-credentials",
 )
-# The boot script runs it from the venv; owner-exec has no use for it, so it is not linked onto PATH.
+# The boot script runs it from this library's environment; owner-exec has no use for it, so it is not linked onto PATH.
 CLAIM_WATCHER_COMMAND: Final[str] = "auth-sandbox-await-claim"
-# Where this library keeps the boot script and the sandbox's supervisord config, relative to the workspace root.
-SANDBOX_SOURCE_DIR: Final[Path] = Path("system/libs/auth_sandbox/sandbox")
+# This library's project, and where it keeps the boot script and the sandbox's supervisord config, relative to the
+# workspace root.
+LIBRARY_SOURCE_DIR: Final[Path] = Path("system/libs/auth_sandbox")
+SANDBOX_SOURCE_DIR: Final[Path] = LIBRARY_SOURCE_DIR / "sandbox"
 BOOT_SCRIPT_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "boot.sh"
 SUPERVISORD_CONF_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "supervisord.conf"
 # The pin ``system/scripts/setup_system.sh`` installs, in the shape ``: "${LATCHKEY_VERSION:=3.19.3}"``.
@@ -43,8 +46,8 @@ _LATCHKEY_VERSION_PIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\$\{LATCHKEY_VERSION:=([0-9][0-9.]*)\}"
 )
 _SYMLINK_LIST_PATH: Final[str] = "/tmp/auth-sandbox-symlinks"
-# Run by the venv's python with the pinned version as its argument: the sign-in packages import, and the pinned
-# latchkey meets the floor the venv's imbue-mngr-latchkey enforces on every run (below it, every sign-in in the
+# Run by the library environment's python with the pinned version as its argument: the sign-in packages import, and
+# the pinned latchkey meets the floor its imbue-mngr-latchkey enforces on every run (below it, every sign-in in the
 # image would refuse to start while the build itself succeeded).
 SIGN_IN_PACKAGES_CHECK: Final[str] = (
     "import sys, auth_sandbox.cli; from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION; "
@@ -97,7 +100,8 @@ class ImageBuildSettings(FrozenModel):
         default=WORKSPACE_ROOT, description="Where the seed puts the template tree"
     )
     install_dir: Path = Field(
-        default=INSTALL_DIR, description="Where the boot script and its files land"
+        default=INSTALL_DIR,
+        description="Where the boot script, its files and the library's environment land",
     )
     fortress_launcher: Path = Field(
         default=FORTRESS_LAUNCHER_PATH, description="The browser latchkey launches"
@@ -122,6 +126,8 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
     sign-in needs on top, each checked as it lands."""
     root = shlex.quote(str(settings.workspace_root))
     install_dir = shlex.quote(str(settings.install_dir))
+    venv_dir = settings.install_dir / VENV_DIRNAME
+    venv_bin = shlex.quote(str(venv_dir / "bin"))
     fortress = shlex.quote(str(settings.fortress_launcher))
     boot_script = shlex.quote(str(settings.install_dir / BOOT_SCRIPT_PATH.name))
     supervisord_conf = shlex.quote(
@@ -129,8 +135,7 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
     )
     config = shlex.quote(str(settings.install_dir / TEMPLATE_CONFIG_PATH.name))
     link_commands = " && ".join(
-        f"ln -sfn {root}/.venv/bin/{name} /usr/local/bin/{name}"
-        for name in COMMAND_NAMES
+        f"ln -sfn {venv_bin}/{name} /usr/local/bin/{name}" for name in COMMAND_NAMES
     )
     return (
         BuildStep(
@@ -163,11 +168,20 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
+            description="install this library into its own environment from its lock, on the workspace venv's Python",
+            command=(
+                f"cd {root} && UV_PROJECT_ENVIRONMENT={shlex.quote(str(venv_dir))}"
+                f" uv sync --locked --no-dev --no-editable --python .venv/bin/python --project {LIBRARY_SOURCE_DIR}"
+            ),
+            timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
+        ),
+        BuildStep(
             description=(
-                f"check the sign-in packages import from the workspace venv and accept latchkey {settings.latchkey_version}"
+                f"check the sign-in packages import from the library's environment and accept latchkey"
+                f" {settings.latchkey_version}"
             ),
             command=(
-                f"cd {root} && .venv/bin/python -c {shlex.quote(SIGN_IN_PACKAGES_CHECK)}"
+                f"{venv_bin}/python -c {shlex.quote(SIGN_IN_PACKAGES_CHECK)}"
                 f" {shlex.quote(settings.latchkey_version)}"
             ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
@@ -179,14 +193,14 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
                 f" && install -m 0755 {root}/{BOOT_SCRIPT_SOURCE} {boot_script}"
                 f" && install -m 0644 {root}/{SUPERVISORD_CONF_SOURCE} {supervisord_conf}"
                 f" && bash -n {boot_script}"
-                f" && test -x {root}/.venv/bin/{CLAIM_WATCHER_COMMAND}"
+                f" && test -x {venv_bin}/{CLAIM_WATCHER_COMMAND}"
                 f" && {link_commands}"
             ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
             description="render the template config.json with the Fortress browser entry",
-            command=f"cd {root} && .venv/bin/auth-sandbox-render-config --browser-executable {fortress} {config}",
+            command=f"{venv_bin}/auth-sandbox-render-config --browser-executable {fortress} {config}",
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(

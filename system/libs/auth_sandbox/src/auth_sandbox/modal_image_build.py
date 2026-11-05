@@ -2,8 +2,8 @@
 
 The image is the product ``system/Dockerfile`` with a workspace's first boot and the Screen's stack baked in,
 plus what a browser sign-in needs (the web latchkey auth sandbox spec, section 5.1): the pinned latchkey CLI
-checked, the template ``config.json`` naming the Fortress launcher, the sandbox's boot script and supervisord
-config at ``/opt/auth-sandbox/``, and the ``auth-sandbox-*`` commands on PATH. The steps themselves are
+checked, this library in its own environment, the template ``config.json`` naming the Fortress launcher, the
+sandbox's boot script and supervisord config at ``/opt/auth-sandbox/``, and the ``auth-sandbox-*`` commands on PATH. The steps themselves are
 ``auth_sandbox.image_build`` (tested over a fake sandbox); this script runs them in a real Modal sandbox made
 from the product image and snapshots its filesystem.
 
@@ -11,10 +11,11 @@ Nothing user-specific goes into the image. The connector creates each auth sandb
 (``MINDS_AUTH_SANDBOX_IMAGE_ID`` on the tier) and writes the user's material in afterwards.
 
 Run it from the repo root with Modal credentials for the target workspace (an activated minds env, or a
-``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` pair); ``modal`` is not a workspace dependency, so it comes in for the
-one run::
+``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` pair), from this library's own project; ``modal`` is not a dependency,
+so it comes in for the one run::
 
-    uv run --no-sync --with modal python -m auth_sandbox.modal_image_build [--environment-name NAME]
+    uv sync --locked --project system/libs/auth_sandbox
+    uv run --no-sync --project system/libs/auth_sandbox --with modal python -m auth_sandbox.modal_image_build [--environment-name NAME]
 
 The Dockerfile must carry no BuildKit secret mount, which is the case whenever ``pyproject.toml`` pins mngr
 from the public mirror (``python system/scripts/set_mngr_pin.py --check`` says ``public``).

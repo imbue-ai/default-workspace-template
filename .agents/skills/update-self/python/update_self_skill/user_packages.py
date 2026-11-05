@@ -8,7 +8,9 @@ standalone uv project: its own ``uv.lock`` and ``.venv``, no ``{ workspace = tru
 source, and a supervisord program (if it has one) that syncs its own project with
 ``--locked`` before it execs a script from its own ``.venv/bin``. That way a dependency
 one of them adds never moves the versions the built-ins, or another user package, run on
-(``docs/system/blueprint/app-environments/plan-app-environments.md``).
+(``docs/system/blueprint/app-environments/plan-app-environments.md``). A built-in package
+the root ``[tool.uv.workspace] exclude`` names is a standalone project too, but not the
+user's, and no workspace syncs it: something other than a workspace installs it.
 
 The update apply and its migration use this too, and update-self is staged and run as a
 self-contained unit, so this file exists twice, byte for byte:
@@ -58,6 +60,14 @@ def built_in_members(repo_root: Path) -> list[str]:
     return [member for member in members if isinstance(member, str)]
 
 
+def built_in_standalone_projects(repo_root: Path) -> list[str]:
+    """The root workspace's ``exclude``, as written: built-in packages that are their own uv
+    project, with their own lock and venv, which no workspace syncs."""
+    workspace = _read_toml(repo_root / "pyproject.toml").get("tool", {}).get("uv", {})
+    excluded = workspace.get("workspace", {}).get("exclude", [])
+    return [entry for entry in excluded if isinstance(entry, str)]
+
+
 def _is_member(relative: str, members: Sequence[str]) -> bool:
     return any(fnmatch.fnmatchcase(relative, member.rstrip("/")) for member in members)
 
@@ -76,12 +86,13 @@ def package_directories(repo_root: Path) -> list[str]:
 
 
 def user_packages(repo_root: Path) -> list[str]:
-    """The packages under ``system/`` that the root ``members`` does not name, repo-relative."""
-    members = built_in_members(repo_root)
+    """The packages under ``system/`` that the root ``members`` and ``exclude`` do not name,
+    repo-relative."""
+    built_in = [*built_in_members(repo_root), *built_in_standalone_projects(repo_root)]
     return [
         relative
         for relative in package_directories(repo_root)
-        if not _is_member(relative, members)
+        if not _is_member(relative, built_in)
     ]
 
 

@@ -22,6 +22,7 @@ from auth_sandbox.primitives import (
     RUNTIME_DIR,
     SCREEN_SERVICE_URL,
     SCREEN_TOKEN_SHA256_FILENAME,
+    VENV_DIRNAME,
     WORKSPACE_ROOT,
 )
 
@@ -135,7 +136,8 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
 def test_boot_script_runs_the_claim_watcher_and_ends_the_sandbox_with_it() -> None:
     text = (_REPO_ROOT / BOOT_SCRIPT_SOURCE).read_text()
     assert (
-        f'readonly CLAIM_WATCHER="$REPO_ROOT/.venv/bin/{CLAIM_WATCHER_COMMAND}"' in text
+        f'readonly CLAIM_WATCHER="$INSTALL_DIR/{VENV_DIRNAME}/bin/{CLAIM_WATCHER_COMMAND}"'
+        in text
     )
     # Started ahead of supervisord, so a claim written right after create is not waiting on the stack.
     assert text.index('"$CLAIM_WATCHER" &') < text.index("supervisord -n")

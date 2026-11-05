@@ -28,9 +28,35 @@ packages = ["src/auth_sandbox"]
 
 [dependency-groups]
 dev = [
+    # pytest, inline-snapshot and the ratchet helpers test_auth_sandbox_ratchets.py imports.
+    "imbue-common[testing]",
+    "pytest-timeout>=2.0",
+    # The same plugins every pytest root of the workspace loads: the agent environment cleared and a
+    # skip refused where the environment is meant to be complete, and a tmp_path a stub executable can run from.
+    "pytest-workspace-env",
+    "pytest-executable-tmp",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.85",
 ]
+
+# Its own project, not a root workspace member (the root pyproject's [tool.uv.workspace] exclude):
+# imbue-mngr-latchkey brings mngr plugins a workspace's own mngr must not load, so only the auth
+# sandbox image installs this library. The mngr packages are held to the root's pin
+# (set_mngr_pin.py moves both), and the workspace's test plugins come from their directories.
+[tool.uv.sources]
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/imbue_common" }
+imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_latchkey" }
+pytest-workspace-env = { path = "../pytest_workspace_env", editable = true }
+pytest-executable-tmp = { path = "../pytest_executable_tmp", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+required_plugins = ["pytest-workspace-env", "pytest-executable-tmp"]
+addopts = ["--timeout=10"]
+timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]

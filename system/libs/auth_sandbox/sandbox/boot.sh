@@ -19,7 +19,7 @@ readonly REPO_ROOT="/home/user/workspace"
 readonly INSTALL_DIR="/opt/auth-sandbox"
 readonly RUNTIME_DIR="/run/auth-sandbox"
 readonly SCREEN_URL="http://127.0.0.1:8090"
-readonly CLAIM_WATCHER="$REPO_ROOT/.venv/bin/auth-sandbox-await-claim"
+readonly CLAIM_WATCHER="$INSTALL_DIR/venv/bin/auth-sandbox-await-claim"
 # The connector writes this after it reads the sandbox's tunnels, before or after this script runs, so
 # the script leaves it alone; the Screen reads it on every connect-info request.
 readonly CONNECT_INFO_PATH="/run/auth-sandbox-connect-info.json"

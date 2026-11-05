@@ -116,7 +116,6 @@ package = false
 members = [
     "system/libs/app_manifest",
     "system/libs/app_schema",
-    "system/libs/auth_sandbox",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
     "system/libs/event_streams",
@@ -149,6 +148,11 @@ members = [
     ".agents/shared/scripts",
     ".agents/skills/*/python",
 ]
+# Built-in packages that are their own uv project, each with its own lock and venv, which no
+# workspace syncs: the auth sandbox library, which only the auth sandbox image installs (its
+# imbue-mngr-latchkey would give a workspace's mngr plugins system/config/mngr_plugins.toml
+# does not assign it). Neither members nor user packages (user_packages.py).
+exclude = ["system/libs/auth_sandbox"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
@@ -195,10 +199,6 @@ imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "c1ad
 imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_autocompact" }
 concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/concurrency_group" }
 imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_ttyd" }
-# The auth sandbox library wraps the desktop's sign-in sequence (``imbue.mngr_latchkey.core.Latchkey``);
-# ``imbue-mngr-forward`` is that package's own dependency, published from the same commit.
-imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_latchkey" }
-imbue-mngr-forward = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_forward" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
