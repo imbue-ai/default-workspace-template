@@ -6,4 +6,4 @@
 
 - `system/scripts/setup_system.sh` installs latchkey 3.21.0 (was 3.19.4), the version the VM gateway package installs and the floor `imbue-mngr-latchkey` enforces on every run, so the auth sandbox image (which installs through this script) can run the sign-in at all.
 
-- `system/scripts/install_owner_exec.sh` installs owner-exec v0.2.3-rc.1, which exposes its response-signature headers to the web chrome origin so the chrome can verify a VM's vm-exec answers (a pre-release while the web latchkey branches are tested; v0.2.3 replaces it when they ship).
+- `system/scripts/install_owner_exec.sh` installs owner-exec v0.2.3 (was v0.2.2), which exposes its response-signature headers to the web chrome origin so the chrome can verify a VM's vm-exec answers. The monorepo's VM-install pin moves in lockstep.
