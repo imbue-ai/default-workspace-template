@@ -4,7 +4,6 @@ latchkey's answers, the index it writes from the raw stores, and the status it r
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import os
 import sqlite3
@@ -16,17 +15,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import import_chats
 import pytest
 
-_SCRIPT = Path(__file__).parent / "import_chats.py"
 _DATALIB_LAUNCHER = (
     Path(__file__).resolve().parents[4] / "system/apps/datalib/launch_datalib_http.py"
 )
-_spec = importlib.util.spec_from_file_location("import_chats", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-import_chats = importlib.util.module_from_spec(_spec)
-sys.modules["import_chats"] = import_chats
-_spec.loader.exec_module(import_chats)
 
 CLAUDE = import_chats.SOURCES["claude"]
 CHATGPT = import_chats.SOURCES["chatgpt"]
