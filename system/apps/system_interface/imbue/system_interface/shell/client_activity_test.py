@@ -13,9 +13,9 @@ from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TY
 from imbue.system_interface.shell.client_activity import KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
-from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 

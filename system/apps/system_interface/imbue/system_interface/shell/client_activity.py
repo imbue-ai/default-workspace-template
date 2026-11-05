@@ -18,7 +18,6 @@ import threading
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
-from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -35,7 +34,6 @@ from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
 from imbue.imbue_common.event_envelope import EventSource
@@ -45,6 +43,7 @@ from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.logging import generate_log_event_id
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
@@ -90,13 +89,6 @@ class WindowOpenedEvent(EventEnvelope):
     requester: str = Field(
         description="The op requester's spelling (an app, or app:marker) when an op opened it; empty for a client's own"
     )
-
-
-class WindowInputKind(LowerCaseStrEnum):
-    """What a ``window_input`` records: the page's own input report, or focus landing in a page that reports none."""
-
-    INPUT = auto()
-    FOCUS = auto()
 
 
 class WindowInputEvent(EventEnvelope):

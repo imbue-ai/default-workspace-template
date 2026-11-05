@@ -69,7 +69,6 @@ from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
-from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import entries_wire_json
@@ -134,6 +133,7 @@ from imbue.system_interface.shell.ownership import desktop_owner_of
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import AgentGrantsReader

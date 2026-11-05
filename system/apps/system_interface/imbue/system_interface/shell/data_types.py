@@ -40,12 +40,12 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.app_theming import theming_of
-from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
+from imbue.system_interface.shell.primitives import WindowInputKind
 
 
 class ClientShownRequest(FrozenModel):
