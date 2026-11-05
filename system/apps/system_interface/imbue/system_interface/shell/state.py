@@ -732,9 +732,16 @@ class ShellState(MutableModel):
         app-usage-signals spec, section 6.2); answers how many lines were written. A window still on a desktop is
         recorded with that desktop's app and desktop, whatever the page said; one that is gone with the reported app,
         which must be registered, and the client's active desktop. Input reports go first, so a window reported with
-        both kinds in one heartbeat is written as input."""
+        both kinds in one heartbeat is written as input. A heartbeat reporting no window reads nothing."""
+        if not reports:
+            return 0
         now = datetime.now(timezone.utc)
-        window_by_id = {window.id: (desktop, window) for desktop in self.list_desktops() for window in desktop.windows}
+        desktops = self.list_desktops()
+        window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
+        active_desktop_id = ""
+        if any(report.window_id not in window_by_id for report in reports):
+            active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
+            active_desktop_id = "" if active_desktop is None else str(active_desktop)
         written_count = 0
         for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
             found = window_by_id.get(report.window_id)
@@ -746,8 +753,7 @@ class ShellState(MutableModel):
                 )
                 continue
             else:
-                active_desktop = self.active_desktop_of_client(str(client_id))
-                desktop_id, app = ("" if active_desktop is None else str(active_desktop)), str(report.app)
+                desktop_id, app = active_desktop_id, str(report.app)
             try:
                 is_written = self.activity.append_window_input(
                     client_id=str(client_id),
