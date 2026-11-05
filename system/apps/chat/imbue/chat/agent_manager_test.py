@@ -7921,6 +7921,13 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
+        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
+        # the harness names, while a marker exists only for the kinds this workspace records.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, ChatStatus.BACKGROUND),
+        ("RUNNING_BACKGROUND", None, False, False, False, ChatStatus.BACKGROUND),
+        # A live turn and a permission prompt still outrank it.
+        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, False, False, ChatStatus.WORKING),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, ChatStatus.ATTENTION),
         # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, False, ChatStatus.STOPPED),

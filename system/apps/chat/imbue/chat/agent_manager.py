@@ -41,6 +41,7 @@ from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
@@ -642,14 +643,20 @@ def chat_status_for_agent(
     is_turn_closing: bool,
 ) -> ChatStatus:
     """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, a compaction or
-    a turn still closing, then a busy chat (one a pending background task will wake)."""
+    a turn still closing, then a busy chat (one a pending background task will wake).
+
+    Busy is read from two signals, because each reaches what the other misses: this workspace's
+    own task markers, which it writes for the task kinds it records, and the agent's
+    RUNNING_BACKGROUND lifecycle, which mngr reports for every kind the harness names. A chat
+    waiting on a kind this workspace keeps no marker for is known only by the second.
+    """
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
         return ChatStatus.ATTENTION
     if (activity_state is not None and is_working_activity_state(activity_state)) or is_turn_closing:
         return ChatStatus.WORKING
-    if is_busy:
+    if is_busy or lifecycle_state == BACKGROUND_LIFECYCLE_STATE:
         return ChatStatus.BACKGROUND
     return ChatStatus.IDLE
 
