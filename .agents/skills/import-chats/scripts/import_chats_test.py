@@ -71,6 +71,19 @@ def _raw_store(
     return store
 
 
+# The part of ``datalib-dag init``'s starter config the tests care about.
+_STARTER_CONFIG = """\
+[[groups]]
+id = "unified_document_index"
+name = "Document Index"
+
+[[steps]]
+group = "unified_document_index"
+function = "grid_index"
+inputs = []
+"""
+
+
 def _run_summary(*steps: dict) -> str:
     return json.dumps({"event": "run_summary", "steps": list(steps)})
 
@@ -79,8 +92,9 @@ def _run_summary(*steps: dict) -> str:
 class _FakeDatalib:
     """Stands in for the datalib installer and binaries.
 
-    The installer succeeds; ``datalib-dag --check`` answers ``check_returncode``; ``turn-off`` succeeds unless its
-    step is in ``turn_off_failures``; a ``datalib-dag`` sync calls ``on_sync`` (where a test writes what the ingest
+    The installer succeeds; ``datalib-dag init`` writes the starter config, unless ``init_returncode`` says it
+    failed; ``datalib-dag --check`` answers ``check_returncode``; ``turn-off`` succeeds unless its step is in
+    ``turn_off_failures``; a ``datalib-dag`` sync calls ``on_sync`` (where a test writes what the ingest
     would), then writes ``stderr`` (the event stream, where the real binary writes its run summary) and ``stdout``,
     exiting 2 when a step failed, like the real binary, unless ``returncode`` says otherwise.
     ``datalib-doltlite -readonly -json <store> <sql>`` runs the query on the store with sqlite3 and prints it as the
@@ -89,6 +103,7 @@ class _FakeDatalib:
     stderr: str = ""
     stdout: str = ""
     returncode: int | None = None
+    init_returncode: int = 0
     check_returncode: int = 0
     turn_off_failures: Sequence[str] = ()
     on_sync: Callable[[], object] = lambda: None
@@ -107,6 +122,15 @@ class _FakeDatalib:
         if name == "datalib-doltlite":
             return self._query(command)
         assert name == "datalib-dag", command
+        if command[1] == "init":
+            if self.init_returncode != 0:
+                return subprocess.CompletedProcess(
+                    command, self.init_returncode, "", "Error: read-only\n"
+                )
+            root = Path(command[2])
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "config.toml").write_text(_STARTER_CONFIG)
+            return subprocess.CompletedProcess(command, 0, "wrote the starter\n", "")
         if command[1] == "--check":
             return subprocess.CompletedProcess(
                 command, self.check_returncode, "", "config.toml:3:1: error: no\n"
@@ -134,7 +158,8 @@ class _FakeDatalib:
         return [
             c
             for c in self.commands
-            if Path(c[0]).name == "datalib-dag" and c[1] not in ("--check", "turn-off")
+            if Path(c[0]).name == "datalib-dag"
+            and c[1] not in ("init", "--check", "turn-off")
         ]
 
     @property
@@ -274,7 +299,7 @@ def test_a_sources_stanza_downloads_over_the_api_and_carries_its_search_steps_un
     ]
 
 
-def test_adding_sources_to_an_empty_root_checks_the_config_then_turns_their_search_off(
+def test_adding_sources_to_an_empty_root_starts_from_datalibs_starter_then_checks_and_turns_their_search_off(
     workspace: _SyncWorkspace,
 ) -> None:
     datalib = _FakeDatalib()
@@ -284,7 +309,8 @@ def test_adding_sources_to_an_empty_root_checks_the_config_then_turns_their_sear
     assert added == [CLAUDE, CHATGPT]
     config_path = workspace.datalib.config_path
     candidate = str(config_path.with_name("config.toml.import-chats"))
-    check, *_ = datalib.commands
+    init, check, *_ = datalib.commands
+    assert init[1:] == ["init", str(workspace.data_root)]
     assert check[1:] == ["--check", candidate]
     # Turned off in the checked candidate, so the config in place never holds the steps turned on.
     assert {c[2] for c in datalib.commands if c[1] == "turn-off"} == {candidate}
@@ -295,13 +321,28 @@ def test_adding_sources_to_an_empty_root_checks_the_config_then_turns_their_sear
         "chatgpt_chats/keyword_index",
     ]
     assert {c[-1] for c in datalib.commands if c[1] == "turn-off"} == {"import-chats"}
-    assert [
-        group["id"] for group in tomllib.loads(config_path.read_text())["groups"]
-    ] == [
+    text = config_path.read_text()
+    assert text.startswith(_STARTER_CONFIG)
+    config = tomllib.loads(text)
+    assert [group["id"] for group in config["groups"]] == [
+        "unified_document_index",
         "claude_chats",
         "chatgpt_chats",
     ]
+    # The index reads none of the chats' steps until the skill wires them in for search.
+    assert config["steps"][0]["inputs"] == []
     assert sorted(path.name for path in config_path.parent.iterdir()) == ["config.toml"]
+
+
+def test_a_starter_config_datalib_cannot_write_is_an_error_saying_why(
+    workspace: _SyncWorkspace,
+) -> None:
+    with pytest.raises(import_chats.ImportChatsError, match="Error: read-only"):
+        import_chats.ensure_sources(
+            workspace.datalib, [CLAUDE], _FakeDatalib(init_returncode=1)
+        )
+
+    assert not workspace.datalib.config_path.exists()
 
 
 def test_adding_a_source_keeps_the_config_as_it_was_and_leaves_a_source_already_there_alone(
@@ -321,6 +362,7 @@ def test_adding_a_source_keeps_the_config_as_it_was_and_leaves_a_source_already_
     added = import_chats.ensure_sources(workspace.datalib, [CLAUDE, CHATGPT], datalib)
 
     assert added == [CHATGPT]
+    assert datalib.commands[0][1] == "--check"
     text = config_path.read_text()
     assert text.startswith(existing.rstrip("\n") + "\n\n# ChatGPT conversations")
     assert datalib.turned_off == [
@@ -383,10 +425,12 @@ def test_a_config_datalib_refuses_is_never_put_in_place(
 
 
 @pytest.mark.parametrize(
-    "previous", [None, "# mine\n"], ids=["no-config-before", "a-config-before"]
+    ("previous", "left_in_place"),
+    [(None, _STARTER_CONFIG), ("# mine\n", "# mine\n")],
+    ids=["no-config-before", "a-config-before"],
 )
-def test_a_search_step_that_cannot_be_turned_off_leaves_the_config_as_it_was(
-    workspace: _SyncWorkspace, previous: str | None
+def test_a_search_step_that_cannot_be_turned_off_never_puts_its_source_in_the_config(
+    workspace: _SyncWorkspace, previous: str | None, left_in_place: str
 ) -> None:
     config_path = workspace.datalib.config_path
     if previous is not None:
@@ -400,7 +444,7 @@ def test_a_search_step_that_cannot_be_turned_off_leaves_the_config_as_it_was(
     ):
         import_chats.ensure_sources(workspace.datalib, [CLAUDE], datalib)
 
-    assert (config_path.read_text() if config_path.exists() else None) == previous
+    assert config_path.read_text() == left_in_place
     assert not config_path.with_name("config.toml.import-chats").exists()
 
 
@@ -819,7 +863,11 @@ def test_a_later_sync_of_one_source_leaves_the_other_in_the_config(
 
     assert datalib.turned_off == []
     groups = tomllib.loads(workspace.datalib.config_path.read_text())["groups"]
-    assert [group["id"] for group in groups] == ["claude_chats", "chatgpt_chats"]
+    assert [group["id"] for group in groups] == [
+        "unified_document_index",
+        "claude_chats",
+        "chatgpt_chats",
+    ]
 
 
 def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_other(

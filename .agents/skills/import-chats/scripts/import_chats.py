@@ -22,7 +22,8 @@ A sync of a large account takes a while: run it through ``system/scripts/workspa
 ``status`` prints the status file.
 
 The store is the datalib skill's (``data/.skills/datalib/Default/``), shared with anything else the user
-mirrors there. A source this script adds gets an ingest step (the download into the raw store
+mirrors there; a store with no config yet starts from datalib's own starter, which holds its index steps and
+applets. A source this script adds gets an ingest step (the download into the raw store
 ``<group>/ingest/entities.doltlite_db``), a ``render_markdown`` step and a ``keyword_index`` step,
 and the last two are turned off before the config holding them is put in place: a first import
 only downloads, which is what keeps it quick and light. Turning them on, which the skill does only
@@ -377,6 +378,22 @@ def _configured_groups(config_text: str, config_path: Path) -> dict[str, str]:
     }
 
 
+def _write_starter_config(
+    datalib: Datalib, run: Callable[..., subprocess.CompletedProcess]
+) -> str:
+    """Write datalib's starter config into a root with none, and return it.
+
+    It holds the index steps and applets that anything else mirrored here, and the Datalib app, rely on; datalib
+    writes them only into a root with no config, so a config started without them would never get them."""
+    started = _run_datalib(datalib, run, "datalib-dag", "init", str(datalib.data_root))
+    if started.returncode != 0:
+        said = started.stderr.strip() or started.stdout.strip()
+        raise ImportChatsError(
+            f"datalib could not start a config in {datalib.data_root}: {said}"
+        )
+    return datalib.config_path.read_text(encoding="utf-8")
+
+
 def ensure_sources(
     datalib: Datalib,
     named: Sequence[ChatSource],
@@ -391,8 +408,8 @@ def ensure_sources(
     try:
         previous = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        previous = None
-    groups = _configured_groups(previous or "", config_path)
+        previous = _write_starter_config(datalib, run)
+    groups = _configured_groups(previous, config_path)
     for source in named:
         configured_type = groups.get(source.group)
         if configured_type is not None and configured_type != source.datalib_type:
@@ -404,7 +421,7 @@ def ensure_sources(
     if not added:
         return []
     stanzas = "\n".join(source_stanza(source) for source in added)
-    existing = (previous or "").rstrip("\n")
+    existing = previous.rstrip("\n")
     _put_config_with_search_off(
         datalib, f"{existing}\n\n{stanzas}" if existing else stanzas, added, run
     )

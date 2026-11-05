@@ -187,9 +187,9 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
 That writes one markdown page per conversation under
 `data/.skills/datalib/Default/<group>/render_markdown/` (an `all.md` in a directory per conversation),
 which `rg` searches, and the next import links each page from the index. From then on every
-import renders what it downloads. If the config also has a `unified_document_index` group (the
-user mirrors other things with datalib), turn on `<group>/keyword_index` too and add the
-source's `render_markdown` and `keyword_index` steps to that group's `grid_index` and
-`qmd_aggregator` inputs, so datalib's own search covers the chats; check the config with
+import renders what it downloads. If the config's `unified_document_index/grid_index` already
+reads other sources (the user mirrors other things with datalib), turn on `<group>/keyword_index`
+too and add the source's `render_markdown` and `keyword_index` steps to that group's `grid_index`
+and `qmd_aggregator` inputs, so datalib's own search covers the chats; check the config with
 `datalib-dag --check "$CONFIG"`, and see the datalib skill's agent guide for that search.
 `datalib-dag turn-off "$CONFIG" <step> --by import-chats` turns a step off again.
