@@ -1,9 +1,12 @@
-"""Disk space. The memory figures come from ``oom_priority.meminfo``, where the resource sampler reads them too."""
+"""Disk space as the workspace can use it (``disk_headroom``, which also sees a cloud machine's disk quota).
 
-import shutil
+The memory figures come from ``oom_priority.meminfo``, where the resource sampler reads them too."""
+
 from pathlib import Path
+
+from disk_headroom.space import read_disk_space
 
 
 def disk(path: Path) -> dict[str, int]:
-    usage = shutil.disk_usage(path)
-    return {"total": usage.total, "used": usage.used, "free": usage.free}
+    space = read_disk_space(path)
+    return {"total": space.total, "used": space.used, "free": space.free}
