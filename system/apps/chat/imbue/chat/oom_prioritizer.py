@@ -187,7 +187,7 @@ class ChatOomPrioritizer:
             return
         with self._lifecycle_lock:
             with self._lock:
-                if self._worker is not None:
+                if self._live_worker_locked() is not None:
                     return
             generation = self._lifecycle_generation
         self.reapply()
@@ -195,7 +195,7 @@ class ChatOomPrioritizer:
             if self._lifecycle_generation != generation:
                 return
             with self._lock:
-                if self._worker is not None:
+                if self._live_worker_locked() is not None:
                     return
             worker = _PassWorker.build(self._run_passes)
             self._start_pass_thread(worker.thread)
@@ -324,7 +324,7 @@ class ChatOomPrioritizer:
             if not self._is_pass_requested:
                 self._pass_requested_at = time.monotonic()
             self._is_pass_requested = True
-            worker = self._worker
+            worker = self._live_worker_locked()
         if worker is not None:
             # Enough even if a stop withdraws ``worker`` right now: the flag was set while it was
             # still published, and a withdrawn thread looks at the flag on its way out (and runs
@@ -382,6 +382,23 @@ class ChatOomPrioritizer:
             if not self._wake_published_worker_if_pending(owner):
                 return
 
+    def _live_worker_locked(self) -> _PassWorker | None:
+        """The published pass thread, or None. Called with ``_lock`` held.
+
+        A published thread that is no longer running (it died of an error a pass raised) is
+        withdrawn here, so nothing waits on it: passes run inline again, and ``start`` can
+        publish a new one. A dying thread also withdraws itself (see ``_run_passes``); this
+        covers a thread that ended any other way.
+        """
+        worker = self._worker
+        if worker is not None and not worker.thread.is_alive():
+            self._worker = None
+            _loguru_logger.warning(
+                "The memory-priority pass thread is not running; running passes inline until it is restarted"
+            )
+            return None
+        return worker
+
     def _take_pending_turn(self, owner: _PassWorker | None) -> tuple[bool, float | None]:
         """Take the pending request if it is ``owner``'s turn to run it; returns (taken, when it was requested).
 
@@ -391,7 +408,7 @@ class ChatOomPrioritizer:
         with self._lock:
             if not self._is_pass_requested:
                 return False, None
-            published = self._worker
+            published = self._live_worker_locked()
             if published is not None and published is not owner:
                 return False, None
             self._is_pass_requested = False
@@ -407,7 +424,7 @@ class ChatOomPrioritizer:
         with self._lock:
             if not self._is_pass_requested:
                 return False
-            published = self._worker
+            published = self._live_worker_locked()
         if published is not None and published is not owner:
             published.wake_event.set()
             return False
@@ -497,32 +514,44 @@ class ChatOomPrioritizer:
         The sweep exists because staleness is the one signal that changes with no event to
         announce it: a chat crosses a staleness threshold without anything happening. A
         pass that fails reading the registry or ``/proc`` (an ``OSError``) is logged and its
-        request kept, so the next wake (or the next sweep) retries it. Any other error is a
-        bug and ends the thread, as it did before passes moved here.
+        request kept, so the next wake (or the next sweep) retries it. Any other error ends
+        the thread, which then withdraws itself: passes run inline on the requests' threads
+        again (as before passes moved here), and a later ``start`` publishes a new thread.
         """
-        next_sweep_at = time.monotonic() + self._sweep_interval_seconds
-        while not worker.stop_event.is_set():
-            worker.wake_event.wait(timeout=max(0.0, next_sweep_at - time.monotonic()))
-            worker.wake_event.clear()
-            if worker.stop_event.is_set():
-                break
-            if time.monotonic() >= next_sweep_at:
-                next_sweep_at = time.monotonic() + self._sweep_interval_seconds
-                with self._lock:
-                    if not self._is_pass_requested:
-                        self._pass_requested_at = time.monotonic()
-                    self._is_pass_requested = True
+        try:
+            next_sweep_at = time.monotonic() + self._sweep_interval_seconds
+            while not worker.stop_event.is_set():
+                worker.wake_event.wait(timeout=max(0.0, next_sweep_at - time.monotonic()))
+                worker.wake_event.clear()
+                if worker.stop_event.is_set():
+                    break
+                if time.monotonic() >= next_sweep_at:
+                    next_sweep_at = time.monotonic() + self._sweep_interval_seconds
+                    with self._lock:
+                        if not self._is_pass_requested:
+                            self._pass_requested_at = time.monotonic()
+                        self._is_pass_requested = True
+                try:
+                    self._run_pending_passes(owner=worker)
+                except OSError as e:
+                    _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed; will retry")
+                    # Pace retries of a pass that keeps failing to the sweep, not to the request rate.
+                    worker.stop_event.wait(timeout=min(self._sweep_interval_seconds, 5.0))
+            # Stopped: hand on (or run) whatever is still pending, so nothing accepted is dropped.
             try:
                 self._run_pending_passes(owner=worker)
             except OSError as e:
-                _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed; will retry")
-                # Pace retries of a pass that keeps failing to the sweep, not to the request rate.
-                worker.stop_event.wait(timeout=min(self._sweep_interval_seconds, 5.0))
-        # Stopped: hand on (or run) whatever is still pending, so nothing accepted is dropped.
-        try:
-            self._run_pending_passes(owner=worker)
-        except OSError as e:
-            _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
-            # The failed request is pending again: give it to a successor if there is one. With
-            # none, the next ``reapply`` (inline, since nothing is published) runs it.
-            self._wake_published_worker_if_pending(worker)
+                _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
+                # The failed request is pending again: give it to a successor if there is one. With
+                # none, the next ``reapply`` (inline, since nothing is published) runs it.
+                self._wake_published_worker_if_pending(worker)
+        finally:
+            if not worker.stop_event.is_set():
+                # Ended by an error a pass raised (anything but an OSError, which is retried):
+                # withdraw this thread so requests run passes inline instead of waking it.
+                with self._lock:
+                    if self._worker is worker:
+                        self._worker = None
+                _loguru_logger.error(
+                    "The memory-priority pass thread ended unexpectedly; running passes inline until it is restarted"
+                )

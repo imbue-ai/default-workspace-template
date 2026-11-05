@@ -1025,3 +1025,60 @@ def test_a_replacement_published_during_a_stopped_threads_extra_pass_takes_over_
         for gate in gates.values():
             gate.set()
         prioritizer.stop()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_pass_that_raises_an_unexpected_error_does_not_stop_later_bands_being_written() -> None:
+    # Only OSError is retried on the pass thread; any other error ends it. That must not leave
+    # every later request waking a dead thread with no band ever written again.
+    writes: list[tuple[int, int]] = []
+    passes: list[threading.Thread] = []
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        passes.append(threading.current_thread())
+        if len(passes) == 2:
+            raise ValueError("a bug in a callback")
+        return {cid: [10] for cid in cids}
+
+    def set_adj(pid: int, adj: int) -> bool:
+        writes.append((pid, adj))
+        return True
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=set_adj,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+    )
+    prioritizer.start()
+    try:
+        first_worker = prioritizer._worker
+        assert first_worker is not None
+        # Pass 2 raises ValueError on the pass thread, which ends it.
+        prioritizer.reapply()
+        assert poll_until(lambda: not first_worker.thread.is_alive(), timeout=5)
+        assert prioritizer._worker is None
+        writes_before = len(writes)
+        prioritizer.record_message(ChatId("a"))
+        # Ran inline, on this thread: the band is written by the time it returns.
+        assert len(writes) == writes_before + 1
+        assert prioritizer._is_pass_requested is False
+        # And a later start brings a pass thread back.
+        prioritizer.start()
+        assert prioritizer._worker is not None and prioritizer._worker.thread.is_alive()
+    finally:
+        prioritizer.stop()
+
+
+def test_a_published_pass_thread_that_is_no_longer_running_is_withdrawn_and_passes_run_inline() -> None:
+    h = _Harness(["a"], {"a": 10})
+    dead = oom_prioritizer_module._PassWorker.build(lambda worker: None)
+    dead.thread.start()
+    dead.thread.join(timeout=5)
+    with h.prioritizer._lock:
+        h.prioritizer._worker = dead
+    writes_before = len(h.writes)
+    h.prioritizer.reapply()
+    assert len(h.writes) == writes_before + 1
+    assert h.prioritizer._worker is None
