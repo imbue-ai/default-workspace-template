@@ -7,9 +7,9 @@ from pathlib import Path
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TYPE
-from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
+from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.testing import message_report
@@ -169,7 +169,10 @@ def test_a_window_input_is_written_once_per_client_window_and_minute_whatever_it
     )
     assert log.append_window_input("c2", "home", "worldbuilder", "w1", WindowInputKind.FOCUS, _T0) is True
     assert log.append_window_input("c1", "home", "notes", "w2", WindowInputKind.INPUT, _T0) is True
-    assert log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=1)) is True
+    assert (
+        log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=1))
+        is True
+    )
 
     events = log.read_events()
     assert [(event["client_id"], event["window_id"], event["kind"], event["timestamp"]) for event in events] == [
@@ -188,9 +191,13 @@ def test_a_windows_minute_is_forgotten_once_it_is_old_enough_to_be_written_again
     again later is written again and the memory holds only the windows in use."""
     log = _log(tmp_path)
     assert log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0) is True
-    assert log.append_window_input("c1", "home", "notes", "w2", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    assert (
+        log.append_window_input("c1", "home", "notes", "w2", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    )
     assert log._last_input_minute_by_client_window.keys() == {("c1", "w2")}
-    assert log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    assert (
+        log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    )
 
 
 def test_a_window_input_advances_last_seen_and_nothing_else(tmp_path: Path) -> None:

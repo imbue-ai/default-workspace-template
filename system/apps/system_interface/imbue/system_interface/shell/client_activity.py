@@ -35,11 +35,11 @@ from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
 from imbue.imbue_common.event_envelope import EventSource
 from imbue.imbue_common.event_envelope import EventType
-from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.event_envelope import IsoTimestamp
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.logging import generate_log_event_id
@@ -178,7 +178,9 @@ class ClientActivityLog(MutableModel):
         try:
             compress_staged_streams(self.events_path, KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT)
         except OSError as e:
-            logger.opt(exception=e).warning("Failed to archive the staged client-activity log beside {}", self.events_path)
+            logger.opt(exception=e).warning(
+                "Failed to archive the staged client-activity log beside {}", self.events_path
+            )
 
     def append_message(self, report: ClientActivityReport) -> None:
         truncated, is_truncated = truncate_message_text(report.text)
@@ -239,7 +241,9 @@ class ClientActivityLog(MutableModel):
             remembered = self._last_input_minute_by_client_window
             if remembered.get(key) == minute:
                 return False
-            for stale_key in [k for k, last_minute in remembered.items() if last_minute <= minute - _WINDOW_INPUT_MEMORY_MINUTES]:
+            for stale_key in [
+                k for k, last_minute in remembered.items() if last_minute <= minute - _WINDOW_INPUT_MEMORY_MINUTES
+            ]:
                 del remembered[stale_key]
             remembered[key] = minute
             self._append_locked(

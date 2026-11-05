@@ -88,8 +88,8 @@ from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
-from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowInputReport
+from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
@@ -734,16 +734,16 @@ class ShellState(MutableModel):
         which must be registered, and the client's active desktop. Input reports go first, so a window reported with
         both kinds in one heartbeat is written as input."""
         now = datetime.now(timezone.utc)
-        window_by_id = {
-            window.id: (desktop, window) for desktop in self.list_desktops() for window in desktop.windows
-        }
+        window_by_id = {window.id: (desktop, window) for desktop in self.list_desktops() for window in desktop.windows}
         written_count = 0
         for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
             found = window_by_id.get(report.window_id)
             if found is not None:
                 desktop_id, app = str(found[0].id), str(found[1].app)
             elif self.inventory.entry(str(report.app)) is None:
-                logger.warning("Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app)
+                logger.warning(
+                    "Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app
+                )
                 continue
             else:
                 active_desktop = self.active_desktop_of_client(str(client_id))
