@@ -650,12 +650,19 @@ def resolve_is_busy(
     which never reaches the harness's payload and so can never show up as the lifecycle, and the
     task kinds this workspace records that the lifecycle has not reported yet.
 
-    CLEANUP: this workspace records the harness's own background tasks itself, from the same
-    turn-end payload mngr reads for RUNNING_BACKGROUND, so those two track the same work.
-    Retiring that duplicate means dropping `claude_background_task_hooks.py` and reading mngr's
-    leases instead, which needs a lease to carry what the task row shows: what each task is, and
-    when it started, preserved across the turn ends that rewrite the lease set. A lease carries a
-    name and a deadline, so today that row would lose its description and its elapsed time.
+    CLEANUP: this workspace records the harness's own background tasks itself, in
+    `claude_background_task_hooks.py`, from the same turn-end payload mngr reads for
+    RUNNING_BACKGROUND -- so those two track the same work. Two things have to change before that
+    duplicate can go, and the first is not ours:
+
+    1. Every chat has to report the lifecycle. mngr writes both halves an agent needs -- the
+       work-lease library and the harness's turn-end hook -- into the agent's own state dir at
+       create, and the hook the harness runs is that copy, so bumping the mngr pin leaves existing
+       chats running their older one. A turn end does not opt them in. They report WAITING until
+       recreated, and our markers are the only signal they have.
+    2. A lease has to carry what the task row shows: what each task is, and when it started,
+       preserved across the turn ends that rewrite the lease set. A lease carries a name and a
+       deadline, so today the row would lose its description and its elapsed time.
     """
     return (
         is_turn_in_flight(activity_state)
