@@ -31,6 +31,7 @@
  */
 
 import {
+  INPUT_REPORT_INTERVAL_MS,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -126,9 +127,6 @@ function themeMessage(
 let stopFollowingTheme: (() => void) | null = null;
 /** Stops the started layer hearing the window lose focus to a frame, for the same reason. */
 let stopWatchingFrameFocus: (() => void) | null = null;
-
-/** How often at most focus landing in one contract-less page is reported: the contract's own input throttle. */
-const FOCUS_REPORT_INTERVAL_MS = 20_000;
 
 interface LivePage {
   readonly windowId: string;
@@ -622,7 +620,7 @@ export class LivePagesLayer implements PageDriver {
   private noteFocusLandingIn(page: LivePage): void {
     if (page.hasCapabilities) return;
     const now = Date.now();
-    if (now - page.lastFocusReportedAt < FOCUS_REPORT_INTERVAL_MS) return;
+    if (now - page.lastFocusReportedAt < INPUT_REPORT_INTERVAL_MS) return;
     page.lastFocusReportedAt = now;
     notePageInput(page.windowId, page.app, "focus");
   }
