@@ -251,7 +251,7 @@ describe("MarkdownContent images", () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
     const path = `/code/uploads/${"c".repeat(32)}-800x600/photo.png`;
-    rememberLocalImage(path, "blob:local-photo");
+    rememberLocalImage(path, "blob:local-photo", 1024);
 
     const image = mountMarkdown(`![${path}](${path})`, "ts-1");
 

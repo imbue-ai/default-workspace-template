@@ -222,7 +222,7 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
       _patchAttachment(chatId, localId, { status: "ready", uploaded, previewUrl: undefined });
       if (item.previewUrl === undefined) return;
       if (isStillStaged) {
-        rememberLocalImage(uploaded.path, item.previewUrl);
+        rememberLocalImage(uploaded.path, item.previewUrl, file.size);
       } else {
         releasePreview();
       }

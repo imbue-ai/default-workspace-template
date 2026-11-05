@@ -142,26 +142,44 @@ export function uploadedImageSize(path: string): ImageSize | null {
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-// Blob URLs of the images this document uploaded, by stored path.
-const _localImageUrlsByPath = new Map<string, string>();
+/** The most bytes of local image copies a document holds; past it the oldest are released, and a
+ *  message naming one draws from the served copy instead. The newest is held even when it alone is
+ *  over. */
+export const LOCAL_IMAGE_BUDGET_BYTES = 25 * 1024 * 1024;
 
-/** Hold ``url`` (a blob URL of the file uploaded to ``path``), so a message naming that path draws at
- *  once instead of waiting on the served copy. */
-export function rememberLocalImage(path: string, url: string): void {
-  _localImageUrlsByPath.set(path, url);
+interface LocalImage {
+  url: string;
+  bytes: number;
 }
 
-/** The local copy of the image uploaded to ``path``, when this document uploaded it. */
+// Blob URLs of the images this document uploaded, by stored path, oldest first.
+const _localImagesByPath = new Map<string, LocalImage>();
+let _localImageBytes = 0;
+
+/** Hold ``url`` (a blob URL of the ``bytes``-long file uploaded to ``path``), so a message naming that
+ *  path draws at once instead of waiting on the served copy. */
+export function rememberLocalImage(path: string, url: string, bytes: number): void {
+  forgetLocalImage(path);
+  _localImagesByPath.set(path, { url, bytes });
+  _localImageBytes += bytes;
+  for (const oldestPath of _localImagesByPath.keys()) {
+    if (_localImageBytes <= LOCAL_IMAGE_BUDGET_BYTES || oldestPath === path) break;
+    forgetLocalImage(oldestPath);
+  }
+}
+
+/** The local copy of the image uploaded to ``path``, when this document uploaded it and still holds it. */
 export function localImageUrl(path: string): string | undefined {
-  return _localImageUrlsByPath.get(path);
+  return _localImagesByPath.get(path)?.url;
 }
 
-/** Release the local copy of ``path`` (its upload was removed from the draft). */
+/** Release the local copy of ``path`` (its upload was removed from the draft, or it fell out of the budget). */
 export function forgetLocalImage(path: string): void {
-  const url = _localImageUrlsByPath.get(path);
-  if (url === undefined) return;
-  _localImageUrlsByPath.delete(path);
-  URL.revokeObjectURL(url);
+  const image = _localImagesByPath.get(path);
+  if (image === undefined) return;
+  _localImagesByPath.delete(path);
+  _localImageBytes -= image.bytes;
+  URL.revokeObjectURL(image.url);
 }
 
 export function formatFileSize(bytes: number): string {

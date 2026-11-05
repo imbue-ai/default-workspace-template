@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // apiUrl reads a <meta> tag via document, which is absent in the node test
 // environment; stub base-path so serve URLs are deterministic.
@@ -9,9 +9,13 @@ import {
   attachmentMarkdown,
   attachmentServeUrl,
   buildMessageWithAttachments,
+  forgetLocalImage,
   formatFileSize,
   isImagePath,
+  LOCAL_IMAGE_BUDGET_BYTES,
+  localImageUrl,
   parseMessageAttachments,
+  rememberLocalImage,
   uploadedImageSize,
 } from "./attachments";
 
@@ -137,6 +141,59 @@ describe("uploadedImageSize", () => {
     expect(uploadedImageSize(`/home/user/workspace/data/uploads/${ID}/photo.png`)).toBeNull();
     expect(uploadedImageSize("/home/user/workspace/data/images/chart-1600x900/photo.png")).toBeNull();
     expect(uploadedImageSize("https://example.com/pic.png")).toBeNull();
+  });
+});
+
+describe("rememberLocalImage", () => {
+  const MB = 1024 * 1024;
+  const PATHS = ["/code/uploads/a/1.png", "/code/uploads/b/2.png", "/code/uploads/c/3.png"];
+
+  afterEach(() => {
+    for (const path of PATHS) forgetLocalImage(path);
+    vi.unstubAllGlobals();
+  });
+
+  function stubRevoke(): ReturnType<typeof vi.fn> {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", Object.assign(class extends URL {}, { revokeObjectURL }));
+    return revokeObjectURL;
+  }
+
+  it("releases the oldest copies once the held bytes pass the budget", () => {
+    const revokeObjectURL = stubRevoke();
+    const third = LOCAL_IMAGE_BUDGET_BYTES / 2 - MB;
+    rememberLocalImage(PATHS[0], "blob:1", third);
+    rememberLocalImage(PATHS[1], "blob:2", third);
+
+    rememberLocalImage(PATHS[2], "blob:3", 3 * MB);
+
+    expect(localImageUrl(PATHS[0])).toBeUndefined();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:1");
+    expect(localImageUrl(PATHS[1])).toBe("blob:2");
+    expect(localImageUrl(PATHS[2])).toBe("blob:3");
+  });
+
+  it("holds the newest copy even when it alone is over the budget", () => {
+    const revokeObjectURL = stubRevoke();
+    rememberLocalImage(PATHS[0], "blob:1", MB);
+
+    rememberLocalImage(PATHS[1], "blob:2", LOCAL_IMAGE_BUDGET_BYTES + MB);
+
+    expect(localImageUrl(PATHS[0])).toBeUndefined();
+    expect(localImageUrl(PATHS[1])).toBe("blob:2");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:2");
+  });
+
+  it("frees a forgotten copy's bytes for later ones", () => {
+    stubRevoke();
+    rememberLocalImage(PATHS[0], "blob:1", LOCAL_IMAGE_BUDGET_BYTES - MB);
+    forgetLocalImage(PATHS[0]);
+    rememberLocalImage(PATHS[1], "blob:2", LOCAL_IMAGE_BUDGET_BYTES - MB);
+
+    rememberLocalImage(PATHS[2], "blob:3", MB);
+
+    expect(localImageUrl(PATHS[1])).toBe("blob:2");
+    expect(localImageUrl(PATHS[2])).toBe("blob:3");
   });
 });
 
