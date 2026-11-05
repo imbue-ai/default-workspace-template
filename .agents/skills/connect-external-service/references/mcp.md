@@ -59,8 +59,8 @@ What you find decides the request:
 
 - **`401` and metadata with `authorization_endpoint`, `token_endpoint` and
   `registration_endpoint`**: the `mcp` login flow, below. Note
-  `scopes_supported`: they go in the request, and there is no adding one
-  later (see the flow).
+  `scopes_supported` (if any): they go in the request, and it's hard to add
+  them later (see the flow).
 - **`401` and no `registration_endpoint`**: the server wants a client someone
   registered by hand, which no flow here can do. Row 3 is out; go on to row 5
   or 6.
@@ -79,15 +79,11 @@ and `issuesRefreshTokens: false` only when the server's docs say it issues
 access tokens alone. The URLs in the parameters have to be on `domain` or a
 subdomain of it, as for the other flows.
 
-**Err on the side of too many scopes.** A connection's scopes are fixed when
+Err on the side of too many scopes. A connection's scopes are fixed when
 the user signs in, and there is no request that adds one: a scope that turns
 out to be missing later means asking the user to disconnect the service in
 Imbue Studio (the Permissions tab of this machine's options) and then setting
-it up again from scratch, sign-in included. So ask for the broad scope when
-the server offers one (its `scopes_supported`, or the server's docs), and
-otherwise for every scope the service could plausibly need for this user's
-work, not just the one the current task needs. Ask for none only when the
-server lists none.
+it up again from scratch, sign-in included.
 
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
