@@ -59,8 +59,8 @@ What you find decides the request:
 
 - **`401` and metadata with `authorization_endpoint`, `token_endpoint` and
   `registration_endpoint`**: the `mcp` login flow, below. Note
-  `scopes_supported`; request only the scopes the task needs, none when the
-  server lists none.
+  `scopes_supported`: they go in the request, and there is no adding one
+  later (see the flow).
 - **`401` and no `registration_endpoint`**: the server wants a client someone
   registered by hand, which no flow here can do. Row 3 is out; go on to row 5
   or 6.
@@ -79,11 +79,21 @@ and `issuesRefreshTokens: false` only when the server's docs say it issues
 access tokens alone. The URLs in the parameters have to be on `domain` or a
 subdomain of it, as for the other flows.
 
+**Err on the side of too many scopes.** A connection's scopes are fixed when
+the user signs in, and there is no request that adds one: a scope that turns
+out to be missing later means asking the user to disconnect the service in
+Imbue Studio (the Permissions tab of this machine's options) and then setting
+it up again from scratch, sign-in included. So ask for the broad scope when
+the server offers one (its `scopes_supported`, or the server's docs), and
+otherwise for every scope the service could plausibly need for this user's
+work, not just the one the current task needs. Ask for none only when the
+server lists none.
+
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read", "write"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
 ```
 
 Approving opens latchkey's own browser on the user's computer at the server's
@@ -98,7 +108,10 @@ After approval the service is one `latchkey services list` names, and a later
 `No credentials found` or `Request not permitted by the user` is handled as for
 a builtin (`references/latchkey.md`, "Interpreting latchkey permission
 errors"). A `401` from the server after that means the sign-in is gone; re-send
-the request.
+the request. A `403` or an `insufficient_scope` error means the connection's
+scopes do not cover the call: tell the user plainly that the connection has to
+be set up again with wider access, ask them to disconnect the service in Imbue
+Studio, and once they have, send the request again with the scopes it needs.
 
 ## A server with a key
 
