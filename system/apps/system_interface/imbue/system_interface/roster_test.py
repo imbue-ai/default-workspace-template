@@ -26,6 +26,7 @@ from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.workspace_name import workspace_name_source
@@ -33,6 +34,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _T0 = datetime(2026, 10, 22, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_DANA = RequestIdentity(owner=False, user_id="user-dana-7720", email="dana@partner.org")
+_EVE = RequestIdentity(owner=False, user_id="user-eve-3301", email="eve@elsewhere.net")
 _OWNER = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 _ANONYMOUS_OWNER = RequestIdentity(owner=True)
 
@@ -67,6 +70,7 @@ def _source(tmp_path: Path) -> RosterSource:
         share_grants=ShareGrantsReader(
             share_env_path=secrets / "share.env", share_grants_path=secrets / "grants.toml"
         ),
+        share_identities=ShareIdentitiesReader(share_identities_path=secrets / "share_identities.json"),
         agent_grants=AgentGrantsReader(agent_grants_path=secrets / "agent_grants.toml"),
         agent_last_seen_path=tmp_path / "state" / "agent_access" / "last_seen.json",
         workspace_name=workspace_name_source("Atlas", {}),
@@ -164,6 +168,86 @@ def test_a_shared_workspace_lists_the_owner_first_then_grants_invited_and_visiti
     assert claude.last_seen == "2026-10-22T09:59:40.000000000Z"
     assert agent.handle == "agent"
     assert {entry.color for entry in document.participants} <= set(PARTICIPANT_COLORS)
+
+
+def test_a_person_a_domain_grant_admitted_is_listed_from_their_presence_while_the_domain_is_granted(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    source.share_grants.share_grants_path.write_text(_GRANTS)
+    source.presence.heartbeat(_OWNER, _T0)
+    # Dana came in through the partner.org grant; Eve's domain is not granted.
+    source.presence.heartbeat(_DANA, _T0 - timedelta(hours=1), last_input_at=_T0 - timedelta(hours=1))
+    source.presence.heartbeat(_EVE, _T0)
+
+    document = source.document(_T0)
+
+    assert _keys(document) == [
+        "user:user-owner-9c21",
+        "user:user-bob-4471",
+        "user:user-carol-1138",
+        "user:user-dana-7720",
+        "email:friend@example.com",
+        "workspace-agent",
+    ]
+    owner, bob, carol, dana, friend, agent = document.participants
+    assert (dana.kind, dana.display_name, dana.email, dana.is_connected, dana.is_admitted_by_domain) == (
+        "person",
+        "dana",
+        "dana@partner.org",
+        False,
+        True,
+    )
+    assert dana.last_seen == "2026-10-22T09:00:00.000000000Z"
+    assert [entry.is_admitted_by_domain for entry in (owner, bob, carol, friend, agent)] == [False] * 5
+
+    # A domain grant that goes away takes its visitors off the roster, presence files and all.
+    source.share_grants.share_grants_path.write_text(
+        '[workspace]\nusers = ["user-bob-4471"]\nemails = []\nemail_domains = []\n'
+    )
+    assert _keys(source.document(_T0)) == ["user:user-owner-9c21", "user:user-bob-4471", "workspace-agent"]
+
+
+def test_a_granted_account_that_never_arrived_is_named_from_the_desktops_identities(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    source.share_grants.share_grants_path.write_text(_GRANTS)
+    source.presence.heartbeat(_ANONYMOUS_OWNER, _T0)
+
+    # With nothing known, the id stands in for the name.
+    carol = source.document(_T0).participants[2]
+    assert (carol.key, carol.display_name, carol.email) == ("user:user-carol-1138", "user-carol-1138", None)
+
+    source.share_identities.share_identities_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "identities": {
+                    "user-carol-1138": {"email": "carol@partner.org", "display_name": None},
+                    "user-bob-4471": {"email": "bob@example.com", "display_name": "Bob B."},
+                },
+            }
+        )
+    )
+    bob, carol = source.document(_T0).participants[1:3]
+    assert (bob.display_name, bob.email, bob.handle) == ("Bob B.", "bob@example.com", "Bob-B.")
+    assert (carol.display_name, carol.email, carol.handle) == ("carol", "carol@partner.org", "carol")
+
+    # What presence and the arrival recorded come first: the sidecar is the fallback for someone never seen.
+    source.presence.heartbeat(_BOB, _T0)
+    bob = source.document(_T0).participants[1]
+    assert (bob.display_name, bob.email) == ("Bob B.", "bob@example.com")
+    source.users.record_user(
+        UserRecord(
+            user_id=UserId("user-bob-4471"),
+            desktop_id=DesktopId("bob"),
+            desktop_name="Bob",
+            email="robert@example.com",
+            display_name="Robert",
+            last_seen=_T0,
+        )
+    )
+    bob = source.document(_T0).participants[1]
+    assert (bob.display_name, bob.email) == ("Robert", "bob@example.com")
 
 
 def test_a_visiting_agent_is_offline_past_the_window_and_a_colliding_name_is_suffixed(tmp_path: Path) -> None:
