@@ -9,7 +9,7 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { ChatImport, ChatImportSource } from "../models/ChatImport";
-import { SOURCE_LABELS, cardPhase, importedSummary, sourceNames } from "../models/ChatImport";
+import { SOURCE_LABELS, cardPhase, importedSummary, sourceNames, watchForImportStart } from "../models/ChatImport";
 
 export const IMPORT_PROMPT =
   "Bring my Claude and ChatGPT chats into this workspace, so you can search and build on my past conversations.";
@@ -99,7 +99,10 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
     const phase = cardPhase(attrs.chatImport);
     if (phase === "hidden" || attrs.chatImport === null) return null;
     const sources = attrs.chatImport.sources;
-    const start = (text: string) => () => attrs.onStartWithText(text);
+    const start = (text: string) => () => {
+      attrs.onStartWithText(text);
+      watchForImportStart();
+    };
     let title: string;
     let body: m.Children;
     let actions: m.Children;

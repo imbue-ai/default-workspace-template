@@ -63,6 +63,51 @@ describe("following a running import", () => {
     await vi.advanceTimersByTimeAsync(3 * model.POLL_INTERVAL_MS);
     expect(fetched).toHaveBeenCalledTimes(2);
   });
+
+  it("looks for the import a started chat brings, until it has come and gone", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const answers = [
+      chatImport({}),
+      chatImport({}),
+      chatImport({ claude: source("importing", 3) }),
+      chatImport({ claude: source("imported", 9) }),
+    ];
+    const fetched = vi.fn(async () => new Response(JSON.stringify(answers.shift()), { status: 200 }));
+    vi.stubGlobal("fetch", fetched);
+    const model = await import("./ChatImport");
+    await model.refreshChatImport();
+
+    await vi.advanceTimersByTimeAsync(3 * model.POLL_INTERVAL_MS);
+    expect(fetched).toHaveBeenCalledTimes(1);
+
+    model.watchForImportStart();
+    await vi.advanceTimersByTimeAsync(2 * model.POLL_INTERVAL_MS);
+    expect(model.cardPhase(model.getChatImport())).toBe("importing");
+
+    await vi.advanceTimersByTimeAsync(model.POLL_INTERVAL_MS);
+    expect(model.cardPhase(model.getChatImport())).toBe("imported");
+
+    await vi.advanceTimersByTimeAsync(3 * model.POLL_INTERVAL_MS);
+    expect(fetched).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops looking when no import has come within the watch", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const fetched = vi.fn(async () => new Response(JSON.stringify(chatImport({})), { status: 200 }));
+    vi.stubGlobal("fetch", fetched);
+    const model = await import("./ChatImport");
+    await model.refreshChatImport();
+
+    model.watchForImportStart();
+    await vi.advanceTimersByTimeAsync(model.IMPORT_START_WATCH_MS + model.POLL_INTERVAL_MS);
+    const fetchedDuringTheWatch = fetched.mock.calls.length;
+    expect(fetchedDuringTheWatch).toBeGreaterThan(1);
+
+    await vi.advanceTimersByTimeAsync(3 * model.POLL_INTERVAL_MS);
+    expect(fetched).toHaveBeenCalledTimes(fetchedDuringTheWatch);
+  });
 });
 
 describe("putting the card away", () => {

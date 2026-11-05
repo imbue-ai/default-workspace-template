@@ -41,7 +41,8 @@ from the workspace venv (`.venv/bin/getting-started`), serving on
   rewritten for two minutes (a running sync rewrites it every ten seconds), answered as
   `failed`. The page fetches it on load and on focus, and polls it while a source is
   importing. The card's import, update and resume actions each start a chat
-  (`shell:start-with-text`) that the skill matches on.
+  (`shell:start-with-text`) that the skill matches on; that chat takes the focus, so the page
+  also polls for up to fifteen minutes after one, until the import shows up.
 - `POST /api/chat-import/dismiss`: puts the card away for good ("Not now" or "Hide"),
   recorded in `data/.state/getting-started/chat_import.json`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this

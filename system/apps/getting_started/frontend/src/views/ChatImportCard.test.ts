@@ -2,12 +2,16 @@
 import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatImport } from "../models/ChatImport";
 import { chatImportRecord, chatImportSourceRecord as source } from "../testing/records";
 import { ChatImportCard, IMPORT_PROMPT } from "./ChatImportCard";
 
-afterEach(() => unmountViews());
+afterEach(() => {
+  unmountViews();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function render(chatImport: ChatImport | null): { root: HTMLElement; started: string[]; dismissals: number[] } {
   const started: string[] = [];
@@ -113,5 +117,23 @@ describe("the chat import card", () => {
     const { root, started } = render(chatImportRecord({ claude: source("imported", 30) }));
     click(root, "update");
     expect(started).toEqual(["Check my Claude chats for new conversations and bring them into this workspace."]);
+  });
+
+  it("looks for the import its action starts, since the chat takes the focus", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const fetched = vi.fn(async () => new Response(JSON.stringify(chatImportRecord()), { status: 200 }));
+    vi.stubGlobal("fetch", fetched);
+    const model = await import("../models/ChatImport");
+    const card = await import("./ChatImportCard");
+    await model.refreshChatImport();
+    const root = mountView(() =>
+      m(card.ChatImportCard, { chatImport: model.getChatImport(), onStartWithText: () => {}, onDismiss: () => {} }),
+    );
+
+    click(root, "import");
+    await vi.advanceTimersByTimeAsync(model.POLL_INTERVAL_MS);
+
+    expect(fetched).toHaveBeenCalledTimes(2);
   });
 });

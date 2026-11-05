@@ -4,9 +4,10 @@
  * whether the import is offered (``src/getting_started/chat_import.py``).
  *
  * Fetched once per page load and again when the window regains focus; while a source is still
- * importing it is polled, so the card counts up as the import runs. A fetch that fails keeps what
- * was last loaded, so a failed first fetch leaves the card hidden: it is an offer, and the page
- * reads fine without it.
+ * importing it is polled, so the card counts up as the import runs. It is also polled for a while
+ * after the card starts a chat, which takes the focus away from this window, so the import that chat
+ * starts reaches the card. A fetch that fails keeps what was last loaded, so a failed first fetch
+ * leaves the card hidden: it is an offer, and the page reads fine without it.
  */
 
 import m from "mithril";
@@ -38,6 +39,8 @@ export type ChatImportCardPhase = "offer" | "importing" | "imported" | "attentio
 export const CHAT_IMPORT_PATH = "/api/chat-import";
 export const CHAT_IMPORT_DISMISS_PATH = "/api/chat-import/dismiss";
 export const POLL_INTERVAL_MS = 4000;
+/** Long enough for the chat to connect each account, which waits on the user signing in. */
+export const IMPORT_START_WATCH_MS = 15 * 60 * 1000;
 
 /** The names the sources go by on the card, in the order it lists them. */
 export const SOURCE_LABELS: ReadonlyArray<readonly [string, string]> = [
@@ -80,6 +83,7 @@ export function sourceNames(keys: ReadonlyArray<string>): string {
 let state: ChatImport | null = null;
 let isDismissedHere = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let watchForImportUntil = 0;
 
 export function getChatImport(): ChatImport | null {
   return state;
@@ -88,8 +92,18 @@ export function getChatImport(): ChatImport | null {
 function schedulePoll(): void {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = null;
-  if (cardPhase(state) !== "importing") return;
+  const phase = cardPhase(state);
+  if (phase === "importing") watchForImportUntil = 0;
+  const isWatching = phase !== "hidden" && Date.now() < watchForImportUntil;
+  if (phase !== "importing" && !isWatching) return;
   pollTimer = setTimeout(() => void refreshChatImport(), POLL_INTERVAL_MS);
+}
+
+/** The card just started a chat that will run an import: look for it until it shows up, or for
+ *  ``IMPORT_START_WATCH_MS``. */
+export function watchForImportStart(): void {
+  watchForImportUntil = Date.now() + IMPORT_START_WATCH_MS;
+  schedulePoll();
 }
 
 /** Take a server answer as the state. A dismissal made here is never undone by an answer to a load
