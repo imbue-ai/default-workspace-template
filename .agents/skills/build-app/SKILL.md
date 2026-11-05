@@ -690,14 +690,6 @@ priority = "user"
 program = "<name>"
 ```
 
-A wrapped server's pages carry no shell page script, so the workspace
-records only that somebody clicked into the app's window, never that they
-kept using it (the shell's `window_input` log, desktop contracts.md
-section 6). When the server lets a page carry a script of your own (a
-template it renders, a static page it serves), serve the two shell modules
-and the page script the scaffold's runner shows, so the page reports its
-input like a scaffolded app's.
-
 Then add a `[program:<name>]` block as its own
 `system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
 and then your existing start command. supervisord runs commands directly (no
@@ -765,13 +757,16 @@ Verification and gotchas references apply identically to this path.
 
 A wrapped tool's pages do not carry the shell page script, so a plain click
 on one of their links to a local service or another app navigates the tool's
-own window. If the tool can serve one more static file from its own origin
-and add a script to its pages (Jupyter's custom JS, a dev server's plugin
-hook), give it the contract: serve
+own window, and the workspace records only that somebody clicked into the
+app's window, never that they kept using it (the shell's `window_input`
+log, desktop contracts.md section 6). If the tool can serve one more static
+file from its own origin and add a script to its pages (Jupyter's custom JS,
+a dev server's plugin hook), give it the contract: serve
 `system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
 at `/_static/app_contract.js` and add
 `<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
-to its pages. If it can do neither, leave it as it is.
+to its pages, which also makes them report their input like a scaffolded
+app's. If it can do neither, leave it as it is.
 
 ## `forward_port.py` CLI reference
 
