@@ -79,27 +79,23 @@ The code runs under one of two interpreters, and what it imports decides which:
 
 - **Bare tier**: code whose imports are all standard library -- the bare
   packages (`workspace_bare_scripts`, update-self's) and the stdlib-only
-  libraries (`oom_priority`, `app_registration`, `chat_background_tasks`,
-  `tk_command_parsing`) count as standard library here -- runs under the
-  system `python3` with no venv. It gains nothing from the venv and would pay
-  for it on every start: from the venv, `notify_user.py` took 120 ms against
-  61 ms under `python3`. That matters most for what runs often, such as the
-  agent hooks on every tool call. Some code must run with no venv whatever it
-  imports, so it stays in this tier:
-  - no venv exists where it runs: the build steps before `uv sync`
-    (`build_workspace.sh`). publish-template's manifest tools also run after
-    their worktree reset removes `.venv`, but they need pydantic, so they run
-    under `uv run --no-project --with 'pydantic>=2'` instead;
-  - the venv may be broken or mid-change: update-self, and the boot's recovery
-    of an interrupted update;
-  - the venv installs another copy of it: update-self's staged copy of the
-    target release;
-  - something outside this release runs it as `python3 <path>`: Imbue Studio
-    (`background_tasks.py`, `message_chat.py`, the bug-report collector and
-    the other `system/scripts/` stubs it calls), minds_evals and minds_admin
-    (`background_tasks.py`), and the program lines of apps users scaffolded
-    (`oom_tag_service.py`, `venv_links.py`, `forward_port.py`,
-    `with_secrets.py`).
+  libraries on the bare search paths (`BARE_SEARCH_PATHS` in
+  `system/entry_points_testing.py`) count as standard library here -- runs
+  under the system `python3` with no venv. It gains nothing from the venv and
+  would pay for it on every start: from the venv, `notify_user.py` took 120 ms
+  against 61 ms under `python3`. That matters most for what runs often, such
+  as the agent hooks on every tool call. Some code must run with no venv
+  whatever it imports, so it stays in this tier. The cases are below, each
+  with one example; the code itself says which case it is in (in its
+  docstring, or in the `no-venv` marker on its import-path edit), and that,
+  not this list, is where to look:
+  - no venv exists yet where it runs, such as the build steps before
+    `uv sync`;
+  - the venv may be broken or mid-change, such as update-self;
+  - the venv installs another copy of it, such as update-self's staged copy of
+    the target release;
+  - something outside this release runs it as `python3 <path>`, such as
+    Imbue Studio running `background_tasks.py`.
 - **Venv tier**: code that imports a third-party package, or a venv-tier
   package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
@@ -108,7 +104,7 @@ The code runs under one of two interpreters, and what it imports decides which:
 Code that must run with no venv has everything it imports made bare too.
 Other stdlib-only code is bare only because that is lighter to run. It may import
 what bare code already can (the standard library, the bare packages and the
-stdlib-only libraries above), but it never widens that set: once it needs
+libraries on the bare search paths), but it never widens that set: once it needs
 anything else, it moves to the venv tier and its callers switch to
 `uv run --no-sync`. It does not get a new bare search path, and it
 does not hold another package's module to the standard library.
