@@ -8,6 +8,9 @@ so the machine publishes the quota's limit and usage into the workspace's
 volume (``/mngr-vol/.host-diskinfo``) and the room left is the smaller of the
 two. Where no fresh file exists (a local docker workspace, or a machine that
 publishes none), the filesystem's figures are the answer.
+
+Stdlib-only, so scripts run under a bare ``python3`` can import it by putting
+``src`` on ``sys.path``.
 """
 
 import os

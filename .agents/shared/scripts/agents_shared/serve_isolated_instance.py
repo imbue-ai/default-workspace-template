@@ -43,16 +43,20 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
+It imports only the standard library, the stdlib-only ``forward_port`` it registers
+through, and the stdlib-only ``disk_headroom.space`` it checks a ``--copy``'s room with,
+so it runs under the system ``python3`` with no venv.
+
 Usage:
-    uv run --no-sync serve_isolated_instance.py up --name <slug> --cwd <dir> \\
+    python3 serve_isolated_instance.py up --name <slug> --cwd <dir> \\
         (--port-env <ENVVAR> | --port main) [--port-env <name>=<ENVVAR> | --port <name> ...] \\
         [--host-env <ENVVAR>] \\
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
-    uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
-    uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
+    python3 serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
+    python3 serve_isolated_instance.py down --name <slug> [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
@@ -101,6 +105,22 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
+
+# Run by its path, the module puts the bare packages' directory and the stdlib-only
+# disk_headroom library on sys.path; imported as part of its package, the venv already
+# has them.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
+    sys.path.insert(
+        0,
+        str(
+            Path(__file__).resolve().parents[4]
+            / "system"
+            / "libs"
+            / "disk_headroom"
+            / "src"
+        ),
+    )
 
 from disk_headroom.space import read_disk_space
 from workspace_bare_scripts import forward_port
@@ -1138,15 +1158,15 @@ def up(
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Opening it "
             "puts it on the user's screen. Run "
-            f"`uv run --no-sync {_SELF_HINT} refresh --name {name}` to pick up a later "
-            f"edit on this same port, and `uv run --no-sync {_SELF_HINT} down --name "
+            f"`python3 {_SELF_HINT} refresh --name {name}` to pick up a later "
+            f"edit on this same port, and `python3 {_SELF_HINT} down --name "
             f"{name}` to tear it down.\n"
         )
     else:
         sys.stdout.write(f"{inner_url}\n")
         sys.stderr.write(
             f"instance up: reach it at {inner_url} (serving {cwd}). Run "
-            f"`uv run --no-sync {_SELF_HINT} down --name {name}` to tear it down.\n"
+            f"`python3 {_SELF_HINT} down --name {name}` to tear it down.\n"
         )
     return 0
 

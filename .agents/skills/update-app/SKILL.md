@@ -359,7 +359,7 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
+  URL=$(python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
@@ -368,7 +368,7 @@ where the data dies. Encode these, cheapest first:
       --project system/apps/<package> \
       -- <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
 
   `--project` boots a user-built app (a standalone project with its own lock and
@@ -389,7 +389,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each

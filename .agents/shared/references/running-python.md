@@ -80,8 +80,10 @@ The code runs under one of two interpreters, and what it imports decides which:
 - **Bare tier**: code whose imports are all standard library -- the bare
   packages (`workspace_bare_scripts`, update-self's) count as standard library
   here -- runs under the system `python3` with no venv. It pays nothing for an
-  environment it does not use. Bare code includes the agent hooks, the
-  bug-report collector, the pre-sync build steps, the scripts the
+  environment it does not use. This also covers code that must work when the
+  venv is missing or broken, that something outside this release calls by
+  path, or that sits in a long-running program's launch chain: the agent
+  hooks, the bug-report collector, the pre-sync build steps, the scripts the
   Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
   (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...), and
   stdlib-only modules of other packages such as `notify_user.py` and
@@ -90,17 +92,6 @@ The code runs under one of two interpreters, and what it imports decides which:
   package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
   declares.
-
-Only some bare code has to be bare: code that must work when the venv is
-missing or broken, that something outside this release calls by path, or that
-sits in a long-running program's launch chain. Whatever that code needs is made
-bare too, which is why the agent hooks' `tk_command_parsing` is on the bare
-search path. Other stdlib-only code is bare only because that is lighter to
-run. It may import what bare code already can (the standard library, the bare
-packages and the libraries on the bare search path), but it never widens that
-set: once it needs anything else, it moves to the venv tier and its callers
-switch to `uv run --no-sync`. It does not get a new bare search path, and it
-does not hold another package's module to the standard library.
 
 A bare module that imports a bare package it does not sit beside puts that
 package's directory on `sys.path` itself, only when it runs by its path
