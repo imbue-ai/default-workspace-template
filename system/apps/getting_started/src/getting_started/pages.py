@@ -4,8 +4,9 @@ state, and the contract module.
 The page is the frontend's built document (``static/index.html``); its bundle is served under ``/assets``. The
 catalog route answers the freshest copy the store holds, with each drawing resolved to a URL (``catalog`` is null
 when no catalog URL is configured, and a 503 says nothing could be loaded). The chat import routes answer what the
-chat import has brought in and whether it is offered, and record that the user put its card away. The contract module the page speaks to
-the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
+chat import has brought in and whether it is offered, and record that the user put its card away. The contract
+module the page speaks to the shell with is the shell's build output, served from this origin (desktop-interface
+contracts.md section 7).
 """
 
 from pathlib import Path
