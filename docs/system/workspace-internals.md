@@ -136,7 +136,10 @@ job checks the lockfile, the mngr pin and the frontends on a bare runner. The
 Python suites run in the `test-offload` job, inside the workspace
 image on Modal through [offload](https://github.com/imbue-ai/offload): one
 config per pytest root at the repo root (`offload-modal.toml`,
-`offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
+`offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The auth
+sandbox library (`system/libs/auth_sandbox`), its own uv project outside the
+root workspace, is the exception: its suite always runs in the `test` job,
+from its own venv, against the latchkey CLI `setup_system.sh` pins. The
 checkpoint image is `system/Dockerfile` as shipped, plus a first boot
 (`default-workspace-template-seed`) and `system/scripts/offload_sandbox_init.sh`
 (the Screen's env.d unit, Fortress included, and the offload binary); it rebuilds only when one of
