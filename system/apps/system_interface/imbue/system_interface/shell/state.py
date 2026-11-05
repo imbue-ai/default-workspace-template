@@ -732,16 +732,23 @@ class ShellState(MutableModel):
         app-usage-signals spec, section 6.2); answers how many lines were written. A window still on a desktop is
         recorded with that desktop's app and desktop, whatever the page said; one that is gone with the reported app,
         which must be registered, and the client's active desktop. Input reports go first, so a window reported with
-        both kinds in one heartbeat is written as input. A heartbeat reporting no window reads nothing."""
+        both kinds in one heartbeat is written as input. A heartbeat reporting no window reads nothing, and a
+        desktops record the shell cannot bring up to date drops the reports with a warning, never the heartbeat."""
         if not reports:
             return 0
         now = datetime.now(timezone.utc)
-        desktops = self.list_desktops()
-        window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
-        active_desktop_id = ""
-        if any(report.window_id not in window_by_id for report in reports):
-            active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
-            active_desktop_id = "" if active_desktop is None else str(active_desktop)
+        try:
+            desktops = self.list_desktops()
+            window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
+            active_desktop_id = ""
+            if any(report.window_id not in window_by_id for report in reports):
+                active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
+                active_desktop_id = "" if active_desktop is None else str(active_desktop)
+        except ShellStateError as e:
+            logger.opt(exception=e).warning(
+                "Dropped {} input reports of client {}: the desktops cannot be read", len(reports), client_id
+            )
+            return 0
         written_count = 0
         for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
             found = window_by_id.get(report.window_id)

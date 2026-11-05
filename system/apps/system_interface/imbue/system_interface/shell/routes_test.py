@@ -22,6 +22,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_theming import AppThemingStore
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
@@ -198,6 +199,24 @@ def test_a_heartbeat_is_never_refused_for_its_input_reports(client: FlaskClient,
     assert _window_input_events(app) == []
     (user,) = client.get("/api/presence").get_json()["users"]
     assert user["user_id"] == "user-bob-4471" and user["last_input_at"] is not None
+
+
+def test_a_heartbeat_is_not_refused_when_the_desktops_cannot_be_read_for_its_input_reports(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A desktops record the shell cannot bring up to date (here, a directory where the file goes, so the seeding
+    write fails) drops the reports with a warning: presence is recorded and the heartbeat answered as before."""
+    _register_client(app, "c1", "home")
+    desktops_path = _shell(app).desktops.state_directory / DESKTOPS_FILENAME
+    desktops_path.unlink()
+    desktops_path.mkdir()
+
+    response = _heartbeat_with_input(client, "c1", [{"window_id": "win-0123456789abcdef", "app": "files"}])
+
+    assert response.status_code == 200, response.get_json()
+    assert _window_input_events(app) == []
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["user_id"] == "user-bob-4471"
 
 
 def test_an_unplaced_op_open_is_recorded_with_no_client(client: FlaskClient, app: Flask) -> None:
