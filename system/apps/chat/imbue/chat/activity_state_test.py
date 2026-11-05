@@ -4,10 +4,10 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
-from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_non_turn_tail_event
 from imbue.chat.activity_state import is_transcript_tail_stale
@@ -22,8 +22,8 @@ def test_an_agent_carrying_work_past_its_turn_is_alive_but_not_running() -> None
     """The two questions this module answers come apart exactly here.
 
     Its turn has ended, so no turn is in flight; work it declared will start the next one, so it
-    is not dead. Thirteen call sites act on death -- one of them restarts the agent on a timer --
-    so reading this state as dead would act against a live, working agent.
+    is not dead. What acts on death restarts the agent, so reading it as dead acts against a
+    live, working agent.
     """
     assert is_lifecycle_dead(BACKGROUND_LIFECYCLE_STATE) is False
     assert resolve_is_agent_running(BACKGROUND_LIFECYCLE_STATE, is_active_marker_present=False) is False
