@@ -104,8 +104,8 @@ The code runs under one of two interpreters, and what it imports decides which:
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
   declares.
 
-What the code that must run with no venv imports is made bare too. Other
-stdlib-only code is bare only because that is lighter to run. It may import
+Code that must run with no venv has everything it imports made bare too.
+Other stdlib-only code is bare only because that is lighter to run. It may import
 what bare code already can (the standard library, the bare packages and the
 stdlib-only libraries above), but it never widens that set: once it needs
 anything else, it moves to the venv tier and its callers switch to
