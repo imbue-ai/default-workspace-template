@@ -645,7 +645,7 @@ def generate_latchkey_gateway_password() -> str:
 
 
 def latchkey_gateway_env(password: str) -> dict[str, str]:
-    """The three variables the step writes for a workspace whose creator named no gateway."""
+    """The three variables the boot writes for a workspace whose creator named no gateway."""
     return {
         LATCHKEY_GATEWAY_ENV_VAR: LATCHKEY_GATEWAY_URL,
         LATCHKEY_GATEWAY_PASSWORD_ENV_VAR: password,
@@ -677,7 +677,7 @@ def _ensure_latchkey_gateway_env(host_env_path: Path, password: str) -> dict[str
     were) for the supervisord this process becomes to run under, so every
     supervised service inherits them. Best-effort like every other boot step:
     an unreadable or unwritable file is logged and the boot goes on without a
-    gateway, which is what the workspace had before this step existed.
+    gateway.
     """
     try:
         text = host_env_path.read_text()
@@ -711,7 +711,7 @@ def _ensure_latchkey_gateway_env(host_env_path: Path, password: str) -> dict[str
 
 
 def _configure_latchkey_gateway_env() -> dict[str, str]:
-    """The ``latchkey_gateway_env`` step: give a workspace with no named gateway the VM gateway's address.
+    """Give a workspace with no named gateway the VM gateway's address (part of the ``converge_environment`` step).
 
     Reads ``$MNGR_HOST_DIR/env``; a bare dev run has no host dir and skips, as
     the other host-reading steps do. Returns the variables supervisord must add
@@ -719,7 +719,7 @@ def _configure_latchkey_gateway_env() -> dict[str, str]:
     """
     host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     if not host_dir:
-        logger.debug("MNGR_HOST_DIR is unset; skipping the latchkey gateway env step")
+        logger.debug("MNGR_HOST_DIR is unset; skipping the latchkey gateway env")
         return {}
     return _ensure_latchkey_gateway_env(
         Path(host_dir) / "env", generate_latchkey_gateway_password()
@@ -1084,13 +1084,11 @@ def main() -> None:
     # A workspace whose creator named no latchkey gateway (a web-created one)
     # gets the VM gateway's address and a fresh password before supervisord
     # starts: supervised services inherit them from supervisord's environment,
-    # and later chat agents read them from the host env file.
-    supervisord_environment: dict[str, str] = {}
-    with _bootstrap_step("latchkey_gateway_env", "Preparing the credential gateway"):
-        supervisord_environment = _configure_latchkey_gateway_env()
-
+    # and later chat agents read them from the host env file. It shares this
+    # step because the desktop's progress bar knows the boot's steps by id.
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
+        supervisord_environment = _configure_latchkey_gateway_env()
         _run_env_converge_fast_phase()
 
     # Re-engage the agent whose update the boot-time rollback undid. Held until

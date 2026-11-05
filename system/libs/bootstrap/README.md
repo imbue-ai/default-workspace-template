@@ -35,7 +35,8 @@ service.
    file). The password lives in the container, and in the workspace's backups
    of its host dir as every host env value does, until the Imbue Studio web
    chrome reads it over owner-exec to provision the VM's gateway. A file that already names a gateway is left
-   untouched; a bare dev run with no host dir skips the step.
+   untouched; a bare dev run with no host dir skips the check. It reports no
+   progress step of its own: it runs inside `converge_environment`.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

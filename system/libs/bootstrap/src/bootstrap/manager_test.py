@@ -930,7 +930,6 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
         "initialize_main_branch",
         "sync_venv",
         "set_timezone",
-        "latchkey_gateway_env",
         "converge_environment",
         "install_cron",
     ]
@@ -1035,7 +1034,7 @@ def test_main_launches_supervisord_with_the_gateway_env_the_step_returned(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Supervised services only see the gateway through supervisord's environment, so what
-    # the latchkey_gateway_env step returns is exactly what the hand-off must add.
+    # the gateway configuration returns is exactly what the hand-off must add.
     _prepare_boot(monkeypatch, tmp_path)
     gateway_env = {
         LATCHKEY_GATEWAY_ENV_VAR: LATCHKEY_GATEWAY_URL,
@@ -1051,6 +1050,33 @@ def test_main_launches_supervisord_with_the_gateway_env_the_step_returned(
     main()
 
     assert handed_off == [gateway_env]
+
+
+def test_main_configures_the_gateway_env_inside_the_converge_environment_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The desktop's progress bar knows the boot's steps by id, so the gateway check reports
+    # under an existing step rather than as one of its own.
+    _prepare_boot(monkeypatch, tmp_path)
+    events_path = _agent_state_dir(tmp_path) / BOOTSTRAP_EVENTS_RELATIVE_PATH
+    last_event_at_configure: list[dict[str, object]] = []
+
+    def configure() -> dict[str, str]:
+        last_event_at_configure.append(
+            json.loads(events_path.read_text().splitlines()[-1])
+        )
+        return {}
+
+    monkeypatch.setattr("bootstrap.manager._configure_latchkey_gateway_env", configure)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
+
+    main()
+
+    assert [(event["type"], event["step"]) for event in last_event_at_configure] == [
+        (BOOTSTRAP_STEP_STARTED_EVENT, "converge_environment")
+    ]
 
 
 def test_main_boots_without_an_agent_state_dir(
