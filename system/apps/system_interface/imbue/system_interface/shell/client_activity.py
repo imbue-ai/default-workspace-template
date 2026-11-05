@@ -241,7 +241,8 @@ class ClientActivityLog(MutableModel):
         self, client_id: str, desktop_id: str, app: str, window_id: str, kind: WindowInputKind, now: datetime
     ) -> bool:
         """Record input in a window once per client, window and minute of ``now``; answers whether a line was
-        written (a second report of the window inside the minute writes nothing, whatever its kind)."""
+        written (a second report of the window inside the minute writes nothing, whatever its kind). A write that
+        fails is not remembered, so the next report inside the minute tries again."""
         minute = _minute_of(now)
         key = (client_id, window_id)
         with self._append_lock:
@@ -252,7 +253,6 @@ class ClientActivityLog(MutableModel):
                 k for k, last_minute in remembered.items() if last_minute <= minute - _WINDOW_INPUT_MEMORY_MINUTES
             ]:
                 del remembered[stale_key]
-            remembered[key] = minute
             self._append_locked(
                 WindowInputEvent(
                     timestamp=_iso(now),
@@ -266,6 +266,7 @@ class ClientActivityLog(MutableModel):
                     kind=kind,
                 )
             )
+            remembered[key] = minute
         return True
 
     def read_events(self) -> list[dict[str, Any]]:

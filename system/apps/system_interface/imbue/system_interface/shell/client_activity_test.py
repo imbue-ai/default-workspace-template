@@ -5,6 +5,8 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+import pytest
+
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TYPE
@@ -200,6 +202,20 @@ def test_a_windows_minute_is_forgotten_once_it_is_old_enough_to_be_written_again
     assert (
         log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
     )
+
+
+def test_a_window_input_that_could_not_be_written_is_tried_again_in_the_same_minute(tmp_path: Path) -> None:
+    """A failed write (here, a directory where the file goes) is not remembered as the window's minute, so the
+    next report inside the minute writes the line once the log can be written again."""
+    log = _log(tmp_path)
+    log.events_path.mkdir(parents=True)
+    with pytest.raises(OSError):
+        log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0)
+    assert log._last_input_minute_by_client_window == {}
+
+    log.events_path.rmdir()
+    assert log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0) is True
+    assert [event["window_id"] for event in log.read_events()] == ["w1"]
 
 
 def test_a_window_input_advances_last_seen_and_nothing_else(tmp_path: Path) -> None:
