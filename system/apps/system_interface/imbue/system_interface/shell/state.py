@@ -727,15 +727,15 @@ class ShellState(MutableModel):
         except OSError as e:
             logger.opt(exception=e).warning("Failed to record the open of window {} of {}", window.id, window.app)
 
-    def record_window_input(self, client_id: ClientId, reports: Sequence[WindowInputReport]) -> int:
+    def record_window_input(self, client_id: ClientId, reports: Sequence[WindowInputReport]) -> None:
         """Record a heartbeat's input reports in the client-activity log as ``window_input`` events (the
-        app-usage-signals spec, section 6.2); answers how many lines were written. A window still on a desktop is
-        recorded with that desktop's app and desktop, whatever the page said; one that is gone with the reported app,
-        which must be registered, and the client's active desktop. Input reports go first, so a window reported with
-        both kinds in one heartbeat is written as input. A heartbeat reporting no window reads nothing, and a
-        desktops record the shell cannot bring up to date drops the reports with a warning, never the heartbeat."""
+        app-usage-signals spec, section 6.2). A window still on a desktop is recorded with that desktop's app and
+        desktop, whatever the page said; one that is gone with the reported app, which must be registered, and the
+        client's active desktop. Input reports go first, so a window reported with both kinds in one heartbeat is
+        written as input. A heartbeat reporting no window reads nothing, and a desktops record the shell cannot bring
+        up to date drops the reports with a warning, never the heartbeat."""
         if not reports:
-            return 0
+            return
         now = datetime.now(timezone.utc)
         try:
             desktops = self.list_desktops()
@@ -748,12 +748,12 @@ class ShellState(MutableModel):
             logger.opt(exception=e).warning(
                 "Dropped {} input reports of client {}: the desktops cannot be read", len(reports), client_id
             )
-            return 0
-        written_count = 0
+            return
         for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
             found = window_by_id.get(report.window_id)
             if found is not None:
-                desktop_id, app = str(found[0].id), str(found[1].app)
+                desktop, window = found
+                desktop_id, app = str(desktop.id), str(window.app)
             elif self.inventory.entry(str(report.app)) is None:
                 logger.warning(
                     "Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app
@@ -762,7 +762,7 @@ class ShellState(MutableModel):
             else:
                 desktop_id, app = active_desktop_id, str(report.app)
             try:
-                is_written = self.activity.append_window_input(
+                self.activity.append_window_input(
                     client_id=str(client_id),
                     desktop_id=desktop_id,
                     app=app,
@@ -772,10 +772,6 @@ class ShellState(MutableModel):
                 )
             except OSError as e:
                 logger.opt(exception=e).warning("Failed to record input in window {} of {}", report.window_id, app)
-                continue
-            if is_written:
-                written_count += 1
-        return written_count
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
         """Mint a window and write it onto the desktop."""
