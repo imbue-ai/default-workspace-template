@@ -23,11 +23,11 @@
 set -euo pipefail
 
 with_app=1
-case "${1:-}" in
+case "$*" in
     "") ;;
     --without-app) with_app=0 ;;
     *)
-        printf '[install_datalib] unknown argument: %s (the only one is --without-app)\n' "$1" >&2
+        printf '[install_datalib] unknown arguments: %s (the only one is --without-app)\n' "$*" >&2
         exit 2
         ;;
 esac

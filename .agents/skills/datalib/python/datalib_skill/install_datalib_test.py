@@ -142,10 +142,11 @@ def test_without_the_app_the_binaries_are_linked_and_supervisord_is_left_alone(
     assert not (workspace / "supervisorctl.log").exists()
 
 
+@pytest.mark.parametrize("args", [("--quietly",), ("--without-app", "--quietly")])
 def test_an_unknown_argument_is_refused_before_anything_is_installed(
-    workspace: Path,
+    workspace: Path, args: tuple[str, ...]
 ) -> None:
-    result = _run(workspace, args=("--quietly",))
+    result = _run(workspace, args=args)
 
     assert result.returncode == 2
     assert "--without-app" in result.stderr
