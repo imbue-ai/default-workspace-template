@@ -739,16 +739,16 @@ class ShellState(MutableModel):
         now = datetime.now(timezone.utc)
         try:
             desktops = self.list_desktops()
-            window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
-            active_desktop_id = ""
-            if any(report.window_id not in window_by_id for report in reports):
-                active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
-                active_desktop_id = "" if active_desktop is None else str(active_desktop)
         except ShellStateError as e:
             logger.opt(exception=e).warning(
                 "Dropped {} input reports of client {}: the desktops cannot be read", len(reports), client_id
             )
             return
+        window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
+        active_desktop_id = ""
+        if any(report.window_id not in window_by_id for report in reports):
+            active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
+            active_desktop_id = "" if active_desktop is None else str(active_desktop)
         for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
             found = window_by_id.get(report.window_id)
             if found is not None:
