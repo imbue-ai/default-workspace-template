@@ -37,6 +37,7 @@ members = [
     "datalib-skill",
     "default-workspace-template",
     "env-converge",
+    "event-streams",
     "files-app",
     "getting-started",
     "github-sync",
@@ -1202,6 +1203,21 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.85" }]
+
+[[package]]
+name = "event-streams"
+version = "0.1.0"
+source = { editable = "system/libs/event_streams" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ty", specifier = "==0.0.85" }]
@@ -4195,6 +4211,7 @@ version = "0.1.0"
 source = { editable = "system/services/share_gateway" }
 dependencies = [
     { name = "cryptography" },
+    { name = "event-streams" },
     { name = "flask" },
     { name = "httpx" },
     { name = "inotify-simple" },
@@ -4211,6 +4228,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=42" },
+    { name = "event-streams", editable = "system/libs/event_streams" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "inotify-simple", specifier = ">=2.0.0" },
@@ -4346,6 +4364,7 @@ dependencies = [
     { name = "chat-background-tasks" },
     { name = "concurrency-group" },
     { name = "defusedxml" },
+    { name = "event-streams" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
@@ -4388,6 +4407,7 @@ requires-dist = [
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a" },
     { name = "defusedxml", specifier = ">=0.7" },
+    { name = "event-streams", editable = "system/libs/event_streams" },
     { name = "flask", specifier = ">=3.1" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
