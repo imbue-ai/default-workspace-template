@@ -570,10 +570,14 @@ def test_a_check_without_latchkey_says_so() -> None:
         import_chats.check(CLAUDE, run)
 
 
-def test_the_skills_permission_requests_carry_only_the_fields_the_gateway_accepts() -> None:
+def test_the_skills_permission_requests_carry_only_the_fields_the_gateway_accepts() -> (
+    None
+):
     """The gateway answers a field it does not know with a 400, at the top level and in a payload alike, and only a
     predefined payload knows ``proxy``."""
-    skill = (Path(import_chats.__file__).parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    skill = (Path(import_chats.__file__).parent.parent / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     claude, chatgpt = [
         json.loads(shlex.split(line)[1])
         for line in skill.splitlines()
