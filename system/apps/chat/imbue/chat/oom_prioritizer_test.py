@@ -1195,3 +1195,39 @@ def test_a_log_sink_that_calls_back_in_does_not_deadlock_on_the_dead_thread_warn
         logger.remove(handler_id)
     assert callback_was_blocked == [False]
     assert h.prioritizer._worker is None
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_the_error_that_ends_a_pass_thread_is_logged_with_its_traceback() -> None:
+    # A failure in the exit hand-off's recovery pass would replace the original error as the one
+    # the thread reports, so the original is logged first.
+    passes: list[int] = []
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        passes.append(len(passes) + 1)
+        if len(passes) == 2:
+            raise ValueError("the original bug")
+        if len(passes) == 3:
+            raise SystemExit("recovery failed too")
+        return {cid: [10] for cid in cids}
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=lambda pid, adj: True,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+    )
+    errors: list[str] = []
+    handler_id = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        prioritizer.start()
+        worker = prioritizer._worker
+        assert worker is not None
+        # Pass 2 raises ValueError; the exit recovery (pass 3) raises SystemExit.
+        prioritizer.reapply()
+        assert poll_until(lambda: not worker.thread.is_alive(), timeout=5)
+    finally:
+        logger.remove(handler_id)
+        prioritizer.stop()
+    assert any("ended unexpectedly" in e and "ValueError: the original bug" in e for e in errors)

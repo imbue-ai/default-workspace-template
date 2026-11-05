@@ -50,6 +50,7 @@ collaborators are injected so the engine is unit-testable without ``/proc``, the
 agent manager, or the pid registry.
 """
 
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -383,6 +384,8 @@ class ChatOomPrioritizer:
                     is_my_turn, requested_at = self._take_pending_turn(owner)
             finally:
                 self._pass_lock.release()
+                # A dead thread this turn withdrew is logged here, once no lock is held.
+                self._report_withdrawn_dead_worker()
             if not self._wake_published_worker_if_pending(owner):
                 return
 
@@ -556,6 +559,9 @@ class ChatOomPrioritizer:
             except OSError as e:
                 _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
         finally:
+            # The error ending this thread, if any, is logged with its traceback before the exit
+            # hand-off runs a pass: an error there would become the one the thread reports.
+            ending_error = sys.exc_info()[1]
             if not worker.stop_event.is_set():
                 # Ended by an error a pass raised (anything but an OSError, which is retried):
                 # withdraw this thread so requests run passes inline instead of waking it.
@@ -563,10 +569,17 @@ class ChatOomPrioritizer:
                     if self._worker is worker:
                         self._worker = None
                     is_replaced = self._worker is not None
-                _loguru_logger.error(
+                _loguru_logger.opt(exception=ending_error).error(
                     "The memory-priority pass thread ended unexpectedly; {}",
                     "a new one is running" if is_replaced else "running passes inline until it is restarted",
                 )
+            elif ending_error is not None:
+                _loguru_logger.opt(exception=ending_error).error(
+                    "The memory-priority pass thread failed while stopping"
+                )
+            else:
+                # Stopped cleanly: nothing to report.
+                pass
             self._hand_off_on_exit(worker)
 
     def _hand_off_on_exit(self, worker: _PassWorker) -> None:
@@ -574,9 +587,11 @@ class ChatOomPrioritizer:
 
         Runs on ``worker``'s thread as it exits, whichever way. A request may have woken it after
         its last pass, while it was already unwinding from an error. With a live successor, that
-        thread is woken; with none, the pending pass is tried once on this thread, as an inline
-        caller would. A failure there propagates and leaves the request pending for the next call,
-        so a persistent error costs one more attempt, not a retry loop.
+        thread is woken; with none, this thread serves pending passes as an inline caller would,
+        handing over to a successor at the next pass boundary if one is published. A failure there
+        propagates and leaves the request pending for the next call, so a persistent error costs
+        one more attempt, not a retry loop. A recovery that succeeds keeps serving requests for as
+        long as they keep arriving (like any inline caller), so it is not limited to one pass.
         """
         with self._lock:
             is_pending = self._is_pass_requested
