@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatImport } from "../models/ChatImport";
-import { chatImportSourceRecord as source } from "../testing/records";
+import { chatImportRecord, chatImportSourceRecord as source } from "../testing/records";
 import { ChatImportCard, IMPORT_PROMPT } from "./ChatImportCard";
 
 afterEach(() => unmountViews());
@@ -30,26 +30,20 @@ describe("the chat import card", () => {
   it("renders nothing before its state loads or once put away", () => {
     expect(render(null).root.querySelector('[data-section="chat-import"]')).toBeNull();
     expect(
-      render({ is_dismissed: true, is_offered: true, sources: {} }).root.querySelector('[data-section="chat-import"]'),
+      render(chatImportRecord({}, { is_dismissed: true })).root.querySelector('[data-section="chat-import"]'),
     ).toBeNull();
   });
 
   it("offers nothing to an account outside the inner circle, but keeps following an import it has", () => {
-    const hidden = render({ is_dismissed: false, is_offered: false, sources: {} });
+    const hidden = render(chatImportRecord({}, { is_offered: false }));
     expect(hidden.root.querySelector('[data-section="chat-import"]')).toBeNull();
 
-    const running = render({
-      is_dismissed: false,
-      is_offered: false,
-      sources: {
-        claude: { state: "importing", conversations: 3, updated_at: "", detail: "" },
-      },
-    });
+    const running = render(chatImportRecord({ claude: source("importing", 3) }, { is_offered: false }));
     expect(running.root.querySelector('[data-chat-import-phase="importing"]')).not.toBeNull();
   });
 
   it("offers the import, whose action starts the import chat and whose other puts it away", () => {
-    const { root, started, dismissals } = render({ is_dismissed: false, is_offered: true, sources: {} });
+    const { root, started, dismissals } = render(chatImportRecord());
     expect(root.querySelector('[data-chat-import-phase="offer"]')).not.toBeNull();
     click(root, "import");
     expect(started).toEqual([IMPORT_PROMPT]);
@@ -58,11 +52,7 @@ describe("the chat import card", () => {
   });
 
   it("counts each source up while the import runs, with nothing to click", () => {
-    const { root } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { chatgpt: source("importing", 12), claude: source("imported", 30) },
-    });
+    const { root } = render(chatImportRecord({ chatgpt: source("importing", 12), claude: source("imported", 30) }));
     expect(root.querySelector('[data-chat-import-phase="importing"]')).not.toBeNull();
     expect(Array.from(root.querySelectorAll("[data-chat-import-source]")).map((line) => line.textContent)).toEqual([
       "Claude: 30 imported",
@@ -72,11 +62,12 @@ describe("the chat import card", () => {
   });
 
   it("shows how many of its conversations a source has fetched, with a bar, when it reports a total", () => {
-    const { root } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { chatgpt: source("importing", 40, { fetched: 166, to_fetch: 582 }), claude: source("importing", 7) },
-    });
+    const { root } = render(
+      chatImportRecord({
+        chatgpt: source("importing", 40, { fetched: 166, to_fetch: 582 }),
+        claude: source("importing", 7),
+      }),
+    );
     expect(Array.from(root.querySelectorAll("[data-chat-import-source]")).map((line) => line.textContent)).toEqual([
       "Claude: 7 so far",
       "ChatGPT: 166 of 582",
@@ -87,21 +78,15 @@ describe("the chat import card", () => {
   });
 
   it("counts conversations downloaded instead when a source has nothing new to fetch", () => {
-    const { root } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { chatgpt: source("importing", 312, { fetched: 0, to_fetch: 0 }) },
-    });
+    const { root } = render(chatImportRecord({ chatgpt: source("importing", 312, { fetched: 0, to_fetch: 0 }) }));
     expect(root.querySelector('[data-chat-import-source="chatgpt"]')!.textContent).toBe("ChatGPT: 312 so far");
     expect(root.querySelector("[data-chat-import-bar]")).toBeNull();
   });
 
   it("says which source needs the user and resumes the import of that source from a chat", () => {
-    const { root, started } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { claude: source("imported", 30), chatgpt: source("needs_sign_in") },
-    });
+    const { root, started } = render(
+      chatImportRecord({ claude: source("imported", 30), chatgpt: source("needs_sign_in") }),
+    );
     expect(root.querySelector('[data-chat-import-source="chatgpt"]')!.textContent).toBe(
       "ChatGPT: needs you to sign in again",
     );
@@ -112,11 +97,9 @@ describe("the chat import card", () => {
   });
 
   it("shows what came in and offers to look for new chats", () => {
-    const { root, started } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { claude: source("imported", 30), chatgpt: source("imported", 4) },
-    });
+    const { root, started } = render(
+      chatImportRecord({ claude: source("imported", 30), chatgpt: source("imported", 4) }),
+    );
     expect(root.querySelector('[data-section="chat-import"]')!.textContent).toContain(
       "30 from Claude and 4 from ChatGPT.",
     );
@@ -127,11 +110,7 @@ describe("the chat import card", () => {
   });
 
   it("looks for new chats only in the sources that were imported", () => {
-    const { root, started } = render({
-      is_dismissed: false,
-      is_offered: true,
-      sources: { claude: source("imported", 30) },
-    });
+    const { root, started } = render(chatImportRecord({ claude: source("imported", 30) }));
     click(root, "update");
     expect(started).toEqual(["Check my Claude chats for new conversations and bring them into this workspace."]);
   });

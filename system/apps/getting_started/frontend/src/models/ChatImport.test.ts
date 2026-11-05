@@ -1,18 +1,13 @@
 // @vitest-environment jsdom
 import "@imbue/workspace-ui/src/testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatImportSourceRecord as source } from "../testing/records";
-import type { ChatImport, ChatImportSource } from "./ChatImport";
+import { chatImportRecord as chatImport, chatImportSourceRecord as source } from "../testing/records";
 import { cardPhase, dismissChatImport, getChatImport, importedSummary, refreshChatImport } from "./ChatImport";
-
-function chatImport(sources: Record<string, ChatImportSource>, isDismissed = false): ChatImport {
-  return { is_dismissed: isDismissed, is_offered: true, sources };
-}
 
 describe("the chat import card's phase", () => {
   it("is hidden before the state loads and once the card is put away", () => {
     expect(cardPhase(null)).toBe("hidden");
-    expect(cardPhase(chatImport({ claude: source("importing") }, true))).toBe("hidden");
+    expect(cardPhase(chatImport({ claude: source("importing") }, { is_dismissed: true }))).toBe("hidden");
   });
 
   it("offers the import until anything is recorded", () => {
@@ -83,7 +78,7 @@ describe("putting the card away", () => {
     const dismissing = dismissChatImport();
     const [load, dismissal] = answers;
 
-    dismissal(new Response(JSON.stringify(chatImport({}, true)), { status: 200 }));
+    dismissal(new Response(JSON.stringify(chatImport({}, { is_dismissed: true })), { status: 200 }));
     await dismissing;
     load(new Response(JSON.stringify(chatImport({})), { status: 200 }));
     await loading;

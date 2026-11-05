@@ -1,9 +1,9 @@
 /**
- * Record factories for the Getting Started tests: a published template as the catalog lists it, and a
- * source's record in the chat import state. Each spells only what a test is about.
+ * Record factories for the Getting Started tests: a published template as the catalog lists it, and the
+ * chat import state with its sources' records. Each spells only what a test is about.
  */
 
-import type { ChatImportSource, ChatImportSourceState } from "../models/ChatImport";
+import type { ChatImport, ChatImportSource, ChatImportSourceState } from "../models/ChatImport";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
 
 /** A chat import source in ``state`` with ``conversations`` downloaded, and no timestamp or detail. */
@@ -13,6 +13,14 @@ export function chatImportSourceRecord(
   overrides: Partial<ChatImportSource> = {},
 ): ChatImportSource {
   return { state, conversations, updated_at: "", detail: "", ...overrides };
+}
+
+/** The chat import state with ``sources`` recorded: offered, and not put away. */
+export function chatImportRecord(
+  sources: Record<string, ChatImportSource> = {},
+  overrides: Partial<ChatImport> = {},
+): ChatImport {
+  return { is_dismissed: false, is_offered: true, sources, ...overrides };
 }
 
 function capitalized(name: string): string {
