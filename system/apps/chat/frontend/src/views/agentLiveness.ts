@@ -10,8 +10,8 @@
 // Lifecycle states in which the agent process is alive: working a turn (RUNNING), carrying
 // work past one (RUNNING_BACKGROUND), or idle between them (WAITING).
 // RUNNING_UNKNOWN_AGENT_TYPE is an agent running under a process name mngr can't confirm; it
-// counts as running. Mirrors the backend's ``is_lifecycle_dead``, which this set must agree
-// with -- ``test_alive_states_match_the_backend`` holds the two together.
+// counts as running. This set must agree with the backend's ``is_lifecycle_dead``, which cannot
+// be imported from here.
 const ALIVE_STATES: ReadonlySet<string> = new Set([
   "RUNNING",
   "RUNNING_BACKGROUND",

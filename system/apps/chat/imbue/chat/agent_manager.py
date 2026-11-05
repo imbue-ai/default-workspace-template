@@ -39,9 +39,9 @@ from imbue.chat.accounts import index_path
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
-from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
@@ -1032,16 +1032,15 @@ def chat_snapshot_for_active_agent(
     """
     handoff = chat.handoff
     transition = chat.transition
-    # Three signals, because each reaches what the others cannot. The transcript tail and the
-    # closing turn cover a turn the observe stream has not caught up with; the markers cover a
-    # detached ``run_in_background`` runner, which never reaches the harness's own payload and so
-    # can never show up as the agent's RUNNING_BACKGROUND lifecycle.
-    # CLEANUP: the HARNESS markers' contribution here is the one part the lifecycle now
-    # duplicates, and it reports more kinds than the four this workspace records. Drop that
-    # source from this term once no live chat predates the work-lease library -- mngr provisions
-    # it at create time, so a chat that already existed when the mngr pin moved never reports the
-    # state. The markers keep being written either way: the task list needs their descriptions
-    # and start times, and the backup gate needs their pids.
+    # Each term reaches what the others cannot: the transcript tail and the closing turn cover a
+    # turn the observe stream has not caught up with, and a detached ``run_in_background`` runner
+    # never reaches the harness's own payload, so it can never show up as the agent's lifecycle.
+    # CLEANUP: the harness markers' contribution is the one part the RUNNING_BACKGROUND lifecycle
+    # duplicates. Retiring it needs that state to be as timely as the marker, which the Stop hook
+    # writes itself, so reading the lease directory off disk as the `active` marker already is
+    # read here is the prerequisite. Removing the term without that is #1075. The markers keep
+    # being written either way: the task list reads their descriptions and start times, and the
+    # backup gate their pids.
     is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
     return ChatSnapshot(
         chat_id=chat.chat_id,

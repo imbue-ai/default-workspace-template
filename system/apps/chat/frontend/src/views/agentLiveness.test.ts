@@ -9,8 +9,8 @@ describe("isAgentProcessDead", () => {
     expect(isAgentProcessDead("RUNNING")).toBe(false);
     expect(isAgentProcessDead("RUNNING_UNKNOWN_AGENT_TYPE")).toBe(false);
     expect(isAgentProcessDead("WAITING")).toBe(false);
-    // Its turn ended, but work it declared is still running and will start the next one.
-    // Unmounting its terminal would take a live pane away from the user.
+    // Its turn ended, but work it declared will start the next one: unmounting its terminal
+    // would take a live pane from the user.
     expect(isAgentProcessDead("RUNNING_BACKGROUND")).toBe(false);
     // The observer could not look; the agent may be running fine. Anything that ACTS on
     // death (unmounting a terminal iframe) must not act on non-evidence.
