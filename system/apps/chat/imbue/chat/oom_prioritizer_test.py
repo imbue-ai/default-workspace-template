@@ -973,3 +973,55 @@ def test_a_failed_pass_keeps_its_request_pending_for_the_next_one() -> None:
     prioritizer.reapply()
     assert prioritizer._is_pass_requested is False
     assert len(pass_threads) == 3
+
+
+def test_a_replacement_published_during_a_stopped_threads_extra_pass_takes_over_after_it() -> None:
+    # The round-5 review's stronger schedule: the old thread is already running an extra pass
+    # after stop (no successor yet) when the replacement is published.
+    gates = {2: threading.Event(), 3: threading.Event()}
+    entered = {2: threading.Event(), 3: threading.Event()}
+    pass_threads: list[threading.Thread] = []
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        pass_threads.append(threading.current_thread())
+        number = len(pass_threads)
+        if number in gates:
+            entered[number].set()
+            gates[number].wait(timeout=10)
+        return {cid: [10] for cid in cids}
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=lambda pid, adj: True,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+        stop_join_timeout_seconds=0.1,
+    )
+    prioritizer.start()
+    old_worker = prioritizer._worker
+    assert old_worker is not None
+    try:
+        prioritizer.reapply()
+        assert entered[2].wait(timeout=5)
+        prioritizer.stop()
+        # Pending behind pass 2; with no successor the old thread runs it as pass 3.
+        prioritizer.reapply()
+        gates[2].set()
+        assert entered[3].wait(timeout=5)
+        assert pass_threads[2] is old_worker.thread
+        restarter = threading.Thread(target=prioritizer.start, name="restarter")
+        restarter.start()
+        restarter.join(timeout=5)
+        new_worker = prioritizer._worker
+        assert new_worker is not None and new_worker is not old_worker
+        for _ in range(3):
+            prioritizer.reapply()
+        gates[3].set()
+        assert poll_until(lambda: not prioritizer._is_pass_requested and len(pass_threads) >= 4, timeout=5)
+        assert poll_until(lambda: not old_worker.thread.is_alive(), timeout=5)
+        assert all(thread is new_worker.thread for thread in pass_threads[3:])
+    finally:
+        for gate in gates.values():
+            gate.set()
+        prioritizer.stop()
