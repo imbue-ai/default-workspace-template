@@ -1,10 +1,11 @@
-"""The append-only client-activity log: which client sent which message, and which desktop it switched to.
+"""The append-only client-activity log: which client sent which message, which desktop it switched to, and which
+windows were opened.
 
-Lives at ``<state dir>/events/client_activity/events.jsonl`` with the ``message`` and
-``desktop_switch`` shapes of desktop contracts.md section 6. An app posts a ``message`` whenever
-a user sends one to one of its pages, and the shell records a ``desktop_switch`` on every client
-report that names a different previous desktop, so an agent can work out which client (and
-desktop) a request came from.
+Lives at ``<state dir>/events/client_activity/events.jsonl`` with the ``message``, ``desktop_switch`` and
+``window_opened`` shapes of desktop contracts.md section 6. An app posts a ``message`` whenever a user sends one
+to one of its pages, the shell records a ``desktop_switch`` on every client report that names a different previous
+desktop, so an agent can work out which client (and desktop) a request came from, and it records a
+``window_opened`` on every open (an app, never a path or a title), which is how use of an app shows in the log.
 """
 
 import json
@@ -39,6 +40,7 @@ from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
 MESSAGE_EVENT_TYPE: Final[EventType] = EventType("message")
 DESKTOP_SWITCH_EVENT_TYPE: Final[EventType] = EventType("desktop_switch")
+WINDOW_OPENED_EVENT_TYPE: Final[EventType] = EventType("window_opened")
 
 # Message text is truncated at write time: the log exists to say which client asked, not to
 # duplicate the apps' own transcripts.
@@ -58,6 +60,19 @@ class ClientMessageEvent(EventEnvelope):
     )
     text: str = Field(description="The message text, truncated at write time")
     is_text_truncated: bool = Field(description="Whether the text was cut to the limit")
+
+
+class WindowOpenedEvent(EventEnvelope):
+    """A window of an app was opened, or an existing one answered to an open (desktop contracts.md section 6)."""
+
+    client_id: str = Field(description="The requesting client; empty for an open with no client to place it for")
+    desktop_id: str = Field(description="The desktop the window is on")
+    app: str = Field(description="The app whose page the window shows; never the path or the title")
+    window_id: str = Field(description="The window")
+    is_new: bool = Field(description="Whether the open minted the window, rather than answering an existing one")
+    requester: str = Field(
+        description="The op requester's spelling (an app, or app:marker) when an op opened it; empty for a client's own"
+    )
 
 
 class DesktopSwitchEvent(EventEnvelope):
@@ -123,6 +138,24 @@ class ClientActivityLog(MutableModel):
                 client_id=client_id,
                 from_desktop_id=from_desktop_id,
                 to_desktop_id=to_desktop_id,
+            )
+        )
+
+    def append_window_opened(
+        self, client_id: str, desktop_id: str, app: str, window_id: str, is_new: bool, requester: str
+    ) -> None:
+        self._append(
+            WindowOpenedEvent(
+                timestamp=_now_iso(),
+                type=WINDOW_OPENED_EVENT_TYPE,
+                event_id=_new_event_id(),
+                source=CLIENT_ACTIVITY_EVENT_SOURCE,
+                client_id=client_id,
+                desktop_id=desktop_id,
+                app=app,
+                window_id=window_id,
+                is_new=is_new,
+                requester=requester,
             )
         )
 

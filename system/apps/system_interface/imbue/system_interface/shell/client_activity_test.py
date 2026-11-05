@@ -55,6 +55,23 @@ def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
     assert second.is_connected is True and second.active_desktop == "notes"
 
 
+def test_a_window_open_advances_last_seen_and_nothing_else_and_an_unplaced_open_lists_no_client(
+    tmp_path: Path,
+) -> None:
+    log = _log(tmp_path)
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "hello"))
+    log.append_window_opened("c1", "research", "files", "w1", is_new=True, requester="")
+    log.append_window_opened("", "research", "files", "w2", is_new=True, requester="chat")
+    events = log.read_events()
+
+    (summary,) = summarize_client_activity(events, [])
+
+    assert summary.client_id == "c1"
+    assert summary.last_seen == events[1]["timestamp"] and summary.last_seen > events[0]["timestamp"]
+    assert summary.active_desktop == "home"
+    assert [message.text for message in summary.recent_messages] == ["hello"]
+
+
 def test_a_message_settles_the_desktop_and_an_empty_live_desktop_reads_as_none(tmp_path: Path) -> None:
     log = _log(tmp_path)
     log.append_desktop_switch("c1", "home", "research")
