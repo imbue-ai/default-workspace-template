@@ -682,6 +682,14 @@ For pre-existing third-party tools, do not scaffold a lib. Save your
 icon as `system/apps/<name>/icon.svg` and write the app's manifest beside
 it as `system/apps/<name>/app.toml` (like the `files` app):
 
+A wrapped server's pages carry no shell page script, so the workspace
+records only that somebody clicked into the app's window, never that they
+kept using it (the shell's `window_input` log, desktop contracts.md
+section 6). When the server lets a page carry a script of your own (a
+template it renders, a static page it serves), serve the two shell modules
+and the page script the scaffold's runner shows, so the page reports its
+input like a scaffolded app's.
+
 ```toml
 name = "<name>"
 display_name = "<What users see>"

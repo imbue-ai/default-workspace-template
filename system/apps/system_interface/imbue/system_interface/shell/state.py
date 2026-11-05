@@ -69,6 +69,7 @@ from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
+from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import entries_wire_json
@@ -88,6 +89,7 @@ from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
+from imbue.system_interface.shell.data_types import WindowInputReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
@@ -724,6 +726,43 @@ class ShellState(MutableModel):
             )
         except OSError as e:
             logger.opt(exception=e).warning("Failed to record the open of window {} of {}", window.id, window.app)
+
+    def record_window_input(self, client_id: ClientId, reports: Sequence[WindowInputReport]) -> int:
+        """Record a heartbeat's input reports in the client-activity log as ``window_input`` events (the
+        app-usage-signals spec, section 6.2); answers how many lines were written. A window still on a desktop is
+        recorded with that desktop's app and desktop, whatever the page said; one that is gone with the reported app,
+        which must be registered, and the client's active desktop. Input reports go first, so a window reported with
+        both kinds in one heartbeat is written as input."""
+        now = datetime.now(timezone.utc)
+        window_by_id = {
+            window.id: (desktop, window) for desktop in self.list_desktops() for window in desktop.windows
+        }
+        written_count = 0
+        for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
+            found = window_by_id.get(report.window_id)
+            if found is not None:
+                desktop_id, app = str(found[0].id), str(found[1].app)
+            elif self.inventory.entry(str(report.app)) is None:
+                logger.warning("Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app)
+                continue
+            else:
+                active_desktop = self.active_desktop_of_client(str(client_id))
+                desktop_id, app = ("" if active_desktop is None else str(active_desktop)), str(report.app)
+            try:
+                is_written = self.activity.append_window_input(
+                    client_id=str(client_id),
+                    desktop_id=desktop_id,
+                    app=app,
+                    window_id=str(report.window_id),
+                    kind=report.kind,
+                    now=now,
+                )
+            except OSError as e:
+                logger.opt(exception=e).warning("Failed to record input in window {} of {}", report.window_id, app)
+                continue
+            if is_written:
+                written_count += 1
+        return written_count
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
         """Mint a window and write it onto the desktop."""

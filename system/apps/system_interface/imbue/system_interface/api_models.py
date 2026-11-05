@@ -1,6 +1,7 @@
 """What the shell's own routes answer: the health probe, who is here, and a heartbeat's identity."""
 
 from typing import Annotated
+from typing import Any
 from typing import Final
 
 from pydantic import AwareDatetime
@@ -46,9 +47,14 @@ class PresenceListing(FrozenModel):
 
 class HeartbeatRequest(FrozenModel):
     """What a shell page's heartbeat may carry: how long ago the page last saw keyboard or pointer input (the
-    multiplayer spec, section 4.3). A page from before the age was sent reports the moment by its own clock instead,
-    which is taken no later than the shell's now; an older page still sends other fields, or none, which are
-    ignored. An age beyond ``MAX_INPUT_AGE_SECONDS`` is refused as every malformed body is."""
+    multiplayer spec, section 4.3), and which windows a person interacted with since the last heartbeat (the
+    app-usage-signals spec, section 6.3). A page from before the age was sent reports the moment by its own clock
+    instead, which is taken no later than the shell's now; an older page still sends other fields, or none, which are
+    ignored. An age beyond ``MAX_INPUT_AGE_SECONDS`` is refused as every malformed body is.
+
+    The input-window fields are read as whatever arrived and checked by the endpoint, never here: a refused
+    heartbeat would record no presence, and a page keeps its reports across a failed send, so a body the shell
+    could not read would take the person off the roster for good. A field off its shape drops the reports alone."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -59,6 +65,14 @@ class HeartbeatRequest(FrozenModel):
     last_input_at: AwareDatetime | None = Field(
         default=None,
         description="When the page last saw input by its own clock, as a page from before the age was sent reports it",
+    )
+    client_id: Any = Field(
+        default=None, description="The page's own client id; absent from a page from before the input reports"
+    )
+    input_windows: Any = Field(
+        default=None,
+        description="The windows whose pages reported input since the last answered heartbeat, each as a"
+        " WindowInputReport",
     )
 
 

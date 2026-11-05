@@ -40,6 +40,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.app_theming import theming_of
+from imbue.system_interface.shell.client_activity import WindowInputKind
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
@@ -246,6 +247,17 @@ class PlacementsSaveRequest(FrozenModel):
         description="The updated_at of the layout the window last fetched or saved; None for one only seen empty",
     )
     placements: tuple[WindowPlacement, ...] = Field(description="The whole layout, back to front")
+
+
+class WindowInputReport(FrozenModel):
+    """One window a shell page's heartbeat reports a person's input in (the app-usage-signals spec, section 6.3)."""
+
+    window_id: WindowId = Field(description="The window whose page reported")
+    app: AppName = Field(description="The window's app as the page knows it; the desktop's record wins when it exists")
+    kind: WindowInputKind = Field(
+        default=WindowInputKind.INPUT,
+        description="The page's own report, or focus landing in a page that reports none",
+    )
 
 
 class WindowOpenRequest(FrozenModel):

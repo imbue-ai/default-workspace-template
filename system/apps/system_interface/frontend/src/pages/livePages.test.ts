@@ -17,6 +17,7 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_NAVIGATE,
   SHELL_MESSAGE,
@@ -28,7 +29,7 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
-import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
+import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { resetThemeClientForTests, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
@@ -1382,5 +1383,90 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
     layer.reconcile();
     expect(isParked(wrapperOf("win-1"))).toBe(true);
     expect(wrapperOf("win-2").style.visibility).toBe("");
+  });
+});
+
+describe("input reports for the heartbeat (the app-usage-signals spec, sections 6.3 and 6.4)", () => {
+  /** Focus landing in one page is reported at most once per throttle interval: move the clock past it. */
+  function pastTheFocusThrottle(): void {
+    vi.setSystemTime(Date.now() + 21_000);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("notes a page's shell:input with its window and app", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    // The focus landings the setup and the restore noted are not this test's.
+    resetPresenceForTesting();
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    messageFromPage("win-2", { type: SHELL_INPUT });
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "input" },
+    ]);
+  });
+
+  it("notes focus landing in a page that binds no contract, from a raise and from the window's blur, and not in one that does", () => {
+    // The setup reconciled with win-1 focused before its page declared anything: a landing, the shell's own raise.
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
+    resetPresenceForTesting();
+
+    // Restoring win-2 makes it the focused window: a raise the shell made, counted as focus landing.
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-2", app: "notes", kind: "focus" }]);
+
+    // The person clicks into win-1's frame: the window loses focus to it. Within the throttle of the setup's
+    // raise it is not reported again; past it, it is.
+    frameOf("win-1").focus();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-2", app: "notes", kind: "focus" }]);
+    pastTheFocusThrottle();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-2", app: "notes", kind: "focus" },
+      { window_id: "win-1", app: "docs", kind: "focus" },
+    ]);
+
+    // A page that has declared its capabilities reports its own input: neither the window losing focus to it nor
+    // a raise of it says anything more.
+    resetPresenceForTesting();
+    pastTheFocusThrottle();
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    window.dispatchEvent(new Event("blur"));
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "input" }]);
+
+    // The window losing focus to anything but a page's frame (the launcher's field) is nobody's landing.
+    resetPresenceForTesting();
+    host.focus();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+  });
+
+  it("forgets a page's capabilities on its reload, since a fresh page has declared nothing yet", () => {
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    resetPresenceForTesting();
+    pastTheFocusThrottle();
+    frameOf("win-1").focus();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+
+    load("win-1");
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
   });
 });

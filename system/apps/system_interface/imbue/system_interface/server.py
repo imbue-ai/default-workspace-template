@@ -26,14 +26,17 @@ from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from loguru import logger as _loguru_logger
+from pydantic import Field
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import UserId
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
@@ -68,6 +71,7 @@ from imbue.system_interface.route_table import ROSTER_ROUTE
 from imbue.system_interface.route_table import SHELL_ROUTE_TABLE
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
+from imbue.system_interface.shell.data_types import WindowInputReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
@@ -560,9 +564,39 @@ def _parse_heartbeat() -> HeartbeatRequest:
         raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
+class _WindowInputReports(FrozenModel):
+    """What a heartbeat's input-window fields validated into."""
+
+    client_id: ClientId = Field(description="The reporting page's client")
+    reports: tuple[WindowInputReport, ...] = Field(description="The entries that were of the report's shape")
+    dropped_count: int = Field(description="The entries that were not")
+
+
+def _window_input_reports(heartbeat: HeartbeatRequest) -> _WindowInputReports | None:
+    """The heartbeat's input reports, or None for a page that sent no client id (one from before the reports) or
+    one off the rule. An entry off its shape is dropped and counted, never a reason to refuse the heartbeat."""
+    if heartbeat.client_id is None:
+        return None
+    try:
+        client_id = ClientId(str(heartbeat.client_id))
+    except InvalidLayoutValueError:
+        logger.warning("Ignored a heartbeat's input reports: its client id is off the rule")
+        return None
+    raw_entries = heartbeat.input_windows if isinstance(heartbeat.input_windows, list) else []
+    dropped_count = 0 if isinstance(heartbeat.input_windows, (list, type(None))) else 1
+    reports: list[WindowInputReport] = []
+    for raw_entry in raw_entries:
+        try:
+            reports.append(WindowInputReport.model_validate(raw_entry))
+        except (ValidationError, InvalidLayoutValueError):
+            dropped_count += 1
+    return _WindowInputReports(client_id=client_id, reports=tuple(reports), dropped_count=dropped_count)
+
+
 def _presence_heartbeat_endpoint() -> Response:
     """One shell page's heartbeat: record the requester's presence (the owner of an unshared workspace under the
-    ``owner`` key) and the page's newest input time, and answer their own identity record and participant key.
+    ``owner`` key), the page's newest input time, and the windows a person interacted with since the last heartbeat
+    (the app-usage-signals spec, section 6.3), and answer their own identity record and participant key.
 
     Answers 204 and records nothing for a visiting agent, which never heartbeats: there is no file for one here.
     """
@@ -578,6 +612,11 @@ def _presence_heartbeat_endpoint() -> Response:
     except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
+    input_reports = _window_input_reports(heartbeat)
+    if input_reports is not None:
+        if input_reports.dropped_count:
+            logger.warning("Dropped {} input reports off their shape from a heartbeat", input_reports.dropped_count)
+        _shell().record_window_input(input_reports.client_id, input_reports.reports)
     return model_response(HeartbeatResponse(identity=identity, participant=participant_key_of(identity)))
 
 

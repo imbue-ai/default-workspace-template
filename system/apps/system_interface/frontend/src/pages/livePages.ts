@@ -124,6 +124,11 @@ function themeMessage(
 /** Stops the started layer hearing theme changes: the newest layer takes this seat, as it takes the store's
  *  page-driver seat, so a layer replaced by another (a switch to the phone layout) is let go. */
 let stopFollowingTheme: (() => void) | null = null;
+/** Stops the started layer hearing the window lose focus to a frame, for the same reason. */
+let stopWatchingFrameFocus: (() => void) | null = null;
+
+/** How often at most focus landing in one contract-less page is reported: the contract's own input throttle. */
+const FOCUS_REPORT_INTERVAL_MS = 20_000;
 
 interface LivePage {
   readonly windowId: string;
@@ -138,6 +143,11 @@ interface LivePage {
   isNavigationCapable: boolean;
   /** Whether the page owns the close chord: it gets ``shell:close-request`` and its window stays open. */
   isCloseChordCapable: boolean;
+  /** Whether the page has sent ``shell:capabilities`` since its load: it binds the contract and reports its own
+   *  input, so focus landing in it says nothing more (the app-usage-signals spec, section 6.4). */
+  hasCapabilities: boolean;
+  /** When focus landing in the page was last reported, for the throttle; 0 before any. */
+  lastFocusReportedAt: number;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
@@ -226,8 +236,8 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => this.takeLocation(frame, payload));
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
     // Input inside an app's frame never bubbles to the shell's window, so the pages report it (the multiplayer
-    // spec, section 4.3) and the heartbeat's activity reads it as this client's own.
-    setChildFrameMessageHandler(SHELL_INPUT, () => notePageInput());
+    // spec, section 4.3): the heartbeat's activity reads it as this client's own, and carries the window.
+    setChildFrameMessageHandler(SHELL_INPUT, (frame) => this.takeInput(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
@@ -238,6 +248,12 @@ export class LivePagesLayer implements PageDriver {
     this.store.setPageDriver(this);
     stopFollowingTheme?.();
     stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
+    // The window loses focus when it lands in a frame: for a page that binds no contract, the one sign a person
+    // reached its window (the app-usage-signals spec, section 6.4).
+    stopWatchingFrameFocus?.();
+    const onWindowBlur = (): void => this.noteFocusLandingInActiveFrame();
+    window.addEventListener("blur", onWindowBlur);
+    stopWatchingFrameFocus = () => window.removeEventListener("blur", onWindowBlur);
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -586,7 +602,29 @@ export class LivePagesLayer implements PageDriver {
     this.lastFocusedWindowId = focused;
     this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
-    if (page !== undefined) requestFrameFocus(page.wrapper);
+    if (page === undefined) return;
+    requestFrameFocus(page.wrapper);
+    // However the window was raised: somebody put it on screen, and a page that binds no contract will say
+    // nothing more about what happens in it.
+    this.noteFocusLandingIn(page);
+  }
+
+  /** The window lost focus to a frame: when the frame is a contract-less page's, note the landing. */
+  private noteFocusLandingInActiveFrame(): void {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLIFrameElement)) return;
+    const page = this.pageOfFrame(active);
+    if (page !== undefined) this.noteFocusLandingIn(page);
+  }
+
+  /** Report focus landing in a page that binds no contract, at most once per throttle interval per page: the
+   *  weak record of use for an app whose pages never report input (the app-usage-signals spec, section 6.4). */
+  private noteFocusLandingIn(page: LivePage): void {
+    if (page.hasCapabilities) return;
+    const now = Date.now();
+    if (now - page.lastFocusReportedAt < FOCUS_REPORT_INTERVAL_MS) return;
+    page.lastFocusReportedAt = now;
+    notePageInput(page.windowId, page.app, "focus");
   }
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
@@ -729,6 +767,8 @@ export class LivePagesLayer implements PageDriver {
       pendingReport: null,
       isNavigationCapable: false,
       isCloseChordCapable: false,
+      hasCapabilities: false,
+      lastFocusReportedAt: 0,
       greetedDesktopId: null,
       greetedIsViewing: false,
       lastSentVisibility: null,
@@ -742,6 +782,7 @@ export class LivePagesLayer implements PageDriver {
     frame.addEventListener("load", () => {
       page.isNavigationCapable = false;
       page.isCloseChordCapable = false;
+      page.hasCapabilities = false;
       page.lastSentVisibility = null;
       this.greet(page);
       this.syncVisibility(page, this.isShown(page));
@@ -878,6 +919,7 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
+    page.hasCapabilities = true;
     this.greet(page);
     // A page that loads the contract after its own load (a dynamic ``import()``) missed the visibility the load told
     // it. A page takes itself to be shown until told otherwise, so only a hidden one is told again.
@@ -905,6 +947,12 @@ export class LivePagesLayer implements PageDriver {
       // A report the shell refused leaves the stored path in force, and the page follows it again.
       if (!isTaken && page.pendingReport?.path === path) page.pendingReport = null;
     });
+  }
+
+  /** ``shell:input`` from a page: a person pressed a key or the pointer in it; the heartbeat carries the window. */
+  private takeInput(frame: HTMLIFrameElement): void {
+    const page = this.pageOfFrame(frame);
+    if (page !== undefined) notePageInput(page.windowId, page.app, "input");
   }
 
   /** ``shell:focused`` from a page: its window is raised. A page that is not shown (minimized, pulled out into the

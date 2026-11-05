@@ -316,7 +316,7 @@ minutes. With
 `MNGR_AGENT_STATE_DIR` unset nothing is counted.
 
 The analytics collection of an explorer-plan workspace reads this feed and
-the shell's `window_opened` client-activity events
+the shell's `window_opened` and `window_input` client-activity events
 (`specs/minds-app-usage-signals/spec.md` in the mngr repo); the access log is
 never collected. See `docs/system/analytics-collection.md`.
 

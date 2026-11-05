@@ -1,0 +1,1 @@
+The build-app skill's escape hatch says a wrapped third-party server's window records only that somebody clicked into it, and that a page the server lets carry a script should serve the shell page script so it reports its input like a scaffolded app's.
