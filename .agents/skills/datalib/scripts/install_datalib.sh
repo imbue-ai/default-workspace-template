@@ -13,7 +13,8 @@
 # --without-app installs everything but the app's program: the chat import
 # (.agents/skills/import-chats) syncs into this same store from its own script
 # and keeps the Datalib app out of the launcher, since datalib itself is not
-# announced to users.
+# announced to users. The program moves a store from before the libraries
+# folder into its library when it starts, so this path has it do just that.
 #
 # The release lands in a directory named after the pin, under the persistent
 # home, and ~/.local/bin gets one symlink per binary, so a pin bump installs
@@ -112,6 +113,8 @@ else
 fi
 
 if [ "$with_app" -eq 0 ]; then
+    # CLEANUP: drop with move_store_into_library in the Datalib app's launcher.
+    (cd "$REPO_ROOT" && python3 system/apps/datalib/launch_datalib_http.py --move-store-only ${DATALIB_DATA_ROOT:+--data-root "$DATALIB_DATA_ROOT"})
     _log "left the Datalib app's program out (--without-app)"
     exit 0
 fi

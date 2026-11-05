@@ -6,6 +6,6 @@ New `import-chats` skill: bring the user's Claude and ChatGPT conversations into
 
 - After each sync the script rewrites one index per source from the downloaded records (`data/.skills/import-chats/claude-chats.md`, `chatgpt-chats.md`): every conversation by title, most recently updated first and grouped by month, Claude projects in their own section, each linked to the original and, once search is on, to its page in the workspace. The skill shows the agent how to find and read conversations straight from the downloaded records.
 
-- The datalib skill's installer takes `--without-app`, which installs the binaries, guide and runtime but adds no Datalib app program; the chat import uses it.
+- The datalib skill's installer takes `--without-app`, which installs the binaries, guide and runtime and moves a store from before the `Default` library into it, but adds no Datalib app program; the chat import uses it.
 
 - `find-transcripts` now points at `import-chats` for Claude and ChatGPT chats instead of saying they cannot be reached.

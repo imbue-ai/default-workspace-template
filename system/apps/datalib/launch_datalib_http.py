@@ -12,6 +12,9 @@ token in ``DATALIB_TOKEN``.
 Usage (the ``datalib`` program line, from the repo root):
     python3 system/apps/datalib/launch_datalib_http.py
 
+``--move-store-only`` moves a store from before the libraries folder into its library and exits, for
+the datalib skill's installer when it leaves this program out.
+
 Standard-library only, like forward_port.py: the program line runs it under a
 plain ``python3``, so the app never depends on the root venv being intact. The
 one import beyond the standard library is the stdlib-only ``oom_priority``
@@ -212,9 +215,10 @@ def _drop_data_root_line(config_path: Path, old_root: Path) -> None:
         config_path.write_text("".join(kept), encoding="utf-8")
 
 
-# CLEANUP: drop move_store_into_library, its helpers above, and its call in launch() once every
-# workspace that used datalib while the store sat at data/.skills/datalib itself (before the
-# libraries folder, October 2026) has started the app since.
+# CLEANUP: drop move_store_into_library, its helpers above, its call in launch(), --move-store-only
+# and the installer's call of it once every workspace that used datalib while the store sat at
+# data/.skills/datalib itself (before the libraries folder, October 2026) has started the app or
+# imported chats since.
 def move_store_into_library(libraries_dir: Path, data_root: Path) -> bool:
     """Move a store written at the libraries folder itself into ``data_root``, a library inside it; return whether one moved.
 
@@ -417,6 +421,11 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         default=FORWARD_PORT_PATH,
         help="The registration script",
     )
+    parser.add_argument(
+        "--move-store-only",
+        action="store_true",
+        help="Move a store from before the libraries folder into the data root, then exit",
+    )
     return parser.parse_args(argv)
 
 
@@ -424,8 +433,12 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(name)s: %(levelname)s: %(message)s"
     )
+    arguments = parse_arguments(sys.argv[1:])
     try:
-        launch(parse_arguments(sys.argv[1:]))
+        if arguments.move_store_only:
+            move_store_into_library(arguments.data_root.parent, arguments.data_root)
+        else:
+            launch(arguments)
     except DatalibLaunchError as e:
         logger.error("%s", e)
         sys.exit(EXIT_NOT_READY)
