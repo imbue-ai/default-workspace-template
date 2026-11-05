@@ -1,5 +1,4 @@
-#!/usr/bin/env bash
-# Shared system-toolchain setup for default-workspace-template hosts.
+#!/usr/bin/env bash # Shared system-toolchain setup for default-workspace-template hosts.
 #
 # Installs the repo-independent toolchain: system packages, language runtimes,
 # and pinned CLIs. This is the single source of truth for that setup -- the
@@ -61,7 +60,7 @@ provision_drop_inherited_pins
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.19.4}"
+: "${LATCHKEY_VERSION:=3.22.1}"
 : "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
