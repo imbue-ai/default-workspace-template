@@ -27,7 +27,6 @@ from imbue.imbue_common.logging import log_span
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/getting_started/app.toml")
-# Supervisord runs the app from the workspace root.
 WORKSPACE_ROOT: Final[Path] = Path(".")
 APP_NAME: Final[AppName] = AppName("getting-started")
 # The frontend's build output, inside the package.
