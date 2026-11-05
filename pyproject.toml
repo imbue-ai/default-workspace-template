@@ -96,7 +96,7 @@ dev = [
     # (the CI job that runs the suites inside the workspace image).
     "pytest-workspace-env",
     # system/test_no_type_errors.py, pinned to the version every project's ratchet uses.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [tool.uv]
