@@ -12,6 +12,8 @@ dependencies = [
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.
     "defusedxml>=0.7",
+    # The announcement stream's archive rule, shared with the share gateway's request counts.
+    "event-streams",
     # A registration bounds its own request body, a per-request setter Flask 3.1 added.
     "flask>=3.1",
     "flask-sock>=0.7",
