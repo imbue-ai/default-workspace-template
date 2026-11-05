@@ -10,7 +10,6 @@ from loguru import logger
 from auth_sandbox.claim import (
     Claim,
     ClaimPaths,
-    await_claim,
     parse_claim,
     serve_claim,
 )
@@ -18,7 +17,6 @@ from auth_sandbox.cli import await_claim_command
 from auth_sandbox.errors import ClaimFileError
 from auth_sandbox.mock_latchkey_test import (
     FakeClock,
-    FakeClockExhaustedError,
     ScheduledWrite,
 )
 
@@ -117,27 +115,24 @@ def test_a_refused_claim_is_logged_once_and_a_rewritten_valid_one_is_installed(
 ) -> None:
     paths = _paths(tmp_path)
     paths.claim_path.write_text(_claim_text(screen_token_sha256="not-a-digest"))
-    rewritten = tmp_path / "rewritten.json"
-    rewritten.write_text(_claim_text())
-    clock = FakeClock(current=_START)
+    # One watcher sees the refused file, polls it unchanged, then sees the connector's rewrite.
+    clock = FakeClock(
+        current=_START,
+        scheduled=[
+            ScheduledWrite(at=_START + 30, path=paths.claim_path, text=_claim_text())
+        ],
+    )
     errors, handle = _errors_logged()
     try:
-        # Unchanged, the refused file is not read again: the wait ends only when the clock runs out.
-        with pytest.raises(FakeClockExhaustedError):
-            await_claim(
-                paths.claim_path, FakeClock(current=_START, limit=_START + 5), 0.25
-            )
-        assert len(errors) == 1
-        assert "64 lower-case hex digits" in errors[0]
-        assert paths.authorized_keys_path.read_text() == ""
-
-        # The connector's atomic rename makes a new file, which is read and installed.
-        os.replace(rewritten, paths.claim_path)
         serve_claim(paths, clock, 0.25)
     finally:
         logger.remove(handle)
     assert len(errors) == 1
+    assert "64 lower-case hex digits" in errors[0]
     assert paths.authorized_keys_path.read_text() == _KEY + "\n"
+    assert paths.screen_token_sha256_path.read_text() == _DIGEST + "\n"
+    assert clock.pauses[:120] == [0.25] * 120
+    assert clock.pauses[120:] == [570.0]
 
 
 def test_a_claim_that_arrives_already_expired_admits_no_one(tmp_path: Path) -> None:
