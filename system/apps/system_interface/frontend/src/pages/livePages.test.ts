@@ -1403,8 +1403,6 @@ describe("input reports for the heartbeat (the app-usage-signals spec, sections 
   it("notes a page's shell:input with its window and app", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
-    // The focus landings the setup and the restore noted are not this test's.
-    resetPresenceForTesting();
     messageFromPage("win-1", { type: SHELL_INPUT });
     messageFromPage("win-2", { type: SHELL_INPUT });
     messageFromPage("win-1", { type: SHELL_INPUT });
