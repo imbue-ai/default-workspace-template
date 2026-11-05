@@ -1,4 +1,5 @@
 import gzip
+import threading
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -244,3 +245,31 @@ def test_an_oversized_log_is_archived_aside_and_the_readers_read_the_live_stream
     ]
     assert gzip.decompress(archive.read_bytes()) == older
     assert [path.exists() for path in earlier_archives] == [False, False, True]
+
+
+def test_one_archive_thread_runs_at_a_time_and_a_later_append_finishes_what_it_missed(tmp_path: Path) -> None:
+    """Appends come from request threads: while an archive thread is alive, an append that finds a staged stream
+    starts no second one (two compressions of one staged file would write one archive over the other), and the
+    first append after it finishes compresses what is still staged."""
+    log = _log(tmp_path)
+    log.append_desktop_switch("c1", "desk-0", "desk-1")
+    staged = log.events_path.with_name("events.jsonl.20200101000000000000.archiving")
+    staged.write_bytes(b"older")
+    is_released = threading.Event()
+    archiving = threading.Thread(target=is_released.wait, daemon=True)
+    archiving.start()
+    log._archive_thread = archiving
+
+    log.append_desktop_switch("c1", "desk-1", "desk-2")
+    assert log._archive_thread is archiving and staged.exists()
+
+    is_released.set()
+    archiving.join(timeout=10.0)
+    log.append_desktop_switch("c1", "desk-2", "desk-3")
+    assert log._archive_thread is not archiving
+    wait_for(
+        lambda: not staged.exists() and staged.with_suffix(".gz").exists(),
+        timeout=10.0,
+        error_message="the staged client-activity log was never compressed",
+    )
+    assert gzip.decompress(staged.with_suffix(".gz").read_bytes()) == b"older"

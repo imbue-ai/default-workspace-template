@@ -153,6 +153,7 @@ class ClientActivityLog(MutableModel):
         description="The size past which the stream is staged aside before a write",
     )
     _append_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _archive_thread: threading.Thread | None = PrivateAttr(default=None)
     _last_input_minute_by_client_window: dict[tuple[str, str], int] = PrivateAttr(default_factory=dict)
 
     def _append(self, event: EventEnvelope) -> None:
@@ -161,7 +162,9 @@ class ClientActivityLog(MutableModel):
 
     def _append_locked(self, event: EventEnvelope) -> None:
         """Append one event; the caller holds the append lock. A stream past the threshold is staged aside first,
-        and whatever is staged (this write's, or a stopped shell's) is compressed on a thread of its own."""
+        and whatever is staged (this write's, or a stopped shell's) is compressed on a thread of its own. Appends
+        come from request threads, so one archive thread runs at a time: a stream staged while it runs is found by
+        the first append after it finishes."""
         path = self.events_path
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -171,8 +174,12 @@ class ClientActivityLog(MutableModel):
             logger.opt(exception=e).warning("Failed to check the client-activity log {} for archiving", path)
         with path.open("a", encoding="utf-8") as event_file:
             event_file.write(event.model_dump_json() + "\n")
-        if staged_streams(path):
-            threading.Thread(target=self._compress_staged_streams, daemon=True, name="client-activity-archive").start()
+        is_archiving = self._archive_thread is not None and self._archive_thread.is_alive()
+        if not is_archiving and staged_streams(path):
+            self._archive_thread = threading.Thread(
+                target=self._compress_staged_streams, daemon=True, name="client-activity-archive"
+            )
+            self._archive_thread.start()
 
     def _compress_staged_streams(self) -> None:
         try:
