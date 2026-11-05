@@ -603,8 +603,9 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     requestFrameFocus(page.wrapper);
     // However the window was raised: somebody put it on screen, and a page that binds no contract will say
-    // nothing more about what happens in it.
-    this.noteFocusLandingIn(page);
+    // nothing more about what happens in it. A page that has not loaded yet (the shell's boot, a window just
+    // opened) may still declare the contract, so its raise says nothing; a click into it still counts.
+    if (page.greetedDesktopId !== null) this.noteFocusLandingIn(page);
   }
 
   /** The window lost focus to a frame: when the frame is a contract-less page's, note the landing. */

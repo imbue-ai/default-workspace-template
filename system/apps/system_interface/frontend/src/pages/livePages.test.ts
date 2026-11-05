@@ -1415,32 +1415,44 @@ describe("input reports for the heartbeat (the app-usage-signals spec, sections 
   });
 
   it("notes focus landing in a page that binds no contract, from a raise and from the window's blur, and not in one that does", () => {
-    // The setup reconciled with win-1 focused before its page declared anything: a landing, the shell's own raise.
-    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
-    resetPresenceForTesting();
+    // The setup reconciled with win-1 focused before its page had loaded: a page that may still declare the
+    // contract, so the shell's own raise at boot says nothing.
+    expect(pendingInputReportsForTesting()).toEqual([]);
 
-    // Restoring win-2 makes it the focused window: a raise the shell made, counted as focus landing.
+    // Restoring win-2 raises a page that has not loaded either; once loaded and declaring nothing, a later raise
+    // of it is a landing the shell made.
     store.restoreWindow("win-2");
     layer.reconcile();
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    load("win-2");
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    store.raiseWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-2", app: "notes", kind: "focus" }]);
 
-    // The person clicks into win-1's frame: the window loses focus to it. Within the throttle of the setup's
-    // raise it is not reported again; past it, it is.
+    // The person clicks into win-1's frame: the window loses focus to it, loaded or not. A second click within
+    // the throttle is not reported again; past it, it is.
     frameOf("win-1").focus();
     expect(document.activeElement).toBe(frameOf("win-1"));
-    window.dispatchEvent(new Event("blur"));
-    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-2", app: "notes", kind: "focus" }]);
-    pastTheFocusThrottle();
     window.dispatchEvent(new Event("blur"));
     expect(pendingInputReportsForTesting()).toEqual([
       { window_id: "win-2", app: "notes", kind: "focus" },
       { window_id: "win-1", app: "docs", kind: "focus" },
     ]);
+    resetPresenceForTesting();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    pastTheFocusThrottle();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
 
     // A page that has declared its capabilities reports its own input: neither the window losing focus to it nor
     // a raise of it says anything more.
     resetPresenceForTesting();
     pastTheFocusThrottle();
+    load("win-1");
     messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
     window.dispatchEvent(new Event("blur"));
     store.raiseWindow("win-1");
