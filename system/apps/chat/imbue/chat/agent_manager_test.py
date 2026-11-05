@@ -59,6 +59,7 @@ from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
@@ -7907,6 +7908,41 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_turn_closing", "has_background_task", "expected"),
+    [
+        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
+        # the harness names, while a marker exists only for the kinds this workspace records.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, True),
+        ("RUNNING_BACKGROUND", None, False, False, True),
+        # A marker alone carries a detached runner, which the harness never reports.
+        ("WAITING", ActivityState.IDLE, False, True, True),
+        # The transcript tail and the closing turn cover a turn the lifecycle has not caught.
+        ("WAITING", ActivityState.THINKING, False, False, True),
+        ("WAITING", ActivityState.IDLE, True, False, True),
+        # Nothing outstanding: the user is the next mover.
+        ("WAITING", ActivityState.IDLE, False, False, False),
+        ("STOPPED", None, False, False, False),
+    ],
+)
+def test_busy_means_the_agent_will_resume_on_its_own(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_turn_closing: bool,
+    has_background_task: bool,
+    expected: bool,
+) -> None:
+    assert (
+        resolve_is_busy(
+            activity_state=activity,
+            is_turn_closing=is_turn_closing,
+            lifecycle_state=lifecycle,
+            has_background_task=has_background_task,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
     ("lifecycle", "activity", "is_permission_pending", "is_busy", "is_turn_closing", "expected"),
     [
         ("RUNNING", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
@@ -7921,13 +7957,11 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
-        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
-        # the harness names, while a marker exists only for the kinds this workspace records.
-        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, ChatStatus.BACKGROUND),
-        ("RUNNING_BACKGROUND", None, False, False, False, ChatStatus.BACKGROUND),
-        # A live turn and a permission prompt still outrank it.
-        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, False, False, ChatStatus.WORKING),
-        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, ChatStatus.ATTENTION),
+        # An agent carrying work past its turn reaches this rule as busy, and a live turn or a
+        # permission prompt still outranks it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
+        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, False, ChatStatus.STOPPED),

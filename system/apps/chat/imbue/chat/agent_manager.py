@@ -635,6 +635,37 @@ def is_turn_in_flight(activity_state: ActivityState | None) -> bool:
 
 
 @pure
+def resolve_is_busy(
+    *,
+    activity_state: ActivityState | None,
+    is_turn_closing: bool,
+    lifecycle_state: str,
+    has_background_task: bool,
+) -> bool:
+    """Whether the agent will resume on its own rather than waiting on the user.
+
+    Each signal reaches what the others cannot. The transcript tail and the closing turn cover a
+    turn the observe stream has not caught up with. The RUNNING_BACKGROUND lifecycle covers every
+    task kind the harness names. A task marker covers a detached ``run_in_background`` runner,
+    which never reaches the harness's payload and so can never show up as the lifecycle, and the
+    task kinds this workspace records that the lifecycle has not reported yet.
+
+    CLEANUP: this workspace records the harness's own background tasks itself, from the same
+    turn-end payload mngr reads for RUNNING_BACKGROUND, so those two track the same work.
+    Retiring that duplicate means dropping `claude_background_task_hooks.py` and reading mngr's
+    leases instead, which needs a lease to carry what the task row shows: what each task is, and
+    when it started, preserved across the turn ends that rewrite the lease set. A lease carries a
+    name and a deadline, so today that row would lose its description and its elapsed time.
+    """
+    return (
+        is_turn_in_flight(activity_state)
+        or is_turn_closing
+        or lifecycle_state == BACKGROUND_LIFECYCLE_STATE
+        or has_background_task
+    )
+
+
+@pure
 def chat_status_for_agent(
     lifecycle_state: str,
     activity_state: ActivityState | None,
@@ -645,10 +676,7 @@ def chat_status_for_agent(
     """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, a compaction or
     a turn still closing, then a busy chat (one a pending background task will wake).
 
-    Busy is read from two signals, because each reaches what the other misses: this workspace's
-    own task markers, which it writes for the task kinds it records, and the agent's
-    RUNNING_BACKGROUND lifecycle, which mngr reports for every kind the harness names. A chat
-    waiting on a kind this workspace keeps no marker for is known only by the second.
+    What counts as busy is :func:`resolve_is_busy`'s question.
     """
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
@@ -656,7 +684,7 @@ def chat_status_for_agent(
         return ChatStatus.ATTENTION
     if (activity_state is not None and is_working_activity_state(activity_state)) or is_turn_closing:
         return ChatStatus.WORKING
-    if is_busy or lifecycle_state == BACKGROUND_LIFECYCLE_STATE:
+    if is_busy:
         return ChatStatus.BACKGROUND
     return ChatStatus.IDLE
 
@@ -1032,16 +1060,12 @@ def chat_snapshot_for_active_agent(
     """
     handoff = chat.handoff
     transition = chat.transition
-    # Each term reaches what the others cannot: the transcript tail and the closing turn cover a
-    # turn the observe stream has not caught up with, and a detached ``run_in_background`` runner
-    # never reaches the harness's own payload, so it can never show up as the agent's lifecycle.
-    # CLEANUP: this workspace records the harness's own background tasks itself, from the same
-    # turn-end payload mngr reads for RUNNING_BACKGROUND, so the two track the same work. Retiring
-    # that duplicate means dropping `claude_background_task_hooks.py` and reading mngr's leases
-    # instead, which needs a lease to carry what the task row shows: what each task is, and when
-    # it started, preserved across the turn ends that rewrite the lease set. A lease carries a
-    # name and a deadline, so today that row would lose its description and its elapsed time.
-    is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
+    is_busy = resolve_is_busy(
+        activity_state=agent.activity_state,
+        is_turn_closing=agent.is_turn_closing,
+        lifecycle_state=agent.state,
+        has_background_task=bool(background_tasks),
+    )
     return ChatSnapshot(
         chat_id=chat.chat_id,
         kind=chat_kind_of(agent.harness),
