@@ -4,7 +4,7 @@ state, and the contract module.
 The page is the frontend's built document (``static/index.html``); its bundle is served under ``/assets``. The
 catalog route answers the freshest copy the store holds, with each drawing resolved to a URL (``catalog`` is null
 when no catalog URL is configured, and a 503 says nothing could be loaded). The chat import routes answer what the
-chat import has brought in and record that the user put its card away. The contract module the page speaks to
+chat import has brought in and whether it is offered, and record that the user put its card away. The contract module the page speaks to
 the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
 """
 
@@ -159,8 +159,8 @@ def build_pages_blueprint(
 
     @blueprint.get(CHAT_IMPORT_PATH)
     def chat_import_state() -> ResponseReturnValue:
-        """The "Bring in your chats" card's state: each source the chat import has recorded, and whether the card
-        was put away."""
+        """The "Bring in your chats" card's state: each source the chat import has recorded, whether the card was
+        put away, and whether the import is offered."""
         return model_response(chat_import.view())
 
     @blueprint.post(CHAT_IMPORT_DISMISS_PATH)

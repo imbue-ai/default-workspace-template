@@ -145,7 +145,7 @@ class ChatImportResponse(FrozenModel):
 
 
 class ChatImportStore(FrozenModel):
-    """Reads the skill's status file and keeps the card's dismissal."""
+    """Reads the skill's status file and the profile snapshot's offer, and keeps the card's dismissal."""
 
     status_path: Path = Field(description="The import-chats skill's status file")
     dismissal_path: Path = Field(description="Where the app records that the user put the card away")
