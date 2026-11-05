@@ -95,7 +95,7 @@ class _FakeDatalib:
     returncode: int | None = None
     check_returncode: int = 0
     turn_off_failures: Sequence[str] = ()
-    on_sync: Callable[[], None] = lambda: None
+    on_sync: Callable[[], object] = lambda: None
     commands: list[list[str]] = field(default_factory=list)
 
     def __call__(
@@ -508,9 +508,16 @@ def test_a_check_asks_the_sources_own_api_through_the_impersonating_gateway() ->
 
 
 def test_a_check_reads_an_answer_that_is_not_utf8() -> None:
-    def run(_command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def run(
+        _command: Sequence[str], *, encoding: str, errors: str, **_kwargs: object
+    ) -> subprocess.CompletedProcess:
         script = "import sys; sys.stdout.buffer.write(b'<html>\\xff cloudflare</html>\\n403')"
-        return subprocess.run([sys.executable, "-c", script], **kwargs)
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            encoding=encoding,
+            errors=errors,
+        )
 
     assert import_chats.check(CLAUDE, run)[0] == "blocked"
 
