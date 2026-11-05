@@ -108,6 +108,12 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # whole time.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
 
+# The lifecycle of an agent whose turn ended while work it declared is still outstanding: a
+# background command, a subagent, a monitor. Alive, and the next thing to move it is that work
+# rather than the user -- but no turn is in flight, so this is deliberately not one of
+# RUNNING_LIFECYCLE_STATES, which answers that narrower question.
+BACKGROUND_LIFECYCLE_STATE: str = "RUNNING_BACKGROUND"
+
 # The lifecycle of an agent whose process exited while its tmux pane lives on: a crash, a kill, an
 # out-of-memory shed of the process. A deliberate stop takes the pane with it and reads STOPPED.
 EXITED_LIFECYCLE_STATE: str = "DONE"
@@ -123,15 +129,16 @@ UNKNOWN_LIFECYCLE_STATE: str = "UNKNOWN"
 def is_lifecycle_dead(lifecycle_state: str) -> bool:
     """True iff the observe-reported lifecycle positively says the agent process is dead.
 
-    Dead is everything outside the RUNNING states, WAITING (alive between turns), and
-    UNKNOWN (unobservable -- non-evidence, never treated as death). A dead process's
+    Dead is everything outside the RUNNING states, WAITING (alive between turns),
+    RUNNING_BACKGROUND (alive, carrying work past its turn), and UNKNOWN (unobservable --
+    non-evidence, never treated as death). A dead process's
     in-memory queue and in-flight turn died with it, so its activity must settle to IDLE
     no matter what the transcript tail says; the manager applies that override in
     ``_recompute_activity_state``.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return False
-    if lifecycle_state == WAITING_LIFECYCLE_STATE:
+    if lifecycle_state in (WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE):
         return False
     return lifecycle_state != UNKNOWN_LIFECYCLE_STATE
 
@@ -148,6 +155,10 @@ def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: boo
     live turn. Each harness's plugin also clears the marker at launch, so a
     marker outliving its process cannot be mistaken for a live turn by anything that reads it
     directly either.
+
+    RUNNING_BACKGROUND reads as not running here, which is the point of it: that agent's turn
+    has ended, and work it left behind will start the next one. Liveness is
+    :func:`is_lifecycle_dead`'s question, not this one's.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return True

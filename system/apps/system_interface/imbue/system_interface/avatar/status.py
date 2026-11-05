@@ -53,7 +53,9 @@ ENV_MNGR_HOST_DIR: Final[str] = "MNGR_HOST_DIR"
 DEFAULT_MNGR_HOST_DIRNAME: Final[str] = ".mngr"
 AGENT_EVENTS_RELATIVE_PATH: Final[Path] = Path("events") / "mngr" / "agents" / "events.jsonl"
 PRIMARY_LABEL_KEY: Final[str] = "is_primary"
-WORKING_AGENT_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
+WORKING_AGENT_STATES: Final[frozenset[str]] = frozenset(
+    {"RUNNING", "RUNNING_BACKGROUND", "RUNNING_UNKNOWN_AGENT_TYPE"}
+)
 # Twice the observer's snapshot interval.
 STALE_AFTER: Final[timedelta] = timedelta(minutes=10)
 

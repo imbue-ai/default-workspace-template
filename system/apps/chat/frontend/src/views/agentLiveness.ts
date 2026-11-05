@@ -7,10 +7,17 @@
  * message revives it; dead here means only that the process is not up now.
  */
 
-// Lifecycle states in which the agent process is alive, whether working (RUNNING) or idle
-// (WAITING). RUNNING_UNKNOWN_AGENT_TYPE is an agent running under a process name mngr can't
-// confirm; it counts as running.
-const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"]);
+// Lifecycle states in which the agent process is alive: working a turn (RUNNING), carrying
+// work past one (RUNNING_BACKGROUND), or idle between them (WAITING).
+// RUNNING_UNKNOWN_AGENT_TYPE is an agent running under a process name mngr can't confirm; it
+// counts as running. Mirrors the backend's ``is_lifecycle_dead``, which this set must agree
+// with -- ``test_alive_states_match_the_backend`` holds the two together.
+const ALIVE_STATES: ReadonlySet<string> = new Set([
+  "RUNNING",
+  "RUNNING_BACKGROUND",
+  "RUNNING_UNKNOWN_AGENT_TYPE",
+  "WAITING",
+]);
 
 /** True iff ``state`` POSITIVELY says the agent process is dead.
 
