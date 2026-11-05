@@ -237,8 +237,10 @@ vi.mock("../models/Providers", () => ({
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import {
+  MAX_TEXTAREA_HEIGHT_PX,
   MessageInput,
   prependToComposer,
   raiseFailureNotice,
@@ -634,17 +636,38 @@ describe("MessageInput send button", () => {
   });
 });
 
+/** The composer's row as fitComposer touches it, holding its attributes in `attributes`. */
+function fakeComposerRow(attributes: Set<string>) {
+  return {
+    clientWidth: 600,
+    style: {},
+    getBoundingClientRect: () => ({ height: 36 }),
+    hasAttribute: (name: string) => attributes.has(name),
+    removeAttribute: (name: string) => attributes.delete(name),
+    toggleAttribute: (name: string, force: boolean) => {
+      if (force) attributes.add(name);
+      else attributes.delete(name);
+      return force;
+    },
+  };
+}
+
+/** Stand in for ResizeObserver, which jsdom lacks and the composer row constructs when it mounts. */
+function stubInertResizeObserver(): void {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+}
+
 describe("MessageInput layout with attachments", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
     localStorage.clear();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        disconnect(): void {}
-      },
-    );
+    stubInertResizeObserver();
   });
 
   afterEach(() => {
@@ -658,18 +681,7 @@ describe("MessageInput layout with attachments", () => {
     const rowVnode = findByClass(tree, "message-input-row");
     const attributes = new Set<string>();
     if (rowVnode?.attrs?.["data-attachments"] !== undefined) attributes.add("data-attachments");
-    const row = {
-      clientWidth: 600,
-      style: {},
-      getBoundingClientRect: () => ({ height: 36 }),
-      hasAttribute: (name: string) => attributes.has(name),
-      removeAttribute: (name: string) => attributes.delete(name),
-      toggleAttribute: (name: string, force: boolean) => {
-        if (force) attributes.add(name);
-        else attributes.delete(name);
-        return force;
-      },
-    };
+    const row = fakeComposerRow(attributes);
     const textarea = { style: {}, scrollHeight: 28, clientHeight: 28, focus: () => undefined };
     (rowVnode?.attrs?.oncreate as (vnode: unknown) => void)({ dom: row });
     (findByTag(tree, "textarea")?.attrs?.onupdate as (vnode: unknown) => void)({ dom: textarea });
@@ -685,6 +697,171 @@ describe("MessageInput layout with attachments", () => {
       { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
     ]);
     expect(stacksOneLineOfText()).toBe(true);
+  });
+});
+
+describe("MessageInput draft scroll position", () => {
+  const ONE_LINE_PX = 28;
+  const DRAFT_CONTENT_PX = 600;
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+    stubInertResizeObserver();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
+   *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The draft ends with
+   *  `draftSuffix`, and the caret sits at `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing
+   *  it to "auto" resets its scrollTop, as some browsers do. `scrollTopWriteCount` counts the writes to its
+   *  scrollTop. */
+  function makeOverflowingDraftTextarea({
+    caretPosition,
+    draftSuffix = "",
+    isScrollLostOnCollapse = false,
+  }: { caretPosition?: number; draftSuffix?: string; isScrollLostOnCollapse?: boolean } = {}) {
+    let storedScrollTopPx = 0;
+    let heightStyle = "";
+    const value = "a long draft ".repeat(40) + draftSuffix;
+    const caret = caretPosition ?? value.length;
+    return {
+      value,
+      selectionStart: caret,
+      selectionEnd: caret,
+      scrollTopWriteCount: 0,
+      style: {
+        overflowY: "",
+        get height(): string {
+          return heightStyle;
+        },
+        set height(next: string) {
+          heightStyle = next;
+          if (next === "auto" && isScrollLostOnCollapse) storedScrollTopPx = 0;
+        },
+      },
+      focus: () => undefined,
+      setSelectionRange(start: number, end: number): void {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+      },
+      get clientHeight(): number {
+        return this.style.height === "" || this.style.height === "auto" ? ONE_LINE_PX : parseFloat(this.style.height);
+      },
+      get scrollHeight(): number {
+        return Math.max(DRAFT_CONTENT_PX, this.clientHeight);
+      },
+      get scrollTop(): number {
+        return Math.min(storedScrollTopPx, this.scrollHeight - this.clientHeight);
+      },
+      set scrollTop(valuePx: number) {
+        this.scrollTopWriteCount += 1;
+        storedScrollTopPx = Math.max(0, Math.min(valuePx, this.scrollHeight - this.clientHeight));
+      },
+    };
+  }
+
+  /** Mount the composer around `textarea` and lay it out once; returns the textarea's input, key and redraw
+   *  hooks. */
+  function mountComposer(textarea: ReturnType<typeof makeOverflowingDraftTextarea>) {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    const textareaVnode = findByTag(tree, "textarea");
+    const onupdate = textareaVnode?.attrs?.onupdate as (vnode: unknown) => void;
+    const oninput = textareaVnode?.attrs?.oninput as (event: unknown) => void;
+    const onkeydown = textareaVnode?.attrs?.onkeydown as (event: unknown) => void;
+    (findByClass(tree, "message-input-row")?.attrs?.oncreate as (vnode: unknown) => void)({
+      dom: fakeComposerRow(new Set()),
+    });
+    onupdate({ dom: textarea });
+    return {
+      redraw: () => onupdate({ dom: textarea }),
+      type: () => oninput({ target: textarea }),
+      press: (key: string) => onkeydown({ key, preventDefault: () => undefined }),
+    };
+  }
+
+  it("leaves an overflowing draft where its reader scrolled it when the composer redraws", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    expect(textarea.clientHeight).toBe(MAX_TEXTAREA_HEIGHT_PX);
+    textarea.scrollTop = 40;
+    const writeCountBeforeRedraw = textarea.scrollTopWriteCount;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(40);
+    expect(textarea.scrollTopWriteCount).toBe(writeCountBeforeRedraw);
+  });
+
+  it("keeps an overflowing draft's scroll position across a redraw where collapsing it to measure loses it", () => {
+    const textarea = makeOverflowingDraftTextarea({ isScrollLostOnCollapse: true });
+    const composer = mountComposer(textarea);
+    textarea.scrollTop = 40;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("keeps a draft typed at its end scrolled down through the redraw after the browser reveals the caret", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    composer.type();
+    // After the input event the browser scrolls the caret into view, short of the padding under it.
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    textarea.scrollTop = 40;
+    composer.redraw();
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("scrolls an overflowing draft all the way down while typing at its end", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    // The browser has revealed the caret line, but not the padding under it.
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+    composer.type();
+
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    const writeCountAtBottom = textarea.scrollTopWriteCount;
+    composer.type();
+    expect(textarea.scrollTopWriteCount).toBe(writeCountAtBottom);
+  });
+
+  it("keeps an overflowing draft's position while typing in its middle", () => {
+    const textarea = makeOverflowingDraftTextarea({ caretPosition: 5 });
+    const composer = mountComposer(textarea);
+    textarea.scrollTop = 40;
+
+    composer.type();
+
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("scrolls an overflowing draft all the way down after picking a mention at its end", () => {
+    mocks.isRoom = true;
+    setMentionsForTesting([{ handle: "alice", display_name: "Alice", kind: "invited", key: "alice", chat_id: null }]);
+    try {
+      const textarea = makeOverflowingDraftTextarea({ draftSuffix: "@al" });
+      const composer = mountComposer(textarea);
+      composer.type();
+      textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+      composer.press("Enter");
+
+      expect(textarea.value.endsWith("@alice ")).toBe(true);
+      expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    } finally {
+      mocks.isRoom = false;
+      setMentionsForTesting([]);
+    }
   });
 });
 
