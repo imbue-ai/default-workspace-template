@@ -98,20 +98,18 @@ live loop:
 
 Subagents are here to keep you responsive and get the work done faster: while
 they build, you stay free to read the user's next message and reply. Do every
-task through a subagent, whether a new one or one already running: each
-requested change, each follow-up on a change, and each fix. Keep one subagent for
-quick look-and-feel changes (a colour, a font size, spacing, showing or hiding an
-element) and send each such request to it as soon as it arrives, so those
-changes appear in the app right away. After each change it makes, the quick
-look-and-feel subagent refreshes the user's window (`uv run --no-sync
-workspace-layout refresh --app <name>`) so the change shows at once. Hand every
-other request to a subagent as soon as it arrives, including the first one: start
-a new native subagent (the `Agent` tool) when the work makes sense to give to a
-new agent, or send it to a subagent already running when it fits with that
-subagent's work. A list of changes in one message is several
-requests, so each change in the list goes to a subagent as above. Start each
-building subagent with `model: "sonnet"`, and leave its `isolation` unset, so
-every subagent edits the live app directly. Subagents run in the background, so
+task through one of two building subagents (the `Agent` tool): each requested
+change, each follow-up on a change, and each fix. Keep one subagent, started
+with `model: "sonnet"`, for quick look-and-feel changes (a colour, a font size,
+spacing, showing or hiding an element) and send each such request to it as soon
+as it arrives, so those changes appear in the app right away. After each change
+it makes, the quick look-and-feel subagent refreshes the user's window (`uv run
+--no-sync workspace-layout refresh --app <name>`) so the change shows at once.
+Send every other request to one other subagent, started with `model: "opus"`, as
+soon as it arrives, including the first one. A list of changes in one message is
+several requests, so each change in the list goes to one of these two subagents.
+Leave each building subagent's `isolation` unset, so every subagent edits the
+live app directly. Subagents run in the background, so
 starting one returns at once. They work under your service lease (below) and do
 not take their own. Keep each brief short: the user's request word for word and
 the app's location; leave the design to the subagent. Building subagents only
