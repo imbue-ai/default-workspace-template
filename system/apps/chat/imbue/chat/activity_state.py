@@ -99,7 +99,7 @@ RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOW
 # mngr's lifecycle reports RUNNING iff this marker file exists in the agent state dir while
 # the process is alive; every harness's plugin writes the same filename. Reading it directly
 # is a *timely* alternative to the observe-reported lifecycle state (see
-# :func:`resolve_is_agent_running`).
+# :func:`resolve_is_turn_in_flight`).
 ACTIVE_MARKER_FILENAME: str = "active"
 
 # The lifecycle state of an alive-but-idle agent (between turns). This is the ONLY state where
@@ -144,21 +144,23 @@ def is_lifecycle_dead(lifecycle_state: str) -> bool:
 
 
 @pure
-def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: bool) -> bool:
+def resolve_is_turn_in_flight(lifecycle_state: str, is_active_marker_present: bool) -> bool:
     """Whether the agent has a turn in flight, preferring the ``active`` marker over the
     (laggy) observe-reported lifecycle state.
 
     RUNNING states are authoritative. In the alive-but-idle WAITING state the marker breaks the
     tie: the observe stream can miss a short turn, so the reported state stays WAITING while the
     marker itself flips promptly -- trust the marker there. Any other state (STOPPED / EXITED /
-    ...) reads as not running, so a hard-crashed agent's stale marker is never mistaken for a
-    live turn. Each harness's plugin also clears the marker at launch, so a
-    marker outliving its process cannot be mistaken for a live turn by anything that reads it
-    directly either.
+    ...) reads as no turn, so a hard-crashed agent's stale marker is never mistaken for a live
+    turn. Each harness's plugin also clears the marker at launch, so a marker outliving its
+    process cannot be mistaken for a live turn by anything that reads it directly either.
 
-    RUNNING_BACKGROUND reads as not running here, which is the point of it: that agent's turn
-    has ended, and work it left behind will start the next one. Liveness is
+    RUNNING_BACKGROUND reads as no turn in flight, which is the point of it: that agent's turn
+    has ended, and work it left behind will start the next one. Whether it is alive at all is
     :func:`is_lifecycle_dead`'s question, not this one's.
+
+    Not to be confused with ``is_turn_in_flight``, which asks the same of an already-derived
+    ``ActivityState``; this one resolves the two raw signals it is derived from.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return True

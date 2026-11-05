@@ -5568,7 +5568,7 @@ class AgentManager:
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
-        # activity indicator through the unchanged ``is_agent_running`` gate --
+        # activity indicator through the unchanged activity gate --
         # otherwise a stopped agent would keep a stale "Thinking..." indicator.
         # Added agents were already recomputed via _ensure_activity_tracking above;
         # unchanged agents keep their re-applied cached state. broadcast_on_change
