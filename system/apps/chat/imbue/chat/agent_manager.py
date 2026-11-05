@@ -1035,12 +1035,12 @@ def chat_snapshot_for_active_agent(
     # Each term reaches what the others cannot: the transcript tail and the closing turn cover a
     # turn the observe stream has not caught up with, and a detached ``run_in_background`` runner
     # never reaches the harness's own payload, so it can never show up as the agent's lifecycle.
-    # CLEANUP: the harness markers' contribution is the one part the RUNNING_BACKGROUND lifecycle
-    # duplicates. Retiring it needs that state to be as timely as the marker, which the Stop hook
-    # writes itself, so reading the lease directory off disk as the `active` marker already is
-    # read here is the prerequisite. Removing the term without that is #1075. The markers keep
-    # being written either way: the task list reads their descriptions and start times, and the
-    # backup gate their pids.
+    # CLEANUP: this workspace records the harness's own background tasks itself, from the same
+    # turn-end payload mngr reads for RUNNING_BACKGROUND, so the two track the same work. Retiring
+    # that duplicate means dropping `claude_background_task_hooks.py` and reading mngr's leases
+    # instead, which needs a lease to carry what the task row shows: what each task is, and when
+    # it started, preserved across the turn ends that rewrite the lease set. A lease carries a
+    # name and a deadline, so today that row would lose its description and its elapsed time.
     is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
     return ChatSnapshot(
         chat_id=chat.chat_id,
