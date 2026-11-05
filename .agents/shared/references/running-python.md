@@ -104,6 +104,14 @@ The code runs under one of two interpreters, and what it imports decides which:
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
   declares.
 
+What the code that must run with no venv imports is made bare too. Other
+stdlib-only code is bare only because that is lighter to run. It may import
+what bare code already can (the standard library, the bare packages and the
+stdlib-only libraries above), but it never widens that set: once it needs
+anything else, it moves to the venv tier and its callers switch to
+`uv run --no-sync`. It does not get a new bare search path, and it
+does not hold another package's module to the standard library.
+
 A bare module that imports a bare package it does not sit beside puts that
 package's directory on `sys.path` itself, only when it runs by its path
 (`if not __package__:`), as path arithmetic on `Path(__file__)`. A test holds

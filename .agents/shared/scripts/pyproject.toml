@@ -9,6 +9,8 @@ dependencies = [
     "app-registration",
     # and links a standalone project's venv through venv_links.
     "workspace-scripts",
+    # serve_isolated_instance checks a --copy fits against what the disk can still take.
+    "disk-headroom",
 ]
 
 [build-system]

@@ -37,6 +37,9 @@ dependencies = [
     # `uv run --no-sync routines ...` from the repo root, so its console script must
     # survive a sync of the root closure too.
     "routines",
+    # Agents run `uv run --no-sync disk-headroom` from the repo root where they would run df,
+    # so its console script must survive a sync of the root closure too.
+    "disk-headroom",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -119,6 +122,7 @@ members = [
     "system/libs/app_schema",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
+    "system/libs/disk_headroom",
     "system/libs/event_streams",
     "system/libs/github_sync",
     "system/libs/latchkey_access",
@@ -172,6 +176,7 @@ workspace-layout = { workspace = true }
 workspace-profile = { workspace = true }
 latchkey-access = { workspace = true }
 routines = { workspace = true }
+disk-headroom = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 chat = { workspace = true }
 files-app = { workspace = true }

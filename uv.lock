@@ -36,6 +36,7 @@ members = [
     "connect-external-service-skill",
     "datalib-skill",
     "default-workspace-template",
+    "disk-headroom",
     "env-converge",
     "event-streams",
     "files-app",
@@ -77,6 +78,7 @@ version = "0.1.0"
 source = { editable = ".agents/shared/scripts" }
 dependencies = [
     { name = "app-registration" },
+    { name = "disk-headroom" },
     { name = "pyyaml" },
     { name = "workspace-scripts" },
 ]
@@ -84,6 +86,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-registration", editable = "system/libs/app_registration" },
+    { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "workspace-scripts", editable = "system/scripts" },
 ]
@@ -1052,6 +1055,7 @@ dependencies = [
     { name = "bootstrap" },
     { name = "chat" },
     { name = "chat-background-tasks" },
+    { name = "disk-headroom" },
     { name = "env-converge" },
     { name = "files-app" },
     { name = "getting-started" },
@@ -1102,6 +1106,7 @@ requires-dist = [
     { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
+    { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "files-app", editable = "system/apps/files" },
     { name = "getting-started", editable = "system/apps/getting_started" },
@@ -1155,6 +1160,25 @@ sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
 ]
+
+[[package]]
+name = "disk-headroom"
+version = "0.1.0"
+source = { editable = "system/libs/disk_headroom" }
+dependencies = [
+    { name = "click" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "click", specifier = ">=8.1" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.85" }]
 
 [[package]]
 name = "distro"
@@ -4306,6 +4330,7 @@ source = { editable = "system/apps/system_monitor" }
 dependencies = [
     { name = "app-manifest" },
     { name = "app-schema" },
+    { name = "disk-headroom" },
     { name = "flask" },
     { name = "host-backup" },
     { name = "httpx" },
@@ -4325,6 +4350,7 @@ dev = [
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "flask", specifier = ">=3.0" },
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "httpx", specifier = ">=0.27" },
