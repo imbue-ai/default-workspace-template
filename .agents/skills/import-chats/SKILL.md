@@ -133,7 +133,9 @@ title. When the user wants to browse their chats, link the index by its absolute
 
 The conversations themselves are in each source's raw store, a SQLite-compatible database read
 with `datalib-doltlite` (in `~/.local/bin`). Each row's `payload` is the conversation as the
-site's API returned it; a row with no `payload` was listed but not downloaded yet.
+site's API returned it; a row with no `payload` was listed but not downloaded yet. It is stored
+as binary JSON: SQLite's JSON functions read it directly, and anything that reads it as text,
+`LIKE` above all, needs `json(payload)`, or it silently stops at the conversation's first null.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -142,9 +144,9 @@ CHATGPT_DB=data/.skills/datalib/Default/chatgpt_chats/ingest/entities.doltlite_d
 
 # Find conversations by title or by anything said in them (a plain scan; fine at this size).
 datalib-doltlite -readonly -json "$CLAUDE_DB" "SELECT id, name, updated_at FROM conversations
-  WHERE payload LIKE '%warp core%' ORDER BY updated_at DESC LIMIT 20"
+  WHERE json(payload) LIKE '%warp core%' ORDER BY updated_at DESC LIMIT 20"
 datalib-doltlite -readonly -json "$CHATGPT_DB" "SELECT id, title, update_time FROM conversations
-  WHERE payload LIKE '%warp core%' ORDER BY CAST(update_time AS REAL) DESC LIMIT 20"
+  WHERE json(payload) LIKE '%warp core%' ORDER BY CAST(update_time AS REAL) DESC LIMIT 20"
 
 # Read one Claude conversation, message by message.
 datalib-doltlite -readonly -json "$CLAUDE_DB" "SELECT json_extract(m.value, '$.sender') AS sender,
