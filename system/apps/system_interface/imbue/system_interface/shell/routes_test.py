@@ -104,6 +104,45 @@ def _op(client: FlaskClient, op: str, args: dict[str, Any], requester: dict[str,
 # Section 6: the client-activity report
 
 
+def test_every_window_open_is_recorded_in_the_client_activity_log(client: FlaskClient, app: Flask) -> None:
+    """Section 6: a ``window_opened`` per open, naming the app and the window but never the path, whether a client
+    opened it, an op with a requester did, or an op opened it unplaced with nobody connected."""
+    _register_client(app, "c1", "home")
+    first = _open_window(client, "files", "/private/folder/").get_json()["window"]["id"]
+    # A focus re-open of the same page answers the existing window; it is recorded as such.
+    again = _open_window(client, "files", "/private/folder/", if_present="focus").get_json()
+    assert again["is_new"] is False and again["window"]["id"] == first
+    by_op = _op(client, "open", {"app": "terminal", "client": "c1"}, {"app": "chat", "marker": "agent-1"})
+    assert by_op.status_code == 200
+
+    events = [event for event in _shell(app).activity.read_events() if event["type"] == "window_opened"]
+    assert [
+        (
+            event["client_id"],
+            event["desktop_id"],
+            event["app"],
+            event["window_id"],
+            event["is_new"],
+            event["requester"],
+        )
+        for event in events
+    ] == [
+        ("c1", "home", "files", first, True, ""),
+        ("c1", "home", "files", first, False, ""),
+        ("c1", "home", "terminal", by_op.get_json()["window_id"], True, "chat:agent-1"),
+    ]
+    assert all("path" not in event and "title" not in event for event in events)
+    assert all(event["source"] == "client_activity" and event["event_id"] for event in events)
+
+
+def test_an_unplaced_op_open_is_recorded_with_no_client(client: FlaskClient, app: Flask) -> None:
+    opened = _op(client, "open", {"app": "files"}, {"app": "chat", "marker": ""})
+    assert opened.status_code == 200 and opened.get_json()["client_id"] is None
+
+    (event,) = [event for event in _shell(app).activity.read_events() if event["type"] == "window_opened"]
+    assert (event["client_id"], event["app"], event["is_new"], event["requester"]) == ("", "files", True, "chat")
+
+
 def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: Flask) -> None:
     message = {
         "client_id": "c1",
