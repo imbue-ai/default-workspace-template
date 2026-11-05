@@ -89,10 +89,17 @@ class _PassWorker:
     meant for the worker that replaced it.
     """
 
-    def __init__(self, target: Callable[["_PassWorker"], None]) -> None:
+    stop_event: threading.Event
+    wake_event: threading.Event
+    thread: threading.Thread
+
+    @classmethod
+    def build(cls, target: Callable[["_PassWorker"], None]) -> "_PassWorker":
+        self = cls.__new__(cls)
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.thread = threading.Thread(target=target, args=(self,), daemon=True, name="oom-chat-sweep")
+        return self
 
 
 class ChatOomPrioritizer:
@@ -125,6 +132,8 @@ class ChatOomPrioritizer:
         clock: Callable[[], float] = time.time,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
         presence: PresenceTracker | None = None,
+        stop_join_timeout_seconds: float = _STOP_JOIN_TIMEOUT_SECONDS,
+        start_pass_thread: Callable[[threading.Thread], None] = threading.Thread.start,
     ) -> None:
         self._list_chat_ids = list_chat_ids
         self._resolve_pids_by_chat_id = resolve_pids_by_chat_id
@@ -132,6 +141,10 @@ class ChatOomPrioritizer:
         self._resolve_process_started_at = resolve_process_started_at
         self._clock = clock
         self._sweep_interval_seconds = sweep_interval_seconds
+        # How long ``stop`` waits for the pass thread, and how a pass thread is started:
+        # injected so tests can shorten the one and fail or delay the other.
+        self._stop_join_timeout_seconds = stop_join_timeout_seconds
+        self._start_pass_thread = start_pass_thread
         self._lock = threading.Lock()
         self._presence = presence if presence is not None else PresenceTracker(clock=clock)
         # chat_id -> time of its most recent message, for recency ranking.
@@ -184,15 +197,15 @@ class ChatOomPrioritizer:
             with self._lock:
                 if self._worker is not None:
                     return
-            worker = _PassWorker(self._run_passes)
-            worker.thread.start()
+            worker = _PassWorker.build(self._run_passes)
+            self._start_pass_thread(worker.thread)
             with self._lock:
                 self._worker = worker
 
     def stop(self) -> None:
         """Stop the pass thread, between passes. Idempotent; safe if ``start`` never ran or failed.
 
-        A pass already running finishes; the join waits up to ``_STOP_JOIN_TIMEOUT_SECONDS``
+        A pass already running finishes; the join waits up to ``stop_join_timeout_seconds``
         for the thread. Pending work is never dropped: the stopped thread hands it to a
         thread a later ``start`` published, or runs it itself if there is none (see
         ``_run_pending_passes``). Later ``reapply`` calls run inline again.
@@ -208,7 +221,7 @@ class ChatOomPrioritizer:
                 self._lingering_workers.append(worker)
             to_join = list(self._lingering_workers)
         for lingering in to_join:
-            lingering.thread.join(timeout=_STOP_JOIN_TIMEOUT_SECONDS)
+            lingering.thread.join(timeout=self._stop_join_timeout_seconds)
         with self._lifecycle_lock:
             self._lingering_workers = [w for w in self._lingering_workers if w.thread.is_alive()]
 
@@ -298,7 +311,7 @@ class ChatOomPrioritizer:
         thread writes it moments later. A pass that starts more than ``_SLOW_PASS_WARN_SECONDS``
         after its request, or takes that long, is logged once it starts or finishes (after the
         fact: a pass that never returns is not reported). The pass thread runs one pass
-        for each burst of requests, catches and logs a failed pass, and stops between
+        for each burst of requests, logs a pass that fails reading the registry or ``/proc``, and stops between
         passes. Before ``start`` (and after ``stop``, or if ``start`` failed) the pass runs
         on the caller's thread, still one at a time (see ``_run_pending_passes``): a caller
         that finds another thread running passes returns, and that thread runs its request.
@@ -340,37 +353,50 @@ class ChatOomPrioritizer:
         """
         while self._pass_lock.acquire(blocking=False):
             try:
-                while True:
-                    with self._lock:
-                        if not self._is_pass_requested:
-                            break
-                        published = self._worker
-                        if published is not None and published is not owner:
-                            break
-                        self._is_pass_requested = False
-                        requested_at, self._pass_requested_at = self._pass_requested_at, None
+                is_my_turn, requested_at = self._take_pending_turn(owner)
+                while is_my_turn:
                     started_at = time.monotonic()
                     if requested_at is not None and started_at - requested_at > _SLOW_PASS_WARN_SECONDS:
                         _loguru_logger.warning(
                             "Re-tagging chats' memory priority started {:.1f}s after it was requested",
                             started_at - requested_at,
                         )
+                    is_pass_done = False
                     try:
                         self._reapply_once()
-                    except BaseException:
-                        with self._lock:
-                            self._is_pass_requested = True
-                            if self._pass_requested_at is None:
-                                self._pass_requested_at = requested_at
-                        raise
+                        is_pass_done = True
+                    finally:
+                        if not is_pass_done:
+                            # The pass failed (and its error propagates): keep its request pending.
+                            with self._lock:
+                                self._is_pass_requested = True
+                                if self._pass_requested_at is None:
+                                    self._pass_requested_at = requested_at
                     if time.monotonic() - started_at > _SLOW_PASS_WARN_SECONDS:
                         _loguru_logger.warning(
                             "Re-tagging chats' memory priority took {:.1f}s", time.monotonic() - started_at
                         )
+                    is_my_turn, requested_at = self._take_pending_turn(owner)
             finally:
                 self._pass_lock.release()
             if not self._wake_published_worker_if_pending(owner):
                 return
+
+    def _take_pending_turn(self, owner: _PassWorker | None) -> tuple[bool, float | None]:
+        """Take the pending request if it is ``owner``'s turn to run it; returns (taken, when it was requested).
+
+        It is ``owner``'s turn when it is the published pass thread, or when no pass thread is
+        published. Called with the pass lock held.
+        """
+        with self._lock:
+            if not self._is_pass_requested:
+                return False, None
+            published = self._worker
+            if published is not None and published is not owner:
+                return False, None
+            self._is_pass_requested = False
+            requested_at, self._pass_requested_at = self._pass_requested_at, None
+            return True, requested_at
 
     def _wake_published_worker_if_pending(self, owner: _PassWorker | None) -> bool:
         """Hand a pending request to the published pass thread if that is someone other than ``owner``.
@@ -470,8 +496,9 @@ class ChatOomPrioritizer:
 
         The sweep exists because staleness is the one signal that changes with no event to
         announce it: a chat crosses a staleness threshold without anything happening. A
-        failed pass is logged and the request kept, so the next wake (or the next sweep)
-        retries it; the thread itself never dies of one.
+        pass that fails reading the registry or ``/proc`` (an ``OSError``) is logged and its
+        request kept, so the next wake (or the next sweep) retries it. Any other error is a
+        bug and ends the thread, as it did before passes moved here.
         """
         next_sweep_at = time.monotonic() + self._sweep_interval_seconds
         while not worker.stop_event.is_set():
@@ -487,14 +514,14 @@ class ChatOomPrioritizer:
                     self._is_pass_requested = True
             try:
                 self._run_pending_passes(owner=worker)
-            except Exception as e:
+            except OSError as e:
                 _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed; will retry")
                 # Pace retries of a pass that keeps failing to the sweep, not to the request rate.
                 worker.stop_event.wait(timeout=min(self._sweep_interval_seconds, 5.0))
         # Stopped: hand on (or run) whatever is still pending, so nothing accepted is dropped.
         try:
             self._run_pending_passes(owner=worker)
-        except Exception as e:
+        except OSError as e:
             _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
             # The failed request is pending again: give it to a successor if there is one. With
             # none, the next ``reapply`` (inline, since nothing is published) runs it.
