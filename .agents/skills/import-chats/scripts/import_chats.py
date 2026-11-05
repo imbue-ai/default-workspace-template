@@ -1026,12 +1026,11 @@ def _record_failed(
         )
 
 
-# CLEANUP: drop with move_store_into_library in the Datalib app's launcher, once every workspace that imported
-# chats while the store sat at data/.skills/datalib itself (before the libraries folder, October 2026) has
-# imported or started the app since.
+# CLEANUP: drop with move_store_into_library in the Datalib app's launcher, once every workspace whose store sat at
+# data/.skills/datalib itself (before the libraries folder, October 2026) has imported or started the app since.
 def move_store_into_library(launcher: Path, data_root: Path) -> None:
-    """Move a store an earlier import wrote at the libraries folder itself into ``data_root``, with the Datalib
-    app's own move, so the import and the app keep sharing one store. Nothing moves when there is no such store."""
+    """Move a store from before the libraries folder, written at that folder itself, into ``data_root``, with the
+    Datalib app's own move, so the import and the app share one store. Nothing moves when there is no such store."""
     spec = importlib.util.spec_from_file_location("launch_datalib_http", launcher)
     if spec is None or spec.loader is None:
         raise ImportChatsError(f"cannot load the Datalib app's launcher {launcher}")

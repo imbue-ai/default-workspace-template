@@ -812,7 +812,7 @@ def test_a_sync_installs_adds_the_sources_runs_their_downloads_and_records_what_
     assert "2 conversations" in (index_dir / "chatgpt-chats.md").read_text()
 
 
-def test_a_store_an_earlier_import_wrote_at_the_libraries_folder_moves_into_the_library(
+def test_a_store_written_at_the_libraries_folder_itself_moves_into_the_library(
     tmp_path: Path, workspace: _SyncWorkspace
 ) -> None:
     libraries = tmp_path / "libraries"
