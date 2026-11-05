@@ -12,6 +12,7 @@ from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import AwareDatetime
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 from workspace_layout.answers import InventoryApp
@@ -65,6 +66,17 @@ class UserRecord(FrozenModel):
     email: str | None = Field(default=None, description="The verified email as of the user's last arrival")
     display_name: str | None = Field(default=None, description="The display name as of the user's last arrival")
     last_seen: AwareDatetime = Field(description="When a client of the user last arrived")
+
+
+class GrantedIdentity(FrozenModel):
+    """What the Imbue Studio desktop recorded of one granted account when it saved the grants: the address and name
+    it resolved the grant from, so the roster can name a person who has not arrived yet (the multiplayer spec,
+    section 4.2). Cross-version data from another program, so a field this build does not know is ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    email: str | None = Field(default=None, description="The account's verified email as the desktop last saw it")
+    display_name: str | None = Field(default=None, description="The account's display name as the desktop last saw it")
 
 
 class AppInventoryEntry(FrozenModel):
