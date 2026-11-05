@@ -59,9 +59,9 @@ from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
-from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
