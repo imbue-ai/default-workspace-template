@@ -7,6 +7,7 @@ from pathlib import Path
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TYPE
+from imbue.system_interface.shell.client_activity import KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
 from imbue.system_interface.shell.client_activity import WindowInputKind
@@ -214,7 +215,8 @@ def test_a_window_input_advances_last_seen_and_nothing_else(tmp_path: Path) -> N
 
 def test_an_oversized_log_is_archived_aside_and_the_readers_read_the_live_stream_alone(tmp_path: Path) -> None:
     """Section 6.5 of the app-usage-signals spec: past the threshold the stream is staged aside before a write and
-    gzipped off-thread, the next line starts a fresh stream, and ``read_events`` reads only that stream."""
+    gzipped off-thread, the next line starts a fresh stream, ``read_events`` reads only that stream, and only the
+    newest archives are kept."""
     events_path = tmp_path / "events" / "client_activity" / "events.jsonl"
     log = ClientActivityLog(events_path=events_path, archive_threshold_bytes=600)
     # Three lines of about 220 bytes: the stream crosses the threshold on the third, so the next write stages it.
@@ -222,15 +224,23 @@ def test_an_oversized_log_is_archived_aside_and_the_readers_read_the_live_stream
         log.append_desktop_switch("c1", f"desk-{index}", f"desk-{index + 1}")
     assert 600 < events_path.stat().st_size < 1200
     older = events_path.read_bytes()
+    # Archives from before, named so they sort before the one made now; only the newest survive the pruning.
+    earlier_archives = [events_path.with_name(f"events.jsonl.2020010{day}000000000000.gz") for day in (1, 2, 3)]
+    for earlier_archive in earlier_archives:
+        earlier_archive.write_bytes(gzip.compress(b"earlier"))
 
     log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0)
 
     (event,) = log.read_events()
     assert event["type"] == "window_input"
     wait_for(
-        lambda: sorted(path.suffix for path in events_path.parent.iterdir()) == [".gz", ".jsonl"],
+        lambda: sorted(path.suffix for path in events_path.parent.iterdir())
+        == [".gz"] * KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT + [".jsonl"],
         timeout=10.0,
-        error_message="the staged client-activity log was never compressed",
+        error_message="the staged client-activity log was never compressed and the older archives pruned",
     )
-    (archive,) = [path for path in events_path.parent.iterdir() if path.suffix == ".gz"]
+    (archive,) = [
+        path for path in events_path.parent.iterdir() if path.suffix == ".gz" and path not in earlier_archives
+    ]
     assert gzip.decompress(archive.read_bytes()) == older
+    assert [path.exists() for path in earlier_archives] == [False, False, True]
