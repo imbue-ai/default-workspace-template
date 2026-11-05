@@ -214,9 +214,11 @@ What gets generated:
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point its own
   sync installs into its own `.venv`; depends on the workspace's shared code
   (`app-schema`) through an editable path source, so that code is shared live
-  and `imbue-common` comes from the root's mngr pin; and makes the directory its
+  and `imbue-common` comes from the root's mngr pin; makes the directory its
   own `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
-  for the ratchets' type check. Never add an `imbue-common` source of your own:
+  for the ratchets' type check; and carries the root's two-week supply-chain
+  cooldown (`[tool.uv] exclude-newer = "14 days"`), which a standalone project
+  does not inherit. Never add an `imbue-common` source of your own:
   a second source for the same package fails to lock.
 - `system/apps/<package>/uv.lock` -- the app's own lock, seeded from the root
   `uv.lock` so the app starts on the built-ins' versions and resolves from the

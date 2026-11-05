@@ -270,13 +270,19 @@ dev = [
     # What runner_test.py asserts the API document with.
     "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 # Makes this directory the tests' own pytest root, so they run against this app's venv
 # rather than the workspace's root configuration.
 [tool.pytest.ini_options]
 testpaths = ["."]
+
+# Supply-chain cooldown, the workspace root's two-week window: a registry release is
+# adopted once it has been public this long, so a compromised release can be noticed
+# and yanked before a relock pulls it in.
+[tool.uv]
+exclude-newer = "14 days"
 
 # The workspace's shared code, live and editable. app-schema's own workspace sources
 # apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
