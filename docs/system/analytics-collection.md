@@ -38,8 +38,9 @@ who asked, read or write, allowed or why not, never a path or an address;
 `system/services/share_gateway/README.md`) and the shell's `window_opened` and
 `window_input` client-activity events (which app a window was opened on,
 and which app you or a visitor interacted with in a given minute: the app and
-the window, never the path, the title, or what was typed or clicked). The gateway's per-request access log in
-`data/.state/share_gateway/access.log` is yours alone and is never collected.
+the window, never the path, the title, or what was typed or clicked). The
+gateway's per-request access log in `data/.state/share_gateway/access.log` is
+yours alone and is never collected.
 
 What is collected and how it is redacted is specified in the mngr repo:
 `specs/minds-analytics/disclosure.md` (the plain-language description) and
