@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -567,6 +568,27 @@ def test_a_check_without_latchkey_says_so() -> None:
 
     with pytest.raises(import_chats.ImportChatsError, match="cannot run latchkey"):
         import_chats.check(CLAUDE, run)
+
+
+def test_the_skills_permission_requests_carry_only_the_fields_the_gateway_accepts() -> None:
+    """The gateway answers a field it does not know with a 400, at the top level and in a payload alike, and only a
+    predefined payload knows ``proxy``."""
+    skill = (Path(import_chats.__file__).parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    claude, chatgpt = [
+        json.loads(shlex.split(line)[1])
+        for line in skill.splitlines()
+        if line.lstrip().startswith("-d '{")
+    ]
+
+    assert set(claude) == set(chatgpt) == {"agent_id", "type", "payload", "rationale"}
+    assert claude["type"] == "predefined"
+    assert claude["payload"] == {
+        "scope": "claude-ai",
+        "permissions": ["everything"],
+        "proxy": True,
+    }
+    assert chatgpt["type"] == "custom-service"
+    assert set(chatgpt["payload"]) == {"domain", "scheme", "login"}
 
 
 def test_the_raw_store_counts_only_conversations_whose_detail_arrived(

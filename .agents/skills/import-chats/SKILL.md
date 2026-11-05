@@ -52,23 +52,27 @@ For each source, run `check` first. It prints one JSON line whose `state` says w
   Approving opens a sign-in window in the Imbue Studio app; after an approval, run `check`
   again (if it still says `needs_permission`, wait a few seconds and retry: the grant takes
   a moment to arrive). A denial means the user does not want that source: skip it.
-- `blocked`: the site refused the request itself, which a sign-in does not fix. If a request
-  for that source has not been filed in this chat, file it (it turns on routing through the
-  user's computer, below) and check again once it is approved. Otherwise tell the user plainly
-  that the site would not let the workspace read their chats right now, and go on with the
-  other source.
+- `blocked`: the site refused the request itself, which a sign-in does not fix but sending the
+  requests through the user's computer usually does. If Claude's request has not been filed in
+  this chat, file it (it asks for that routing) and check again once it is approved. Otherwise
+  ask the user, in a sentence, to turn on "Proxy through my desktop" in that connection's
+  settings and to tell you when it is on, then check again. If it is still `blocked`, tell the
+  user plainly that the site would not let the workspace read their chats right now, and go on
+  with the other source.
 
 File the requests one per tool call (the chat builds a card from each call, and shows only the
-first of two in one call). The user may approve them in either order. Both set `"proxy": true`:
-claude.ai and chatgpt.com refuse requests from datacenter addresses, so the requests go out
-through the user's own computer.
+first of two in one call). The user may approve them in either order. claude.ai and chatgpt.com
+refuse requests from datacenter addresses, so the requests have to go out through the user's own
+computer. Claude's request asks for that with `"proxy": true` in its payload. ChatGPT's custom
+connection cannot ask (the gateway refuses the field on it), so its routing is that connection's
+own setting, as `blocked` says.
 
 Claude:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "claude-ai", "permissions": ["everything"]}, "proxy": true, "rationale": "I'"'"'d like to read your Claude conversations so I can bring them into this workspace. You will be asked to sign in to Claude."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "claude-ai", "permissions": ["everything"], "proxy": true}, "rationale": "I'"'"'d like to read your Claude conversations so I can bring them into this workspace. You will be asked to sign in to Claude."}'
 ```
 
 ChatGPT (chatgpt.com's own login, keeping the access token its page fetches from
@@ -77,7 +81,7 @@ ChatGPT (chatgpt.com's own login, keeping the access token its page fetches from
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "chatgpt.com", "scheme": "https", "login": {"url": "https://chatgpt.com/auth/login", "flow": "token-capture", "flow_params": {"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}}}, "proxy": true, "rationale": "I'"'"'d like to read your ChatGPT conversations so I can bring them into this workspace. You will be asked to sign in to ChatGPT."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "chatgpt.com", "scheme": "https", "login": {"url": "https://chatgpt.com/auth/login", "flow": "token-capture", "flow_params": {"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}}}, "rationale": "I'"'"'d like to read your ChatGPT conversations so I can bring them into this workspace. You will be asked to sign in to ChatGPT."}'
 ```
 
 Signing in to claude.ai here may sign the user out of claude.ai in their everyday browser;
