@@ -1082,3 +1082,116 @@ def test_a_published_pass_thread_that_is_no_longer_running_is_withdrawn_and_pass
     h.prioritizer.reapply()
     assert len(h.writes) == writes_before + 1
     assert h.prioritizer._worker is None
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_request_accepted_while_a_pass_thread_is_dying_is_still_run() -> None:
+    # Round-6 finding: the request saw the thread alive, woke it and returned; the thread then
+    # withdrew without running it, and nothing ran it until another request came.
+    failing = threading.Event()
+    request_done = threading.Event()
+    passes: list[threading.Thread] = []
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        passes.append(threading.current_thread())
+        if len(passes) == 2:
+            failing.set()
+            request_done.wait(timeout=10)
+            raise ValueError("a bug in a callback")
+        return {cid: [10] for cid in cids}
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=lambda pid, adj: True,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+    )
+    prioritizer.start()
+    worker = prioritizer._worker
+    assert worker is not None
+    try:
+        prioritizer.reapply()
+        assert failing.wait(timeout=5)
+        # Accepted while the pass thread is about to die: it wakes that thread and returns.
+        prioritizer.record_message(ChatId("a"))
+        request_done.set()
+        # No further request: the dying thread runs it on its way out.
+        assert poll_until(lambda: not worker.thread.is_alive(), timeout=5)
+        assert poll_until(lambda: not prioritizer._is_pass_requested, timeout=5)
+        assert len(passes) == 3
+    finally:
+        request_done.set()
+        prioritizer.stop()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_an_unexpected_error_in_a_stopping_threads_last_pass_is_handed_to_the_replacement() -> None:
+    gate = threading.Event()
+    entered = threading.Event()
+    passes: list[threading.Thread] = []
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        passes.append(threading.current_thread())
+        if len(passes) == 2:
+            entered.set()
+            gate.wait(timeout=10)
+            raise ValueError("a bug in a callback")
+        return {cid: [10] for cid in cids}
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=lambda pid, adj: True,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+        stop_join_timeout_seconds=0.1,
+    )
+    # Pass 1, inline (nothing published).
+    prioritizer.reapply()
+    stopping_worker = oom_prioritizer_module._PassWorker.build(prioritizer._run_passes)
+    stopping_worker.stop_event.set()
+    with prioritizer._lock:
+        prioritizer._is_pass_requested = True
+    stopping_worker.thread.start()
+    try:
+        assert entered.wait(timeout=5)
+        prioritizer.start()
+        replacement = prioritizer._worker
+        assert replacement is not None
+        gate.set()
+        # The stopping thread's pass raises ValueError; the replacement runs the request at once,
+        # well inside its one-hour sweep.
+        assert poll_until(lambda: not prioritizer._is_pass_requested, timeout=5)
+        assert passes[-1] is replacement.thread
+    finally:
+        gate.set()
+        prioritizer.stop()
+
+
+def test_a_log_sink_that_calls_back_in_does_not_deadlock_on_the_dead_thread_warning() -> None:
+    # The warning used to be logged with the state lock held, so a sink calling back into the
+    # prioritizer blocked on it. The sink calls back on a side thread and records whether that
+    # call got through while the warning was being logged (the test cannot hang either way).
+    h = _Harness(["a"], {"a": 10})
+    dead = oom_prioritizer_module._PassWorker.build(lambda worker: None)
+    dead.thread.start()
+    dead.thread.join(timeout=5)
+    with h.prioritizer._lock:
+        h.prioritizer._worker = dead
+    callback_was_blocked: list[bool] = []
+
+    def reentrant_sink(message: object) -> None:
+        if "pass thread is not running" in str(message):
+            callback = threading.Thread(target=h.prioritizer.reapply, daemon=True)
+            callback.start()
+            callback.join(timeout=1.0)
+            callback_was_blocked.append(callback.is_alive())
+
+    handler_id = logger.add(reentrant_sink, level="WARNING")
+    try:
+        h.prioritizer.reapply()
+    finally:
+        logger.remove(handler_id)
+    assert callback_was_blocked == [False]
+    assert h.prioritizer._worker is None

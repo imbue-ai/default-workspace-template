@@ -171,6 +171,8 @@ class ChatOomPrioritizer:
         self._is_pass_requested = False
         # When the oldest still-pending request was made (monotonic), for the slow-pass warning.
         self._pass_requested_at: float | None = None
+        # Set under ``_lock`` when a dead pass thread is withdrawn; logged once the lock is released.
+        self._is_dead_worker_unreported = False
 
     def start(self) -> None:
         """Apply the current state once, then start the pass thread, which runs every later pass.
@@ -201,6 +203,7 @@ class ChatOomPrioritizer:
             self._start_pass_thread(worker.thread)
             with self._lock:
                 self._worker = worker
+        self._report_withdrawn_dead_worker()
 
     def stop(self) -> None:
         """Stop the pass thread, between passes. Idempotent; safe if ``start`` never ran or failed.
@@ -325,6 +328,7 @@ class ChatOomPrioritizer:
                 self._pass_requested_at = time.monotonic()
             self._is_pass_requested = True
             worker = self._live_worker_locked()
+        self._report_withdrawn_dead_worker()
         if worker is not None:
             # Enough even if a stop withdraws ``worker`` right now: the flag was set while it was
             # still published, and a withdrawn thread looks at the flag on its way out (and runs
@@ -393,11 +397,20 @@ class ChatOomPrioritizer:
         worker = self._worker
         if worker is not None and not worker.thread.is_alive():
             self._worker = None
+            # Logged by ``_report_withdrawn_dead_worker`` once ``_lock`` is released, so a log sink
+            # that calls back into this object cannot deadlock on it.
+            self._is_dead_worker_unreported = True
+            return None
+        return worker
+
+    def _report_withdrawn_dead_worker(self) -> None:
+        """Log a dead pass thread that ``_live_worker_locked`` withdrew. Called with no lock held."""
+        with self._lock:
+            is_unreported, self._is_dead_worker_unreported = self._is_dead_worker_unreported, False
+        if is_unreported:
             _loguru_logger.warning(
                 "The memory-priority pass thread is not running; running passes inline until it is restarted"
             )
-            return None
-        return worker
 
     def _take_pending_turn(self, owner: _PassWorker | None) -> tuple[bool, float | None]:
         """Take the pending request if it is ``owner``'s turn to run it; returns (taken, when it was requested).
@@ -542,9 +555,6 @@ class ChatOomPrioritizer:
                 self._run_pending_passes(owner=worker)
             except OSError as e:
                 _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
-                # The failed request is pending again: give it to a successor if there is one. With
-                # none, the next ``reapply`` (inline, since nothing is published) runs it.
-                self._wake_published_worker_if_pending(worker)
         finally:
             if not worker.stop_event.is_set():
                 # Ended by an error a pass raised (anything but an OSError, which is retried):
@@ -552,6 +562,29 @@ class ChatOomPrioritizer:
                 with self._lock:
                     if self._worker is worker:
                         self._worker = None
+                    is_replaced = self._worker is not None
                 _loguru_logger.error(
-                    "The memory-priority pass thread ended unexpectedly; running passes inline until it is restarted"
+                    "The memory-priority pass thread ended unexpectedly; {}",
+                    "a new one is running" if is_replaced else "running passes inline until it is restarted",
                 )
+            self._hand_off_on_exit(worker)
+
+    def _hand_off_on_exit(self, worker: _PassWorker) -> None:
+        """Give whatever is pending to a successor, or try it once here: a request ``worker`` was woken for must not be stranded.
+
+        Runs on ``worker``'s thread as it exits, whichever way. A request may have woken it after
+        its last pass, while it was already unwinding from an error. With a live successor, that
+        thread is woken; with none, the pending pass is tried once on this thread, as an inline
+        caller would. A failure there propagates and leaves the request pending for the next call,
+        so a persistent error costs one more attempt, not a retry loop.
+        """
+        with self._lock:
+            is_pending = self._is_pass_requested
+            successor = self._live_worker_locked()
+        self._report_withdrawn_dead_worker()
+        if not is_pending:
+            return
+        if successor is not None and successor is not worker:
+            successor.wake_event.set()
+            return
+        self._run_pending_passes()
