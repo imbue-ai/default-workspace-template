@@ -169,7 +169,12 @@ jobs:
       # installed before /tmp loses exec.
       - name: Install the pinned latchkey CLI
         run: |
-          npm install -g "latchkey@$(sed -n 's/^: "${LATCHKEY_VERSION:=\([0-9.]*\)}"$/\1/p' system/scripts/setup_system.sh)"
+          version="$(sed -n 's/^: "${LATCHKEY_VERSION:=\([0-9.]*\)}"$/\1/p' system/scripts/setup_system.sh)"
+          if [ -z "$version" ]; then
+            echo "no LATCHKEY_VERSION pin found in system/scripts/setup_system.sh" >&2
+            exit 1
+          fi
+          npm install -g "latchkey@$version"
 
       # A workspace container mounts /tmp noexec, where a test's stub
       # executable is skipped and the real tool runs. This runner's /tmp is exec, so
