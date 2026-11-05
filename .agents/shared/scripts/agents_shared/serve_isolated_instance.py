@@ -110,7 +110,8 @@ from typing import Callable, NamedTuple, Sequence
 
 from disk_headroom.space import read_disk_space
 from workspace_bare_scripts import forward_port, run_in_background
-from workspace_bare_scripts.frame_kind import FrameKind
+
+from agents_shared.preview_wrapper_server import FrameKind
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -152,9 +153,8 @@ FAILED_LOG_SUFFIX = "-failed.log"
 # verb would not be runnable.
 _SELF_HINT = ".agents/shared/scripts/agents_shared/serve_isolated_instance.py"
 
-# The wrapper server ships beside this module and imports only the standard library and
-# the bare package, which it puts on sys.path itself when run by its path, so it runs by
-# its path under whichever interpreter runs this one.
+# The wrapper server ships beside this module and imports only the standard library, so it
+# runs by its path under whichever interpreter runs this one.
 WRAPPER_SCRIPT = Path(__file__).resolve().with_name("preview_wrapper_server.py")
 
 # Boot budget: a fresh instance (first import + startup) runs alongside whatever

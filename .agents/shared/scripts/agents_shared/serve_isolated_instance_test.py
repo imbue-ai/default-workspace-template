@@ -28,10 +28,10 @@ from typing import Callable, Sequence
 
 import pytest
 from workspace_bare_scripts import forward_port
-from workspace_bare_scripts.frame_kind import FrameKind
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
+from agents_shared.preview_wrapper_server import FrameKind
 
 _SCRIPT = Path(__file__).resolve().parent / "serve_isolated_instance.py"
 

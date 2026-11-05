@@ -48,9 +48,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agents_shared import serve_isolated_instance
+from agents_shared.preview_wrapper_server import FrameKind
 from app_manifest.errors import ManifestLoadError, RegistryReadError
 from workspace_bare_scripts import forward_port
-from workspace_bare_scripts.frame_kind import FrameKind
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
 FRAME_SUFFIX = "-sketch"

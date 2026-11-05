@@ -21,8 +21,8 @@ host cannot be known server-side -- so the inner iframe's ``src`` is derived
 in the page's JavaScript from ``location.host`` by swapping the wrapper's own
 leading label for the inner service's name.
 
-Standard library and the bare package only, so it runs under the system ``python3``
-with no venv; ``serve_isolated_instance`` launches it by its path under its own interpreter. To run it
+Standard library only, so it runs under the system ``python3`` with no venv;
+``serve_isolated_instance`` launches it by its path under its own interpreter. To run it
 by hand:
 
     python3 .agents/shared/scripts/agents_shared/preview_wrapper_server.py --port 8200 \\
@@ -32,17 +32,19 @@ by hand:
 import argparse
 import html
 import json
-import sys
+from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import NamedTuple
 
-# Run by its path, the module puts the bare packages' directory on sys.path; imported as
-# part of its package, the venv already has it.
-if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
 
-from workspace_bare_scripts.frame_kind import FrameKind
+class FrameKind(StrEnum):
+    """What the framed page is; its value is the wrapper's ``--kind`` and what a frame's record stores."""
+
+    # A proposed change to an app the user already has (update-app's previews).
+    CHANGE = "change"
+    # A new app's look-and-feel mock (build-app), up until the app is really hooked
+    # up to its data: hard-coded content or a sample, with some of it not working yet.
+    MOCK = "mock"
 
 
 class BannerCopy(NamedTuple):
