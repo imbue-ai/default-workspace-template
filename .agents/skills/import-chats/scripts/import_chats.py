@@ -66,7 +66,7 @@ import sys
 import threading
 import tomllib
 import urllib.parse
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -216,7 +216,7 @@ def write_status(path: Path, document: Mapping) -> None:
 
 
 @contextlib.contextmanager
-def _file_lock(lock_path: Path) -> Iterator[None]:
+def _file_lock(lock_path: Path) -> Generator[None, None, None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
@@ -939,7 +939,7 @@ def _reporting_progress(
     progress: IngestProgress,
     run: Callable[..., subprocess.CompletedProcess],
     interval_seconds: float,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Record each source's progress every ``interval_seconds`` for as long as the block runs.
 
     Each record also refreshes ``updated_at``, which the Getting Started app reads as the sync's heartbeat: a
