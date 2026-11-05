@@ -70,7 +70,7 @@ dev = [
     # Used by check_no_type_errors in test_ratchets.py. Pinned exactly because each
     # ty release adds checks, so a new version is adopted together with the fixes it
     # asks for.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]
