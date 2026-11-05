@@ -50,16 +50,6 @@ _OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 _CHAT_BACKGROUND_TASKS_SRC = (
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
 )
-# Only this module of disk_headroom is bare; the rest of the package is its click command.
-_DISK_HEADROOM_SPACE = (
-    REPO_ROOT
-    / "system"
-    / "libs"
-    / "disk_headroom"
-    / "src"
-    / "disk_headroom"
-    / "space.py"
-)
 
 # The first-party modules each bare runtime context has on sys.path. update-self runs as a
 # staged copy that puts only its own python/ there (and loads oom_priority off the target
@@ -71,7 +61,6 @@ _SYSTEM_IMPORTABLE = frozenset(
         "tk_command_parsing",
         "oom_priority",
         "chat_background_tasks",
-        "disk_headroom",
     }
 )
 
@@ -127,7 +116,7 @@ def _bare_files() -> list[Path]:
         for path in sorted(tree.rglob("*.py"))
         if not _is_test_support(path)
     ]
-    return sorted({*stubs, *modules, _DISK_HEADROOM_SPACE})
+    return sorted({*stubs, *modules})
 
 
 def _run_ty(

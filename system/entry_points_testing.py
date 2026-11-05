@@ -29,9 +29,9 @@ UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "script
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 
-# Modules of venv packages that import only the standard library, the bare packages and the
-# stdlib-only libraries below, so they run under the system python3 too. One that needs any of
-# those puts its directory on sys.path itself when it runs by its path.
+# Modules of venv packages that import only the standard library and the bare packages, so
+# they run under the system python3 too. One that needs a bare package puts its root on
+# sys.path itself when it runs by its path.
 BARE_MODULES = (
     REPO_ROOT
     / ".agents"
@@ -47,12 +47,6 @@ BARE_MODULES = (
     / "python"
     / "connect_external_service_skill"
     / "request_secret.py",
-    REPO_ROOT
-    / ".agents"
-    / "shared"
-    / "scripts"
-    / "agents_shared"
-    / "serve_isolated_instance.py",
     REPO_ROOT
     / ".agents"
     / "shared"
@@ -75,7 +69,6 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src",
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
-    REPO_ROOT / "system" / "libs" / "disk_headroom" / "src",
 )
 
 # Bare scripts that are not package stubs: oom_priority's own entry scripts, a
