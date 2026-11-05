@@ -1,0 +1,3 @@
+The shell records every window open in the client-activity log as a `window_opened` event (desktop contracts.md section 6): the client, the desktop, the app, the window id, whether the open minted the window or answered an existing one, and the op requester when an op asked for it. Never the path or the title. The analytics collection of an explorer workspace reads it as the signal that an app was used.
+
+The announcement stream's archive rule (stage an oversized `events.jsonl` aside, gzip it off-thread, keep the newest archives) moved into the shared `event_streams` library, which the share gateway's request counts use too.

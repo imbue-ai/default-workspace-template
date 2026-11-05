@@ -56,10 +56,14 @@ class GrantList:
         return self.allows_email(email)
 
     def allows_email(self, email: str) -> bool:
-        normalized = email.strip().lower()
-        if normalized in self.emails:
+        if email.strip().lower() in self.emails:
             return True
-        _, at, domain = normalized.rpartition("@")
+        return self.allows_email_domain(email)
+
+    def allows_email_domain(self, email: str) -> bool:
+        """Whether the address's domain is one this scope's ``email_domains`` grants (an exact ``emails`` entry is
+        not a domain match)."""
+        _, at, domain = email.strip().lower().rpartition("@")
         return bool(at) and domain in self.email_domains
 
 
