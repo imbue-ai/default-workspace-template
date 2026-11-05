@@ -44,7 +44,7 @@ The connector writes `/run/auth-sandbox-claim.json` when it claims the sandbox f
 {"authorized_key": "<the user's OpenSSH public key line>", "screen_token_sha256": "<lower-case hex>", "expires_at": <unix seconds>}
 ```
 
-`auth-sandbox-await-claim`, which the boot script starts before supervisord, polls for it every 250 ms and checks it as the boot script used to check the same values in the environment: the key one non-empty line, the digest 64 lower-case hex digits, `expires_at` a positive number.
+`auth-sandbox-await-claim`, which the boot script starts before supervisord, polls for it every 250 ms and checks it: the key one non-empty line, the digest 64 lower-case hex digits, `expires_at` a positive number.
 It then writes the key as the whole of `/home/user/.ssh/authorized_keys` and the digest to `/run/auth-sandbox/screen_token_sha256` (both 0600, through a rename, so neither owner-exec nor the Screen's gate, which read them per request, sees a half-written file), and waits until `expires_at`.
 A claim that does not validate is logged and ignored, and the sandbox stays unusable until the connector's sweep retires it; the watcher reads the file again only if it is replaced.
 A claim whose `expires_at` has already passed admits no one: the watcher returns at once and the sandbox ends.

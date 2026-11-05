@@ -64,9 +64,8 @@ class _FileStamp(FrozenModel):
 
 @pure
 def parse_claim(text: str) -> Claim:
-    """Parse the claim file with the checks the boot script made of the same values when they came in the
-    environment: each lands in a file a reader splits on lines or a header, so a line break would add a key or a
-    directive the connector never sent.
+    """Parse the claim file, refusing a value that spans lines: each lands in a file a reader splits on lines or a
+    header, so a line break would add a key or a directive the connector never sent.
 
     Raises:
         ClaimFileError: when the text is not that shape.
