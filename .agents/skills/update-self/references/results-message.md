@@ -70,7 +70,8 @@ List each, in plain terms:
   stop-chats` printed): that it was paused for the update and has carried on,
   and for a background agent, that its chat was told to pick it back up. Name
   any that could not be started again, and that sending it a message brings it
-  back.
+  back. The main chat's line says it was interrupted instead: say its work was
+  stopped for the update and it was told what changed.
 - **Each background command that was stopped** with a paused chat: that it was
   interrupted and its chat was told to run it again.
 - **Each cache, old worktree, or snapshot it pruned**, with what it held: a

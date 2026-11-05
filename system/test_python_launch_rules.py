@@ -849,7 +849,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 def test_prevent_sys_path_edits() -> None:
     offenders = _sys_path_editors(REPO_ROOT)
-    assert len(offenders) <= snapshot(23), (
+    assert len(offenders) <= snapshot(22), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
         + "\n".join(offenders)

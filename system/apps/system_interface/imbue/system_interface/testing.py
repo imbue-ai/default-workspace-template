@@ -274,6 +274,7 @@ def build_test_state(
         profiles=resolved_profiles,
         users=shell.users,
         share_grants=shell.share_grants,
+        share_identities=shell.share_identities,
         agent_grants=shell.agent_grants,
         agent_last_seen_path=resolved_repo_root / AGENT_LAST_SEEN_FILE,
         workspace_name=workspace_name,

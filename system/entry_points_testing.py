@@ -52,12 +52,6 @@ BARE_MODULES = (
     / "shared"
     / "scripts"
     / "agents_shared"
-    / "serve_isolated_instance.py",
-    REPO_ROOT
-    / ".agents"
-    / "shared"
-    / "scripts"
-    / "agents_shared"
     / "resolve_template_base.py",
     REPO_ROOT
     / ".agents"

@@ -137,7 +137,9 @@ from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
+from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_IDENTITIES_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.theme_watch import ThemeCatalogWatch
 from imbue.system_interface.shell.theme_wire import theme_catalog_wire_json
@@ -186,6 +188,9 @@ class ShellState(MutableModel):
     )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     share_grants: ShareGrantsReader = Field(frozen=True, description="The people's grants the desktop writes")
+    share_identities: ShareIdentitiesReader = Field(
+        frozen=True, description="What the desktop knew of each granted account, written beside the grants"
+    )
     agent_grants: AgentGrantsReader = Field(frozen=True, description="The visiting agents' grants the gateway writes")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
@@ -1063,6 +1068,9 @@ def build_shell_state(
         share_env_path=_under_repo_root(DEFAULT_SHARE_ENV_PATH, repo_root),
         share_grants_path=_under_repo_root(DEFAULT_SHARE_GRANTS_PATH, repo_root),
     )
+    share_identities = ShareIdentitiesReader(
+        share_identities_path=_under_repo_root(DEFAULT_SHARE_IDENTITIES_PATH, repo_root)
+    )
     agent_grants = AgentGrantsReader(agent_grants_path=_under_repo_root(DEFAULT_AGENT_GRANTS_PATH, repo_root))
     shell = ShellState(
         state_directory=state_directory,
@@ -1089,6 +1097,7 @@ def build_shell_state(
         ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         share_grants=share_grants,
+        share_identities=share_identities,
         agent_grants=agent_grants,
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
