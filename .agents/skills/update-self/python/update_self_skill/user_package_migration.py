@@ -14,7 +14,8 @@ writes today, keeping the versions it runs on:
 
 1. its ``uv.lock`` is seeded from the shared lock it ran on (``--shared-lock``, the root
    ``uv.lock`` from before the update's merge; else the current one), so ``uv lock`` keeps
-   every version it can;
+   every version it can, and it gets the root's dependency cooldown (``[tool.uv]``
+   ``exclude-newer``), which a standalone project does not inherit;
 2. every source the root workspace gave it -- a ``{ workspace = true }`` one of its own, or
    a workspace member it depends on through the root's sources -- becomes an editable path
    source, so the shared code stays live;
@@ -67,6 +68,12 @@ _TYPE_CHECK_CALL = "check_no_type_errors"
 _TY_PROJECT_TABLE = (
     "# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.\n"
     "[tool.ty]\n"
+)
+# A standalone project does not inherit the root's [tool.uv] settings, so it carries the
+# root's supply-chain cooldown itself, as build-app's scaffold writes it.
+_COOLDOWN_COMMENT = (
+    "# Supply-chain cooldown, the workspace root's window: a registry release is adopted\n"
+    "# once it has been public this long, so a compromised one can be yanked first.\n"
 )
 _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
 _TABLE_HEADER = re.compile(r"^\s*\[")
@@ -175,13 +182,17 @@ def _root_sources(repo_root: Path) -> dict[str, dict]:
     }
 
 
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _inline_table(value: dict) -> str:
     parts = []
     for key, item in value.items():
         if isinstance(item, bool):
             rendered = "true" if item else "false"
         elif isinstance(item, str):
-            rendered = '"' + item.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            rendered = _toml_string(item)
         else:
             raise MigrationError(f"cannot write the source value {key} = {item!r}")
         parts.append(f"{key} = {rendered}")
@@ -271,6 +282,18 @@ def _add_pytest_root(text: str) -> str:
 def _add_ty_project(text: str) -> str:
     separator = "" if text.endswith("\n\n") else "\n"
     return text + separator + _TY_PROJECT_TABLE
+
+
+def _add_exclude_newer(text: str, window: str) -> str:
+    """``text`` with ``exclude-newer = window`` in its ``[tool.uv]`` table, added if absent."""
+    setting = _COOLDOWN_COMMENT + f"exclude-newer = {_toml_string(window)}\n"
+    lines = text.splitlines(keepends=True)
+    span = _table_span(lines, "[tool.uv]")
+    if span is None:
+        separator = "" if text.endswith("\n\n") else "\n"
+        return text + separator + "[tool.uv]\n" + setting
+    lines.insert(span[0] + 1, setting)
+    return "".join(lines)
 
 
 def _root_ty_requirement(root: dict) -> str:
@@ -646,13 +669,21 @@ def plan_migration(
                 "path": os.path.relpath(repo_root / packages[dependency], package_dir),
                 "editable": True,
             }
-    raised = _raise_python_floor(
-        package_text, pyproject, _read_toml(repo_root / "pyproject.toml")
-    )
+    root = _read_toml(repo_root / "pyproject.toml")
+    raised = _raise_python_floor(package_text, pyproject, root)
     if raised is not None:
         package_text = raised
         notes.append(
             "raises its requires-python to the workspace's floor, which its libraries need"
+        )
+    window = root.get("tool", {}).get("uv", {}).get("exclude-newer")
+    if window is not None and "exclude-newer" not in pyproject.get("tool", {}).get(
+        "uv", {}
+    ):
+        package_text = _add_exclude_newer(package_text, window)
+        notes.append(
+            f'adds the workspace\'s dependency cooldown (exclude-newer = "{window}") to its '
+            "own [tool.uv]"
         )
     test_files = _test_files(package_dir)
     if test_files:
@@ -679,7 +710,7 @@ def plan_migration(
                 _requirement_name(requirement) == "ty"
                 for requirement in _declared_requirements(pyproject)
             ):
-                ty = _root_ty_requirement(_read_toml(repo_root / "pyproject.toml"))
+                ty = _root_ty_requirement(root)
                 package_text = _add_dev_requirement(package_text, ty)
                 notes.append(f"adds `{ty}` to its dev group, for its own type check")
             if "ty" not in pyproject.get("tool", {}):

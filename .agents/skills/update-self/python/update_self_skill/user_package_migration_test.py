@@ -834,3 +834,69 @@ def test_a_package_below_the_workspaces_python_floor_is_raised_to_it(
         "raises its requires-python to the workspace's floor, which its libraries need"
         in plan.notes
     )
+
+
+def _give_root_a_cooldown(workspace: Path) -> None:
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text() + '\n[tool.uv]\nexclude-newer = "14 days"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_has_cooldown", "package_uv_table", "expected_uv_settings"),
+    [
+        (True, "", {"exclude-newer": "14 days"}),
+        (
+            True,
+            '[tool.uv]\nrequired-version = ">=0.10"\n',
+            {"required-version": ">=0.10", "exclude-newer": "14 days"},
+        ),
+        (True, '[tool.uv]\nexclude-newer = "7 days"\n', {"exclude-newer": "7 days"}),
+        (False, "", {}),
+    ],
+)
+def test_a_package_gets_the_roots_dependency_cooldown_unless_it_sets_its_own(
+    workspace: Path,
+    root_has_cooldown: bool,
+    package_uv_table: str,
+    expected_uv_settings: dict[str, str],
+) -> None:
+    if root_has_cooldown:
+        _give_root_a_cooldown(workspace)
+    pyproject = workspace / "system/apps/widget/pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + "\n" + package_uv_table)
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+
+    uv_settings = tomllib.loads(plan.package_text)["tool"]["uv"]
+    assert {
+        key: value for key, value in uv_settings.items() if key != "sources"
+    } == expected_uv_settings
+    assert uv_settings["sources"] == {
+        "applib": {"path": "../../libs/applib", "editable": True}
+    }
+
+
+def test_a_migrated_package_locks_within_the_roots_dependency_cooldown(
+    workspace: Path, tmp_path: Path
+) -> None:
+    _give_root_a_cooldown(workspace)
+
+    code = migration.main(
+        [
+            "--repo-root",
+            str(workspace),
+            "migrate",
+            "system/apps/widget",
+            "--shared-lock",
+            str(tmp_path / "pre-merge.lock"),
+        ],
+        run=_Uv(tmp_path / "cache" / "uv"),
+    )
+
+    assert code == 0
+    lock = tomllib.loads((workspace / "system/apps/widget/uv.lock").read_text())
+    assert lock["options"]["exclude-newer-span"] == "P14D"
