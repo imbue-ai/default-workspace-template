@@ -313,32 +313,39 @@ class ChatOomPrioritizer:
             self._is_pass_requested = True
             worker = self._worker
         if worker is not None:
+            # Enough even if a stop withdraws ``worker`` right now: the flag was set while it was
+            # still published, and a withdrawn thread looks at the flag on its way out (and runs
+            # the request, or hands it to its successor).
             worker.wake_event.set()
-            with self._lock:
-                is_still_published = self._worker is worker
-            # A stop withdraws the thread before it tells the thread to stop, so a thread still
-            # published here has not yet exited and will see this request; one already withdrawn
-            # may have exited without it, so the request is run here instead.
-            if is_still_published:
-                return
+            return
         self._run_pending_passes()
 
     def _run_pending_passes(self, owner: _PassWorker | None = None) -> None:
-        """Run the wanted passes on this thread, unless another thread holds the pass lock; never drop one.
+        """Run the wanted passes on this thread when it is this thread's turn; never drop one.
 
-        ``owner`` is the pass thread calling it (None for an inline caller). The pass lock is
-        released before the pending flag is read again, so a request that lands just as a
-        pass finishes is never left behind: its caller sets the flag before it tries the
-        lock, so either it gets the lock itself or the holder sees its flag here. The holder
-        then hands it on: to the published pass thread if that is someone else, or keeps
-        running it (an inline caller, the published thread itself, or a stopped thread with
-        no successor to hand it to). A failed pass leaves its request pending and raises.
+        ``owner`` is the pass thread calling it (None for an inline caller). It is this
+        thread's turn when it is the published pass thread, or when no pass thread is
+        published (an inline caller, or a stopped pass thread finishing up). Otherwise the
+        published thread is woken to run the request. That is checked before every pass,
+        so a stopped thread hands over to a successor at the next pass boundary.
+
+        With no successor, a stopped thread keeps running passes for as long as requests
+        keep arriving while it holds the pass lock, as an inline caller would. It exits
+        once none is pending.
+
+        The pass lock is released before the pending flag is read again, so a request that
+        lands just as a pass finishes is never left behind: its caller sets the flag before
+        it tries the lock, so either it gets the lock itself or the holder sees its flag
+        here. A failed pass leaves its request pending and raises.
         """
         while self._pass_lock.acquire(blocking=False):
             try:
-                while owner is None or not owner.stop_event.is_set():
+                while True:
                     with self._lock:
                         if not self._is_pass_requested:
+                            break
+                        published = self._worker
+                        if published is not None and published is not owner:
                             break
                         self._is_pass_requested = False
                         requested_at, self._pass_requested_at = self._pass_requested_at, None
@@ -362,16 +369,23 @@ class ChatOomPrioritizer:
                         )
             finally:
                 self._pass_lock.release()
-            with self._lock:
-                if not self._is_pass_requested:
-                    return
-                published = self._worker
-            if published is not None and published is not owner:
-                published.wake_event.set()
+            if not self._wake_published_worker_if_pending(owner):
                 return
-            if owner is not None and published is None:
-                # Stopped, with no successor to hand the request to: run it here, as an inline caller would.
-                owner = None
+
+    def _wake_published_worker_if_pending(self, owner: _PassWorker | None) -> bool:
+        """Hand a pending request to the published pass thread if that is someone other than ``owner``.
+
+        Returns True when the request is still ``owner``'s to run: it is pending, and
+        ``owner`` is the published thread or no thread is published.
+        """
+        with self._lock:
+            if not self._is_pass_requested:
+                return False
+            published = self._worker
+        if published is not None and published is not owner:
+            published.wake_event.set()
+            return False
+        return True
 
     def _reapply_once(self) -> None:
         """One pass: recompute and write every managed chat's ``oom_score_adj``.
@@ -482,3 +496,6 @@ class ChatOomPrioritizer:
             self._run_pending_passes(owner=worker)
         except Exception as e:
             _loguru_logger.opt(exception=e).warning("Re-tagging chats' memory priority failed while stopping")
+            # The failed request is pending again: give it to a successor if there is one. With
+            # none, the next ``reapply`` (inline, since nothing is published) runs it.
+            self._wake_published_worker_if_pending(worker)

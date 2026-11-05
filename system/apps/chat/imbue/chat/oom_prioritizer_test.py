@@ -828,3 +828,127 @@ def test_work_pending_when_the_pass_thread_is_told_to_stop_is_run_before_it_exit
     h.prioritizer.stop()
     assert h.prioritizer._is_pass_requested is False
     assert h.registry_reads == reads_before + 1
+
+
+def _gated_prioritizer(
+    gate_pass_numbers: set[int], fail_pass_numbers: set[int]
+) -> tuple[ChatOomPrioritizer, list[threading.Thread], threading.Event, threading.Event]:
+    """A prioritizer whose numbered passes block on a gate (and optionally fail); records each pass's thread."""
+    pass_threads: list[threading.Thread] = []
+    gate = threading.Event()
+    gated_pass_entered = threading.Event()
+
+    def resolve_pids_by_chat_id(cids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        pass_threads.append(threading.current_thread())
+        number = len(pass_threads)
+        if number in gate_pass_numbers:
+            gated_pass_entered.set()
+            gate.wait(timeout=10)
+        if number in fail_pass_numbers:
+            raise OSError("registry unreadable")
+        return {cid: [10] for cid in cids}
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [ChatId("a")],
+        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
+        set_adj=lambda pid, adj: True,
+        resolve_process_started_at=lambda cid: None,
+        sweep_interval_seconds=3600.0,
+    )
+    return prioritizer, pass_threads, gate, gated_pass_entered
+
+
+def test_a_stopped_thread_hands_new_work_to_its_replacement_at_the_next_pass_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Round-4 finding: the stopped thread kept taking passes after a replacement was published.
+    monkeypatch.setattr(oom_prioritizer_module, "_STOP_JOIN_TIMEOUT_SECONDS", 0.1)
+    prioritizer, pass_threads, gate, gated_pass_entered = _gated_prioritizer({2}, set())
+    prioritizer.start()  # pass 1, inline on this thread
+    old_worker = prioritizer._worker
+    assert old_worker is not None
+    try:
+        prioritizer.reapply()  # pass 2, on the old thread, held
+        assert gated_pass_entered.wait(timeout=5)
+        prioritizer.stop()  # times out; the old thread still holds the pass lock
+        prioritizer.reapply()  # pending behind the old thread
+        restarter = threading.Thread(target=prioritizer.start, name="restarter")
+        restarter.start()
+        restarter.join(timeout=5)
+        new_worker = prioritizer._worker
+        assert new_worker is not None and new_worker is not old_worker
+        gate.set()
+        assert poll_until(lambda: not prioritizer._is_pass_requested and len(pass_threads) >= 3, timeout=5)
+        for _ in range(5):
+            prioritizer.reapply()
+            poll_until(lambda: not prioritizer._is_pass_requested, timeout=5)
+        assert poll_until(lambda: not old_worker.thread.is_alive(), timeout=5)
+        # Every pass after the old thread's held one ran on the replacement thread.
+        assert pass_threads[2:] and all(thread is new_worker.thread for thread in pass_threads[2:])
+    finally:
+        gate.set()
+        prioritizer.stop()
+
+
+def test_a_request_that_races_a_restart_never_runs_a_pass_on_the_requesting_thread() -> None:
+    # Round-4 finding: a request that woke the old thread just as stop and start ran fell back to
+    # running a pass inline although a replacement was published.
+    prioritizer, pass_threads, _gate, _entered = _gated_prioritizer(set(), set())
+    prioritizer.start()
+    old_worker = prioritizer._worker
+    assert old_worker is not None
+    real_set = old_worker.wake_event.set
+    has_restarted: list[bool] = []
+
+    def restart_then_wake() -> None:
+        # Only the request's own wake restarts (stop wakes the old thread too, through this same method).
+        if not has_restarted:
+            has_restarted.append(True)
+            # The restart happens elsewhere (start runs its own first pass on its caller's thread).
+            restarter = threading.Thread(target=lambda: (prioritizer.stop(), prioritizer.start()), name="restarter")
+            restarter.start()
+            restarter.join(timeout=10)
+        real_set()
+
+    old_worker.wake_event.set = restart_then_wake  # ty: ignore[invalid-assignment]
+    try:
+        caller = threading.Thread(target=prioritizer.reapply, name="requesting-thread")
+        caller.start()
+        caller.join(timeout=10)
+        assert not caller.is_alive()
+        assert poll_until(lambda: not prioritizer._is_pass_requested, timeout=5)
+        assert "requesting-thread" not in [thread.name for thread in pass_threads]
+    finally:
+        prioritizer.stop()
+
+
+def test_a_pass_that_fails_while_the_thread_stops_is_handed_to_the_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Round-4 finding: the failure skipped the hand-off and left the replacement asleep with work pending.
+    monkeypatch.setattr(oom_prioritizer_module, "_STOP_JOIN_TIMEOUT_SECONDS", 0.1)
+    prioritizer, pass_threads, gate, gated_pass_entered = _gated_prioritizer({3}, {3})
+    prioritizer.start()  # pass 1, inline
+    old_worker = prioritizer._worker
+    assert old_worker is not None
+    try:
+        prioritizer.stop()  # the old thread exits cleanly; nothing pending
+        assert poll_until(lambda: not old_worker.thread.is_alive(), timeout=5)
+        prioritizer.reapply()  # pass 2, inline on this thread (nothing published)
+        # Now a stopped thread that is running a pass (pass 3, held then failing) while a
+        # replacement gets published: drive it through the stopping path directly.
+        stopping_worker = oom_prioritizer_module._PassWorker(prioritizer._run_passes)
+        stopping_worker.stop_event.set()
+        with prioritizer._lock:
+            prioritizer._is_pass_requested = True
+        stopping_worker.thread.start()
+        assert gated_pass_entered.wait(timeout=5)
+        prioritizer.start()  # replacement published while pass 3 runs
+        replacement = prioritizer._worker
+        assert replacement is not None
+        gate.set()  # pass 3 fails; its request must go to the replacement without another request
+        assert poll_until(lambda: not prioritizer._is_pass_requested, timeout=5)
+        assert pass_threads[-1] is replacement.thread
+    finally:
+        gate.set()
+        prioritizer.stop()
