@@ -203,6 +203,9 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
+from imbue.chat.sign_in_notices import SignInFailureNotices
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -1397,6 +1400,8 @@ class AgentManager:
     # Tells the Imbue Studio app a chat was read when it goes from unwatched to watched. Reaches the
     # app only when ``build`` was given the gateway; the default drops every call.
     _imbue_studio_notifications: ImbueStudioNotificationsClient
+    # The chats whose current sign-in failure the app's feed was already told of.
+    _sign_in_failure_notices: SignInFailureNotices
     # Runs periodic idle compaction (mngr's autocompact plugin, in process) for the opted-in chats.
     _autocompactor: ChatAutoCompactor
     # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
@@ -1630,6 +1635,7 @@ class AgentManager:
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
         )
+        manager._sign_in_failure_notices = SignInFailureNotices()
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -2646,6 +2652,17 @@ class AgentManager:
         section 7.4), as that chat's own agent, so the notification opens that chat and no other; a chat whose
         agent the app cannot post as sends nothing."""
         self._imbue_studio_notifications.notify_mention(mentioned_in, title, message)
+
+    def report_sign_in_failures(self, chat_id: ChatId, events: list[dict[str, Any]]) -> None:
+        """Tell the Imbue Studio app's feed when a live batch of ``chat_id``'s events starts a run of replies
+        refused for want of a signed-in AI account; once per run, and recorded read there for anyone already
+        watching the chat, who sees the sign-in action in the reply itself."""
+        if not self._sign_in_failure_notices.record_live_events(chat_id, events):
+            return
+        _loguru_logger.info("Chat {} could not reply: its AI account is signed out; notifying the owner", chat_id)
+        self._imbue_studio_notifications.notify_sign_in_needed(
+            chat_id, SIGN_IN_NEEDED_TITLE, SIGN_IN_NEEDED_MESSAGE, tuple(self.chat_watchers(chat_id))
+        )
 
     def read_streamed_reply(self, agent_id: str) -> StreamedReply | None:
         """The reply the agent's harness session is streaming over its live connection, or None.

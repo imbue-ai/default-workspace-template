@@ -25,9 +25,9 @@ from app_manifest.primitives import (
 )
 from build_app_skill import scaffold_flask_lib
 
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "forward_port.py"
+_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "forward_port.py"
 
 # ``<name>-<8 lowercase base36 chars>``, with the name's underscores hyphenated:
 # a label is a strict hostname label.
@@ -590,7 +590,7 @@ def test_a_bad_icon_file_does_not_brick_an_existing_apps_restart(
         apps_file,
     )
     assert result.returncode == 0, result.stderr
-    assert "warning" in result.stderr
+    assert "warning" in result.stderr.lower()
     rows = _read_apps(apps_file)
     assert rows[0]["url"] == "http://localhost:8001"
     assert rows[0]["icon"] == _ICON
@@ -900,7 +900,11 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     ]
     # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
     assert row["keybindings"] == [
-        {"id": "rename", "label": "Rename the selected entry", "default_chords": ["f2"]},
+        {
+            "id": "rename",
+            "label": "Rename the selected entry",
+            "default_chords": ["f2"],
+        },
         {"id": "unbound", "label": "Something with no default", "default_chords": []},
     ]
 
@@ -922,17 +926,26 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(
     assert _read_apps(apps_file)[0]["pin"] == {"path": "/inbox"}
 
 
-def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_without_one(tmp_path: Path) -> None:
+def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_without_one(
+    tmp_path: Path,
+) -> None:
     apps_file = tmp_path / "apps.toml"
     (tmp_path / "chat").mkdir()
     (tmp_path / "notes").mkdir()
     themed = _write_manifest(
-        tmp_path / "chat", 'name = "chat"\ndisplay_name = "Chat"\nicon = "icon.svg"\n\n[theming]\nmode = "parts"\n'
+        tmp_path / "chat",
+        'name = "chat"\ndisplay_name = "Chat"\nicon = "icon.svg"\n\n[theming]\nmode = "parts"\n',
     )
-    plain = _write_manifest(tmp_path / "notes", 'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n')
+    plain = _write_manifest(
+        tmp_path / "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n',
+    )
 
     for manifest, port in ((themed, 8010), (plain, 8090)):
-        result = _run(["--manifest", str(manifest), "--url", f"http://localhost:{port}"], apps_file)
+        result = _run(
+            ["--manifest", str(manifest), "--url", f"http://localhost:{port}"],
+            apps_file,
+        )
         assert result.returncode == 0, result.stderr
 
     rows = {row["name"]: row for row in _read_apps(apps_file)}
@@ -1082,6 +1095,46 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     ):
         assert stale_key not in row, stale_key
     assert "priority" not in row
+
+
+def test_a_manifest_registration_with_overrides_lasts_until_the_next_plain_one(
+    tmp_path: Path,
+) -> None:
+    """build-app's mock frame hides the app it frames and keeps it running while only
+    the frame has a window, without disturbing anything else on the row; the app's own
+    next registration puts the manifest's values back."""
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    assert (
+        _run(
+            ["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file
+        ).returncode
+        == 0
+    )
+    plain_row = _read_apps(apps_file)[0]
+
+    name = forward_port.register_manifest(
+        apps_file,
+        manifest,
+        "http://localhost:8300",
+        overrides={"internal": True, "stop_when_no_windows": False},
+    )
+
+    assert name == "files"
+    overridden_row = _read_apps(apps_file)[0]
+    assert overridden_row["internal"] is True
+    assert overridden_row["stop_when_no_windows"] is False
+    assert {
+        key: value
+        for key, value in overridden_row.items()
+        if key not in {"internal", "stop_when_no_windows"}
+    } == {
+        key: value for key, value in plain_row.items() if key != "stop_when_no_windows"
+    }
+
+    forward_port.register_manifest(apps_file, manifest, "http://localhost:8300")
+
+    assert _read_apps(apps_file)[0] == plain_row
 
 
 def test_manifest_registration_with_a_matching_name_flag_is_accepted(
@@ -1239,7 +1292,7 @@ def test_a_manifest_missing_its_icon_file_does_not_brick_an_existing_apps_restar
     )
 
     assert result.returncode == 0, result.stderr
-    assert "warning" in result.stderr
+    assert "warning" in result.stderr.lower()
     row = _read_apps(apps_file)[0]
     assert row["url"] == "http://localhost:8301"
     assert row["icon"] == _ICON
@@ -1293,7 +1346,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
     tmp_path: Path,
 ) -> None:
     real_icon = (
-        (Path(__file__).resolve().parents[3] / "system" / "apps" / "files" / "icon.svg")
+        (Path(__file__).resolve().parents[4] / "apps" / "files" / "icon.svg")
         .read_text()
         .strip()
     )
@@ -1437,7 +1490,7 @@ def test_the_script_imports_under_an_isolated_stdlib_only_interpreter() -> None:
             "-I",
             "-S",
             "-c",
-            f"import sys; sys.path.insert(0, {str(_SCRIPT.parent)!r}); from workspace_bare_scripts import forward_port; print(forward_port.DEFAULT_APPS_FILE)",
+            f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r}); from app_registration import forward_port; print(forward_port.DEFAULT_APPS_FILE)",
         ],
         capture_output=True,
         text=True,

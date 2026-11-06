@@ -98,6 +98,14 @@ def mint_window_id() -> WindowId:
     return WindowId(f"win-{secrets.token_hex(_MINTED_ID_BYTES)}")
 
 
+class WindowInputKind(LowerCaseStrEnum):
+    """What a ``window_input`` records: the page's own input report, or focus landing in a page that reports none
+    (a wire value: the heartbeat's report and the client-activity event alike)."""
+
+    INPUT = auto()
+    FOCUS = auto()
+
+
 class LaunchTargetKind(LowerCaseStrEnum):
     """Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at that path
     (else a new one), a named window this client points at it, or wherever the ``show`` op's rule puts it (a wire

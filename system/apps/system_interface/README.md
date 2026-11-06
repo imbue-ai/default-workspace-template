@@ -385,17 +385,27 @@ connect, with every `presence_updated`, whenever a heartbeat moves a person's
 newest input time, and whenever one of its files changes -- a burst of file
 events announced once, a second later, and a document equal to the last one
 pushed never pushed again): the owner first, then every account the workspace-level grants of
-`data/.secrets/share_grants.toml` name, then every invited email still in
-them, then every visiting agent of `data/.secrets/agent_access/grants.toml`
-(both parsed by the `share_grants` library the gateway parses them with), and
-the workspace's own agent last, named after the workspace and pictured by the
-selected avatar. Each entry carries its key, kind, name, picture, email, the
-handle it is mentioned by (`@agent` for the workspace agent, reserved first;
-a later collision gets `-2`, `-3`, ...), its colour (one of eight, by the
-key's hash), and whether it is here: a person by their heartbeats, a visiting
-agent by the gateway's `data/.state/agent_access/last_seen.json`, under the
-same 70-second window. The apps read the roster from here rather than from
-its files: it is the one place names, keys, and handles are decided.
+`data/.secrets/share_grants.toml` name, then every account a workspace-level
+domain grant admitted (a domain grant names nobody, so these are the presence
+records whose email's domain the grants still name; their entries are marked
+`is_admitted_by_domain`, and a revoked domain takes them off the roster), then
+every invited email still in the grants, then every visiting agent of
+`data/.secrets/agent_access/grants.toml` (both documents parsed by the
+`share_grants` library the gateway parses them with), and the workspace's own
+agent last, named after the workspace and pictured by the selected avatar.
+Each entry carries its key, kind, name, picture, email, the handle it is
+mentioned by (`@agent` for the workspace agent, reserved first; a later
+collision gets `-2`, `-3`, ...), its colour (one of eight, by the key's hash),
+and whether it is here: a person by their heartbeats, a visiting agent by the
+gateway's `data/.state/agent_access/last_seen.json`, under the same 70-second
+window. A person is named from their profile, else what their last arrival
+recorded, else what the Imbue Studio desktop recorded of them when it granted
+them (`data/.secrets/share_identities.json`, written beside the grants with
+every save: the email and display name each granted account id resolved
+from, which is how someone granted but never yet here gets a name rather than
+their id), else their email's local part, else their id. The apps read the
+roster from here rather than from its files: it is the one place names, keys,
+and handles are decided.
 
 **Profiles.** A user's display name and profile picture come from imbue_cloud,
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`

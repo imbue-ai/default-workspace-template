@@ -12,6 +12,8 @@ dependencies = [
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.
     "defusedxml>=0.7",
+    # The announcement stream's archive rule, shared with the share gateway's request counts.
+    "event-streams",
     # A registration bounds its own request body, a per-request setter Flask 3.1 added.
     "flask>=3.1",
     "flask-sock>=0.7",
@@ -76,7 +78,7 @@ dev = [
     # Used by check_no_type_errors in test_ratchets.py. Pinned exactly because each
     # ty release adds checks, so a new version is adopted together with the fixes it
     # asks for.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]
