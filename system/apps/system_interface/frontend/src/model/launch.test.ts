@@ -15,7 +15,7 @@ import {
   orderAppLaunches,
   textRowDisabledReason,
 } from "./launch";
-import { appRecord, launchPathRecord } from "../testing/records";
+import { appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
 
 const docs = appRecord("docs", {
   launcher_rank: 20,
@@ -96,15 +96,11 @@ describe("launch paths of an app", () => {
     ]);
     expect(appShortcutsOf(appRecord("gone", { default_shortcuts: [{ launch: "missing", mode: "new" }] }))).toEqual([]);
     // An app declaring several keeps each it offers, in its order.
-    const screen = appRecord("screen", {
+    const screen = screenAppRecord({
       default_shortcuts: [
         { launch: "screen", mode: "focus" },
         { launch: "missing", mode: "new" },
         { launch: "browser", mode: "focus" },
-      ],
-      launch_paths: [
-        launchPathRecord({ id: "screen", path: "/" }),
-        launchPathRecord({ id: "browser", path: "/launch/browser", method: "POST" }),
       ],
     });
     expect(appShortcutsOf(screen)).toEqual([

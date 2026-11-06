@@ -19,6 +19,7 @@ import {
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  screenAppRecord,
   themeCatalog,
   themeMetricsRecord,
   themeRecord,
@@ -925,17 +926,7 @@ describe("the desktop shortcut rows", () => {
   });
 
   it("offers each of an app's default shortcuts from its own launcher row", async () => {
-    const screen = appRecord("screen", {
-      launch_paths: [
-        launchPathRecord({ id: "screen", path: "/" }),
-        launchPathRecord({ id: "browser", path: "/launch/browser", method: "POST" }),
-      ],
-      default_shortcuts: [
-        { launch: "screen", mode: "focus" },
-        { launch: "browser", mode: "focus" },
-      ],
-    });
-    socket.deliver().onAppsUpdated([appRecord("docs"), screen]);
+    socket.deliver().onAppsUpdated([appRecord("docs"), screenAppRecord()]);
 
     openLaunchMenu("screen:browser");
     chooseRow("add-to-desktop");

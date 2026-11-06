@@ -5,6 +5,7 @@ import {
   launchPathRecord,
   layoutRecord,
   placementRecord,
+  screenAppRecord,
   windowRecord,
 } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
@@ -40,16 +41,7 @@ describe("resolveLaunchRun", () => {
   });
 
   it("a focus shortcut of a one-window app's POST launch path runs it even with a window to focus", () => {
-    const screen = appRecord("screen", {
-      launch_paths: [
-        launchPathRecord({ id: "screen", path: "/" }),
-        launchPathRecord({ id: "browser", path: "/launch/browser", method: "POST" }),
-      ],
-      default_shortcuts: [
-        { launch: "screen", mode: "focus" },
-        { launch: "browser", mode: "focus" },
-      ],
-    });
+    const screen = screenAppRecord();
     // A many-window app (its default shortcut opens new windows): a focus shortcut of its POST path still raises.
     const terminal = appRecord("terminal", {
       launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })],

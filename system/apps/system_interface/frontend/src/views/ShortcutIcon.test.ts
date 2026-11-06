@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopShortcut } from "../model/records";
-import { appRecord, launchPathRecord } from "../testing/records";
+import { appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
 import {
   CONNECTING_TOOLTIP,
   ICON_MARKUP_SIZE,
@@ -30,15 +30,10 @@ describe("shortcutLabel", () => {
   });
 
   it("reads an app's later default shortcuts by their launch path's label, and any other shortcut by the app's name", () => {
-    const screen = appRecord("screen", {
+    const screen = screenAppRecord({
       launch_paths: [
-        launchPathRecord({ id: "screen", label: "Screen", path: "/" }),
-        launchPathRecord({ id: "browser", label: "Browser", path: "/launch/browser", method: "POST" }),
+        ...screenAppRecord().launch_paths,
         launchPathRecord({ id: "spare", label: "Spare", path: "/spare" }),
-      ],
-      default_shortcuts: [
-        { launch: "screen", mode: "focus" },
-        { launch: "browser", mode: "focus" },
       ],
     });
     const of = (launch: string): DesktopShortcut => ({
