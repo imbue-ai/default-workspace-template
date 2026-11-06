@@ -58,8 +58,9 @@
  * notification user message. The walk reads its verdict onto the request's card
  * and treats the notification as a turn boundary (the agent blocked on the
  * request and is now resuming), so any open step carries over and continues in
- * the new turn rather than the same node resuming beneath the card. The raw text
- * isn't shown (its verdict is on the card). The notification carries the
+ * the new turn rather than the same node resuming beneath the card (as after a
+ * chip, a step the turn before it never took up stays off its timeline). The
+ * raw text isn't shown (its verdict is on the card). The notification carries the
  * resolved request's own id (see message-classification's resolutionRequestIdOf),
  * so a card looks up its verdict by that id rather than by arrival order: two
  * requests resolved out of the order they were created never swap their
@@ -720,8 +721,10 @@ export function buildSections(
         lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
-        carryover = current === null ? [] : openStepsAtEnd(current);
+        const previous = current;
+        carryover = previous === null ? [] : openStepsAtEnd(previous);
         current = ensureSection(null, `section-after-${e.event_id}`);
+        continueCarryover(previous, current);
         continue;
       }
       // The chat app's notice that a secret card was answered: the same break as a
@@ -734,8 +737,10 @@ export function buildSections(
         if (requestId !== null) resolutionsByRequestId.set(requestId, secretResolution);
         const note = secretResolutionNoteOf(e);
         if (requestId !== null && note !== null) secretNotesByRequestId.set(requestId, note);
-        carryover = current === null ? [] : openStepsAtEnd(current);
+        const previous = current;
+        carryover = previous === null ? [] : openStepsAtEnd(previous);
         current = ensureSection(null, `section-after-${e.event_id}`);
+        continueCarryover(previous, current);
         continue;
       }
       if (
@@ -765,17 +770,15 @@ export function buildSections(
       // module docstring): close the prior section (carrying open steps) and open a new one
       // headed by the message.
       lastSwitched = null;
-      const wasDormant = current !== null && current.dormant_step_id !== null;
-      const untakenBefore = current === null ? [] : untakenCarryoverIds(current);
-      carryover = current === null ? [] : openStepsAtEnd(current);
+      const previous = current;
+      carryover = previous === null ? [] : openStepsAtEnd(previous);
       current = ensureSection(e, `section-${e.event_id}`);
-      if (isGenuineUserTurn(e) || wasDormant) {
+      if (isGenuineUserTurn(e)) {
         // The user moved on: a step the agent left open belongs to the earlier request, so an
-        // answer to this one does not join it unless the agent takes the step up again. A chip
-        // does not change which request the agent is answering, so a dormant step stays so.
+        // answer to this one does not join it unless the agent takes the step up again.
         setCarryoverDormant(current);
       } else {
-        current.untaken_carryover_ids = new Set(untakenBefore);
+        continueCarryover(previous, current);
       }
       continue;
     }
@@ -890,6 +893,18 @@ function setCarryoverDormant(section: SectionBuilder): void {
   section.dormant_step_id = section.current_step_id;
   section.current_step_id = null;
   section.untaken_carryover_ids = new Set(section.step_order);
+}
+
+/** Open `next` on the same request `previous` was answering (after a chip, a notice, or a request's
+ *  verdict), which does not change what the agent is answering: a dormant step stays dormant, and
+ *  the carried-over steps `previous` never took up stay off `next`'s timeline. */
+function continueCarryover(previous: SectionBuilder | null, next: SectionBuilder): void {
+  if (previous === null) return;
+  if (previous.dormant_step_id !== null) {
+    setCarryoverDormant(next);
+    return;
+  }
+  next.untaken_carryover_ids = new Set(untakenCarryoverIds(previous));
 }
 
 /** The steps in untaken_carryover_ids the agent has not taken up in the section so far. */

@@ -1927,6 +1927,35 @@ describe("permission resolutions", () => {
     expect(sections.every((s) => !(s.user_event?.content ?? "").includes("was granted"))).toBe(true);
   });
 
+  it("keeps a step the turn moved past off the timeline across a permission verdict", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "free up disk"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Check overall disk usage")),
+      userMsg("2026-05-01T01:00:02Z", "show me my gmail unreads instead"),
+      tkMsg("2026-05-01T01:00:03Z", "tk start s2", "c-s2"),
+      result("2026-05-01T01:00:03Z", "c-s2", startOut("s2", "Connect to your Gmail account")),
+      permissionMsg("2026-05-01T01:00:04Z", "perm"),
+      result("2026-05-01T01:00:04Z", "perm", '{"request_id":"r1"}'),
+      userMsg(
+        "2026-05-01T01:00:05Z",
+        "Your permission request for Gmail was granted. Retry. (request_id: r1)",
+        "u-res",
+        {
+          display: "permission_resolution",
+          resolution: "granted",
+          request_id: "r1",
+        },
+      ),
+      workMsg("2026-05-01T01:00:06Z", "Bash", "w-after"),
+      result("2026-05-01T01:00:06Z", "w-after", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
+    expect(stepItems(sections[2].items)[0].events.map((e) => e.event_id)).toEqual(["a-w-after"]);
+  });
+
   it("carries an open step over the approval so it continues in the new turn", () => {
     const events = [
       userMsg("2026-05-01T01:00:00Z", "show me my gmail unreads"),
@@ -2347,6 +2376,30 @@ describe("secret requests", () => {
     expect(verdictFor(sections[0].items[1] as PermissionItem, "secret-1")).toBe("stored");
     expect(sections[1].user_event).toBeNull();
     expect(stepItems(sections[1].items)[0].is_carryover).toBe(true);
+  });
+
+  it("keeps a step the turn moved past off the timeline across a secret's notice", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "free up disk"),
+      tkMsg("2026-05-01T01:00:01Z", "tk start s1", "c-s1"),
+      result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Check overall disk usage")),
+      userMsg("2026-05-01T01:00:02Z", "connect me to the widget API instead"),
+      tkMsg("2026-05-01T01:00:03Z", "tk start s2", "c-s2"),
+      result("2026-05-01T01:00:03Z", "c-s2", startOut("s2", "Connect to the widget API")),
+      secretMsg("2026-05-01T01:00:04Z", "sec"),
+      secretResult("2026-05-01T01:00:04Z", "sec", "secret-1", "svc"),
+      userMsg(
+        "2026-05-01T01:00:05Z",
+        "Secret stored: data/.secrets/svc.env (A) (secret: stored, request_id: secret-1)",
+        "u-res",
+        { display: "secret_resolution", resolution: "stored", request_id: "secret-1" },
+      ),
+      workMsg("2026-05-01T01:00:06Z", "Bash", "w-after"),
+      result("2026-05-01T01:00:06Z", "w-after", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
   });
 
   it("carries the decline note onto the card by id", () => {
