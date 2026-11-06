@@ -6,4 +6,7 @@ from typing import Final
 STATE_DIR: Final[Path] = Path("data/.state/terminal")
 TTYD_EXECUTABLE: Final[str] = "ttyd"
 # The tagging wrapper every terminal session runs its shell through (the terminal-session band).
-OOM_TAG_SCRIPT: Final[Path] = Path("system/services/oom_priority/bin/oom_tag_service.py")
+# own-process: wrapper -- it sets each terminal session's band and execs its shell
+OOM_TAG_SCRIPT: Final[Path] = Path(
+    "system/services/oom_priority/bin/oom_tag_service.py"
+)

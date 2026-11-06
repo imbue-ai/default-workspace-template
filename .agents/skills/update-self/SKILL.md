@@ -60,7 +60,9 @@ what this run needs, with no confirmation and no preflight script, you may:
 
 - stop other chats and background agents, idle or running, through `run-status
   stop-chats` (5b, and earlier with `--agent <name>` when memory runs short),
-  which records each so the end of the pass starts it again with a note;
+  which records each so the end of the pass starts it again with a note. The
+  main chat is the exception: the chat app starts it again as soon as it stops,
+  so `stop-chats --agent` refuses it, and 5b only interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
   (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
@@ -438,7 +440,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
-    --description "Wait for the update's background agent" -- \
+    --description "Wait for the update's background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
@@ -698,7 +700,9 @@ and is not resumed (`references/resuming-after-stuck.md`).
 Once the branch fast-forwards, **pause** every chat and background agent that
 is busy (mid-turn, or waiting on a background command), other than this chat
 and the update's own worker and anything under it. It records each one, so the
-resume below starts it again with a note:
+resume below starts it again with a note. A busy main chat is stopped too, but
+the chat app starts it again at once, idle, so it is interrupted rather than
+held, and the resume only sends it the note:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \

@@ -344,6 +344,8 @@ export interface RosterParticipant {
   readonly last_seen: string | null;
   /** When their newest page last saw keyboard or pointer input (ISO 8601), when it reports it. */
   readonly last_input_at: string | null;
+  /** Whether a domain grant admits them rather than a grant naming them (the multiplayer spec, section 4.2). */
+  readonly is_admitted_by_domain: boolean;
 }
 
 /** What a chat is doing, as the chat app reports it for the agent's card (the multiplayer spec, section 6.4). */
@@ -825,6 +827,7 @@ function parseRosterParticipant(raw: unknown): RosterParticipant {
     is_connected: asBoolean(record.is_connected, "participant.is_connected"),
     last_seen: asOptionalString(record.last_seen, "participant.last_seen"),
     last_input_at: asOptionalString(record.last_input_at, "participant.last_input_at"),
+    is_admitted_by_domain: asBoolean(record.is_admitted_by_domain, "participant.is_admitted_by_domain"),
   };
 }
 

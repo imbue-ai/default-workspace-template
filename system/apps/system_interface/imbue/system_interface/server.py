@@ -562,7 +562,8 @@ def _parse_heartbeat() -> HeartbeatRequest:
 
 def _presence_heartbeat_endpoint() -> Response:
     """One shell page's heartbeat: record the requester's presence (the owner of an unshared workspace under the
-    ``owner`` key) and the page's newest input time, and answer their own identity record and participant key.
+    ``owner`` key), the page's newest input time, and the windows a person interacted with since the last heartbeat
+    (the app-usage-signals spec, section 6.3), and answer their own identity record and participant key.
 
     Answers 204 and records nothing for a visiting agent, which never heartbeats: there is no file for one here.
     """
@@ -578,6 +579,8 @@ def _presence_heartbeat_endpoint() -> Response:
     except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
+    if heartbeat.client_id is not None:
+        _shell().record_window_input(heartbeat.client_id, heartbeat.input_windows)
     return model_response(HeartbeatResponse(identity=identity, participant=participant_key_of(identity)))
 
 

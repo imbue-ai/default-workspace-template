@@ -251,9 +251,7 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_regi
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
-    tmp_path: Path, registration_registry: Path
-) -> None:
+def test_register_app_reports_the_refusal_of_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
@@ -261,10 +259,11 @@ def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
         register_app(manifest_path, AppUrl("http://localhost:8300"))
 
 
-def test_register_app_needs_the_registration_script_under_the_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, registration_registry: Path) -> None:
+    (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text('name = "registered"\ndisplay_name = "Registered"\nicon = "icon.svg"\n')
+    registration_registry.write_text("[[apps]\nname = \n")
 
-    with pytest.raises(AppRegistrationError, match="not found"):
-        register_app(tmp_path / "app.toml", AppUrl("http://localhost:8300"))
+    with pytest.raises(AppRegistrationError, match="registration of"):
+        register_app(manifest_path, AppUrl("http://localhost:8300"))
