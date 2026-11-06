@@ -105,12 +105,8 @@ _CONTEXT_MESSAGE_WORD_LIMIT: Final[int] = 300
 # The newest transcript events read to find those messages; events are payload-free, so this many
 # comfortably holds CONTEXT_MESSAGE_COUNT messages between tool calls.
 _CONTEXT_TAIL_EVENT_LIMIT: Final[int] = 200
-# How likely Jev must judge a quick look-and-feel change before the message is routed.
+# How likely Jev must judge a yes before the message is routed.
 _YES_CUTOFF: Final[float] = 0.5
-# Above this judged chance of being blocked by unfinished work, the message stays with the chat's agent. It
-# sits below 0.5 because wrongly routing a change to something not built yet costs more than keeping a
-# routable one: on the labelled tuning set, 0.4 kept every blocked message and lost one routable one.
-_PENDING_WORK_CUTOFF: Final[float] = 0.4
 # A just-created quick-change chat is not taking messages until its agent is up.
 _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
@@ -425,7 +421,7 @@ def decide_routing(
         return RoutingDecision.NOT_ROUTED
     if pending_work_probability is None:
         return RoutingDecision.UNUSABLE_ANSWER
-    if pending_work_probability > _PENDING_WORK_CUTOFF:
+    if pending_work_probability > _YES_CUTOFF:
         return RoutingDecision.PENDING_WORK
     return RoutingDecision.ROUTED
 
