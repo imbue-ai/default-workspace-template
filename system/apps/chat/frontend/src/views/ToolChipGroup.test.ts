@@ -7,13 +7,14 @@ const { mockDetailState, mockRequestDetail, agent } = vi.hoisted(() => ({
   mockDetailState: vi.fn(),
   mockRequestDetail: vi.fn(),
   // What the chats model and the transcript store report for the chat: the agent's activity and its events.
-  agent: { activityState: "IDLE", events: [] as unknown[] },
+  agent: { activityState: "IDLE", events: [] as unknown[], hasMoreAfter: false },
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
   getEventDetailState: mockDetailState,
   getEventDetailVersion: () => 0,
   getEventsForChat: () => agent.events,
+  hasMoreAfter: () => agent.hasMoreAfter,
   requestEventDetail: mockRequestDetail,
 }));
 vi.mock("../models/Chats", async (importOriginal) => ({
@@ -73,6 +74,7 @@ beforeEach(() => {
   mockRequestDetail.mockReset();
   agent.activityState = "IDLE";
   agent.events = [];
+  agent.hasMoreAfter = false;
   root = document.createElement("div");
   document.body.appendChild(root);
 });
@@ -304,6 +306,15 @@ describe("the call the agent is running", () => {
     expect(offLine.classList.contains("tool-chip--running")).toBe(false);
     expect(offLine.querySelector(".tool-chip-icon")).not.toBeNull();
     expect(offLine.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
+
+    // The reader paged back and the window stops short of the live end: the call running now is past the held
+    // events, so the last unanswered one held is not it.
+    agent.hasMoreAfter = true;
+    mount(chips, [result({ tool_call_id: "c1" })], true);
+    const shortOfLiveEnd = chipButtons()[1];
+    expect(shortOfLiveEnd.classList.contains("tool-chip--running")).toBe(false);
+    expect(shortOfLiveEnd.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
+    agent.hasMoreAfter = false;
 
     agent.activityState = "THINKING";
     mount(chips, [result({ tool_call_id: "c1" }), result({ tool_call_id: "c2" })], true);

@@ -52,7 +52,7 @@ import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
-import { getEventsForChat } from "../models/Response";
+import { getEventsForChat, hasMoreAfter } from "../models/Response";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
@@ -95,10 +95,12 @@ export function labelForToolCall(tc: ToolCall): string {
 }
 
 /** The call the agent is running right now: the latest call with no result, while the backend reports a tool
- *  running. Its chip on a stretch's line shows it running in place of the status row (see `isRunningCallInline`); a
- *  chip in a step's opened work leaves it to the status row. */
+ *  running and the held window reaches the live end (short of it, the running call lies past the held events, whose
+ *  last unanswered call only waits on a result the window stops before). Its chip on a stretch's line shows it
+ *  running in place of the status row (see `isRunningCallInline`); a chip in a step's opened work leaves it to the
+ *  status row. */
 export function runningToolCall(chatId: string): ToolCall | null {
-  if (getChatById(chatId)?.active_agent.activity_state !== "TOOL_RUNNING") return null;
+  if (getChatById(chatId)?.active_agent.activity_state !== "TOOL_RUNNING" || hasMoreAfter(chatId)) return null;
   return pendingToolCall(getEventsForChat(chatId));
 }
 
