@@ -4,9 +4,10 @@ An agent's harness process loads its binary, its extensions and some of its conf
 it starts, so an update that changes one of them reaches a running agent only when that agent
 is restarted. A restart keeps the conversation: each harness resumes its own session.
 
-``restart_idle_agents`` asks the chat app to restart every chat it lists, other than the
-pass's own chat and its worker, if that chat has ended its turn, and reports the ones the chat
-app left running because they were busy. ``start_self_restart`` restarts the pass's own chat
+``restart_idle_agents`` asks the chat app to restart every running chat it lists, other than
+the pass's own chat, its worker, and the chats the pass's resume started after the update
+landed, if that chat has ended its turn, and reports the ones the chat app left running because
+they were busy. ``start_self_restart`` restarts the pass's own chat
 once its last turn ends, from a detached helper, and sends it a note to confirm the restart to
 the user (or, when the restart does not happen, a note saying so).
 
