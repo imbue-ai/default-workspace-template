@@ -48,9 +48,9 @@ belong in tested code rather than agent prose:
 
 ``agent-restart-verdict``
     Whether the update changes what a running agent's harness loaded when it started (a
-    harness version pin, the Antigravity installer, a harness extension tree), so the
-    lead must restart the agents after the apply, and which changes say so. The
-    worker's §4d rule reads it.
+    harness version pin, Antigravity's in its installer included, or a harness extension
+    tree), so the lead must restart the agents after the apply, and which changes say so.
+    The worker's §4d rule reads it.
 
 ``footprint-ranges``
     Name the two commit ranges the worker reads each app's footprint over:
