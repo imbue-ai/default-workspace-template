@@ -2719,12 +2719,8 @@ class AgentManager:
             tracker = self._activity_tracker_by_agent.get(agent_id) if agent_id else None
         if not agent_id:
             return UNREADABLE_CHAT_BUSY_REASON
-        # The observe-reported lifecycle trails a turn's start; the marker flips at once (stat outside the lock).
-        active_marker_filename = tracker.active_marker_filename if tracker is not None else None
-        is_active_marker_present = (
-            active_marker_filename is not None
-            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
-        )
+        # The observe-reported lifecycle trails a turn's start; the marker flips at once.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
         with self._lock:
             agent = self._agents.get(agent_id)
             if agent is None:
@@ -5690,6 +5686,19 @@ class AgentManager:
         if chat is not None and is_active_agent and self._chat_stream_ender is not None:
             self._chat_stream_ender(str(chat.chat_id))
 
+    def _is_active_marker_present(self, agent_id: str, tracker: HarnessActivityTracker | None) -> bool:
+        """Whether the agent's turn-in-flight marker is on disk; a filesystem stat, so call it outside the lock.
+
+        The tracker declares which file that is; a harness that keeps no marker (codex -- its daemon
+        is the turn authority), or an agent with no tracker, reads False and the lifecycle state
+        stands alone.
+        """
+        active_marker_filename = tracker.active_marker_filename if tracker is not None else None
+        return (
+            active_marker_filename is not None
+            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
+        )
+
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
 
@@ -6562,14 +6571,8 @@ class AgentManager:
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
         # The turn-in-flight marker flips promptly at turn start/end, whereas the observe-reported
-        # lifecycle state can miss a short turn -- so read it for a timely signal (stat outside the
-        # lock). The tracker declares which file that is; ``None`` = the harness keeps no marker
-        # (codex -- its daemon is the turn authority) and the lifecycle state stands alone.
-        active_marker_filename = tracker.active_marker_filename
-        is_active_marker_present = (
-            active_marker_filename is not None
-            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
-        )
+        # lifecycle state can miss a short turn -- so read it for a timely signal.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
         live_compaction = self._resolve_live_compaction(
             agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
         )
