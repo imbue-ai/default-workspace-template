@@ -24,6 +24,7 @@ from update_self_skill import (
     update_runtime,
     update_self,
 )
+from update_self_skill.chat_app_testing import FakeChatAppServer
 from update_self_skill.messenger_testing import RecordingMessengers
 
 _OWN_CHAT = "agent-00000000000000000000000000000001"
@@ -43,7 +44,7 @@ def _chat(chat_id: str, title: str, status: str, name: str = "") -> dict[str, An
 
 
 def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_answer_reported(
-    fake_chat_app: Any,
+    fake_chat_app: FakeChatAppServer,
 ) -> None:
     fake_chat_app.answers = [
         (
@@ -294,7 +295,7 @@ def test_the_note_names_every_chat_not_restarted_or_that_none_were(
 
 
 def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
-    fake_chat_app: Any, recording_messengers: RecordingMessengers
+    fake_chat_app: FakeChatAppServer, recording_messengers: RecordingMessengers
 ) -> None:
     """The helper is detached and carries no agent id, so the stop half of the restart, which
     kills every process carrying the chat's agent id, leaves it alive to send the note."""
@@ -353,7 +354,7 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
 
 
 def test_a_self_restart_that_never_happens_tells_the_chat_so(
-    fake_chat_app: Any, recording_messengers: RecordingMessengers
+    fake_chat_app: FakeChatAppServer, recording_messengers: RecordingMessengers
 ) -> None:
     """The results message has told the user this chat restarts; when it does not, the chat
     is told so instead of the success note."""

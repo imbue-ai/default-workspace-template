@@ -11,7 +11,6 @@ import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
 from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
@@ -25,6 +24,7 @@ from update_self_skill import (
     update_self,
 )
 from update_self_skill.agents_testing import FakeAgents, chat, worker
+from update_self_skill.chat_app_testing import FakeChatAppServer
 
 _LEAD = "update-to-minds-v0-9-0"
 
@@ -427,7 +427,7 @@ def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(
 def test_restart_agents_leaves_out_what_the_resume_started_after_the_update_landed(
     tmp_path: Path,
     fake_agents: FakeAgents,
-    fake_chat_app: Any,
+    fake_chat_app: FakeChatAppServer,
     capsys: pytest.CaptureFixture[str],
     landed_args: list[str],
     expected_restarts: list[str],
