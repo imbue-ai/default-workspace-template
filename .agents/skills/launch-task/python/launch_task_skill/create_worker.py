@@ -1288,7 +1288,7 @@ _IDLE_STATES = ("WAITING", _STOPPED_STATE)
 # mid-turn, WAITING has ended a turn but is still a resumable agent its own
 # lead may be about to answer (a ``gate`` report round trip looks exactly like
 # this). Either one, in a *child*, means its parent is not finished.
-_LIVE_CHILD_STATES = ("RUNNING", "WAITING")
+_LIVE_CHILD_STATES = ("RUNNING", "RUNNING_BACKGROUND", "WAITING")
 
 
 # Labels ``launch`` stamps on every worker it creates.
