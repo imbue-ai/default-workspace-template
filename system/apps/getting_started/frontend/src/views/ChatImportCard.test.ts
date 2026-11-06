@@ -38,7 +38,7 @@ describe("the chat import card", () => {
     ).toBeNull();
   });
 
-  it("offers nothing to an account outside the inner circle, but keeps following an import it has", () => {
+  it("offers nothing to an account with experimental features off, but keeps following an import it has", () => {
     const hidden = render(chatImportRecord({}, { is_offered: false }));
     expect(hidden.root.querySelector('[data-section="chat-import"]')).toBeNull();
 

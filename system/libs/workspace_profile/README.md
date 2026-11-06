@@ -6,8 +6,8 @@ from the workspace's account, and resolves account-keyed settings for a request 
 
 The snapshot is read-only inside the workspace: it names the workspace's account and owner
 and carries the account-keyed settings the built-in apps consume: the keybindings, and whether
-the account is in Imbue's trusted inner circle (`is_owner_in_inner_circle`), which decides whether
-an app offers a not-yet-public feature.
+the account has experimental features on (`are_experimental_features_enabled`), which decides
+whether an app offers a feature still being tried out.
 The workspace's own layer lives under `data/system/profile/`: per-user override files
 (`overrides/users/<user_id>.json`, written by the workspace only) and the shell's unsent
 account changes (`unsent.json`), which overlay the owner's snapshot values until they are

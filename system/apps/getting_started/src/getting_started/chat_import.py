@@ -1,5 +1,5 @@
 """The "Bring in your chats" card's state: what the import-chats skill has imported, whether the user put the card
-away, and whether the import is offered at all (only to the accounts in Imbue's trusted inner circle, for now).
+away, and whether the import is offered at all (only to accounts with experimental features on, for now).
 
 The skill's script (``.agents/skills/import-chats/scripts/import_chats.py``) records each source it imports in
 ``data/.skills/import-chats/status.json``; this module only reads that file. A source the file says is still
@@ -20,7 +20,7 @@ from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
-from workspace_profile.snapshot import is_owner_in_inner_circle
+from workspace_profile.snapshot import are_experimental_features_enabled
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 
 from getting_started.state_files import read_json_object
@@ -162,7 +162,7 @@ class ChatImportStore(FrozenModel):
         """The card's state as ``GET /api/chat-import`` answers it."""
         return ChatImportResponse(
             is_dismissed=self.is_dismissed(),
-            is_offered=is_owner_in_inner_circle(load_workspace_profile_snapshot(self.workspace_root)),
+            is_offered=are_experimental_features_enabled(load_workspace_profile_snapshot(self.workspace_root)),
             sources={
                 key: ChatImportSourceView.model_validate(source.model_dump(exclude={"pid"}))
                 for key, source in read_chat_import_sources(self.status_path).items()

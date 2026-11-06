@@ -4,7 +4,7 @@ from pathlib import Path
 from workspace_profile.snapshot import (
     SNAPSHOT_RELATIVE_PATH,
     SUPPORTED_SNAPSHOT_FORMAT,
-    is_owner_in_inner_circle,
+    are_experimental_features_enabled,
     load_workspace_profile_snapshot,
     parse_workspace_profile_snapshot,
 )
@@ -87,14 +87,15 @@ def test_parse_snapshot_rejects_a_header_field_of_the_wrong_type() -> None:
     )
 
 
-def test_only_a_snapshot_saying_so_puts_the_owner_in_the_inner_circle() -> None:
-    assert is_owner_in_inner_circle(None) is False
+def test_only_a_snapshot_saying_so_turns_experimental_features_on() -> None:
+    assert are_experimental_features_enabled(None) is False
     for text, expected in (
-        ('{"is_inner_circle": true}', True),
-        ('{"is_inner_circle": false}', False),
-        ('{"is_inner_circle": "true"}', False),
+        ('{"experimental_features_enabled": true}', True),
+        ('{"experimental_features_enabled": false}', False),
+        ('{"experimental_features_enabled": "true"}', False),
         ("{}", False),
     ):
         assert (
-            is_owner_in_inner_circle(parse_workspace_profile_snapshot(text)) is expected
+            are_experimental_features_enabled(parse_workspace_profile_snapshot(text))
+            is expected
         )

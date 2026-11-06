@@ -174,10 +174,10 @@ def test_the_chat_import_route_offers_the_import_only_when_the_snapshot_says_so(
 
     snapshot_path = tmp_path / SNAPSHOT_RELATIVE_PATH
     snapshot_path.parent.mkdir(parents=True)
-    snapshot_path.write_text(json.dumps({"account_id": "user-1", "is_inner_circle": True}))
+    snapshot_path.write_text(json.dumps({"account_id": "user-1", "experimental_features_enabled": True}))
     assert client.get("/api/chat-import").get_json()["is_offered"] is True
 
-    snapshot_path.write_text(json.dumps({"account_id": "user-1", "is_inner_circle": False}))
+    snapshot_path.write_text(json.dumps({"account_id": "user-1", "experimental_features_enabled": False}))
     assert client.get("/api/chat-import").get_json()["is_offered"] is False
 
 

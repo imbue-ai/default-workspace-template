@@ -34,8 +34,8 @@ SNAPSHOT_HEADER_KEYS: Final[frozenset[str]] = frozenset(
     {"snapshot_format", "account_id", "owner_user_id", "written_at", "written_by"}
 )
 
-# Whether the account is in Imbue's trusted inner circle; only a client outside the workspace writes it.
-INNER_CIRCLE_SETTING_KEY: Final[str] = "is_inner_circle"
+# Whether the owning account has experimental features on; only a client outside the workspace writes it.
+EXPERIMENTAL_FEATURES_SETTING_KEY: Final[str] = "experimental_features_enabled"
 
 # The account-keyed setting keys this template's apps consume from the snapshot. A setting is
 # added here only when a workspace app reads it; the vendored contract fixture test pins this
@@ -43,7 +43,7 @@ INNER_CIRCLE_SETTING_KEY: Final[str] = "is_inner_circle"
 # mirrored.
 CONSUMED_SETTING_KEYS: Final[tuple[str, ...]] = (
     "keybindings",
-    INNER_CIRCLE_SETTING_KEY,
+    EXPERIMENTAL_FEATURES_SETTING_KEY,
 )
 
 
@@ -129,13 +129,15 @@ def load_workspace_profile_snapshot(
     return parse_workspace_profile_snapshot(text)
 
 
-def is_owner_in_inner_circle(snapshot: WorkspaceProfileSnapshot | None) -> bool:
-    """Whether the workspace's owning account is in Imbue's trusted inner circle.
+def are_experimental_features_enabled(
+    snapshot: WorkspaceProfileSnapshot | None,
+) -> bool:
+    """Whether the workspace's owning account has experimental features on.
 
     Only a client outside the workspace can say so: a workspace with no snapshot, or one from a
-    client that does not write the key, is outside it.
+    client that does not write the key, has them off.
     """
     return (
         snapshot is not None
-        and snapshot.value_by_key.get(INNER_CIRCLE_SETTING_KEY) is True
+        and snapshot.value_by_key.get(EXPERIMENTAL_FEATURES_SETTING_KEY) is True
     )

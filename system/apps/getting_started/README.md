@@ -3,8 +3,8 @@
 The Getting Started app: the ways into the workspace, on one page a window of the desktop
 frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`).
 Top to bottom: a search field over its own content; "Bring in your chats", a card offering to copy
-the user's Claude and ChatGPT conversations into the workspace (to accounts in Imbue's trusted
-inner circle, until it is put away); "Start something", eight intents two to a row (four at first,
+the user's Claude and ChatGPT conversations into the workspace (to accounts with experimental
+features on, until it is put away); "Start something", eight intents two to a row (four at first,
 the rest behind "See more"), each with a seeded first message; "Start from a template", the
 published template catalog by shelf, with a detail page (the drawing,
 the write-up, what the template needs, its repository) whose two actions adopt the template
@@ -31,8 +31,8 @@ from the workspace venv (`.venv/bin/getting-started`), serving on
   copy under `data/.state/getting-started/template_catalog.json`; `{"catalog": null}` when
   no URL is configured, a 503 when nothing could ever be loaded.
 - `GET /api/chat-import`: the "Bring in your chats" card's state,
-  `{"is_dismissed", "is_offered", "sources"}`. `is_offered` is whether the workspace's account is
-  in Imbue's trusted inner circle, read from the workspace profile snapshot
+  `{"is_dismissed", "is_offered", "sources"}`. `is_offered` is whether the workspace's account
+  has experimental features on, read from the workspace profile snapshot
   (`system/libs/workspace_profile`); the card makes its first offer only when it is, and keeps
   following an import that has already started either way. `sources` holds each source the
   `import-chats` skill recorded in `data/.skills/import-chats/status.json`
