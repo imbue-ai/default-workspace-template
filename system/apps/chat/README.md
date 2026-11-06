@@ -918,6 +918,24 @@ transcript ahead of the message it refused.
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 
+The same chooser can run before the workspace is up. On an Imbue Cloud create
+the Imbue Studio app runs `chat-early-sign-in`, this package's second console
+script (`early_sign_in.py`), over SSH as soon as the machine answers, and shows
+its page on the creation page. It serves the chooser on its own (`sign_in.html`)
+and the account routes above, driven by an `AuthFlowService` of its own, on a
+loopback port it names in one startup line (`early-sign-in: {"port": <port>}`),
+plus `GET /api/early-sign-in` (whether a sign-in is under way, whether the user
+is done with the chooser, and the accounts signed in there) and
+`POST /api/early-sign-in/done`, which the page sends when the user closes the
+chooser or signs in. Its sign-ins run under a staging store,
+`~/.minds-early-sign-in`, because the chat app's boot kills sign-in CLIs and
+removes unindexed folders in the live store; a finished account is moved into
+`~/.minds/accounts` and indexed in one hold of the store's lock
+(`accounts.move_in_account`), so it is in the workspace whether or not the chat
+app has started. The program ends when its stdin closes (Studio hanging up), or
+after 30 minutes, abandoning any sign-in under way and clearing the staging
+store.
+
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
 create the Imbue Studio app's chats fall back to on a template whose script has no
