@@ -134,8 +134,9 @@ class FrontendProbe:
 
 
 class HttpClient:
-    """Indirection over the loopback probes: the health checks (live service +
-    pre-flight boot) and the frontend probe's page fetches."""
+    """Indirection over the loopback requests: the health checks (live service +
+    pre-flight boot), the frontend probe's page fetches, and the agent restarts'
+    reads of the chat app's chat list and posts to its interrupt route."""
 
     def get_status(self, url: str, timeout: float) -> int | None:
         try:
