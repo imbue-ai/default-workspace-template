@@ -5568,6 +5568,27 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
     assert agent_id not in manager._compaction_pending_by_agent
 
 
+@pytest.mark.parametrize("body", [None, {"keep_queue": True}])
+def test_an_interrupt_clears_a_compaction_its_restart_ended(tmp_path: Path, body: dict[str, bool] | None) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    marker = write_compacting_marker(state_dir, "manual")
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == 200
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
 def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path) -> None:
     agent_id = f"agent-{uuid4().hex}"
     agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)

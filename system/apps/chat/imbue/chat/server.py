@@ -1580,7 +1580,13 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             )
 
     if interrupt_request.keep_queue:
-        return _restart_and_resend_queue(chat_id, agent_info, *_interrupt_capabilities(agent_info))
+        watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+
+        def settle_after_interrupt() -> None:
+            settle_activity()
+            get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
+
+        return _restart_and_resend_queue(chat_id, agent_info, watcher, restart_process, settle_after_interrupt)
 
     agent_name = agent_info.name
 
