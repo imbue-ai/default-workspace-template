@@ -246,7 +246,8 @@ sub-workers it split its pass across are already gone with it):
   separate commit.
 - **app**: refresh its window so the user sees the merged build
   (`uv run --no-sync workspace-layout refresh --app <app-name>`), then close
-  the ticket.
+  the ticket. If the `done` report's `Sharing:` line left routes for the user
+  to decide, ask them now, as `lead-proxy.md`'s `name: done` says.
 - **service**: it has no window -- restart its programs (`supervisorctl
   restart <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. Then close the ticket.

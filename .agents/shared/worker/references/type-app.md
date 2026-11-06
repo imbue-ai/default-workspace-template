@@ -75,6 +75,112 @@ App specifics:
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout
 open` / `refresh` / `list` against the served tree.
 
+## Phone and sharing checks
+
+The user built and confirmed the app on a desktop, as its owner, so two ways
+of reaching it went untried: from a phone, and by someone else. Once sharing
+is on, the app has its own public address (`build-app`'s "The shared (public)
+URL"), and the user can open it from their phone's browser
+(`.agents/skills/use-from-phone/SKILL.md`) or grant it to other people and to
+visiting agents. The crystallize pass runs these checks after its first
+milestone (`op-crystallize.md`, Stage 3). Each finding is either fixed and
+covered by a test, or named in your report; none is a reason to stop the pass.
+
+### On a phone
+
+A phone shows one window at a time, filling the screen, or the app's own
+link opened directly in its browser; either way the app's page gets a
+phone-sized viewport and a finger instead of a mouse. Drive the isolated
+instance (`web-frontend-testing.md`) in a browser context at 393x852 and at
+852x393 with `has_touch=True` and `is_mobile=True` (without `is_mobile`,
+Chromium ignores the page's viewport tag and does not draw what a phone
+does), and check:
+
+- The page carries `<meta name="viewport" content="width=device-width,
+  initial-scale=1">`, without which a phone draws the desktop layout shrunk
+  to fit.
+- Nothing scrolls sideways at 393 wide
+  (`document.documentElement.scrollWidth <= 393`; not `window.innerWidth`,
+  which an emulated phone widens to fit a page that overflows): a wide table
+  or code block scrolls inside its own container, and fixed widths give way
+  to the screen's.
+- Every action the desktop offers can be done by tapping. Nothing is reachable
+  only on hover (a row's buttons that appear on hover, a tooltip that holds
+  the only copy of a value), controls are big enough to tap (about 44px), and
+  a menu or dialog fits on screen and closes.
+- A text field's font is at least 16px, or iOS zooms the page when it gains
+  focus.
+
+The user confirmed the desktop layout, so a fix for a phone applies only on a
+phone, never as a new desktop look: under the media queries the workspace's
+own apps switch on (`system/libs/workspace_ui/src/device_queries.ts`), a
+phone-sized viewport either way round, which covers 852x393 where a
+`max-width` breakpoint does not, or `(pointer: coarse)` for what a finger
+needs (hover-only controls, tap targets). Look at the screenshots at both
+phone sizes and at the desktop size the user confirmed, as
+`web-frontend-testing.md` requires for any page you change. Commit one
+`browser` test in that phone context (393x852, `has_touch=True`,
+`is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
+scroll and runs the app's main action by tapping it. The repo-root
+`conftest.py` does not reach a user-built app's suite and its dev group has
+no Playwright, so add `playwright` to that group (`uv add --dev playwright` in
+its directory), register the `browser` marker in its
+`[tool.pytest.ini_options]`, and launch Fortress by its path inside the test,
+as `AGENTS.md` says.
+
+### When it is shared
+
+Over a share, every route answers whoever holds a grant on the whole
+workspace or on this app (`system/services/share_gateway/README.md`,
+"Grants"), and a visiting agent scoped to it ("Visiting agents" there), not
+just the pages the user clicks. Each request carries `X-Imbue-Identity`
+("Request identity" there): `owner` is always present; a person over a share
+adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
+`granter`, with no `user_id` ("Visiting agents", "Admission"); and a request
+with no header is the owner's. Read it with `workspace_layout.identity`, as
+the shell and the chat app do. The scaffold gives an app only `app-schema`, so
+when the app lacks it, add `workspace-layout` as an editable path dependency
+in the app's own directory (`.agents/shared/references/running-python.md`,
+"User packages are standalone projects"). Use `parse_identity_header` (it
+raises `workspace_layout.errors.InvalidIdentityHeaderError` for a header that
+does not parse: answer that with a 400, never read it as the owner's),
+`is_owner_participant`, and `participant_key_of`, which names the requester
+`user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
+the test client exercises all of this without turning sharing on.
+
+- **The API.** Go through every route the app's API document lists and decide
+  what a visitor may do with it. Reading what the app shows is usually what
+  sharing is for. Look harder at a route that reveals a secret, a credential,
+  or the owner's data beyond what the pages show; spends the owner's money (a
+  Claude call, a paid API); changes or deletes data; or runs a command or
+  touches files outside the app's own data. A route that hands a visitor a
+  secret or a credential is a defect: make it owner-only, answering a visitor
+  403 the way the chat app's `system/apps/chat/imbue/chat/identity.py` does.
+  Whether visitors may see the owner's data beyond what the pages show,
+  change, delete, spend, or run a command or touch files outside the app's
+  data is the user's call, not yours: unless the task file says, keep the
+  behavior and name each such route in your report. The API
+  document is what a visiting agent reads to learn the app (`build-app`'s
+  "The app describes its own API"), so a route's description says when it is
+  owner-only.
+- **Who did what.** When the app stores something a person or an agent made
+  or changed (an edit, a submission, a comment), store the requester's
+  participant key with it; `email` and `agent_name` are for display only,
+  never the key.
+- **The access log.** When visitors can change anything, the app keeps a log
+  of who did it: one line per request that changed something, with the time,
+  the participant key, whether it was the owner, and the route. Keep it under
+  the app's data directory and bound it like any other store ("Bound disk
+  growth" in `harden-creation.md`). Log reads too only when the app shows data
+  the owner would want to know was seen.
+
+Cover each with a test through the test client, sending a person's header
+(`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
+(`{"owner": false, "agent_id": "...", "agent_name": "...", "granter": "..."}`):
+an owner-only route answers both 403 and still works for the owner and for a
+request with no header, a header that does not parse answers 400, a change
+records the visitor's participant key, and the access log gains its line.
+
 ## Critical apps
 
 The shell (`system/apps/system_interface`), the chat (`system/apps/chat`), the
