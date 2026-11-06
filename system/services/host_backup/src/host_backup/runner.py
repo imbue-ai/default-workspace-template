@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
+from env_converge.converge import DEFAULT_WORKSPACE_DIR, capture_unless_fresh_rootfs
+from env_converge.record import EnvConvergeError, default_record_dir
 from loguru import logger
 
 from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
@@ -64,17 +66,6 @@ LOG_FILE = Path("/tmp/host-backup.log")
 # Number of consecutive failed ticks after which the runner raises a prominent,
 # durable alarm so a silent multi-day backup outage cannot go unnoticed.
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
-
-# Where `uv run --no-sync env-converge capture` resolves its venv from; matches the
-# host-backup program's `directory=` in system/supervisord.conf.d/host-backup.conf,
-# made explicit so the capture also works when the runner is launched from
-# another cwd.
-WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
-
-# Hard ceiling for the pre-snapshot `env-converge capture` refresh. The probes
-# (dpkg/npm/uv listings) normally take a few seconds; a wedged probe must not
-# stall the backup cadence.
-ENV_RECORD_CAPTURE_TIMEOUT_SECONDS: Final[float] = 120.0
 
 SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 
@@ -333,10 +324,17 @@ def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
     return env
 
 
+def _capture_environment_record() -> None:
+    """``env-converge capture``'s work, in this process: re-capture the record unless the rootfs is fresh."""
+    capture_unless_fresh_rootfs(
+        default_record_dir(), DEFAULT_WORKSPACE_DIR, is_forced=False
+    )
+
+
 def _refresh_environment_record(
     *,
     state: _LoopState,
-    run_fn: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    capture_fn: Callable[[], None] = _capture_environment_record,
 ) -> None:
     """Re-capture the environment record so the snapshot carries current package state.
 
@@ -347,41 +345,29 @@ def _refresh_environment_record(
     (npm globals, uv tools) are otherwise only refreshed at boot; without this,
     anything installed since boot would be missing from a restored workspace.
 
-    Best-effort by design: capture is read-only and takes seconds, and a
-    failure (or absent env-converge, e.g. a pre-cutover workspace) must never
-    block the backup itself -- a slightly stale record beats no backup.
+    Best-effort by design: capture is read-only, each of its probes has its own
+    timeout, and a failure must never block the backup itself -- a slightly
+    stale record beats no backup.
     """
     start = time.monotonic()
-    exit_code: int | None = None
-    stderr = ""
+    error_message = ""
     try:
-        result = run_fn(
-            ["uv", "run", "--no-sync", "env-converge", "capture"],
-            cwd=WORKSPACE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
-            check=False,
-        )
-        exit_code = result.returncode
-        stderr = result.stderr.strip()[-500:]
-    except (OSError, subprocess.TimeoutExpired) as e:
-        stderr = str(e)[-500:]
+        capture_fn()
+        success = True
+    except (EnvConvergeError, OSError, ValueError) as e:
+        success = False
+        error_message = str(e)[-500:]
     duration = time.monotonic() - start
-    success = exit_code == 0
     if not success:
-        logger.warning(
-            "Pre-snapshot env-converge capture failed (rc={}): {}", exit_code, stderr
-        )
+        logger.warning("Pre-snapshot env-converge capture failed: {}", error_message)
     write_event(
         state.events_dir,
         make_event(
             BackupEventType.ENV_RECORD_CAPTURE_COMPLETED,
             tick_id=state.current_tick_id,
             success=success,
-            exit_code=exit_code,
             duration_seconds=duration,
-            stderr="" if success else stderr,
+            error_message=error_message,
         ),
     )
 

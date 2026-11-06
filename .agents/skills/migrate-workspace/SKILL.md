@@ -330,7 +330,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name migrate-workspace --template worker \
     --runtime-dir data/.tasks/migrate-workspace/ --task-file data/.tasks/migrate-workspace/task.md
 
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name migrate-workspace --task-file data/.tasks/migrate-workspace/task.md --timeout 90m
 ```

@@ -250,12 +250,15 @@ reads the reply being written off the agent's terminal pane three times a
 second, through mngr's `stream_snapshot` converter
 (`harnesses/claude/reply_draft.py`), and sends what changed:
 `{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
-shows the draft after the transcript while `after_event_id` is still the last
-event it holds, so the reply landing replaces it at once; an empty `text`
-clears it. A draft that matches a reply the transcript already holds is never
-sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. Codex also writes an agent message to its
-rollout only once it is finished; its draft comes from the
+shows the draft while `after_event_id` is still the last event it holds, so the
+reply landing replaces it at once; an empty `text` clears it. It shows where the
+reply will land: while a step is open, as that step's caption (or at the end of
+its work, when the step is expanded), and otherwise after the transcript. A step
+left open from an earlier turn takes it only once the agent works in it again
+in the new turn. A draft that matches a reply the transcript already holds is
+never sent. The terminal's rendering loses heading levels and code-fence
+languages, which the landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
 rollout holds the message's id. Pi records an assistant message only on
@@ -898,8 +901,8 @@ login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
 the line was reworded, on its own probe; a denial the browser reports says
 access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
-keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
-sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+keeps waiting with Try again). A ChatGPT code login that cannot start says so
+and offers trying again or an API key. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
 first way in (`reauth_method` on each account row). Signing in again
 restarts the live agents bound to the account (by the `account=<id>` label described below),
