@@ -334,17 +334,16 @@ class DesktopStore(MutableModel):
     def _read_offered_unlocked(self, rows: Sequence[RegistryRow]) -> frozenset[ShortcutTarget] | None:
         """The targets recorded as offered, or None when the file is absent, unreadable, or of another version
         (logged). A record of apps, written while an app had one default shortcut, offered each app's first one; it is
-        rewritten as those targets once there are rows to read them from."""
+        rewritten as those targets once there are rows to read them from, and reads as None until then."""
         raw = read_json_object(self._offered_path())
         if raw is not None and raw.get("version") == _APPS_OFFERED_FILE_VERSION:
             legacy = parse_versioned_document(
                 raw, AppsOfferedDocument, _APPS_OFFERED_FILE_VERSION, self._offered_path()
             )
-            if legacy is None:
+            if legacy is None or not rows:
                 return None
             targets = first_default_shortcut_targets(rows, frozenset(legacy.apps))
-            if rows:
-                self._write_offered_unlocked(targets)
+            self._write_offered_unlocked(targets)
             return targets
         document = parse_versioned_document(
             raw, DefaultShortcutsOfferedDocument, DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION, self._offered_path()

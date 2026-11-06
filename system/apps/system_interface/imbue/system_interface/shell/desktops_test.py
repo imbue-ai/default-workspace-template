@@ -308,25 +308,37 @@ def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_
     assert offered_targets_recorded(tmp_path / "state") == [("chat", "root")]
 
 
-def test_a_desktop_added_before_the_registry_is_read_leaves_a_missing_offered_record_for_the_next_reconcile(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "offered_record_text",
+    [None, json.dumps({"version": 1, "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)})],
+)
+def test_a_desktop_added_before_the_registry_is_read_leaves_the_offered_record_for_the_next_reconcile(
+    tmp_path: Path, offered_record_text: str | None
 ) -> None:
-    """With no rows there is nothing to start the record over from, so the next reconcile with rows still counts the
-    desktops' apps as offered and a shortcut the user removed from one desktop stays removed."""
-    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    """With no rows there is nothing to start a missing record over from, nor to read a record of apps as targets, so
+    the record is left as it is, whatever the new desktop holds: the next reconcile with rows still counts what was
+    offered and a shortcut the user removed from one desktop stays removed."""
+    before_chat, with_chat = builtin_registry_rows(tmp_path / "registry")
     store = DesktopStore(state_directory=tmp_path / "state")
     store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
     store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None, with_chat)
     store.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
     offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
-    offered_path.unlink()
+    if offered_record_text is None:
+        offered_path.unlink()
+    else:
+        offered_path.write_text(offered_record_text)
 
-    store.create_desktop("Alpha", "#222222", 2, (), (), None, ())
+    store.create_desktop("Alpha", "#222222", 2, seed_desktop_shortcuts(before_chat), (), None, ())
 
-    assert not offered_path.exists()
+    if offered_record_text is None:
+        assert not offered_path.exists()
+    else:
+        assert offered_path.read_text() == offered_record_text
     home, _, alpha = store.reconcile_shortcuts_with(with_chat).desktops
     assert "chat" not in shortcut_apps_on(home)
-    assert alpha.shortcuts == ()
+    assert alpha.shortcuts == seed_desktop_shortcuts(before_chat)
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_chat)
 
 
 def _delete_file(path: Path) -> None:
