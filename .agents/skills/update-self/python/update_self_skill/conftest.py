@@ -109,16 +109,17 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def fake_chat_app(tmp_path: Path) -> Iterator[FakeChatAppServer]:
-    """A chat app over loopback, registered under the ``chat`` row of ``tmp_path/workspace``'s registry.
+    """A chat app over loopback, registered under the ``chat`` row of ``tmp_path``'s registry.
 
     ``server.answers`` is the sequence of ``(status, body)`` its chat list gives, the last one
     repeating; ``server.list_reads`` counts the reads. ``server.interrupt_answers`` maps a chat id
     to the sequence its interrupt route gives (default a 200), and ``server.interrupts`` records
-    each ``(chat_id, body)`` posted there. ``server.workspace`` is the workspace root.
+    each ``(chat_id, body)`` posted there. ``server.workspace`` is the workspace root, the same
+    ``tmp_path`` the other fixtures here use.
     """
-    server = FakeChatAppServer(tmp_path / "workspace")
+    server = FakeChatAppServer(tmp_path)
     registry = server.workspace / APPS_REGISTRY_PATH
-    registry.parent.mkdir(parents=True)
+    registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text(
         f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{server.server_address[1]}"\n'
     )

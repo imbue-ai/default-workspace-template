@@ -21,7 +21,6 @@ from imbue.chat.primitives import ChatId
 from update_self_skill import (
     update_apply_contract,
     update_chat_pause,
-    update_layout,
     update_resume_note,
     update_self,
 )
@@ -441,11 +440,6 @@ def test_restart_agents_leaves_out_what_the_resume_started_after_the_update_land
     )
     MainChatStore(path=tmp_path / DEFAULT_CHAT_DATA_DIR / MAIN_CHAT_FILENAME).write(
         ChatId("agent-main-1")
-    )
-    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
-    registry.parent.mkdir(parents=True, exist_ok=True)
-    registry.write_text(
-        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{fake_chat_app.server_address[1]}"\n'
     )
     listed = [
         ("agent-lead", _LEAD),
