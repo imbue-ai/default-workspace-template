@@ -385,7 +385,8 @@ the root `README.md`, `AGENTS.md` and `CLAUDE.md`, and markdown under
 directory) also runs the always-run set: the test files in `system/*.py`, the
 cross-cutting `system/scripts` guards, and the checks that read every skill's
 prose. A listed guard git does not track (an always-run one, or a check a
-supervisord block selects) fails the selection rather than dropping out of it. A change made only of documentation selects nothing.
+supervisord block selects) fails the selection rather than dropping out of it.
+A change made only of documentation selects nothing.
 
 `system/apps/chat` and `system/apps/system_interface` run as their own pytest
 roots: workspace members with their own pytest configuration, which the root
