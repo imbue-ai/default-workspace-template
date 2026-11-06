@@ -36,7 +36,7 @@ dev = [
     "pytest-workspace-env",
     "pytest-executable-tmp",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 # Its own project, not a root workspace member (the root pyproject's [tool.uv.workspace] exclude):
