@@ -1,18 +1,25 @@
-# The service's MCP server (row 3)
+# The service's MCP server (row 2)
 
 ## When this row applies
 
-Row 3 is a hosted MCP server the service itself publishes: its docs link to
-it, or it lives in the service's own GitHub organization. A listing in an MCP
-directory or registry does not make a server official; anyone can list one.
+Row 2 is a hosted MCP server the service itself publishes (its docs link to
+it, or it lives in the service's own GitHub organization) whose authorization
+server registers clients itself: its metadata has a `registration_endpoint`.
+That is what makes the row frictionless, and why it comes before a key: the
+user signs in once, in a window Imbue Studio opens, and copies nothing. A
+server without that endpoint wants a client someone registers by hand, which
+no flow here can do, so it is not this row however official it is; neither is
+a server that takes a key in a header (see "A server with a key"). A listing
+in an MCP directory or registry does not make a server official; anyone can
+list one.
 
 A server anyone else hosts is not a row: whoever runs it sees the user's
 credential and every request. Its source can still show you which endpoints
-and auth scheme the service's API takes, for row 2 or row 5.
+and auth scheme the service's API takes, for row 3 or row 5.
 
 A server published as a package to run here is not a row either. It only
 calls the service's API with a key, and nothing it adds is worth running a
-stranger's code with this workspace's access: use that API through row 2 or
+stranger's code with this workspace's access: use that API through row 3 or
 row 5 instead, and read the package's source for the endpoints it calls.
 
 MCP is allowed for a service latchkey has no builtin for. The workspace disables
@@ -39,8 +46,9 @@ it expires.
 
 ## Find the server's endpoints
 
-The MCP endpoint comes from the service's docs. How it authenticates comes from
-the server itself, with no credential: a Streamable HTTP server answers an
+This is the row's test, and it costs nothing: no credential, no permission
+request. The MCP endpoint comes from the service's docs. How it authenticates
+comes from the server itself: a Streamable HTTP server answers an
 unauthenticated `initialize` with `401` and a `WWW-Authenticate` header whose
 `resource_metadata` URL (usually `/.well-known/oauth-protected-resource`) lists
 its `authorization_servers`; each of those publishes its endpoints at
@@ -61,11 +69,11 @@ What you find decides the request:
   `registration_endpoint`**: the `mcp` login flow, below. Note
   `scopes_supported` (if any): they go in the request, and it's hard to add
   them later (see the flow).
-- **`401` and no `registration_endpoint`**: the server wants a client someone
-  registered by hand, which no flow here can do. Row 3 is out; go on to row 5
-  or 6.
-- **The docs say the server takes an API key in a header**: a custom service
-  with a key, "A server with a key" below.
+- **`401` and no `registration_endpoint`** (or no metadata at all): the
+  server wants a client someone registered by hand, which no flow here can
+  do. Row 2 is out; go on to row 3 with the service's API.
+- **The docs say the server takes an API key in a header**: not this row but
+  row 3, "A server with a key" below.
 - **No `401`, no key**: nothing to connect. Call the endpoint with plain
   `curl`, as below but without latchkey.
 
@@ -111,10 +119,12 @@ Studio, and once they have, send the request again with the scopes it needs.
 
 ## A server with a key
 
-A server that takes its key in a header is row 2's request on the MCP
+A server that takes its key in a header is row 3's request on the MCP
 endpoint's domain: the default bearer header or the one the docs name in
 `payload.header`, with `payload.credential_instructions` saying where the key
-comes from. The gateway attaches it to every call below.
+comes from. The gateway attaches it to every call below. It is no easier for
+the user than the service's API with the same key, so pick whichever of the
+two the docs make simpler to call.
 
 ## Calling the server
 
