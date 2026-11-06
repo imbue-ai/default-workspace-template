@@ -190,6 +190,7 @@ from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import InterruptBusyResponse
 from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
@@ -1568,9 +1569,11 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     if interrupt_request.only_if_idle:
         busy_with = get_state().agent_manager.restart_busy_reason_for_chat(ChatId(chat_id))
         if busy_with is not None:
-            return json_response(
-                {"detail": f"Chat '{chat_id}' is {busy_with}; it was not restarted", "busy_with": busy_with},
-                status_code=409,
+            return model_response(
+                InterruptBusyResponse(
+                    detail=f"Chat '{chat_id}' is {busy_with}; it was not restarted", busy_with=busy_with
+                ),
+                409,
             )
 
     if interrupt_request.keep_queue:
@@ -3074,8 +3077,18 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(
-        response_model=InterruptAgentResponse, alternate_responses=(_CONVERGING,)
+        request_model=InterruptAgentRequest,
+        response_model=InterruptAgentResponse,
+        alternate_responses=(
+            _CONVERGING,
+            AlternateResponse(status=409, model=InterruptBusyResponse),
+            # ``keep_queue`` answers as the flush does.
+            AlternateResponse(status=200, model=SendMessageResponse),
+            AlternateResponse(status=500, model=SendFailureResponse),
+        ),
+        is_body_parsed_by_view=True,
     ),
     ("POST", "/api/chats/{chat_id}/flush-queue"): RouteModels(
         response_model=SendMessageResponse,

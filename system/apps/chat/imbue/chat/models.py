@@ -630,6 +630,12 @@ class ConvergingResponse(ErrorResponse):
     phase: HandoffPhase = Field(description="The phase the chat is in")
 
 
+class InterruptBusyResponse(ErrorResponse):
+    """The 409 an ``only_if_idle`` interrupt answers for a chat that has not ended its turn."""
+
+    busy_with: str = Field(description="What the chat is in the middle of, in plain words")
+
+
 class HandoffCancelResponse(FrozenModel):
     """Response from POST /api/chats/{id}/handoff/cancel."""
 
