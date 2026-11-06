@@ -22,6 +22,12 @@ dependencies = [
     # The latchkey gateway's address, credentials and headers, read from the environment mngr injects.
     "latchkey-access",
     "pydantic-settings>=2.13.1",
+    # Signs and encrypts the Web Push messages the shell sends to the devices that turned notifications on; the
+    # three after it are the key type, key encoding, and transport errors its API hands back.
+    "pywebpush>=2.5",
+    "py-vapid>=1.9",
+    "cryptography>=42",
+    "requests>=2.31",
     # The home-screen icon rasterizes the avatar's SVG to PNG; its wheels bundle resvg, so no system library.
     "resvg-py>=0.5.0",
     # The two grants documents the roster is computed from, parsed as the gateway parses them.
@@ -50,6 +56,8 @@ dev = [
     "pytest-timeout>=2.3.0",
     "coverage",
     "inline-snapshot>=0.13",
+    # Decrypts what the real Web Push transport posts, in its delivery test (test_web_push_delivery.py).
+    "http-ece>=1.2",
     # The live mngr CLI, for the contract test that pins the not-built placeholder's repair
     # command to the CLI it names (test_chat_system.py, the one module that may import the
     # chat package's command builder beside it).

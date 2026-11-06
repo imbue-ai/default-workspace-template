@@ -78,6 +78,7 @@ from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
+from imbue.system_interface.shell.web_push_routes import register_web_push_routes
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -945,6 +946,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     register_shell_routes(application)
     register_keybindings_routes(application)
     register_avatar_routes(application)
+    register_web_push_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 
     # Registered unconditionally, even when the bundle is absent at startup: the directory can

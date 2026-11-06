@@ -1,15 +1,16 @@
 /**
  * The launcher menu (launcher-and-getting-started plan section 4.2): the card above the taskbar's
  * field, a column of rows in which one is always highlighted. The launch-path rows come first,
- * then a divider and the window rows while typing, then a divider and the free-text rows; a
- * section with no rows draws nothing. The rows themselves come from ``reducers/launcherRows``;
- * this draws them and reports a hover (which moves the highlight) and a click (which runs a row).
+ * with the tour's and the notifications page's rows after them, then a divider and the window rows
+ * while typing, then a divider and the free-text rows; a section with no rows draws nothing. The
+ * rows themselves come from ``reducers/launcherRows``; this draws them and reports a hover (which
+ * moves the highlight) and a click (which runs a row).
  * The highlighted row, whatever its kind, carries the ``Enter`` caption; the secondary text row
  * carries its chord's. A right-click on the row of an app's own desktop shortcut reports it, for the
  * menu that adds it to the desktop or takes it off.
  * Markers the tests use are data attributes (plan section 6.2): ``data-launcher-overlay`` on
  * the card, and on each row ``data-launcher-row``, ``data-launch``, ``data-launcher-window``,
- * ``data-text-action``, ``data-highlighted``, and ``data-disabled``.
+ * ``data-text-action``, ``data-notifications-row``, ``data-highlighted``, and ``data-disabled``.
  * The phone's start sheet draws the same sections (``LauncherSections``) with rows sized for a
  * finger and no key captions, since its rows are tapped rather than chosen from a keyboard.
  */
@@ -210,20 +211,29 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
         keys,
       ]);
+    case "notifications":
+      return m("button", { ...rowAttrs(row, index, attrs), "data-notifications-row": "" }, [
+        glyphCell(glyph("bell", markSize), attrs.isSheet),
+        m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
+        keys,
+      ]);
   }
 }
 
-/** The menu's sections, launch-path rows then window rows then free-text rows, each after a divider. */
+/** The menu's sections: launch-path rows (then the tour's and the notifications page's), then window rows, then
+ *  free-text rows, each after a divider. */
 function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
-  const { launchRows, tourRows, windowRows, textRows, rows, isNoMatch } = attrs.menu;
+  const { launchRows, tourRows, notificationsRows, windowRows, textRows, rows, isNoMatch } = attrs.menu;
   // The flat index of each section's first row, so hover and highlight speak of one list.
   const tourFrom = launchRows.length;
-  const windowsFrom = launchRows.length + tourRows.length;
+  const notificationsFrom = tourFrom + tourRows.length;
+  const windowsFrom = notificationsFrom + notificationsRows.length;
   const textFrom = windowsFrom + windowRows.length;
   return [
     m("div", { "data-section": "launch" }, [
       launchRows.map((row, index) => rowView(row, index, attrs)),
       tourRows.map((row, index) => rowView(row, tourFrom + index, attrs)),
+      notificationsRows.map((row, index) => rowView(row, notificationsFrom + index, attrs)),
     ]),
     windowRows.length === 0
       ? null

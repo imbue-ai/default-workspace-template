@@ -2,7 +2,6 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
-from typing import Final
 from typing import assert_never
 
 from app_manifest.manifest import PinStyle
@@ -82,13 +81,13 @@ from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
 from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
-from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
+from imbue.system_interface.shell.route_helpers import refuse_if_preview
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.theme_routes import register_theme_routes
@@ -145,21 +144,6 @@ def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturn
 
 def _shell() -> ShellState:
     return get_state().shell
-
-
-# What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
-# app's stop and start reach supervisord, the update notice's verbs act on the live apply's
-# rollback point, and the embedder-message relay posts to live apps. Everything else a preview
-# offers (opening, placing, and closing windows, a refresh, the interface reload, the avatar)
-# edits the preview's own state or reaches only the preview's own windows, so it stays live for
-# the person judging the change.
-PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
-
-
-def _refuse_if_preview() -> ResponseReturnValue | None:
-    if get_state().is_preview:
-        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
-    return None
 
 
 def _entry_or_raise(name: str) -> AppInventoryEntry:
@@ -221,7 +205,7 @@ def chats_activity_route() -> ResponseReturnValue:
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
-    refusal = _refuse_if_preview()
+    refusal = refuse_if_preview()
     if refusal is not None:
         return refusal
     shell = _shell()
@@ -269,7 +253,7 @@ def stop_app(name: str) -> ResponseReturnValue:
 
 def quit_app(name: str) -> ResponseReturnValue:
     """``POST /api/apps/<name>/quit``: close every window of the app, then stop it; refused as a stop is."""
-    refusal = _refuse_if_preview()
+    refusal = refuse_if_preview()
     if refusal is not None:
         return refusal
     shell = _shell()
@@ -349,7 +333,7 @@ def relay_embedder_message() -> ResponseReturnValue:
     200 when every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no
     app handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
     previewed."""
-    refusal = _refuse_if_preview()
+    refusal = refuse_if_preview()
     if refusal is not None:
         return refusal
     relayed = parse_request_body(EmbedderMessageRelayRequest)
@@ -410,7 +394,7 @@ def pending_update() -> ResponseReturnValue:
 def confirm_pending_update() -> ResponseReturnValue:
     """ "Everything seems good", or Close on a settled notice: drop the record, and the kept copies with it when no
     rollback ran (a failed rollback's copies stay for an agent). Refused in a preview, which owns no live state."""
-    refusal = _refuse_if_preview()
+    refusal = refuse_if_preview()
     if refusal is not None:
         return refusal
     _shell().update_notice.confirm()
@@ -420,7 +404,7 @@ def confirm_pending_update() -> ResponseReturnValue:
 def rollback_pending_update() -> ResponseReturnValue:
     """ "Roll back": start the rollback detached and answer once it is under way, with its first progress in the
     record; the rest of its progress and its outcome follow on the socket."""
-    refusal = _refuse_if_preview()
+    refusal = refuse_if_preview()
     if refusal is not None:
         return refusal
     _shell().update_notice.launch_rollback()
