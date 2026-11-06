@@ -22,6 +22,7 @@ from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.share_grants import GrantedAppsReader
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -35,20 +36,36 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
 class FakeSupervisor:
-    """A statename table with the two verbs, recording what was asked."""
+    """A statename table with the two verbs, recording what was asked; every start spawns a process with a new
+    pid."""
 
     def __init__(self, statename_by_program: dict[str, str]) -> None:
         self.statename_by_program = statename_by_program
+        self.pid_by_program = {program: index + 1 for index, program in enumerate(statename_by_program)}
         self.started: list[str] = []
         self.stopped: list[str] = []
         self.is_reachable = True
 
-    def states(self) -> dict[str, str] | None:
-        return dict(self.statename_by_program) if self.is_reachable else None
+    def states(self) -> dict[str, SupervisorProgramState] | None:
+        if not self.is_reachable:
+            return None
+        return {
+            program: SupervisorProgramState(statename=statename, pid=self.pid_by_program.get(program, 0))
+            for program, statename in self.statename_by_program.items()
+        }
 
     def start(self, program: str) -> None:
         self.started.append(program)
+        self._spawn(program)
+
+    def restart(self, program: str) -> None:
+        """Stop and start the program between two passes, as ``verify_app.py --restart`` does: no pass sees it
+        down."""
+        self._spawn(program)
+
+    def _spawn(self, program: str) -> None:
         self.statename_by_program[program] = "STARTING"
+        self.pid_by_program[program] = max(self.pid_by_program.values(), default=0) + 1
 
     def stop(self, program: str) -> None:
         self.stopped.append(program)
@@ -302,7 +319,7 @@ def test_a_pass_does_not_park_an_app_woken_after_its_state_was_read(
     clock = _clock_of(manager)
     read_count = [0]
 
-    def read_states_then_wake() -> dict[str, str] | None:
+    def read_states_then_wake() -> dict[str, SupervisorProgramState] | None:
         states = supervisor.states()
         read_count[0] += 1
         if read_count[0] == 1:
@@ -624,6 +641,22 @@ def test_a_window_opening_within_the_grace_period_keeps_the_app(
 
     # The clock starts over once the last window closes.
     windows.count_by_app["docs"] = 0
+    manager.sweep_once()
+    _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
+
+
+def test_a_restart_gives_an_app_with_no_window_the_whole_grace_period_again(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """An app restarted two seconds before its idle mark runs out is not stopped while its new process comes up:
+    the mark counts from the latest start."""
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    clock = _clock_of(manager)
+    manager.mark_visited()
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS - 2
+
+    supervisor.restart("docs")
     manager.sweep_once()
     _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
 

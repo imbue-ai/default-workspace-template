@@ -79,8 +79,12 @@ def _agent_env(**extra: str) -> dict[str, str]:
     return env
 
 
-def _wait_for_posts(fake_chat_app: Any, count: int) -> list[tuple[str, dict[str, Any]]]:
-    deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
+def _wait_for_posts(
+    fake_chat_app: Any,
+    count: int,
+    deadline_seconds: float = _DELIVERY_DEADLINE_SECONDS,
+) -> list[tuple[str, dict[str, Any]]]:
+    deadline = time.monotonic() + deadline_seconds
     while len(fake_chat_app.posted) < count:
         assert time.monotonic() < deadline, "the report never reached the chat app"
         time.sleep(0.1)
@@ -431,10 +435,32 @@ def test_the_runner_only_ever_lowers_its_own_band(
     assert int(oom_score_adj.read_text()) == expected
 
 
-@pytest.mark.skipif(
+_NEEDS_OOM_SCORE_ADJ = pytest.mark.skipif(
     not run_in_background.OWN_OOM_SCORE_ADJ_PATH.exists(),
     reason="needs Linux's /proc/<pid>/oom_score_adj",
 )
+
+
+def _start_runner_from_the_agent_subprocess_band(
+    cwd: Path, description: str, *command: str, options: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
+    """Run the script as an agent's Bash tool call does, from the most-expendable band."""
+    runner = shlex.join(_runner_argv(description, *command, options=options))
+    return subprocess.run(
+        [
+            "sh",
+            "-c",
+            f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec {runner}",
+        ],
+        cwd=cwd,
+        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@_NEEDS_OOM_SCORE_ADJ
 @pytest.mark.usefixtures("fake_mngr")
 def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_band(
     fake_chat_app: Any, tmp_path: Path
@@ -451,25 +477,211 @@ def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_b
         "print('command', open('/proc/self/oom_score_adj').read().strip())\n"
         "print('runner', open(parent).read().strip())\n"
     )
-    caller_argv = [
-        "sh",
-        "-c",
-        f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec {shlex.join(_runner_argv('Check the bands', *command))}",
-    ]
 
-    started = subprocess.run(
-        caller_argv,
-        cwd=tmp_path,
-        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner_from_the_agent_subprocess_band(
+        tmp_path, "Check the bands", *command
     )
 
     assert started.returncode == 0, started.stderr
     [(_, body)] = _wait_for_posts(fake_chat_app, 1)
     assert f"command {bands.AGENT_SUBPROCESS}" in body["message"]
     assert f"runner {run_in_background.RUNNER_OOM_SCORE_ADJ}" in body["message"]
+
+
+@_NEEDS_OOM_SCORE_ADJ
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_waiter_runs_in_the_runners_band_not_the_callers(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    """A lead's wait on its worker holds next to no memory; in the caller's most-expendable band
+    a shed would lose the lead's only signal that the worker is done."""
+    command = _python_command(
+        "print('command', open('/proc/self/oom_score_adj').read().strip())"
+    )
+
+    started = _start_runner_from_the_agent_subprocess_band(
+        tmp_path, "Wait for the worker", *command, options=("--waiter",)
+    )
+
+    assert started.returncode == 0, started.stderr
+    [(_, body)] = _wait_for_posts(fake_chat_app, 1)
+    assert f"command {run_in_background.RUNNER_OOM_SCORE_ADJ}" in body["message"]
+
+
+# Ends itself with SIGTERM, as a shed does, the first time it runs, and finishes the next.
+_SHED_ONCE_SOURCE = (
+    "import os, pathlib, signal\n"
+    "runs = pathlib.Path('runs')\n"
+    "runs.write_text(runs.read_text() + 'x' if runs.exists() else 'x')\n"
+    "if len(runs.read_text()) == 1:\n"
+    "    os.kill(os.getpid(), signal.SIGTERM)\n"
+    "print('the worker reported')\n"
+)
+_REARM_DEADLINE_SECONDS = run_in_background.WAITER_REARM_SETTLE_SECONDS + 10
+_NEEDS_PROC_ENVIRON = pytest.mark.skipif(
+    not Path("/proc/self/environ").exists(),
+    reason="needs Linux's /proc/<pid>/environ, which tells a running agent from a stopped one",
+)
+
+
+@_NEEDS_PROC_ENVIRON
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_shed_waiter_is_started_again_while_its_agent_still_runs(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    agent_id = f"agent-{secrets.token_hex(16)}"
+    # Stands in for the agent: a process of its own carrying the agent's id.
+    agent = subprocess.Popen(
+        ["sleep", "60"], env=_agent_env(MNGR_AGENT_ID=agent_id), start_new_session=True
+    )
+    try:
+        started = _start_runner(
+            tmp_path,
+            _agent_env(MNGR_AGENT_ID=agent_id),
+            "Wait for the worker",
+            *_python_command(_SHED_ONCE_SOURCE),
+            options=("--waiter",),
+        )
+        assert started.returncode == 0, started.stderr
+
+        [(_, body)] = _wait_for_posts(fake_chat_app, 1, _REARM_DEADLINE_SECONDS)
+    finally:
+        agent.kill()
+        agent.wait()
+
+    assert "<summary>Wait for the worker (finished)</summary>" in body["message"]
+    assert "started it again (1 of 3)" in body["message"]
+    assert "the worker reported" in body["message"]
+
+
+@_NEEDS_PROC_ENVIRON
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_waiter_ended_with_its_stopped_agent_is_reported_not_restarted(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    # No process outside the run carries this id: the agent is stopped.
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=f"agent-{secrets.token_hex(16)}"),
+        "Wait for the worker",
+        *_python_command(_SHED_ONCE_SOURCE),
+        options=("--waiter",),
+    )
+    assert started.returncode == 0, started.stderr
+
+    [(_, body)] = _wait_for_posts(fake_chat_app, 1, _REARM_DEADLINE_SECONDS)
+    assert (
+        "<summary>Wait for the worker (killed by signal 15)</summary>"
+        in body["message"]
+    )
+    assert "started it again" not in body["message"]
+
+
+@pytest.mark.parametrize(
+    ("comm", "is_running"),
+    [("claude\n", True), (f"{run_in_background.TMUX_SERVER_COMM}\n", False)],
+    ids=["agent-process", "tmux-server"],
+)
+def test_only_a_process_mngr_stop_would_kill_counts_as_the_running_agent(
+    tmp_path: Path, comm: str, is_running: bool
+) -> None:
+    """``mngr stop`` leaves the shared tmux server running even when it carries the agent's id,
+    so a server carrying it does not make a stopped agent read as running."""
+    agent_id = f"agent-{secrets.token_hex(16)}"
+    # A real process outside this test's process group, whose /proc entry the fake one stands in for.
+    other_group = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        entry = tmp_path / str(other_group.pid)
+        entry.mkdir()
+        (entry / "environ").write_bytes(
+            f"HOME=/home/user\0{run_in_background.AGENT_ID_ENV}={agent_id}\0".encode()
+        )
+        (entry / "comm").write_text(comm)
+
+        assert run_in_background.is_agent_running(agent_id, tmp_path) is is_running
+    finally:
+        other_group.kill()
+        other_group.wait()
+
+
+class _ScriptedRuns:
+    """Stands in for running the command: returns the scripted exit statuses in turn."""
+
+    def __init__(self, returncodes: list[int]) -> None:
+        self.returncodes = returncodes
+        self.calls: list[dict[str, bool]] = []
+
+    def __call__(
+        self,
+        command: list[str],
+        output_path: Path,
+        environ: dict[str, str],
+        is_waiter: bool = False,
+        is_appending: bool = False,
+    ) -> int:
+        self.calls.append({"is_waiter": is_waiter, "is_appending": is_appending})
+        return self.returncodes[len(self.calls) - 1]
+
+
+def _run_scripted(
+    tmp_path: Path, returncodes: list[int], is_waiter: bool, is_caller_running: bool
+) -> tuple[int, _ScriptedRuns]:
+    runs = _ScriptedRuns(returncodes)
+    returncode = run_in_background.run_command_rearming_a_waiter(
+        ["wait"],
+        tmp_path / "output.log",
+        {"MNGR_AGENT_ID": _CHAT_ID},
+        is_waiter,
+        run=runs,
+        is_caller_running=lambda _agent_id: is_caller_running,
+        sleep=lambda _seconds: None,
+    )
+    return returncode, runs
+
+
+@pytest.mark.parametrize("signal_exit", [-15, -9, 143, 137])
+def test_a_waiter_a_signal_ends_is_rerun_until_it_finishes(
+    tmp_path: Path, signal_exit: int
+) -> None:
+    returncode, runs = _run_scripted(
+        tmp_path, [signal_exit, signal_exit, 0], is_waiter=True, is_caller_running=True
+    )
+
+    assert returncode == 0
+    assert [call["is_appending"] for call in runs.calls] == [False, True, True]
+    assert (tmp_path / "output.log").read_text().count("started it again") == 2
+
+
+def test_a_waiter_is_rerun_a_bounded_number_of_times(tmp_path: Path) -> None:
+    returncode, runs = _run_scripted(
+        tmp_path, [143] * 10, is_waiter=True, is_caller_running=True
+    )
+
+    assert returncode == 143
+    assert len(runs.calls) == run_in_background.WAITER_MAX_REARMS + 1
+
+
+@pytest.mark.parametrize(
+    ("returncode_run", "is_waiter", "is_caller_running"),
+    [
+        # Not a waiter: a shed is reported like any other exit.
+        (143, False, True),
+        # The agent is stopped: its stop ended the waiter.
+        (143, True, False),
+        # It failed on its own, not from a signal.
+        (1, True, True),
+    ],
+    ids=["not-a-waiter", "agent-stopped", "not-a-signal"],
+)
+def test_a_command_is_not_rerun_unless_a_signal_ended_a_waiter_whose_agent_runs(
+    tmp_path: Path, returncode_run: int, is_waiter: bool, is_caller_running: bool
+) -> None:
+    returncode, runs = _run_scripted(
+        tmp_path, [returncode_run, 0], is_waiter, is_caller_running
+    )
+
+    assert returncode == returncode_run
+    assert len(runs.calls) == 1
 
 
 @pytest.mark.parametrize(

@@ -51,6 +51,10 @@ interface ProgressBlockAttrs {
   id?: string;
   /** The block is its stretch's first part: a bubble that opens it squares its corner toward the face. */
   isStretchHead?: boolean;
+  /** The step the agent's next words join (SectionView.live_step_id), and the reply it is still
+   *  writing, read at draw time: the draft shows in that step as its latest words would. */
+  liveStepId?: string | null;
+  replyDraft?: () => AssistantMessageEvent | null;
 }
 
 /* Styling.
@@ -86,9 +90,10 @@ function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
 
 /** Sub-caption under the step title:
  *   - done + summary -> the close summary
- *   - active + narration (and not expanded) -> latest in-step narration
+ *   - active + narration (and not expanded) -> latest in-step narration, or the reply the agent
+ *     is still writing in the live step
  *   - otherwise nothing. */
-function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null {
+function renderStepCaption(step: StepNode, isExpanded: boolean, draft: AssistantMessageEvent | null): m.Vnode | null {
   if (step.status === "done") {
     return step.summary
       ? m(
@@ -100,18 +105,24 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
       : null;
   }
   if (isExpanded) return null;
-  if (!step.narration) return null;
+  const narration = draft?.text || step.narration;
+  if (!narration) return null;
   // The narration look (muted italic; the frontier one's shimmer) stays in
   // style.css -- it styles markdown-rendered children and the shimmer is a
   // keyframe machine.
   const captionClass = step.is_frontier ? "pv-tl-narration" : "pv-tl-narration--static";
-  return m(`div.${captionClass}.markdown-content`, m.trust(renderMarkdown(step.narration)));
+  return m(`div.${captionClass}.markdown-content`, m.trust(renderMarkdown(narration)));
 }
 
-function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
+function renderExpandedStepBody(
+  step: StepNode,
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+  draft: AssistantMessageEvent | null,
+): m.Vnode {
   // One run over all the step's events, so a sequence of tool calls reads as a
   // single row of chips rather than one row per event.
-  const children = renderAssistantRun(step.events, toolResults, chatId);
+  const children = renderAssistantRun(draft === null ? step.events : [...step.events, draft], toolResults, chatId);
   // The revealed work sits flush under its title -- no indent and no left rule.
   // The stretch's line already runs down the left of every node, so a second
   // vertical line inside an opened step would read as a nested timeline that is
@@ -136,6 +147,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     is_last: boolean,
     toolResults: Map<string, ToolResultEvent>,
     chatId: string,
+    draft: AssistantMessageEvent | null,
   ): m.Vnode {
     const canExpand = step.events.length > 0;
     const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
@@ -172,9 +184,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               : null,
           ],
         ),
-        renderStepCaption(step, isExpanded),
+        renderStepCaption(step, isExpanded, draft),
         isExpanded
-          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId))
+          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId, draft))
           : null,
       ]),
     ]);
@@ -182,9 +194,10 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
+      const { items, trailing_reply, toolResults, chatId, id, liveStepId, replyDraft } = vnode.attrs;
       blockKeyPrefix = id ?? "";
       const isHead = (index: number): boolean => vnode.attrs.isStretchHead === true && index === 0;
+      const draft = liveStepId != null && replyDraft !== undefined ? replyDraft() : null;
 
       // Consecutive nodes on the timeline (steps and handoffs) stand together as one run of steps.
       const runs: { key: string; nodes: TimelineItem[] }[] = [];
@@ -251,7 +264,10 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           { class: `pv pv--timeline ${TIMELINE_STEPS_CLASS}`, key: run.key },
           run.nodes.map((item, index) => {
             const isLast = index === run.nodes.length - 1;
-            if (item.kind === "step") return renderStepNode(item.step, isLast, toolResults, chatId);
+            if (item.kind === "step") {
+              const stepDraft = item.step.ticket_id === liveStepId ? draft : null;
+              return renderStepNode(item.step, isLast, toolResults, chatId, stepDraft);
+            }
             if (item.kind !== "handoff") return null;
             // The chat's handoff to another agent, a node on the timeline like a step.
             return renderHandoffNode(item.node, chatId, toolResults, {

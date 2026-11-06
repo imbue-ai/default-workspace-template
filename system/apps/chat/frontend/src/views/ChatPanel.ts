@@ -72,7 +72,7 @@ import { TerminalViewToggle } from "./TerminalViewToggle";
 import { buildAgentTerminalUrl } from "../models/Chats";
 import { getShellHandshake } from "../shell";
 import {
-  buildConversationRows,
+  buildConversationView,
   MESSAGE_LIST_CLASS,
   renderAgentTurnRow,
   renderTranscriptSegments,
@@ -81,7 +81,7 @@ import {
 import { ActivityIndicator, runningToolCall, turnStatusPlacement } from "./ActivityIndicator";
 import { authorOfTurn } from "./user-message-display";
 import { TurnDoneMark } from "./TurnDoneMark";
-import type { TranscriptEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
@@ -135,17 +135,22 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
+/** The chat's reply draft, while the window reaches the live end, or null when there is none to show. */
+function liveReplyDraft(chatId: string): AssistantMessageEvent | null {
+  return hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+}
+
 /** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
  *  place; once the summary request is on the stream the rows carry it), then the reply the agent is still writing,
- *  while the window reaches the live end. Not a row of its own: a draft changes a few times a second, and a row
- *  would re-walk the whole held transcript on every change. `opensStretch`: the nodes start a stretch of their own
- *  rather than carry on the last row's. */
-function renderAgentLiveTail(chatId: string, opensStretch: boolean): m.Vnode[] {
+ *  while the window reaches the live end and no step is live to show it in. Not a row of its own: a draft changes a
+ *  few times a second, and a row would re-walk the whole held transcript on every change. `opensStretch`: the nodes
+ *  start a stretch of their own rather than carry on the last row's. */
+function renderAgentLiveTail(chatId: string, opensStretch: boolean, isReplyDraftInStep: boolean): m.Vnode[] {
   const handoffNode = renderHandoffTailNode(
     chatId,
     hasOpenHandoffRequest(getEventsForChat(chatId), getChatById(chatId)?.handoff ?? null),
   );
-  const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+  const draft = isReplyDraftInStep ? null : liveReplyDraft(chatId);
   return [
     ...(handoffNode === null ? [] : [handoffNode]),
     ...(draft === null
@@ -206,6 +211,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
+  // Whether the cached rows show the reply draft, in the step live at their tail.
+  let isReplyDraftInStep = false;
 
   // The scroll engine owns everything about scrolling: the FOLLOW /
   // USER_CONTROLLED state machine, anchor positioning, spacer sizing, the
@@ -481,7 +488,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  a stretch of its own, the status row on its line, or the status row alone under the last row. */
   function renderLiveEndAfterRows(chatId: string, events: TranscriptEvent[], rows: readonly RowDescriptor[]): LiveEnd {
     if (isLiveTailInLastRow(chatId, rows)) return { nodes: [], isAgentTurn: false };
-    const agentNodes = renderAgentLiveTail(chatId, true);
+    const agentNodes = renderAgentLiveTail(chatId, true, isReplyDraftInStep);
     if (agentNodes.length > 0) {
       return { nodes: asAgentTurn([...agentNodes, ...stretchStatusNodes(chatId, events, false)]), isAgentTurn: true };
     }
@@ -835,20 +842,23 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(
+      const view = buildConversationView(
         chatId,
         events,
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
+        () => liveReplyDraft(chatId),
         () =>
           hasMoreAfter(chatId)
             ? []
             : [
-                ...renderAgentLiveTail(chatId, false),
+                ...renderAgentLiveTail(chatId, false, isReplyDraftInStep),
                 ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
               ],
       );
+      cachedRows = view.rows;
+      isReplyDraftInStep = view.isReplyDraftInStep;
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

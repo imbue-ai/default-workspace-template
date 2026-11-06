@@ -25,7 +25,7 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent, UserMessageEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent, ToolResultEvent, UserMessageEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
@@ -159,6 +159,7 @@ function buildRows(
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
   resentTurnIds: ReadonlySet<string>,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
   liveTail: LiveTail | null,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
@@ -252,6 +253,8 @@ function buildRows(
             toolResults,
             chatId,
             isStretchHead,
+            liveStepId: section.live_step_id,
+            replyDraft: replyDraft ?? undefined,
           }),
         // The calls on the timeline's own line: those of its ungrouped runs, its permission requests' messages and
         // its wrap-up, not a step's.
@@ -397,12 +400,36 @@ export function buildConversationRows(
   resentTurns: ResentTurns | null = null,
   liveTail: LiveTail | null = null,
 ): RowDescriptor[] {
+  return buildConversationView(chatId, events, isTailSettled, liveCompaction, resentTurns, null, liveTail).rows;
+}
+
+/** The rows, and whether the reply the agent is still writing shows inside them. */
+export interface ConversationView {
+  rows: RowDescriptor[];
+  /** True when a step is live at the tail: the draft shows in it (read at draw time through
+   *  ``replyDraft``), as the words would once they land, rather than in the live tail. */
+  isReplyDraftInStep: boolean;
+}
+
+/** ``buildConversationRows`` for a chat that streams a reply draft (see models/ReplyDrafts). */
+export function buildConversationView(
+  chatId: string,
+  events: TranscriptEvent[],
+  isTailSettled: boolean,
+  liveCompaction: LiveCompaction | null,
+  resentTurns: ResentTurns | null,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
+  liveTail: LiveTail | null = null,
+): ConversationView {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   for (const eventId of resentTurns?.foldedTurnIds ?? []) hiddenEventIds.add(eventId);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
-  return buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), liveTail);
+  return {
+    rows: buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), replyDraft, liveTail),
+    isReplyDraftInStep: sections.some((section) => section.live_step_id !== null),
+  };
 }
 
 /**
