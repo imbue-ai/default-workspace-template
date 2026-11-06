@@ -14,7 +14,12 @@
 import m from "mithril";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
-import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import {
+  DENY_REQUEST,
+  PERMISSION_RESOLUTIONS,
+  sendToEmbedder,
+  setEmbedderMessageHandler,
+} from "@imbue/workspace-ui/src/embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { getEventDetailState, requestEventDetail } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
@@ -127,6 +132,15 @@ export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolRes
  */
 export function openPermissionRequest(requestId: string): void {
   sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
+}
+
+/**
+ * Ask the outer Imbue Studio app to deny the request without opening its
+ * modal; it denies exactly as the modal's Deny does, and the verdict comes
+ * back as `minds:permission-resolutions`, which flips this card to its receipt.
+ */
+export function denyPermissionRequest(requestId: string): void {
+  sendToEmbedder(DENY_REQUEST, { requestId });
 }
 
 // Shell-reported verdicts
@@ -377,7 +391,8 @@ function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
  *   - Resolved (`resolution` non-null): a compact one-line receipt -- badge,
  *     title, and the Approved / Denied / Couldn't-complete verdict.
  *   - Pending and parsed (`details` non-null): badge, title, the agent's
- *     rationale, and a solid "Review & respond" button that opens the modal.
+ *     rationale, a solid "Review & respond" button that opens the modal, and a
+ *     secondary "Deny" button that denies the request without it.
  *   - Pending and unparsed (`details` null): `hasResult` picks between the two
  *     buttonless status lines -- the result hasn't arrived yet (still
  *     waiting), or it arrived but no request id could be read from it (so the
@@ -455,18 +470,33 @@ export function renderPermissionCard(
       ]),
     ]),
     m("div", { class: "permission-request-actions mt-3 flex items-center justify-between gap-2.5" }, [
-      m(
-        Button,
-        {
-          variant: "primary",
-          onclick(e: Event) {
-            e.preventDefault();
-            e.stopPropagation();
-            openPermissionRequest(details.requestId);
+      m("div", { class: "permission-request-buttons flex items-center gap-2" }, [
+        m(
+          Button,
+          {
+            variant: "primary",
+            onclick(e: Event) {
+              e.preventDefault();
+              e.stopPropagation();
+              openPermissionRequest(details.requestId);
+            },
           },
-        },
-        "Review & respond",
-      ),
+          "Review & respond",
+        ),
+        m(
+          Button,
+          {
+            variant: "secondary",
+            extra: "permission-request-deny",
+            onclick(e: Event) {
+              e.preventDefault();
+              e.stopPropagation();
+              denyPermissionRequest(details.requestId);
+            },
+          },
+          "Deny",
+        ),
+      ]),
       rawToggle,
     ]),
     rawBlock,

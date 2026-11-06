@@ -48,6 +48,8 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
+  // Denying a permission request from the chat's card, beside OPEN_REQUEST_MODAL. Probed like the ones above.
+  export const DENY_REQUEST: "minds:deny-request";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

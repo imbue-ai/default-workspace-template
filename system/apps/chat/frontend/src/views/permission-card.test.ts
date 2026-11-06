@@ -7,6 +7,7 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   PermissionCard,
+  denyPermissionRequest,
   isFiledPermissionRequest,
   initShellPermissionResolutions,
   notePermissionResolutions,
@@ -314,6 +315,11 @@ function findReviewButton(node: unknown): { attrs?: Record<string, unknown>; chi
   return findByClass(node, "btn--primary");
 }
 
+// The secondary "Deny" button beside it.
+function findDenyButton(node: unknown): { attrs?: Record<string, unknown>; children?: unknown } | null {
+  return findByClass(node, "permission-request-deny");
+}
+
 // Every glyph on the card is an `m.trust`ed SVG string, which `findVnode` walks
 // straight past, so glyphs are asserted as markup rather than as vnode attrs.
 function trustedHtmlIn(node: unknown): string {
@@ -404,6 +410,27 @@ describe("renderPermissionCard", () => {
     const button = findReviewButton(vnode);
     expect(button).not.toBeNull();
     expect(textOf(button)).toBe("Review & respond");
+    const deny = findDenyButton(vnode);
+    expect(textOf(deny)).toBe("Deny");
+    expect(String(deny?.attrs?.className).split(" ")).toContain("btn--secondary");
+  });
+
+  it("wires the Deny button to deny the request by id without opening the modal", () => {
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(PERMISSION_OUTPUT),
+    );
+    const deny = findDenyButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
+
+    const postMessage = vi.fn();
+    withStubbedEmbedder({ postMessage }, () =>
+      deny?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
+    );
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: "minds:deny-request", requestId: "885711ec07bf47239d71294e1534330b" },
+      "*",
+    );
   });
 
   it("wires the button to open the modal with the request id", () => {
@@ -429,6 +456,7 @@ describe("renderPermissionCard", () => {
 
     expect(textOf(findByClass(vnode, "permission-request-eyebrow"))).toBe("Permission request");
     expect(findReviewButton(vnode)).toBeNull();
+    expect(findDenyButton(vnode)).toBeNull();
     expect(textOf(findByClass(vnode, "permission-request-status"))).toBe("Waiting for the request to register\u2026");
   });
 
@@ -503,8 +531,9 @@ describe("renderPermissionCard", () => {
     ).not.toBeNull();
     // The compact receipt still names what was requested.
     expect(textOf(findByClass(vnode, "permission-request-receipt-title"))).toBe("slack-api");
-    // The action button is replaced by the verdict receipt.
+    // The action buttons are replaced by the verdict receipt.
     expect(findReviewButton(vnode)).toBeNull();
+    expect(findDenyButton(vnode)).toBeNull();
   });
 
   it("shows a Denied receipt once denied", () => {
@@ -693,6 +722,14 @@ describe("openPermissionRequest", () => {
     const postMessage = vi.fn();
     withStubbedEmbedder({ postMessage }, () => openPermissionRequest("req-123"));
     expect(postMessage).toHaveBeenCalledWith({ type: "minds:open-request-modal", requestId: "req-123" }, "*");
+  });
+});
+
+describe("denyPermissionRequest", () => {
+  it("posts the deny-request message to the parent window", () => {
+    const postMessage = vi.fn();
+    withStubbedEmbedder({ postMessage }, () => denyPermissionRequest("req-123"));
+    expect(postMessage).toHaveBeenCalledWith({ type: "minds:deny-request", requestId: "req-123" }, "*");
   });
 });
 

@@ -1,0 +1,1 @@
+`embed.ts` carries the embed contract's `DENY_REQUEST` (`minds:deny-request`, payload `{requestId}`, workspace to embedder: deny one permission request without opening the request dialog), probed from the vendored module like the rest; `embed-contract.d.ts` declares it.
