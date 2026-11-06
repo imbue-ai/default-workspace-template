@@ -513,15 +513,19 @@ name = "build-app-skill"
 version = "0.1.0"
 source = { editable = ".agents/skills/build-app/python" }
 dependencies = [
+    { name = "agents-shared" },
     { name = "app-manifest" },
     { name = "tomlkit" },
+    { name = "workspace-layout" },
     { name = "workspace-scripts" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "agents-shared", editable = ".agents/shared/scripts" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "tomlkit", specifier = ">=0.12" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-scripts", editable = "system/scripts" },
 ]
 

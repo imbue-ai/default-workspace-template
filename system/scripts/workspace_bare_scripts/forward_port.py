@@ -76,7 +76,7 @@ import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -639,7 +639,11 @@ def _read_manifest(
     if theming is not None:
         mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
         if not isinstance(mode, str):
-            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: theming must be a table whose mode is a string",
+            )
         fields["theming_mode"] = mode
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
@@ -1080,6 +1084,40 @@ def register(
             manifest_fields=manifest_fields,
             theming_mode=theming_mode,
         )
+
+
+class ManifestOverrides(TypedDict, total=False):
+    """The manifest-owned keys a registration may replace on an app's row."""
+
+    internal: bool
+    stop_when_no_windows: bool
+
+
+def register_manifest(
+    path: Path,
+    manifest_path: Path,
+    url: str,
+    *,
+    overrides: ManifestOverrides | None = None,
+) -> str:
+    """Register the app ``manifest_path`` describes at ``url``, as ``--manifest`` does; return its name.
+
+    ``overrides`` replaces the manifest's values on the row for this registration only: the
+    next registration from the manifest alone (the app's own restart) writes the manifest's
+    values back. Raises RegistrationError when the manifest is refused.
+    """
+    manifest_fields, icon_path, manifest_error = _read_manifest(manifest_path, None)
+    if manifest_error is not None:
+        raise RegistrationError(manifest_error)
+    name = str(manifest_fields["name"])
+    register(
+        path,
+        name,
+        url,
+        icon_path=icon_path,
+        manifest_fields={**manifest_fields, **(overrides or {})},
+    )
+    return name
 
 
 def remove(path: Path, name: str) -> None:
