@@ -1,0 +1,1 @@
+New `quick-look-and-feel-change` skill, run only by the quick-change chat the chat app creates: it makes a forwarded look-and-feel change on the live app, refreshes the app's window, and reports back to the chat the request came from.

@@ -87,6 +87,8 @@ from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
+from imbue.chat.chat_quick_change import QuickChangeDeliveryError
+from imbue.chat.chat_quick_change import RoutingResult
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
@@ -207,6 +209,7 @@ from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
@@ -943,6 +946,37 @@ def _hold_send_for_chat_being_created(
     return model_response(HeldSendResponse(status="held", phase=None), 202)
 
 
+def _route_quick_change(state: ChatAppState, chat_id: ChatId | None, message: str) -> RoutingResult:
+    """Ask the quick-change router about a sent message and, when routed with a known chat, forward it."""
+    if state.quick_change_router is None:
+        return RoutingResult(text=message)
+    routing = state.quick_change_router.route(chat_id, message)
+    if chat_id is not None:
+        state.quick_change_router.forward(chat_id, routing)
+    return routing
+
+
+def _deliver_to_chat_in_app(application: Flask, chat_id: str, text: str) -> bool:
+    """Send a message into a chat from any thread, as the send route would: delivered, or held while the chat is
+    being created. False when no chat has the id; QuickChangeDeliveryError when the send path refuses."""
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
+        return False
+    with application.app_context():
+        state = get_state()
+        message_id = uuid4().hex
+        if _find_active_agent(chat_id) is None:
+            if state.agent_manager.hold_send_for_chat_being_created(parsed, message_id, text, HeldSendOrigin.SCRIPT):
+                return True
+            if _find_active_agent(chat_id) is None:
+                return False
+        request = SendMessageRequest(message=text, message_id=message_id)
+        accepted = _send_to_chat(state, parsed, request, message_id, is_refused_on_signed_out_account=False)
+        if isinstance(accepted, _SendRefused):
+            raise QuickChangeDeliveryError(accepted.answer.detail)
+        return True
+
+
 def _send_message_endpoint(chat_id: str) -> Response:
     """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
     state = get_state()
@@ -955,6 +989,12 @@ def _send_message_endpoint(chat_id: str) -> Response:
         return _agent_list_not_known_response()
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
+    # Before the delivery, so the chat's agent never receives an unmarked quick change.
+    routing = _route_quick_change(state, ChatId(chat_id), send_message_request.message)
+    if routing.is_routed:
+        send_message_request = send_message_request.model_copy_update(
+            to_update(send_message_request.field_ref().message, routing.text)
+        )
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, message_id)
         if held is not None:
@@ -965,7 +1005,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
-    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
+    _consider_naming_chat(state, ChatId(chat_id), routing.user_message or send_message_request.message)
     accepted = _send_to_chat(
         state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
     )
@@ -1739,6 +1779,11 @@ def _run_create_chat() -> CreatedChat | Response:
     """
     agent_manager: AgentManager = get_state().agent_manager
     create_request = parse_request_body(CreateChatRequest)
+    # The first message is routed before the create (the chat's agent receives it marked), and
+    # forwarded once the create has given the chat its id.
+    routing = _route_quick_change(get_state(), None, create_request.message)
+    if routing.is_routed:
+        create_request = create_request.model_copy_update(to_update(create_request.field_ref().message, routing.text))
     created = _created_chat_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
@@ -1755,7 +1800,10 @@ def _run_create_chat() -> CreatedChat | Response:
     )
     if isinstance(created, Response):
         return created
-    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
+    router = get_state().quick_change_router
+    if router is not None:
+        router.forward(created.chat_id, routing)
+    _consider_naming_chat(get_state(), created.chat_id, routing.user_message or create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -2720,6 +2768,7 @@ def create_application(state: ChatAppState) -> Flask:
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
+    state.chat_message_deliverer = lambda chat_id, text: _deliver_to_chat_in_app(application, chat_id, text)
     secret_requests_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])

@@ -24,6 +24,12 @@ from imbue.chat.auto_open import LEDGER_FILENAME
 from imbue.chat.background_tasks import BACKGROUND_TASKS_DIRNAME
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_quick_change import OPENROUTER_KEY_FILENAME
+from imbue.chat.chat_quick_change import QUICK_CHANGE_MODEL_ID
+from imbue.chat.chat_quick_change import QuickChangeDeliveryError
+from imbue.chat.chat_quick_change import QuickChangeRouter
+from imbue.chat.chat_quick_change import ask_jev
+from imbue.chat.chat_quick_change import read_chat_jev_credentials
 from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -40,6 +46,9 @@ from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.models import AgentNameConflictError
+from imbue.chat.models import ModelPick
+from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
@@ -56,6 +65,8 @@ logger = _loguru_logger
 # ``test_app_manifests.py`` reads this constant from the source to check the program registers
 # with this manifest.
 MANIFEST_PATH: Final[Path] = Path("system/apps/chat/app.toml")
+# How many numbered names ("Quick look-and-feel changes", "... 2", ...) the quick-change chat tries.
+_QUICK_CHANGE_NAME_ATTEMPTS: Final[int] = 10
 
 
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
@@ -195,6 +206,23 @@ def build_production_state(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
     )
+    if not is_secondary:
+        openrouter_key_path = data_dir / OPENROUTER_KEY_FILENAME
+        state.quick_change_router = QuickChangeRouter(
+            data_dir=data_dir,
+            # Read on every message, so a key placed after the chat app started is picked up.
+            resolve_credentials=lambda chat_id: read_chat_jev_credentials(
+                None if chat_id is None else agent_manager.resolve_chat_account_binding(chat_id), openrouter_key_path
+            ),
+            get_conversation_tail=state.conversation_tail_of_chat,
+            call_jev=lambda credentials, jev_request, timeout: ask_jev(
+                credentials, jev_request, state.http_client, timeout
+            ),
+            create_agent_chat=lambda name, message, labels: _create_quick_change_chat(
+                agent_manager, name, message, labels
+            ),
+            deliver=lambda chat_id, text: _deliver_chat_message(state, chat_id, text),
+        )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
     # chat's when it was the active agent) or an archived member die, and after every
@@ -206,6 +234,29 @@ def build_production_state(
     agent_manager.set_session_watcher_check(state.has_watcher)
     agent_manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
+
+
+def _create_quick_change_chat(agent_manager: AgentManager, name: str, message: str, labels: dict[str, str]) -> str:
+    """Create the quick-change chat on Sonnet; a name already taken (a chat left from an earlier record) gets a number."""
+    model_pick = ModelPick(model_id=QUICK_CHANGE_MODEL_ID)
+    for number in range(1, _QUICK_CHANGE_NAME_ATTEMPTS + 1):
+        requested_name = name if number == 1 else f"{name} {number}"
+        try:
+            created = agent_manager.create_chat(
+                requested_name=requested_name, message=message, labels=labels, model_pick=model_pick
+            )
+        except AgentNameConflictError:
+            continue
+        return str(created.chat_id)
+    # Every numbered name is taken: let the chat app mint the next free "Chat N".
+    created = agent_manager.create_chat(requested_name="", message=message, labels=labels, model_pick=model_pick)
+    return str(created.chat_id)
+
+
+def _deliver_chat_message(state: ChatAppState, chat_id: ChatId, text: str) -> bool:
+    if state.chat_message_deliverer is None:
+        raise QuickChangeDeliveryError("The chat app is not taking messages yet")
+    return state.chat_message_deliverer(str(chat_id), text)
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:

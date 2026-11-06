@@ -16,6 +16,7 @@ from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_quick_change import QuickChangeRouter
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
@@ -103,6 +104,11 @@ class ChatAppState(MutableModel):
         description="Names new chats from their first messages; None where chats are not named (a secondary "
         "chat, whose renames would be the live chat's)",
     )
+    quick_change_router: QuickChangeRouter | None = Field(
+        default=None,
+        description="Routes quick look-and-feel changes to the quick-change agent (``chat_quick_change.py``); None "
+        "where messages are never routed (a secondary chat, and tests that do not wire one)",
+    )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService
     http_client: httpx.Client
@@ -115,6 +121,9 @@ class ChatAppState(MutableModel):
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    # Sends a message into a chat through the ordinary send path from any thread (False when the chat
+    # is gone); set once the Flask app exists (``create_application``), since that path runs in its context.
+    chat_message_deliverer: Callable[[str, str], bool] | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
@@ -306,6 +315,16 @@ class ChatAppState(MutableModel):
         if agent_info is None:
             return None
         return capture_tmux_session_pane(agent_tmux_session_name(agent_info.name))
+
+    def conversation_tail_of_chat(self, chat_id: ChatId, limit: int) -> list[dict[str, Any]]:
+        """The newest ``limit`` events of the agent a chat runs on, oldest first; empty for a chat with no agent.
+
+        Builds the agent's watcher if it has none, as the send that asks for this does anyway.
+        """
+        agent_info = self.agent_manager.get_active_agent_info(chat_id)
+        if agent_info is None:
+            return []
+        return self.get_or_create_watcher(agent_info).get_tail_events(limit)
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """Whether a streamed event belongs to its agent's own session rather than a subagent's.

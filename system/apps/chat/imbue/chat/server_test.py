@@ -52,6 +52,13 @@ from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
+from imbue.chat.chat_quick_change import JevCredentials
+from imbue.chat.chat_quick_change import JevOutcome
+from imbue.chat.chat_quick_change import JevOutcomeStatus
+from imbue.chat.chat_quick_change import QUICK_CHANGE_AGENT_FILENAME
+from imbue.chat.chat_quick_change import QUICK_CHANGE_QUESTION
+from imbue.chat.chat_quick_change import QuickChangeRouter
+from imbue.chat.chat_quick_change import mark_routed_message
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -5278,3 +5285,92 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def _quick_change_client(
+    tmp_path: Path, probability: float | None, messenger: RecordingMngrMessenger
+) -> tuple[FlaskClient, ChatAppState]:
+    """An app whose sends are routed by a quick-change router over a fake Jev (None: Jev times out), with the
+    quick-change chat already recorded so a forward goes through the app's own send path."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    state = build_test_state(agent_manager=manager)
+
+    def call_jev(_credentials: JevCredentials, _request: dict[str, Any], _timeout: float) -> JevOutcome:
+        if probability is None:
+            return JevOutcome(status=JevOutcomeStatus.FAILED, detail="request failed: ReadTimeout")
+        return JevOutcome(
+            status=JevOutcomeStatus.ANSWERED,
+            response={"answers": {QUICK_CHANGE_QUESTION: {"type": "noul", "noul": probability}}},
+        )
+
+    (tmp_path / QUICK_CHANGE_AGENT_FILENAME).write_text(json.dumps({"chat_id": _QUICK_CHANGE_CHAT}), encoding="utf-8")
+    state.quick_change_router = QuickChangeRouter(
+        data_dir=tmp_path,
+        resolve_credentials=lambda _chat_id: JevCredentials(endpoint_url="https://jev.invalid", api_key="sk-dummy"),
+        get_conversation_tail=lambda _chat_id, _limit: [],
+        call_jev=call_jev,
+        create_agent_chat=lambda _name, _message, _labels: pytest.fail("the recorded quick-change chat is reused"),
+        deliver=lambda chat_id, text: state.chat_message_deliverer is not None
+        and state.chat_message_deliverer(str(chat_id), text),
+        run_in_background=lambda fn: fn(),
+    )
+    return create_application(state).test_client(), state
+
+
+_MAIN_CHAT: Final[str] = "agent-00000000000000000000000000000001"
+_QUICK_CHANGE_CHAT: Final[str] = "agent-00000000000000000000000000000002"
+
+
+def _agent_info_by_id(chat_id: str) -> AgentInfo:
+    return AgentInfo(
+        id=chat_id,
+        name=f"agent-{chat_id[-1]}",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+
+
+def test_a_quick_style_change_reaches_the_main_agent_marked_and_the_quick_change_agent_word_for_word(
+    tmp_path: Path,
+) -> None:
+    messenger = RecordingMngrMessenger()
+    client, _ = _quick_change_client(tmp_path, 0.9, messenger)
+    with patch("imbue.chat.server._find_active_agent", side_effect=_agent_info_by_id):
+        response = client.post(f"/api/chats/{_MAIN_CHAT}/message", json={"message": "Make the header dark blue"})
+
+    assert response.status_code == 200
+    sent = dict(messenger.sent)
+    assert sent[_MAIN_CHAT] == mark_routed_message("Make the header dark blue")
+    assert sent[_QUICK_CHANGE_CHAT].endswith("The user's request, word for word:\nMake the header dark blue")
+
+
+def test_a_message_jev_says_no_to_reaches_only_the_main_agent_untouched(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    client, _ = _quick_change_client(tmp_path, 0.1, messenger)
+    with patch("imbue.chat.server._find_active_agent", side_effect=_agent_info_by_id):
+        client.post(f"/api/chats/{_MAIN_CHAT}/message", json={"message": "Add a settings page"})
+
+    assert messenger.sent == [(_MAIN_CHAT, "Add a settings page")]
+
+
+def test_a_message_sent_while_jev_times_out_reaches_only_the_main_agent_untouched(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    client, _ = _quick_change_client(tmp_path, None, messenger)
+    with patch("imbue.chat.server._find_active_agent", side_effect=_agent_info_by_id):
+        client.post(f"/api/chats/{_MAIN_CHAT}/message", json={"message": "Make the header dark blue"})
+
+    assert messenger.sent == [(_MAIN_CHAT, "Make the header dark blue")]
+
+
+def test_the_quick_change_agents_report_reaches_the_main_agent_unrouted(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    client, _ = _quick_change_client(tmp_path, 0.9, messenger)
+    report = (
+        "<background-task-report><summary>Made the header dark blue.</summary>\nApp: todo\n</background-task-report>"
+    )
+    with patch("imbue.chat.server._find_active_agent", side_effect=_agent_info_by_id):
+        client.post(f"/api/chats/{_MAIN_CHAT}/message", json={"message": report})
+
+    assert messenger.sent == [(_MAIN_CHAT, report)]
