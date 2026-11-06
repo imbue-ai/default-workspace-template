@@ -534,7 +534,8 @@ def load_apps(path: Path) -> list[dict[str, object]]:
     """The registry's ``[[apps]]`` tables; empty while the file does not exist.
 
     Raises ``MalformedRegistryError`` for a top-level shape other than ``[[apps]]``
-    tables, and lets ``tomllib.TOMLDecodeError`` and ``OSError`` through.
+    tables, and lets ``tomllib.TOMLDecodeError``, ``UnicodeDecodeError`` (a file that is
+    not UTF-8) and ``OSError`` through.
     """
     if not path.exists():
         return []
