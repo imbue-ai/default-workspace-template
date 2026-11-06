@@ -142,8 +142,8 @@ class RegistryRow(FrozenModel):
         description="Whether the shell may stop the app's program once no window shows it",
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    # CLEANUP: drop the ``default_shortcut`` alias once no registry row predates the ``default_shortcuts`` key; every
-    # app rewrites its row when it next starts.
+    # CLEANUP: drop the ``default_shortcut`` alias and ``_read_one_default_shortcut_as_a_list`` once no registry row
+    # predates the ``default_shortcuts`` key; every app rewrites its row when it next starts.
     default_shortcuts: tuple[DefaultShortcut, ...] = Field(
         default=(),
         validation_alias=AliasChoices("default_shortcuts", "default_shortcut"),
