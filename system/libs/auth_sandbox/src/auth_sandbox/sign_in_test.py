@@ -1,5 +1,9 @@
 from auth_sandbox.mock_latchkey_test import FakeLatchkey
-from auth_sandbox.sign_in import offers_browser_sign_in, run_sign_in
+from auth_sandbox.sign_in import (
+    account_for_browser_sign_in,
+    offers_browser_sign_in,
+    run_sign_in,
+)
 
 
 def test_run_sign_in_initializes_then_runs_the_browser_flow_for_the_account() -> None:
@@ -33,3 +37,25 @@ def test_only_a_service_that_lists_its_options_without_the_browser_takes_typed_c
     assert offers_browser_sign_in({}) is True
     assert offers_browser_sign_in({"authOptions": []}) is True
     assert offers_browser_sign_in({"authOptions": "set"}) is True
+
+
+def test_only_a_service_that_cannot_detect_the_login_account_is_named_one() -> None:
+    assert (
+        account_for_browser_sign_in(
+            {"capabilities": {"detectsLoginAccount": False}}, "work"
+        )
+        == "work"
+    )
+    assert (
+        account_for_browser_sign_in(
+            {"capabilities": {"detectsLoginAccount": True}}, "work"
+        )
+        is None
+    )
+    assert account_for_browser_sign_in({}, "work") is None
+    assert (
+        account_for_browser_sign_in(
+            {"capabilities": {"detectsLoginAccount": False}}, None
+        )
+        is None
+    )

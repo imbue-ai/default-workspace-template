@@ -40,3 +40,20 @@ def offers_browser_sign_in(services_info: Mapping[str, JsonValue]) -> bool:
     if not isinstance(auth_options, list) or not auth_options:
         return True
     return LATCHKEY_AUTH_OPTION_BROWSER in auth_options
+
+
+def account_for_browser_sign_in(
+    services_info: Mapping[str, JsonValue], account: str | None
+) -> str | None:
+    """The account to name to latchkey's browser sign-in: none for a service that tells who logged in.
+
+    Such a service stores the credential under the account it detects and refuses a named account its store does not
+    hold, which the sandbox's fresh store never does; only a service whose description says it cannot detect the
+    account (``capabilities.detectsLoginAccount`` false) takes the account the user picked.
+    """
+    capabilities = services_info.get("capabilities")
+    is_login_account_detected = not (
+        isinstance(capabilities, Mapping)
+        and capabilities.get("detectsLoginAccount") is False
+    )
+    return None if is_login_account_detected else account

@@ -55,7 +55,12 @@ from auth_sandbox.set_credentials import (
     read_and_remove_values_file,
     run_set_credentials,
 )
-from auth_sandbox.sign_in import SignInOutcome, offers_browser_sign_in, run_sign_in
+from auth_sandbox.sign_in import (
+    SignInOutcome,
+    account_for_browser_sign_in,
+    offers_browser_sign_in,
+    run_sign_in,
+)
 from auth_sandbox.store_queries import (
     describe_service,
     store_environment,
@@ -187,8 +192,8 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
     "--account",
     default=None,
     help=(
-        "The account to store the credential under, for a service that cannot tell who logged in; a service "
-        "that can refuses an account the sandbox's fresh store does not hold, so the chrome names none there."
+        "The account the user picked; named to latchkey only for a service that cannot tell who logged in (a "
+        "service that can stores under the account it detects and refuses one the sandbox's fresh store lacks)."
     ),
 )
 @click.option(
@@ -226,7 +231,9 @@ def sign_in_command(
     with _exit_on_sandbox_failure():
         if is_fresh:
             paths.latchkey_browser_state_path.unlink(missing_ok=True)
-        outcome = run_sign_in(latchkey, service, account)
+        outcome = run_sign_in(
+            latchkey, service, account_for_browser_sign_in(services_info, account)
+        )
     _finish(outcome)
     accounts = _stored_accounts(latchkey_binary, service)
     click.echo(json.dumps({"accounts": accounts, "services_info": services_info}))

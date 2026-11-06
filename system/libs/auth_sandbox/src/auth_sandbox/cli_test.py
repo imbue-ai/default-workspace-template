@@ -202,10 +202,11 @@ def test_a_browser_sign_in_prints_the_accounts_and_the_description_as_the_last_l
         "accounts": {"me@example.com": {"credentialType": "browser"}},
         "services_info": _SLACK_INFO,
     }
-    # One description, the sign-in with the machine's session in place, the listing; no `latchkey --version`.
+    # One description, the sign-in with the machine's session in place and without the picked account (slack
+    # detects who logged in), the listing; no `latchkey --version`.
     assert _invocations(tmp_path) == [
         "services info slack --offline [present]",
-        "auth browser slack --strict --account me@example.com [present]",
+        "auth browser slack --strict [present]",
         "auth list --offline [present]",
     ]
     assert state.read_bytes() == b"machine session"
