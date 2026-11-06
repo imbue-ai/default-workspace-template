@@ -1,0 +1,1 @@
+The snapshot reader understands a new setting, `experimental_features_enabled`: `are_experimental_features_enabled` says whether the workspace's owning account has experimental features on, so an app can keep a feature still being tried out to those accounts. A workspace with no snapshot, or one from a client that does not write the key, has them off.

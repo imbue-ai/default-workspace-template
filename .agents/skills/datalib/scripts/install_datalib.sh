@@ -10,12 +10,28 @@
 #
 # Safe to run every time: each half checks what is already in place first.
 #
+# --without-app installs everything but the app's program: the chat import
+# (.agents/skills/import-chats) syncs into this same store from its own script
+# and keeps the Datalib app out of the launcher, since datalib itself is not
+# announced to users. The program moves a store from before the libraries
+# folder into its library when it starts, so this path has it do just that.
+#
 # The release lands in a directory named after the pin, under the persistent
 # home, and ~/.local/bin gets one symlink per binary, so a pin bump installs
 # beside the old release and relinks. datalib-http finds its sibling binaries
 # through the resolved executable path, which is why the binaries themselves
 # stay together in that directory.
 set -euo pipefail
+
+with_app=1
+case "$*" in
+    "") ;;
+    --without-app) with_app=0 ;;
+    *)
+        printf '[install_datalib] unknown arguments: %s (the only one is --without-app)\n' "$*" >&2
+        exit 2
+        ;;
+esac
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
@@ -94,6 +110,13 @@ if "$RELEASE_DIR/datalib-step" pull-runtime; then
     _log "runtime in place under ~/.cache/datalib/runtime"
 else
     _log "runtime fetch FAILED; the first sync will try again"
+fi
+
+if [ "$with_app" -eq 0 ]; then
+    # CLEANUP: drop with move_store_into_library in the Datalib app's launcher.
+    (cd "$REPO_ROOT" && python3 system/apps/datalib/launch_datalib_http.py --move-store-only ${DATALIB_DATA_ROOT:+--data-root "$DATALIB_DATA_ROOT"})
+    _log "left the Datalib app's program out (--without-app)"
+    exit 0
 fi
 
 # The Datalib app's program. supervisord reads system/supervisord.conf.d/ only

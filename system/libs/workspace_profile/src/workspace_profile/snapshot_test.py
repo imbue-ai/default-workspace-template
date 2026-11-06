@@ -4,6 +4,7 @@ from pathlib import Path
 from workspace_profile.snapshot import (
     SNAPSHOT_RELATIVE_PATH,
     SUPPORTED_SNAPSHOT_FORMAT,
+    are_experimental_features_enabled,
     load_workspace_profile_snapshot,
     parse_workspace_profile_snapshot,
 )
@@ -84,3 +85,17 @@ def test_parse_snapshot_rejects_a_header_field_of_the_wrong_type() -> None:
     assert (
         parse_workspace_profile_snapshot(json.dumps({"snapshot_format": "one"})) is None
     )
+
+
+def test_only_a_snapshot_saying_so_turns_experimental_features_on() -> None:
+    assert are_experimental_features_enabled(None) is False
+    for text, expected in (
+        ('{"experimental_features_enabled": true}', True),
+        ('{"experimental_features_enabled": false}', False),
+        ('{"experimental_features_enabled": "true"}', False),
+        ("{}", False),
+    ):
+        assert (
+            are_experimental_features_enabled(parse_workspace_profile_snapshot(text))
+            is expected
+        )

@@ -5,7 +5,9 @@ outside the workspace -- the Imbue Studio desktop, or the hosted web chrome -- m
 from the workspace's account, and resolves account-keyed settings for a request identity.
 
 The snapshot is read-only inside the workspace: it names the workspace's account and owner
-and carries the account-keyed settings the built-in apps consume (the keybindings, today).
+and carries the account-keyed settings the built-in apps consume: the keybindings, and whether
+the account has experimental features on (`are_experimental_features_enabled`), which decides
+whether an app offers a feature still being tried out.
 The workspace's own layer lives under `data/system/profile/`: per-user override files
 (`overrides/users/<user_id>.json`, written by the workspace only) and the shell's unsent
 account changes (`unsent.json`), which overlay the owner's snapshot values until they are

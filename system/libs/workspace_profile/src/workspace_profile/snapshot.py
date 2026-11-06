@@ -3,9 +3,8 @@
 One file, ``data/.state/profile/account.json``, written only by a client outside the workspace
 (the Imbue Studio desktop, or the hosted web chrome) and never by anything inside it. It names the
 workspace's account and owner, and carries the account-keyed settings the workspace's apps
-consume as extra keys beside the header fields (the keybindings, today). It lives under
-``data/.state/`` because it is machine state a client rebuilds: the account is its source of
-truth.
+consume as extra keys beside the header fields. It lives under ``data/.state/`` because it is
+machine state a client rebuilds: the account is its source of truth.
 
 Reads are tolerant in both directions: an absent or unreadable file resolves from overrides
 and defaults alone, and a snapshot a newer client wrote (a higher ``snapshot_format``, or keys
@@ -35,11 +34,17 @@ SNAPSHOT_HEADER_KEYS: Final[frozenset[str]] = frozenset(
     {"snapshot_format", "account_id", "owner_user_id", "written_at", "written_by"}
 )
 
+# Whether the owning account has experimental features on; only a client outside the workspace writes it.
+EXPERIMENTAL_FEATURES_SETTING_KEY: Final[str] = "experimental_features_enabled"
+
 # The account-keyed setting keys this template's apps consume from the snapshot. A setting is
 # added here only when a workspace app reads it; the vendored contract fixture test pins this
 # list against what the desktop writes, so a key added on one side fails the other until
 # mirrored.
-CONSUMED_SETTING_KEYS: Final[tuple[str, ...]] = ("keybindings",)
+CONSUMED_SETTING_KEYS: Final[tuple[str, ...]] = (
+    "keybindings",
+    EXPERIMENTAL_FEATURES_SETTING_KEY,
+)
 
 
 class WorkspaceProfileSnapshot(FrozenModel):
@@ -122,3 +127,17 @@ def load_workspace_profile_snapshot(
         )
         return None
     return parse_workspace_profile_snapshot(text)
+
+
+def are_experimental_features_enabled(
+    snapshot: WorkspaceProfileSnapshot | None,
+) -> bool:
+    """Whether the workspace's owning account has experimental features on.
+
+    Only a client outside the workspace can say so: a workspace with no snapshot, or one from a
+    client that does not write the key, has them off.
+    """
+    return (
+        snapshot is not None
+        and snapshot.value_by_key.get(EXPERIMENTAL_FEATURES_SETTING_KEY) is True
+    )

@@ -63,13 +63,17 @@ def workspace(tmp_path: Path) -> Path:
 
 
 def _run(
-    workspace: Path, state: str = "RUNNING", reread_exit: int = 0
+    workspace: Path,
+    state: str = "RUNNING",
+    reread_exit: int = 0,
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(_SCRIPT)],
+        ["bash", str(_SCRIPT), *args],
         env={
             **os.environ,
             "DATALIB_INSTALL_ROOT": str(workspace / "install"),
+            "DATALIB_DATA_ROOT": str(workspace / "libraries" / "Default"),
             "DATALIB_BIN_DIR": str(workspace / "bin"),
             "DATALIB_PROGRAM_DIR": str(workspace / "conf.d"),
             "DATALIB_SUPERVISORCTL": str(workspace / "supervisorctl"),
@@ -124,3 +128,56 @@ def test_a_supervisord_that_cannot_reread_fails_the_install(workspace: Path) -> 
 
     assert result.returncode != 0
     assert _calls(workspace) == ["reread"]
+
+
+def test_without_the_app_the_binaries_are_linked_and_supervisord_is_left_alone(
+    workspace: Path,
+) -> None:
+    result = _run(workspace, args=("--without-app",))
+
+    assert result.returncode == 0, result.stderr
+    assert (workspace / "bin" / "datalib-step").resolve() == (
+        workspace / "install" / _pinned_version() / "datalib-step"
+    ).resolve()
+    assert not (workspace / "conf.d" / "datalib.conf").exists()
+    assert not (workspace / "supervisorctl.log").exists()
+
+
+def test_without_the_app_a_store_from_before_the_libraries_folder_moves_into_its_library(
+    workspace: Path,
+) -> None:
+    libraries = workspace / "libraries"
+    libraries.mkdir()
+    (libraries / "config.toml").write_text("# the store\n")
+
+    result = _run(workspace, args=("--without-app",))
+
+    assert result.returncode == 0, result.stderr
+    assert [path.name for path in libraries.iterdir()] == ["Default"]
+    assert (libraries / "Default" / "config.toml").read_text() == "# the store\n"
+
+
+def test_without_the_app_a_store_that_cannot_move_fails_the_install_saying_why(
+    workspace: Path,
+) -> None:
+    libraries = workspace / "libraries"
+    (libraries / "Default").mkdir(parents=True)
+    (libraries / "Default" / "config.toml").write_text("# the library\n")
+    (libraries / "config.toml").write_text("# the store\n")
+
+    result = _run(workspace, args=("--without-app",))
+
+    assert result.returncode != 0
+    assert "the library" in result.stderr and "is not empty" in result.stderr
+    assert (libraries / "config.toml").exists()
+
+
+@pytest.mark.parametrize("args", [("--quietly",), ("--without-app", "--quietly")])
+def test_an_unknown_argument_is_refused_before_anything_is_installed(
+    workspace: Path, args: tuple[str, ...]
+) -> None:
+    result = _run(workspace, args=args)
+
+    assert result.returncode == 2
+    assert "--without-app" in result.stderr
+    assert not (workspace / "bin").exists()
