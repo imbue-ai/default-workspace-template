@@ -134,6 +134,11 @@ lease before editing again. Between turns the changes are committed, so
 another chat editing sequentially on top is safe; only *simultaneous* editing
 needs the lease.
 
+**One exception: the quick-change agent.** It may edit an app while you hold
+that app's lease. It works under your lease and never takes or releases one,
+so its edits are not a conflicting editor: do not wait for it, and do not
+release, retake, or ask about your lease because of it.
+
 **An in-flight harden pass does not block you -- the foreground wins.** If
 `tk ready` also shows an in-progress `update` or `heal` ticket whose title
 lists `<name>` among the creations its pass covers (a background pass hardening
@@ -142,6 +147,17 @@ your edit; your change simply makes that pass stale. Leave a note on that
 ticket (`tk add-note <id> "..."`) so its owner catches the pass up to cover
 it at merge time. The full contention rules live in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
+
+### Quick look-and-feel changes
+
+The chat app may send a quick look-and-feel request (a colour, font size,
+spacing, showing or hiding an element, light/dark styling) straight to a
+separate quick-change agent, which edits the app under your editing lease. Such
+a request never reaches you. The log at
+`data/.apps/chat/quick_changes.jsonl` lists each one: what the user asked,
+when, which app, and the quick-change agent's report (done or failed). Check it
+before you edit an app, and whenever the user refers to a change you have not
+seen. Do not redo those changes.
 
 ## The live change loop
 

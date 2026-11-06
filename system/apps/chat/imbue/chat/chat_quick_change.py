@@ -1,33 +1,47 @@
 """Routing quick look-and-feel changes to a separate Sonnet agent.
 
-On every message the user sends to a chat, the chat app asks Jev (TypeSafe's decision model) one
-yes/no question about the message and the last few messages of the conversation: is this a quick
-look-and-feel change to an app (a colour, font size, spacing, showing or hiding an element,
-light/dark styling, restyling a page) that needs no new features, data or backend work?
+On every message sent to a chat, the chat app asks Jev (TypeSafe's decision model) two yes/no
+questions in one call, about the message and the last few messages of the conversation (the
+user's and the agent's):
 
-- Yes: the message is forwarded word for word to the workspace's quick-change agent (one chat per
-  workspace, created on first use and reused, running the ``quick-look-and-feel-change`` skill on
-  Sonnet), which edits the live app and refreshes the user's window. The chat's own agent still
-  receives the message, prefixed with a routing note (``ROUTING_NOTE_TAG``) telling it the change
-  is being made elsewhere; the page shows only the user's words. The quick-change agent's report
-  reaches the chat as a background-task report through the ordinary send path.
-- No, or Jev cannot be reached or times out: the message goes to the chat's agent untouched.
+1. Is this a quick look-and-feel change to an app (a colour, font size, spacing, showing or hiding an
+   element, light/dark styling, restyling a page) that needs no new features, data or backend work?
+2. Does it change or depend on something the user asked for earlier that the agent has not yet said
+   is done? (A follow-up on unfinished work stays with the chat's own agent, which is doing that work.)
 
-The question is asked before the message is delivered, so the chat's agent never sees an unmarked
-quick change; the wait is bounded by ``ROUTING_TIMEOUT_SECONDS``.
+The send waits for the answer before anything is delivered (at most ``ROUTING_TIMEOUT_SECONDS``), so
+a routed message never enters the chat agent's conversation:
+
+- Yes to 1 and no to 2: the message is NOT delivered to the chat's own agent. It is forwarded word
+  for word to the workspace's quick-change agent (one chat per workspace, created on first use and
+  reused, running the ``quick-look-and-feel-change`` skill on Sonnet), together with the app named
+  by the current editing lease (the in-progress ``editing service <name>`` tk ticket the update-app
+  skill has an agent hold). That agent edits the live app under the lease, refreshes the window, and
+  reports with ``system/scripts/report_quick_change.py``.
+- Anything else, or Jev cannot be reached or times out: the message goes to the chat's agent as usual.
+
+Two logs live in the chat app's data folder (``data/.apps/chat/`` in a workspace):
+
+- ``quick_changes.jsonl`` (``QUICK_CHANGES_LOG_FILENAME``): the record the chat's own agents read.
+  Per routed message, a ``request`` line (request id, chat, time, text, app, Jev's answers), a
+  ``forward`` line (handed over, or failed to), and a ``report`` line from the quick-change agent
+  (done or failed, and its one-line summary). The update-app skill tells agents to check it. The
+  chat shows the request and the report as a turn of its own (``chat_quick_change_feed.py``).
+- ``quick_change_routing.jsonl`` (``ROUTING_LOG_FILENAME``): every routing decision for every message,
+  with the full Jev request and answer and timestamps, for measuring routing.
 
 Jev is reached with an OpenRouter key saved in the chat app's data folder (``openrouter_api_key``)
 when there is one, else through the Imbue LiteLLM proxy the chat's account is signed in to, at its
-Jev route (``/jev/v1/systemone``). A chat with neither is never routed.
-
-Every decision (the Jev request, its answer, timings and the outcome) and every forward is
-appended to ``quick_change_routing.jsonl`` in the chat app's data folder. The quick-change agent's
-chat id is kept in ``quick_change_agent.json`` beside it.
+Jev route (``/jev/v1/systemone``). A chat with neither is never routed. The quick-change agent's
+chat id is kept in ``quick_change_agent.json`` beside the logs.
 """
 
 import json
+import os
+import re
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -43,12 +57,16 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.chat_quick_change_feed import FORWARD_FAILED_TEXT
+from imbue.chat.chat_quick_change_feed import overlay_events_for_chat
+from imbue.chat.chat_quick_change_feed import read_quick_change_log
+from imbue.chat.chat_quick_change_feed import reply_event
+from imbue.chat.chat_quick_change_feed import request_event
 from imbue.chat.errors import ChatAppError
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_BASE_URL_ENV_VAR
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.events import DisplayKind
-from imbue.chat.harnesses.message_display import QUICK_CHANGE_ROUTING_NOTE_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import ChatAccountBinding
@@ -61,6 +79,8 @@ from imbue.imbue_common.pure import pure
 logger = _loguru_logger
 
 ROUTING_LOG_FILENAME: Final[str] = "quick_change_routing.jsonl"
+# Shared with system/scripts/report_quick_change.py, which appends the quick-change agent's reports.
+QUICK_CHANGES_LOG_FILENAME: Final[str] = "quick_changes.jsonl"
 QUICK_CHANGE_AGENT_FILENAME: Final[str] = "quick_change_agent.json"
 QUICK_CHANGE_SKILL: Final[str] = "quick-look-and-feel-change"
 QUICK_CHANGE_CHAT_NAME: Final[str] = "Quick look-and-feel changes"
@@ -75,8 +95,8 @@ JEV_ROUTE_PATH: Final[str] = "/jev/v1/systemone"
 OPENROUTER_KEY_FILENAME: Final[str] = "openrouter_api_key"
 OPENROUTER_JEV_URL: Final[str] = "https://openrouter.ai/api/v1/systemone"
 JEV_MODEL: Final[str] = "typesafe/jev-1.13"
-# The longest a send waits for Jev before it is delivered unrouted.
-ROUTING_TIMEOUT_SECONDS: Final[float] = 10.0
+# The longest a send waits for Jev before it is delivered to the chat's agent unrouted.
+ROUTING_TIMEOUT_SECONDS: Final[float] = 3.0
 # Messages of recent conversation (user and agent, newest last) Jev reads beside the new message.
 CONTEXT_MESSAGE_COUNT: Final[int] = 6
 # Each context message is cut to its last this-many words, so one long reply cannot crowd out the rest.
@@ -91,6 +111,7 @@ _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
 
 QUICK_CHANGE_QUESTION: Final[str] = "quick_look_and_feel_change"
+PENDING_WORK_QUESTION: Final[str] = "depends_on_unfinished_work"
 JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     QUICK_CHANGE_QUESTION: {
         "type": "noul",
@@ -111,12 +132,29 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
             ),
         },
     },
+    PENDING_WORK_QUESTION: {
+        "type": "noul",
+        "instructions": (
+            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. Does "
+            "new_message change or depend on something the user asked for earlier in this conversation that "
+            "the agent has not yet said is done?"
+        ),
+        "criteria": {
+            "true": (
+                "new_message adjusts, extends or relies on earlier requested work that the agent has not "
+                "reported as finished, or refers to something that does not exist yet."
+            ),
+            "false": ("new_message stands on its own, or only touches things the agent has already said are done."),
+        },
+    },
 }
 
-ROUTING_NOTE: Final[str] = (
-    "Routed to the quick look-and-feel agent, which is making this change; do not make it yourself. "
-    "Its short report will arrive in this chat as a message when it is done."
-)
+# Where tk keeps tickets: the agents' TICKETS_DIR (pinned in .mngr/settings.toml), else its
+# workspace default relative to the repo root the chat app runs from.
+_DEFAULT_TICKETS_DIR: Final[Path] = Path("data/.tickets")
+# The title of the editing lease the update-app skill has an agent take before editing an app.
+_EDITING_LEASE_TITLE_RE: Final[re.Pattern[str]] = re.compile(r"^# editing service (\S+)\s*$", re.MULTILINE)
+_FRONTMATTER_FIELD_RE: Final[re.Pattern[str]] = re.compile(r"^(\w[\w-]*):\s*(.*?)\s*$", re.MULTILINE)
 
 
 class QuickChangeDeliveryError(ChatAppError):
@@ -129,7 +167,8 @@ class JevCredentials(FrozenModel):
     endpoint_url: str = Field(description="The URL Jev's requests are posted to")
     api_key: str = Field(description="The proxy's LiteLLM virtual key, or an OpenRouter key", repr=False)
     is_openrouter_key: bool = Field(
-        default=False, description="Whether this is the saved OpenRouter key rather than a proxy sign-in"
+        default=False,
+        description="Whether this is the saved OpenRouter key rather than a proxy sign-in",
     )
 
 
@@ -152,20 +191,46 @@ class RoutingDecision(LowerCaseStrEnum):
 
     ROUTED = auto()
     NOT_ROUTED = auto()
+    # A quick look-and-feel change, but to work the agent has not finished: the chat's agent keeps it.
+    PENDING_WORK = auto()
     NO_CREDENTIALS = auto()
     JEV_UNAVAILABLE = auto()
     JEV_FAILED = auto()
-    # Jev answered, but without a usable answer to the question.
+    # Jev answered, but without a usable answer to one of the questions.
     UNUSABLE_ANSWER = auto()
 
 
 class RoutingResult(FrozenModel):
     """What one message's routing came to."""
 
-    text: str = Field(description="What the chat's own agent receives: the message, marked when routed")
-    is_routed: bool = Field(default=False, description="Whether the quick-change agent should make the change")
+    is_routed: bool = Field(
+        default=False,
+        description="Whether the message goes to the quick-change agent instead",
+    )
+    request_id: str = Field(
+        default="",
+        description="The id the quick-change log and report use (routed only)",
+    )
+    routed_at: str = Field(default="", description="When the message was sent, ISO UTC (routed only)")
     user_message: str = Field(default="", description="The user's words, forwarded as they are (routed only)")
     recent_conversation: str = Field(default="", description="The context Jev read, forwarded too (routed only)")
+    quick_change_probability: float | None = Field(default=None, description="Jev's answer to question 1")
+    pending_work_probability: float | None = Field(default=None, description="Jev's answer to question 2")
+
+
+class QuickChangeReportStatus(LowerCaseStrEnum):
+    DONE = auto()
+    FAILED = auto()
+
+
+class QuickChangeReportRequest(FrozenModel):
+    """``POST /api/quick-changes/<request_id>/report``: the quick-change agent's outcome for one request."""
+
+    status: QuickChangeReportStatus = Field(description="Whether the change was made")
+    report: str = Field(
+        min_length=1,
+        description="One or two plain sentences: what changed, in which app",
+    )
 
 
 # Answers that mean Jev is not there for this chat.
@@ -211,7 +276,10 @@ def read_chat_jev_credentials(binding: ChatAccountBinding | None, openrouter_key
 
 
 def ask_jev(
-    credentials: JevCredentials, jev_request: dict[str, Any], http_client: httpx.Client, timeout_seconds: float
+    credentials: JevCredentials,
+    jev_request: dict[str, Any],
+    http_client: httpx.Client,
+    timeout_seconds: float,
 ) -> JevOutcome:
     """One call to Jev, through the proxy or straight to OpenRouter."""
     try:
@@ -222,11 +290,17 @@ def ask_jev(
             timeout=timeout_seconds,
         )
     except httpx.HTTPError as e:
-        return JevOutcome(status=JevOutcomeStatus.FAILED, detail=f"request failed: {type(e).__name__}: {e}")
+        return JevOutcome(
+            status=JevOutcomeStatus.FAILED,
+            detail=f"request failed: {type(e).__name__}: {e}",
+        )
     if response.status_code in _UNAVAILABLE_STATUS_CODES:
         return JevOutcome(status=JevOutcomeStatus.UNAVAILABLE, detail=f"HTTP {response.status_code}")
     if response.status_code != 200:
-        return JevOutcome(status=JevOutcomeStatus.FAILED, detail=f"HTTP {response.status_code}: {response.text[:200]}")
+        return JevOutcome(
+            status=JevOutcomeStatus.FAILED,
+            detail=f"HTTP {response.status_code}: {response.text[:200]}",
+        )
     try:
         payload = response.json()
     except ValueError as e:
@@ -295,18 +369,21 @@ def build_recent_conversation(events: Sequence[Mapping[str, Any]], new_message: 
 def build_jev_request(new_message: str, recent_conversation: str) -> dict[str, Any]:
     return {
         "model": JEV_MODEL,
-        "state": {"new_message": new_message, "recent_conversation": recent_conversation},
+        "state": {
+            "new_message": new_message,
+            "recent_conversation": recent_conversation,
+        },
         "questions": dict(JEV_QUESTIONS),
     }
 
 
 @pure
-def read_quick_change_probability(response: Mapping[str, Any]) -> float | None:
-    """How likely Jev judged the message a quick look-and-feel change, or None for an answer without it."""
+def read_probability(response: Mapping[str, Any], question: str) -> float | None:
+    """How likely Jev judged ``question`` true, or None for an answer without it."""
     answers = response.get("answers")
     if not isinstance(answers, Mapping):
         return None
-    answer = answers.get(QUICK_CHANGE_QUESTION)
+    answer = answers.get(question)
     if not isinstance(answer, Mapping):
         return None
     probability = answer.get("noul")
@@ -316,15 +393,25 @@ def read_quick_change_probability(response: Mapping[str, Any]) -> float | None:
 
 
 @pure
-def decide_routing(outcome: JevOutcome, probability: float | None) -> RoutingDecision:
-    """The routing decision one Jev call comes to."""
+def decide_routing(
+    outcome: JevOutcome,
+    quick_change_probability: float | None,
+    pending_work_probability: float | None,
+) -> RoutingDecision:
+    """The routing decision one Jev call comes to: routed only for a quick change that touches no unfinished work."""
     if outcome.status is JevOutcomeStatus.UNAVAILABLE:
         return RoutingDecision.JEV_UNAVAILABLE
     if outcome.status is JevOutcomeStatus.FAILED:
         return RoutingDecision.JEV_FAILED
-    if probability is None:
+    if quick_change_probability is None:
         return RoutingDecision.UNUSABLE_ANSWER
-    return RoutingDecision.ROUTED if probability > _YES_CUTOFF else RoutingDecision.NOT_ROUTED
+    if quick_change_probability <= _YES_CUTOFF:
+        return RoutingDecision.NOT_ROUTED
+    if pending_work_probability is None:
+        return RoutingDecision.UNUSABLE_ANSWER
+    if pending_work_probability > _YES_CUTOFF:
+        return RoutingDecision.PENDING_WORK
+    return RoutingDecision.ROUTED
 
 
 @pure
@@ -336,22 +423,78 @@ def is_routable_message(message: str) -> bool:
 
 
 @pure
-def mark_routed_message(message: str) -> str:
-    """The message as the chat's own agent receives it once routed: the routing note, then the user's words."""
-    return f"<{QUICK_CHANGE_ROUTING_NOTE_TAG}>{ROUTING_NOTE}</{QUICK_CHANGE_ROUTING_NOTE_TAG}>\n{message}"
-
-
-@pure
-def quick_change_agent_message(main_chat_id: str, user_message: str, recent_conversation: str) -> str:
-    """What the quick-change agent receives for one routed message: the skill, where to report, and the request."""
+def quick_change_agent_message(
+    request_id: str,
+    main_chat_id: str,
+    user_message: str,
+    recent_conversation: str,
+    lease_app: str | None,
+) -> str:
+    """What the quick-change agent receives for one routed message: the skill, the request id it reports under,
+    the app the editing lease names (if any), and the request."""
     return (
         f"/{QUICK_CHANGE_SKILL}\n\n"
-        f"Main chat: {main_chat_id}\n\n"
+        f"Request id: {request_id}\n"
+        f"Main chat: {main_chat_id}\n"
+        f"Editing lease app: {lease_app or '(none)'}\n\n"
         "Recent conversation in the main chat, for context (oldest first):\n"
         f"{recent_conversation or '(none)'}\n\n"
         "The user's request, word for word:\n"
         f"{user_message}"
     )
+
+
+def tickets_dir_from_env() -> Path:
+    """The tk tickets folder the workspace's agents use."""
+    configured = os.environ.get("TICKETS_DIR", "")
+    return Path(configured) if configured else _DEFAULT_TICKETS_DIR
+
+
+class EditingLease(FrozenModel):
+    app_name: str = Field(description="The app the lease is for")
+    holder: str = Field(description="The ticket's agent field: the holder's chat id or agent name ('' when absent)")
+    created: str = Field(description="The ticket's creation timestamp (fixed-width ISO, so it sorts by time)")
+
+
+@pure
+def parse_editing_lease(ticket_text: str) -> EditingLease | None:
+    """The in-progress editing lease a ticket file holds, or None for any other ticket."""
+    parts = ticket_text.split("---", 2)
+    if len(parts) < 3 or parts[0].strip() != "":
+        return None
+    fields = dict(_FRONTMATTER_FIELD_RE.findall(parts[1]))
+    if fields.get("status") != "in_progress" or fields.get("step") == "true":
+        return None
+    title = _EDITING_LEASE_TITLE_RE.search(parts[2])
+    if title is None:
+        return None
+    return EditingLease(
+        app_name=title.group(1),
+        holder=fields.get("agent", ""),
+        created=fields.get("created", ""),
+    )
+
+
+def find_editing_lease_app(tickets_dir: Path, main_chat_id: str) -> str | None:
+    """The app named by the current editing lease: the main chat's own when it holds one, else the newest; None
+    when no lease is held."""
+    leases: list[EditingLease] = []
+    try:
+        paths = sorted(tickets_dir.glob("*.md"))
+    except OSError as e:
+        logger.warning("Could not list tickets in {}: {}", tickets_dir, e)
+        return None
+    for path in paths:
+        try:
+            lease = parse_editing_lease(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if lease is not None:
+            leases.append(lease)
+    if not leases:
+        return None
+    own = [lease for lease in leases if lease.holder == main_chat_id]
+    return max(own or leases, key=lambda lease: lease.created).app_name
 
 
 def _now_iso() -> str:
@@ -363,18 +506,24 @@ class QuickChangeRouter(MutableModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    data_dir: Path = Field(frozen=True, description="The chat app's data folder (routing log, agent record)")
+    data_dir: Path = Field(
+        frozen=True,
+        description="The chat app's data folder (routing log, agent record)",
+    )
     resolve_credentials: Callable[[ChatId | None], JevCredentials | None] = Field(
-        frozen=True, description="The Jev credentials a chat's calls use, or None when it has none"
+        frozen=True,
+        description="The Jev credentials a chat's calls use, or None when it has none",
     )
     get_conversation_tail: Callable[[ChatId, int], list[dict[str, Any]]] = Field(
-        frozen=True, description="The newest events (up to the limit) of the agent the chat runs on, oldest first"
+        frozen=True,
+        description="The newest events (up to the limit) of the agent the chat runs on, oldest first",
     )
     call_jev: Callable[[JevCredentials, dict[str, Any], float], JevOutcome] = Field(
         frozen=True, description="One call to Jev, with its timeout in seconds"
     )
     create_agent_chat: Callable[[str, str, dict[str, str]], str] = Field(
-        frozen=True, description="Creates the quick-change chat from a name, first message and labels; returns its id"
+        frozen=True,
+        description="Creates the quick-change chat from a name, first message and labels; returns its id",
     )
     deliver: Callable[[ChatId, str], bool] = Field(
         frozen=True,
@@ -383,13 +532,30 @@ class QuickChangeRouter(MutableModel):
     )
     timeout_seconds: float = Field(default=ROUTING_TIMEOUT_SECONDS, frozen=True, description="Jev's time limit")
     context_message_count: int = Field(default=CONTEXT_MESSAGE_COUNT, frozen=True, ge=0)
+    find_lease_app: Callable[[str], str | None] = Field(
+        default=lambda main_chat_id: find_editing_lease_app(tickets_dir_from_env(), main_chat_id),
+        frozen=True,
+        description="The app the current editing lease names (given the main chat's id), or None",
+    )
     run_in_background: Callable[[Callable[[], None]], None] = Field(
         default=lambda fn: threading.Thread(target=fn, name="quick-change-forward", daemon=True).start(),
         frozen=True,
         description="Where the forward runs, off the send's thread",
     )
     wait: Callable[[float], object] = Field(
-        default_factory=lambda: threading.Event().wait, frozen=True, description="Waits between delivery attempts"
+        default_factory=lambda: threading.Event().wait,
+        frozen=True,
+        description="Waits between delivery attempts",
+    )
+    get_active_agent_id: Callable[[ChatId], str] = Field(
+        default=lambda _chat_id: "",
+        frozen=True,
+        description="The id of the agent a chat runs on ('' when none)",
+    )
+    on_feed_event: Callable[[ChatId, dict[str, Any]], None] = Field(
+        default=lambda _chat_id, _event: None,
+        frozen=True,
+        description="Shows a quick-change event in the chat's open pages (the stream)",
     )
 
     _agent_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -409,12 +575,12 @@ class QuickChangeRouter(MutableModel):
         return chat_id if isinstance(chat_id, str) and chat_id else None
 
     def route(self, chat_id: ChatId | None, message: str) -> RoutingResult:
-        """Ask Jev about ``message`` and say what the chat's own agent should receive.
+        """Ask Jev about ``message`` and say whether it goes to the quick-change agent instead of the chat's own.
 
         ``chat_id`` is None for a chat's first message sent with its create, before the chat has an id.
-        Never raises: anything that goes wrong leaves the message untouched.
+        Never raises: anything that goes wrong leaves the message unrouted.
         """
-        unrouted = RoutingResult(text=message)
+        unrouted = RoutingResult()
         if not is_routable_message(message) or (chat_id is not None and str(chat_id) == self.quick_change_chat_id()):
             return unrouted
         try:
@@ -424,24 +590,99 @@ class QuickChangeRouter(MutableModel):
             return unrouted
 
     def forward(self, main_chat_id: ChatId, result: RoutingResult) -> None:
-        """Hand a routed message to the quick-change agent, off the caller's thread; nothing for an unrouted one."""
+        """Record a routed message and show it in its chat at once, then hand it to the quick-change agent off the
+        caller's thread; nothing for an unrouted one."""
         if not result.is_routed:
             return
-        text = quick_change_agent_message(str(main_chat_id), result.user_message, result.recent_conversation)
-        self.run_in_background(lambda: self._forward(main_chat_id, text))
+        lease_app = self.find_lease_app(str(main_chat_id))
+        self._append(
+            QUICK_CHANGES_LOG_FILENAME,
+            {
+                "type": "request",
+                "request_id": result.request_id,
+                "chat_id": str(main_chat_id),
+                "requested_at": result.routed_at,
+                "message": result.user_message,
+                "app": lease_app,
+                "jev": {
+                    QUICK_CHANGE_QUESTION: result.quick_change_probability,
+                    PENDING_WORK_QUESTION: result.pending_work_probability,
+                },
+            },
+        )
+        agent_id = self.get_active_agent_id(main_chat_id)
+        self.on_feed_event(
+            main_chat_id,
+            request_event(result.request_id, result.user_message, result.routed_at, agent_id),
+        )
+        self.run_in_background(lambda: self._forward(main_chat_id, result, lease_app))
+
+    def record_report(self, request_id: str, status: str, report: str) -> bool:
+        """Log the quick-change agent's report and show it as the reply in the request's chat; False for an
+        unknown request id."""
+        records = read_quick_change_log(self.data_dir / QUICK_CHANGES_LOG_FILENAME)
+        chat_id = next(
+            (
+                str(record["chat_id"])
+                for record in records
+                if record.get("type") == "request" and record.get("request_id") == request_id and record.get("chat_id")
+            ),
+            None,
+        )
+        if chat_id is None:
+            return False
+        reported_at = _now_iso()
+        self._append(
+            QUICK_CHANGES_LOG_FILENAME,
+            {
+                "type": "report",
+                "request_id": request_id,
+                "status": status,
+                "report": report,
+                "reported_at": reported_at,
+            },
+        )
+        self._log(
+            {
+                "event": "reported",
+                "request_id": request_id,
+                "status": status,
+                "finished_at": reported_at,
+            }
+        )
+        parsed = ChatId(chat_id)
+        self.on_feed_event(
+            parsed,
+            reply_event(request_id, report, reported_at, self.get_active_agent_id(parsed)),
+        )
+        return True
+
+    def overlay_events(self, chat_id: ChatId, agent_id: str) -> list[dict[str, Any]]:
+        """The quick-change events a chat's feed carries (empty for a chat with none)."""
+        log_path = self.data_dir / QUICK_CHANGES_LOG_FILENAME
+        if not log_path.is_file():
+            return []
+        return overlay_events_for_chat(read_quick_change_log(log_path), str(chat_id), agent_id)
 
     def _route(self, chat_id: ChatId | None, message: str) -> RoutingResult:
         started = time.monotonic()
         record: dict[str, Any] = {
             "event": "jev_decision",
+            "request_id": uuid.uuid4().hex,
             "chat_id": None if chat_id is None else str(chat_id),
             "message": message,
             "started_at": _now_iso(),
         }
         credentials = self.resolve_credentials(chat_id)
         if credentials is None:
-            self._log({**record, "decision": str(RoutingDecision.NO_CREDENTIALS), "finished_at": _now_iso()})
-            return RoutingResult(text=message)
+            self._log(
+                {
+                    **record,
+                    "decision": str(RoutingDecision.NO_CREDENTIALS),
+                    "finished_at": _now_iso(),
+                }
+            )
+            return RoutingResult()
         tail = [] if chat_id is None else self.get_conversation_tail(chat_id, _CONTEXT_TAIL_EVENT_LIMIT)
         recent_conversation = build_recent_conversation(tail, message, self.context_message_count)
         jev_request = build_jev_request(message, recent_conversation)
@@ -453,56 +694,108 @@ class QuickChangeRouter(MutableModel):
         )
         outcome = self.call_jev(credentials, jev_request, self.timeout_seconds)
         jev_answered_at = _now_iso()
-        probability = read_quick_change_probability(outcome.response) if outcome.response is not None else None
-        decision = decide_routing(outcome, probability)
+        response = outcome.response or {}
+        quick_change_probability = read_probability(response, QUICK_CHANGE_QUESTION)
+        pending_work_probability = read_probability(response, PENDING_WORK_QUESTION)
+        decision = decide_routing(outcome, quick_change_probability, pending_work_probability)
         elapsed_ms = round((time.monotonic() - started) * 1000)
         self._log(
             {
                 **record,
                 "jev_answered_at": jev_answered_at,
                 "jev_outcome": outcome.model_dump(mode="json"),
-                "probability": probability,
+                "quick_change_probability": quick_change_probability,
+                "pending_work_probability": pending_work_probability,
                 "decision": str(decision),
                 "elapsed_ms": elapsed_ms,
                 "finished_at": _now_iso(),
             }
         )
-        logger.info("Quick-change routing for chat {}: {} ({} ms, p={})", chat_id, decision, elapsed_ms, probability)
+        logger.info(
+            "Quick-change routing for chat {}: {} ({} ms, quick change p={}, unfinished work p={})",
+            chat_id,
+            decision,
+            elapsed_ms,
+            quick_change_probability,
+            pending_work_probability,
+        )
         if decision is not RoutingDecision.ROUTED:
-            return RoutingResult(text=message)
+            return RoutingResult()
         return RoutingResult(
-            text=mark_routed_message(message),
             is_routed=True,
+            request_id=record["request_id"],
+            routed_at=record["started_at"],
             user_message=message,
             recent_conversation=recent_conversation,
+            quick_change_probability=quick_change_probability,
+            pending_work_probability=pending_work_probability,
         )
 
-    def _forward(self, main_chat_id: ChatId, text: str) -> None:
+    def _forward(self, main_chat_id: ChatId, result: RoutingResult, lease_app: str | None) -> None:
         """Hand the request to the quick-change agent, creating it on first use; logged, never raised."""
         started = time.monotonic()
+        text = quick_change_agent_message(
+            result.request_id,
+            str(main_chat_id),
+            result.user_message,
+            result.recent_conversation,
+            lease_app,
+        )
         try:
             quick_chat_id, is_created = self._deliver_to_agent(text)
         except (AgentCreationError, ChatAppError, OSError) as e:
             logger.opt(exception=e).error(
-                "Could not forward chat {}'s message to the quick-change agent", main_chat_id
+                "Could not forward chat {}'s message to the quick-change agent",
+                main_chat_id,
+            )
+            error = f"{type(e).__name__}: {e}"
+            failed_at = _now_iso()
+            self._append(
+                QUICK_CHANGES_LOG_FILENAME,
+                {
+                    "type": "forward",
+                    "request_id": result.request_id,
+                    "status": "forward_failed",
+                    "error": error,
+                    "at": failed_at,
+                },
             )
             self._log(
                 {
                     "event": "forward_failed",
+                    "request_id": result.request_id,
                     "chat_id": str(main_chat_id),
-                    "error": f"{type(e).__name__}: {e}",
-                    "finished_at": _now_iso(),
+                    "error": error,
+                    "finished_at": failed_at,
                 }
             )
+            agent_id = self.get_active_agent_id(main_chat_id)
+            self.on_feed_event(
+                main_chat_id,
+                reply_event(result.request_id, FORWARD_FAILED_TEXT, failed_at, agent_id),
+            )
             return
+        forwarded_at = _now_iso()
+        self._append(
+            QUICK_CHANGES_LOG_FILENAME,
+            {
+                "type": "forward",
+                "request_id": result.request_id,
+                "status": "forwarded",
+                "quick_change_chat_id": quick_chat_id,
+                "at": forwarded_at,
+            },
+        )
         self._log(
             {
                 "event": "forwarded",
+                "request_id": result.request_id,
                 "chat_id": str(main_chat_id),
                 "quick_change_chat_id": quick_chat_id,
                 "is_agent_created": is_created,
+                "lease_app": lease_app,
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
-                "finished_at": _now_iso(),
+                "finished_at": forwarded_at,
             }
         )
 
@@ -525,7 +818,11 @@ class QuickChangeRouter(MutableModel):
             except QuickChangeDeliveryError as e:
                 if attempt == _DELIVERY_ATTEMPTS:
                     raise
-                logger.debug("Quick-change chat {} is not taking messages yet ({}); retrying", chat_id, e)
+                logger.debug(
+                    "Quick-change chat {} is not taking messages yet ({}); retrying",
+                    chat_id,
+                    e,
+                )
                 self.wait(_DELIVERY_RETRY_SECONDS)
         return False
 
@@ -540,7 +837,15 @@ class QuickChangeRouter(MutableModel):
         temp_path.replace(path)
 
     def _log(self, record: dict[str, Any]) -> None:
+        self._append(ROUTING_LOG_FILENAME, record)
+
+    def _append(self, filename: str, record: dict[str, Any]) -> None:
+        """Append one JSON line; a single write of one line, so a report appended by another process never splits it."""
+        line = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
         with self._log_lock:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            with (self.data_dir / ROUTING_LOG_FILENAME).open("a", encoding="utf-8") as f:
-                f.write(json.dumps(record, sort_keys=True) + "\n")
+            fd = os.open(self.data_dir / filename, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)

@@ -64,11 +64,6 @@ WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
 # shows only the words, so the block is stripped here and the rest travels as ``display_body``.
 SEED_CONTEXT_TAG = "chat-seed-context"
 
-# Cross-layer contract: the tag the chat app wraps its routing note in when it hands a message to
-# the quick look-and-feel agent (``chat_quick_change.mark_routed_message``). The chat's own agent
-# reads the note and then the user's words; the page shows only the words.
-QUICK_CHANGE_ROUTING_NOTE_TAG = "quick-change-routing-note"
-
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
@@ -100,9 +95,6 @@ _EMBEDDED_BACKGROUND_TASK_REPORT_RE = re.compile(
 # Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
 # follow it). Non-greedy, since the block never nests.
 _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
-_QUICK_CHANGE_ROUTING_NOTE_RE = re.compile(
-    rf"^\s*<{QUICK_CHANGE_ROUTING_NOTE_TAG}>[\s\S]*?</{QUICK_CHANGE_ROUTING_NOTE_TAG}>\s*"
-)
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
@@ -272,14 +264,6 @@ def _match_seed_context(content: str) -> MessageDisplay | None:
     is back on.
     """
     match = _SEED_CONTEXT_RE.match(content)
-    if match is None:
-        return None
-    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
-
-
-def _match_quick_change_routing_note(content: str) -> MessageDisplay | None:
-    """A message the chat app routed to the quick look-and-feel agent: its routing note, then the user's words."""
-    match = _QUICK_CHANGE_ROUTING_NOTE_RE.match(content)
     if match is None:
         return None
     return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
@@ -482,7 +466,6 @@ def _match_secret_resolution(content: str) -> MessageDisplay | None:
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
     _match_seed_context,
-    _match_quick_change_routing_note,
     _match_welcome,
     _match_skill_expansion,
     _match_stop_hook,

@@ -88,7 +88,9 @@ from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_quick_change import QuickChangeDeliveryError
+from imbue.chat.chat_quick_change import QuickChangeReportRequest
 from imbue.chat.chat_quick_change import RoutingResult
+from imbue.chat.chat_quick_change_feed import QuickChangeOverlayReader
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
@@ -323,6 +325,10 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
         )
         if resident is not None:
             reader_by_agent_id[segment.agent.id] = resident
+        if segment.is_active and resident is not None and state.quick_change_router is not None:
+            overlay = state.quick_change_router.overlay_events(parsed, segment.agent.id)
+            if overlay:
+                reader_by_agent_id[segment.agent.id] = QuickChangeOverlayReader.build(resident, overlay)
     return ChatTranscript.build(
         parsed,
         tuple(
@@ -949,7 +955,7 @@ def _hold_send_for_chat_being_created(
 def _route_quick_change(state: ChatAppState, chat_id: ChatId | None, message: str) -> RoutingResult:
     """Ask the quick-change router about a sent message and, when routed with a known chat, forward it."""
     if state.quick_change_router is None:
-        return RoutingResult(text=message)
+        return RoutingResult()
     routing = state.quick_change_router.route(chat_id, message)
     if chat_id is not None:
         state.quick_change_router.forward(chat_id, routing)
@@ -977,6 +983,18 @@ def _deliver_to_chat_in_app(application: Flask, chat_id: str, text: str) -> bool
         return True
 
 
+def _report_quick_change(request_id: str) -> Response:
+    """``POST /api/quick-changes/<request_id>/report``: the quick-change agent's outcome for one routed request
+    (``system/scripts/report_quick_change.py``), logged and shown as the reply in the chat it came from."""
+    router = get_state().quick_change_router
+    if router is None:
+        return error_response("Quick-change routing is off in this chat app", 404)
+    report_request = parse_request_body(QuickChangeReportRequest)
+    if not router.record_report(request_id, str(report_request.status), report_request.report):
+        return error_response(f"No routed request {request_id!r}", 404)
+    return model_response(OkResponse())
+
+
 def _send_message_endpoint(chat_id: str) -> Response:
     """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
     state = get_state()
@@ -989,12 +1007,6 @@ def _send_message_endpoint(chat_id: str) -> Response:
         return _agent_list_not_known_response()
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
-    # Before the delivery, so the chat's agent never receives an unmarked quick change.
-    routing = _route_quick_change(state, ChatId(chat_id), send_message_request.message)
-    if routing.is_routed:
-        send_message_request = send_message_request.model_copy_update(
-            to_update(send_message_request.field_ref().message, routing.text)
-        )
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, message_id)
         if held is not None:
@@ -1005,7 +1017,11 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
-    _consider_naming_chat(state, ChatId(chat_id), routing.user_message or send_message_request.message)
+    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
+    # Decided before anything is delivered: a routed message goes to the quick-change agent and never
+    # reaches this chat's agent; the chat shows it from the quick-change log (``chat_quick_change_feed``).
+    if _route_quick_change(state, ChatId(chat_id), send_message_request.message).is_routed:
+        return model_response(SendMessageResponse(status="ok"))
     accepted = _send_to_chat(
         state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
     )
@@ -1781,9 +1797,11 @@ def _run_create_chat() -> CreatedChat | Response:
     create_request = parse_request_body(CreateChatRequest)
     # The first message is routed before the create (the chat's agent receives it marked), and
     # forwarded once the create has given the chat its id.
+    # A routed first message is not the new chat's first message: the chat starts with none, and the
+    # message goes to the quick-change agent once the create has given the chat its id.
     routing = _route_quick_change(get_state(), None, create_request.message)
     if routing.is_routed:
-        create_request = create_request.model_copy_update(to_update(create_request.field_ref().message, routing.text))
+        create_request = create_request.model_copy_update(to_update(create_request.field_ref().message, ""))
     created = _created_chat_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
@@ -2593,6 +2611,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
+    ("POST", "/api/quick-changes/{request_id}/report"): RouteModels(
+        request_model=QuickChangeReportRequest, response_model=OkResponse
+    ),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
@@ -2769,6 +2790,9 @@ def create_application(state: ChatAppState) -> Flask:
     focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     state.chat_message_deliverer = lambda chat_id, text: _deliver_to_chat_in_app(application, chat_id, text)
+    application.add_url_rule(
+        "/api/quick-changes/<request_id>/report", view_func=_report_quick_change, methods=["POST"]
+    )
     secret_requests_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])

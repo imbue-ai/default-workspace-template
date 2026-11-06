@@ -222,6 +222,8 @@ def build_production_state(
                 agent_manager, name, message, labels
             ),
             deliver=lambda chat_id, text: _deliver_chat_message(state, chat_id, text),
+            get_active_agent_id=lambda chat_id: _active_agent_id(agent_manager, chat_id),
+            on_feed_event=lambda chat_id, event: event_queues.broadcast(str(chat_id), event),
         )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
@@ -251,6 +253,11 @@ def _create_quick_change_chat(agent_manager: AgentManager, name: str, message: s
     # Every numbered name is taken: let the chat app mint the next free "Chat N".
     created = agent_manager.create_chat(requested_name="", message=message, labels=labels, model_pick=model_pick)
     return str(created.chat_id)
+
+
+def _active_agent_id(agent_manager: AgentManager, chat_id: ChatId) -> str:
+    agent_info = agent_manager.get_active_agent_info(chat_id)
+    return "" if agent_info is None else agent_info.id
 
 
 def _deliver_chat_message(state: ChatAppState, chat_id: ChatId, text: str) -> bool:
