@@ -915,6 +915,15 @@ Which messages a sign-in error refused goes by timestamp, on both the page
 (`auth-recovery.ts`) and the chat app: claude can write the error into its
 transcript ahead of the message it refused.
 
+A sign-in error only shows to someone looking at the chat, so the chat app also
+tells the Imbue Studio app's feed (`sign_in_notices.py`,
+`imbue_studio_notifications.py`). A chat's refusals form a run, from its first
+live reply flagged `is_auth_error` to its next reply that is not, and only the
+run's first refusal is posted: one notification as the chat's own agent, so a
+click opens the chat, carrying the chat's watchers as `watched_by`, so a reader
+already in the chat gets no toast. The backlog a watcher reads when it starts is
+history and is never announced.
+
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 

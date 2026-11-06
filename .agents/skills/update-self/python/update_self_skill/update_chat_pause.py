@@ -52,6 +52,8 @@ from update_self_skill.update_resume_note import compose_resume_note
 UPDATE_WORKER_NAME = "update-self"
 
 STATE_RUNNING = "RUNNING"
+# A turn that ended with work still outstanding: alive, and about to move itself.
+STATE_BACKGROUND = "RUNNING_BACKGROUND"
 
 STATE_WAITING = "WAITING"
 
@@ -144,7 +146,7 @@ class ListedAgent:
 
     @property
     def is_live(self) -> bool:
-        return self.state in (STATE_RUNNING, STATE_WAITING)
+        return self.state in (STATE_RUNNING, STATE_BACKGROUND, STATE_WAITING)
 
 
 @dataclass(frozen=True)
@@ -408,7 +410,7 @@ def select_pause_targets(
         chosen = [
             agent
             for agent in candidates
-            if agent.state == STATE_RUNNING
+            if agent.state in (STATE_RUNNING, STATE_BACKGROUND)
             or (agent.state == STATE_WAITING and agent.chat_id in runners_by_chat)
         ]
     return [
