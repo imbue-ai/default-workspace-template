@@ -34,7 +34,8 @@ say at the call site.
     shared class-string modules use actually resolves — Tailwind v4 emits
     nothing for an unknown utility, so a stray name fails silently).
 - **Type roles** are the `type-*` utilities (`type-heading-lg`, `type-heading`,
-  `type-label`, `type-body`, `type-helper`, `type-section`) — use a role before
+  `type-label`, `type-body`, `type-helper`, `type-section`, and `type-tag`, 10px,
+  for a word badge such as "Read-only" set beside other text) — use a role before
   hand-setting font-size/weight. For an off-role size, reference the token:
   `text-(length:--font-size-body)`; dense chrome (the rail, menus, launcher
   tables) sits on `--font-size-row` (13px).

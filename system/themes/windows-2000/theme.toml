@@ -1,0 +1,30 @@
+contract = 1
+id = "windows-2000"
+name = "Windows 2000"
+description = "Beveled gray windows with the navy caption gradient, Tahoma type, and a blue desktop, on win95.css."
+base = "standard"
+
+[styles]
+files = ["vendor/win95.css", "tokens.css", "parts.css"]
+apps = ["chat"]
+
+[chrome]
+title_align = "start"
+leading = ["icon", "title", "refresh", "menu"]
+trailing = ["minimize", "maximize", "close"]
+
+[icons]
+guide = "icons/guide.md"
+format = "png"
+size = 32
+rendering = "pixelated"
+background = "transparent"
+max_colors = 48
+derive = "quantize"
+references = ["icons/files.png", "icons/chat.png", "icons/terminal.png"]
+
+[[attribution]]
+name = "win95.css"
+url = "https://github.com/AlexBSoft/win95.css"
+license = "MIT"
+files = ["vendor/win95.css", "vendor/assets", "vendor/LICENSE-win95"]

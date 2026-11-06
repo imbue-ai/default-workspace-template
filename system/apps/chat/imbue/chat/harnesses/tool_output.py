@@ -52,6 +52,7 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 from tk_command_parsing.parser import parse_command
+from tk_command_parsing.uv_run import unwrap_uv_run
 
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import MAX_ERROR_SNIPPET_LENGTH
@@ -117,8 +118,9 @@ def is_tk_lifecycle_anywhere(command: str) -> bool:
             return True
         # Workspace instructions run commands through uv. The shell parser deliberately
         # knows only shell syntax; unwrap this runner before asking it about the command.
-        if segment.words[:2] == ("uv", "run"):
-            wrapped = parse_command(shlex.join(segment.words[2:]))
+        program = unwrap_uv_run(segment.words)
+        if program is not None:
+            wrapped = parse_command(shlex.join(program))
             if wrapped is not None and any(s.tk_verb in _TK_LIFECYCLE_VERBS for s in wrapped.segments):
                 return True
     return False

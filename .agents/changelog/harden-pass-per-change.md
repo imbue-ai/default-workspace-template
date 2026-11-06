@@ -1,0 +1,11 @@
+A harden pass now covers one change, not one creation: every app, skill, service or shared script the change touched is hardened by a single pass with a single worker.
+
+- **One pass per change.** `update-creation` and `heal-creation` dispatch one pass for every creation the change (or the gap or failure being healed) touched, so two apps edited to work together, or an app and the skill that drives it, no longer get a worker each. The pass is named by `$SLUG`, its ticket title lists every creation, and the single-flight check and go-live run per creation. The worker may still split the work, by job rather than by creation.
+
+- **Task files name their creations.** A task lists `creations` as `<type>:<name>` (`app`, `skill`, `service`, or `shared` for `.agents/shared`) plus one `scope_file`; `crystallize-creation` uses the same form. `parse_task_frontmatter.py` and `pass-scope` refuse a malformed task, a malformed creation, or one named twice. The worker computes the pass's footprint with the new `app-manifest pass-scope`, loads a `type-<TYPE>.md` per type, and writes one final-gate block per creation; the stale `system-interface` type is gone.
+
+- **Critical apps.** A change touching a critical app takes `update-app`'s careful flow as a whole: ordinary creations it also touched are edited, hardened and applied in the same pass, and checked by the lead afterwards. `update_self.py apply --keep-rollback-point --pass-scope <file>` records the pass's other apps and services in the rollback point, so the notice names them and a rollback restarts them; only critical apps gate the verdict.
+
+- **Go-live** tells an app to refresh its window and a service to restart its programs (noting that a routine-run service has none, and naming `oom_priority`'s), instead of telling a service to refresh a window.
+
+- **The test gate runs only the pass's own tests.** The worker writes its scope file with `--lead-ref` and runs `app-manifest select-tests --scope-file`, which selects what the pass's footprints and its own branch changed. Other chats' commits in the same window no longer pull in their suites (one takeover had been running the chat, shell and full root suites for ~470 unrelated commits) or show up as `Outside footprint:`.

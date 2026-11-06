@@ -3,7 +3,8 @@
 Only the paths that do not need a live CLI: the paste lanes (which are file writes), the
 shape mapping the modal branches on, and the lifecycle around a flow. Driving a real PTY
 belongs in a manual check against the actual binaries, not here -- a fake terminal would
-only assert that our fake behaves like our fake.
+only assert that our fake behaves like our fake. The one exception spawns a stand-in on a
+real PTY, because what it checks is the environment our spawn hands the child.
 """
 
 import itertools
@@ -27,6 +28,7 @@ from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
+from imbue.chat.testing import put_stand_in_cli_on_path
 
 
 @pytest.fixture
@@ -915,3 +917,32 @@ def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
     service.start("anthropic", "console")
 
     assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+
+
+def test_no_agy_a_google_sign_in_runs_can_update_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Left to itself, both the sign-in's bare `agy` and the `agy models` probe after it spawn a
+    background updater that swaps the image's pinned binary for the latest release, under every
+    agent from then on. So each one has to be spawned with the updater turned off."""
+    env_log = tmp_path / "agy-auto-update.log"
+    argv_log = put_stand_in_cli_on_path(
+        tmp_path,
+        "agy",
+        f'''printf '%s\\n' "${{AGY_CLI_DISABLE_AUTO_UPDATE:-unset}}" >> "{env_log}"
+if [ "$1" = models ]; then echo gemini-3.7-flash-high; exit 0; fi
+echo 'Select login method:'
+read -r _choice
+printf 'Visit %s\\n' '{_AGY_URL}'
+read -r _code
+exec sleep 60''',
+        monkeypatch,
+    )
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir)
+
+    started = service.start("google", "oauth")
+    assert started.url == _AGY_URL
+    assert service.submit_code(started.flow_id, "4/0Aexample").state is FlowState.OK
+
+    assert argv_log.read_text().splitlines() == ["", "models"]
+    assert env_log.read_text().splitlines() == ["true", "true"]

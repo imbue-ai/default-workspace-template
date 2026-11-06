@@ -29,9 +29,7 @@ from terminal_app.dispatch import (
 )
 from terminal_app.errors import TtydStartError
 from terminal_app.serving import app_url_port
-from terminal_app.wiring import OOM_TAG_SCRIPT
-from terminal_app.wiring import STATE_DIR
-from terminal_app.wiring import TTYD_EXECUTABLE
+from terminal_app.wiring import OOM_TAG_SCRIPT, STATE_DIR, TTYD_EXECUTABLE
 
 # The pty's fixed wiring, relative to the repo root every supervised program runs from. The
 # state directory is the terminal's: the dispatch scripts ttyd runs and the session id files the

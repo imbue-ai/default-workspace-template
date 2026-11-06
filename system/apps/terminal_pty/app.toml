@@ -3,6 +3,7 @@
 # exists so ttyd has an origin the wrapper can embed (desktop-interface contracts.md section 2).
 name = "terminal-pty"
 display_name = "Terminal PTY"
+description = "The terminal's pty origin (ttyd), framed by the terminal app's pages."
 internal = true
 critical = true
 priority = "terminal"
@@ -14,3 +15,7 @@ program = "terminal-pty"
 [preview]
 command = ["terminal-pty", "--no-register", "--app-url", "http://127.0.0.1:{port:main}", "--state-dir", "{scratch}/state"]
 health_path = "/"
+
+# The pty origin's page is the terminal's xterm; the terminal app hands it the theme's palette.
+[theming]
+mode = "none"

@@ -43,6 +43,7 @@ from typing import assert_never
 
 import pexpect
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
@@ -114,9 +115,8 @@ _VERDICT_DEADLINE_SECONDS: Final = 120.0
 # desktop app shows can say how the sign-in ended. A flow still pending after this is reported as
 # finishing, and the chooser shows how it ends.
 _RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
-_DEVICE_LOGIN_REFUSED_DETAIL: Final = (
-    "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
-    "ChatGPT's security settings, or use an OpenAI API key instead."
+_DEVICE_LOGIN_START_FAILED_DETAIL: Final = (
+    "ChatGPT couldn't start a sign-in with a code. Try again, or use an OpenAI API key instead."
 )
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
@@ -148,19 +148,27 @@ class FlowShape(StrEnum):
 
 
 class FlowStart(FrozenModel):
-    flow_id: str
-    shape: FlowShape
-    url: str | None = None
-    code: str | None = None
+    """What starting a sign-in answers: the flow's id and what it asks the user for next."""
+
+    flow_id: str = Field(description="The flow, for the polls and the submit that follow")
+    shape: FlowShape = Field(description="What the dialog renders: a link and a code, a code to type, or a paste")
+    url: str | None = Field(default=None, description="The sign-in page to open, when the shape has one")
+    code: str | None = Field(
+        default=None, description="The one-time code the user types on that page, when there is one"
+    )
     # The sign-in page the minds desktop app can open for this flow and relay the callback of.
     # None when the CLI named none, or one whose callback this workspace cannot serve.
-    relay_url: str | None = None
+    relay_url: str | None = Field(
+        default=None, description="The sign-in page the Imbue Studio app opens and relays the callback of, if any"
+    )
 
 
 class FlowStatus(FrozenModel):
-    state: FlowState
-    detail: str | None = None
-    account_id: str | None = None
+    """Where a sign-in flow stands."""
+
+    state: FlowState = Field(description="Pending, ok, or failed")
+    detail: str | None = Field(default=None, description="Why it failed, or what it is waiting on")
+    account_id: str | None = Field(default=None, description="The account it signed in, once it is ok")
 
 
 def flow_shape(method: SignInMethod) -> FlowShape:
@@ -401,7 +409,7 @@ class AuthFlowService:
         socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
         env = {
             **os.environ,
-            **build_account_binding(session.lane.harness).account_env(account_path),
+            **build_account_binding(session.lane.harness).cli_env(account_path),
             BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
             SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
             SIGN_IN_FLOW_ENV_VAR: "1",
@@ -434,11 +442,9 @@ class AuthFlowService:
                 login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
         except (CodexAppServerError, OSError) as e:
             logger.warning("Codex sign-in could not begin: {}", e)
-            # A code sign-in is refused when the ChatGPT account has device codes turned off, a
-            # setting the user can change.
             self._fail_locked(
                 session,
-                _DEVICE_LOGIN_REFUSED_DETAIL
+                _DEVICE_LOGIN_START_FAILED_DETAIL
                 if method.login is CodexLogin.DEVICE
                 else "Codex could not begin the sign-in.",
             )
@@ -464,7 +470,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        env = {**os.environ, **build_account_binding(session.lane.harness).cli_env(account_path)}
         url_file: Path | None = None
         if method.relays_browser_sign_in:
             session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))

@@ -23,7 +23,13 @@ function avatarEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
     isDetached: false,
     isFocused: true,
     isPinned: true,
-    look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
+    look: {
+      mode: "floating",
+      style: "avatar",
+      declaredStyle: "avatar",
+      position: { x: 0.5, y: 0.5 },
+      isWindowShown: true,
+    },
     ...overrides,
   };
 }

@@ -77,6 +77,10 @@ from imbue.chat.harnesses.pi_coding.watcher import PiTranscriptLoader
 from imbue.chat.harnesses.placeholder import EMPTY_CATALOG
 from imbue.chat.harnesses.placeholder import PlaceholderModelResolver
 from imbue.chat.harnesses.placeholder import PlaceholderSessionWatcher
+from imbue.chat.harnesses.room.activity import RoomActivityTracker
+from imbue.chat.harnesses.room.session import RoomHarnessSession
+from imbue.chat.harnesses.room.watcher import RoomSessionWatcher
+from imbue.chat.harnesses.room.watcher import RoomTranscriptLoader
 from imbue.chat.harnesses.seed.activity import SeedActivityTracker
 from imbue.chat.harnesses.seed.loader import SeedSessionWatcher
 from imbue.chat.harnesses.session import AgentHarnessSession
@@ -305,7 +309,7 @@ class HarnessSpec(FrozenModel):
     # state dir -- the one per-harness difference the shared live read/watch takes as data.
     # ``Path(".")`` = the state-dir root (claude, pi); codex writes under its CODEX_HOME.
     model_state_relative_path: Path
-    # A factory for the per-harness model catalog, called (once, cached) by ``get_catalog``.
+    # A factory for the per-harness model catalog, called by ``get_catalog``.
     # Behind a factory rather than a value because pi PARSES thousands of models off
     # disk -- too much for import time, and importing this module must not fail on an image
     # where a harness's data is absent. claude/codex just return their hand-written constant.
@@ -364,6 +368,17 @@ class HarnessSpec(FrozenModel):
     # What a /compact sent from the composer does; unless it is sent as text, the chat shows the
     # compaction it starts.
     composer_compact_handling: ComposerCompactHandling = ComposerCompactHandling.SENT_AS_TEXT
+    # Whether the harness is told a non-owner's author by the ``[from: <name>] `` prefix on the delivered text
+    # (the multiplayer spec, section 5.3). A room records the author structurally, so its messages carry none.
+    is_author_prefixed: bool = True
+    # Whether a send starts a stopped agent: mngr's send auto-starts a stopped file-session agent, and the codex
+    # session revives one itself. A room's send appends to its transcript and starts nothing, so a stopped room
+    # stays stopped until ``mngr message``, the start verb, or boot (the multiplayer spec, section 11).
+    is_revived_by_send: bool = True
+    # Whether a message the harness took can be lost with its process: mngr counts a message as delivered
+    # once the harness shows it, which can be before the harness writes it down (claude, while its startup
+    # hooks run). The chat sends such a message again when the process exits before the transcript holds it.
+    resends_sends_lost_with_process: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -400,6 +415,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # the Chat context) even with no turn in flight, which cancels a compaction.
         can_interrupt_compaction=True,
         composer_compact_handling=ComposerCompactHandling.FORWARDED_TO_HARNESS,
+        resends_sends_lost_with_process=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -505,9 +521,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
         binding_class=AntigravityAccountBinding,
-        # Display-only model bar: agy's `/model` is an interactive TUI picker with no
-        # scriptable one-shot form, so the bar reflects and never drives. The session subclass
-        # exists only to absorb catalog staleness -- see its switch_options.
+        # A pick is held for the flush worker, which types agy's `/model` between turns (see
+        # antigravity/model.py). The session subclass also absorbs catalog staleness -- see
+        # its switch_options.
         resolver_class=AntigravityModelResolver,
         catalog_factory=lambda: ANTIGRAVITY_CATALOG,
         session_class=AntigravityHarnessSession,
@@ -534,8 +550,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
     ),
-    # The seed segment of a chat the Imbue Studio app opened (``chat_seed.py``): turns the app wrote
-    # before the workspace had any agent, read like an archived segment. No agent ever runs
+    # The seed segment of a seeded chat (``chat_seed.py``): turns written before any agent joined
+    # it, read like an archived segment. No agent ever runs
     # on it, so every live part is inert: the watcher watches nothing, the tracker reads
     # idle, the resolver switches nothing, and there is no catalog and no popup.
     HarnessType.SEED: HarnessSpec(
@@ -548,6 +564,22 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         catalog_factory=lambda: EMPTY_CATALOG,
         model_state_relative_path=Path("."),
         special_kinds=frozenset(),
+    ),
+    # A chat room (the multiplayer spec, section 7.3): the agent's process is a reader of its pane, so there is
+    # no model, no turn, and no account; the transcript is the room's own file, which a send appends to.
+    HarnessType.ROOM: HarnessSpec(
+        name=HarnessType.ROOM,
+        watcher_class=RoomSessionWatcher,
+        loader_class=RoomTranscriptLoader,
+        tracker_class=RoomActivityTracker,
+        process_started_marker_filename=RoomActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+        session_class=RoomHarnessSession,
+        is_author_prefixed=False,
+        is_revived_by_send=False,
     ),
 }
 
@@ -622,19 +654,6 @@ def get_model_state_path(harness: HarnessType, agent_state_dir: Path) -> Path:
     return model_state_path(agent_state_dir, get_harness_spec(harness).model_state_relative_path)
 
 
-# Built once per process from each harness's factory. The parsed catalogs (pi)
-# read data files that ship in the image, so a non-empty catalog is immutable for the
-# container's life and cached unconditionally; an empty one (harness data absent) is NOT
-# cached, so a later call retries rather than freezing the blank.
-_CATALOG_CACHE: dict[HarnessType, HarnessCatalog] = {}
-
-
 def get_catalog(harness: HarnessType) -> HarnessCatalog:
-    """The model catalog for ``harness``, built via its factory and cached when non-empty."""
-    cached = _CATALOG_CACHE.get(harness)
-    if cached is not None:
-        return cached
-    catalog = get_harness_spec(harness).catalog_factory()
-    if catalog.options:
-        _CATALOG_CACHE[harness] = catalog
-    return catalog
+    """The model catalog for ``harness``, from its factory (pi's factory caches the catalogs it parses)."""
+    return get_harness_spec(harness).catalog_factory()

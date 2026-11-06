@@ -31,6 +31,7 @@ import simple_websocket
 from app_manifest.registry_location import registry_path
 from flask import Flask
 from pydantic import Field
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
@@ -38,8 +39,12 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.roster import RosterSource
+from imbue.system_interface.roster import RosterWatch
+from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.inventory import AppInventory
@@ -99,6 +104,7 @@ class FakeSupervisorServer:
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
         self.statename_by_program: dict[str, str] = {}
+        self.pid_by_program: dict[str, int] = {}
         # Lets tests assert on the sweep's RPC economy (e.g. that a registry
         # with no supervised rows makes no supervisord call at all).
         self.get_all_process_info_call_count = 0
@@ -119,9 +125,12 @@ class FakeSupervisorServer:
     # The dispatch protocol hands every RPC argument over as a marshallable
     # value, so the handlers take ``object`` and stringify -- exactly what the
     # wire delivers.
-    def _get_all_process_info(self) -> list[dict[str, str]]:
+    def _get_all_process_info(self) -> list[dict[str, str | int]]:
         self.get_all_process_info_call_count += 1
-        return [{"name": program, "statename": statename} for program, statename in self.statename_by_program.items()]
+        return [
+            {"name": program, "statename": statename, "pid": self.pid_by_program.get(program, 0)}
+            for program, statename in self.statename_by_program.items()
+        ]
 
     def _start_process(self, name: object, _wait: object) -> bool:
         program = str(name)
@@ -184,6 +193,7 @@ def build_test_state(
     static_directory: Path | None = None,
     presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
+    background_tasks_root: Path | None = None,
     profiles: ProfileResolver | None = None,
     wallpaper_files_directory: Path | None = None,
     launch_poster: LaunchPoster | None = None,
@@ -199,13 +209,15 @@ def build_test_state(
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
     and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
     the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is
-    where the update notice reads its record and finds the update-self script (a fresh temp
-    directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
+    where the update notice reads its record and finds the update-self script, and where the
+    workspace's themes are read from (a fresh temp directory by default, so no test reads the
+    real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
     test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
     files are read from (one under the state directory by default). The avatar's catalog lives under
     the state directory, and its mood is read from ``agent_events_path`` (a file under the state
-    directory by default, absent until a test writes it).
+    directory by default, absent until a test writes it) and the background task markers under
+    ``background_tasks_root`` (a directory under the state directory by default, so no test reads the real chats').
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
@@ -229,6 +241,7 @@ def build_test_state(
         )
     )
     presence = PresenceStore(directory=resolved_presence_directory)
+    resolved_repo_root = repo_root if repo_root is not None else _fresh_shell_state_directory()
     shell = build_shell_state(
         state_directory=state_directory,
         registry_path=registry_path(),
@@ -241,7 +254,10 @@ def build_test_state(
         agent_events_path=agent_events_path
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
-        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
+        background_tasks_root=background_tasks_root
+        if background_tasks_root is not None
+        else state_directory / "background-tasks",
+        repo_root=resolved_repo_root,
         profiles=resolved_profiles,
         launch_poster=launch_poster,
         is_lifecycle_enabled=is_lifecycle_enabled,
@@ -249,18 +265,36 @@ def build_test_state(
         idle_sweep_interval_seconds=idle_sweep_interval_seconds,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
+    workspace_name = workspace_name_source(
+        resolved_config.system_interface_workspace_name,
+        workspace_environ if workspace_environ is not None else {},
+    )
+    roster = RosterSource(
+        presence=presence,
+        profiles=resolved_profiles,
+        users=shell.users,
+        share_grants=shell.share_grants,
+        share_identities=shell.share_identities,
+        agent_grants=shell.agent_grants,
+        agent_last_seen_path=resolved_repo_root / AGENT_LAST_SEEN_FILE,
+        workspace_name=workspace_name,
+        avatar_selection=shell.avatar_selection,
+    )
+    roster_announcer = build_roster_announcer(roster, resolved_broadcaster, utc_now)
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster),
-        profiles=resolved_profiles,
-        workspace_name=workspace_name_source(
-            resolved_config.system_interface_workspace_name,
-            workspace_environ if workspace_environ is not None else {},
+        presence_sweep=build_presence_sweep(
+            presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce
         ),
+        profiles=resolved_profiles,
+        roster=roster,
+        roster_announcer=roster_announcer,
+        roster_watch=RosterWatch(watched_paths=(), announce=roster_announcer.announce),
+        workspace_name=workspace_name,
     )
 
 
@@ -375,9 +409,23 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
         thread.join(timeout=5.0)
 
 
+class HandshakeDrainingWebSocketClient(simple_websocket.Client):
+    """A ``simple_websocket`` client that also delivers frames read together with the handshake response.
+
+    ``simple_websocket.Client.handshake`` (1.1.0) stops at the first protocol event, the accept. Frames the
+    server sent right after accepting that arrive in the same socket read stay buffered in the protocol
+    state, and the reader thread only processes buffered events once more bytes arrive, so a server that
+    then goes quiet leaves them unread until ``receive`` times out.
+    """
+
+    def handshake(self) -> None:
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:
     """Open a WebSocket client against a ``ServedApp`` at ``path``."""
-    return simple_websocket.Client(f"{served.ws_url}{path}", subprotocols=subprotocols)
+    return HandshakeDrainingWebSocketClient(f"{served.ws_url}{path}", subprotocols=subprotocols)
 
 
 def close_ws(ws: simple_websocket.Client) -> None:

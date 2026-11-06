@@ -3,6 +3,8 @@ and the notice each verdict puts into the chat -- over a recording bridge in pla
 
 from pathlib import Path
 
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import register_api_schema_route
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -25,6 +27,14 @@ def _client(tmp_path: Path, bridge: RecordingSecretRequestBridge) -> tuple[Flask
     state = build_test_state(secret_requests=store)
     state.secret_request_bridge = bridge
     attach_state(application, state)
+    # The route table and the 400 for a malformed body come with the schema route, as they do in the real app.
+    register_api_schema_route(
+        application,
+        DEFAULT_API_SCHEMA_PATH,
+        title="Chat",
+        description="The secret-request routes alone",
+        route_table=secret_requests_endpoints.ROUTE_TABLE,
+    )
     secret_requests_endpoints.register_routes(application)
     return application.test_client(), store
 

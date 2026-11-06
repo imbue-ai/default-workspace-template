@@ -30,16 +30,26 @@ export class HttpError extends Error {
   }
 }
 
-/** POST a JSON body and answer the parsed JSON reply, throwing an ``HttpError`` with the server's detail on a refusal. */
-export async function postJson<T>(url: string, body: unknown): Promise<T> {
+/**
+ * A JSON API call: the method, a JSON body when one is given, and the parsed JSON reply (nothing for a 204),
+ * throwing an ``HttpError`` with the server's detail on a refusal. Never served from the browser's cache: an
+ * API answer is read for what the server says now.
+ */
+export async function requestJson<T>(method: string, url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
   });
   if (!response.ok) {
     throw new HttpError(response.status, await errorDetailFromResponse(response));
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/** POST a JSON body and answer the parsed JSON reply, throwing an ``HttpError`` with the server's detail on a refusal. */
+export function postJson<T>(url: string, body: unknown): Promise<T> {
+  return requestJson<T>("POST", url, body);
 }

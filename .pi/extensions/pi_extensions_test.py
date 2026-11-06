@@ -232,7 +232,7 @@ def _tk_result(
             id="the-wrapper-reading-a-secret-file",
         ),
         pytest.param(
-            "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+            "python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
             "--file svc --var SVC_TOKEN --rationale 'to call the API'",
             id="lone-secret-request",
         ),
@@ -288,6 +288,11 @@ def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
             "pytest | " + "tail -20",
             "Do not pipe commands through tail or head",
             id="pipe-into-tail",
+        ),
+        pytest.param(
+            "sleep 240; cat /tmp/out.txt",
+            "foreground `sleep`",
+            id="foreground-sleep",
         ),
         pytest.param(
             "git rebase -i HEAD~2",

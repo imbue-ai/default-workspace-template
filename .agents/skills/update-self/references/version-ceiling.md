@@ -3,14 +3,16 @@
 The default update target **is** the release the **Imbue Studio app driving this
 workspace** was built against, which `resolve-target` reads from the app itself
 (`GET /api/v1/app/version` through the latchkey gateway; `ceiling` in the
-output). The template carries the code that app talks to, so only that pairing
-was ever verified.
+output), or from the message that started the pass when the app pinned it
+there (`handoff-contract.md`, "The scheduled entry"). The template carries the
+code that app talks to, so only that pairing was ever verified.
 
 Three things leave that release out of reach, and all three are **faults**, not
 refusals: `resolve-target` fails, and what to do next is your call with the
 user, never a version the script picks.
 
-- The app cannot be reached, or is too old to report a version.
+- The app cannot be reached, or is too old to report a version. Only a pass
+  with no pin asks it; a pinned pass takes the ceiling from its message.
 - It names a release the upstream does not carry -- so that release was never
   published as the app claims.
 - It names no release at all; a dev build reports its branch. The operator
@@ -22,9 +24,10 @@ announces its own updates, on the user's release channel.
 
 ## At the ceiling vs behind it
 
-A workspace already *at* the app's release is refused rather than passed: there
+A workspace already *at* the app's release is stopped rather than passed: there
 is nothing to merge, so `resolve-target` says so instead of spending a worker
-and a validation run on a no-op. One *behind* it updates to it. The two are
+and a validation run on a no-op, and the pass ends `ALREADY_CURRENT`, not
+`REFUSED`. One *behind* it updates to it. The two are
 told apart by whether the resolved ref is already an ancestor of `HEAD`.
 
 ## Overrides past the ceiling

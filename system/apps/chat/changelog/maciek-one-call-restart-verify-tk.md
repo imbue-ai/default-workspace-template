@@ -1,0 +1,1 @@
+- The P6 tool-call policy allows a `tk start` or `tk close` to share its tool call with other `tk create`/`start`/`close` commands joined by `;`, `&&` or a newline; the progress view applies the `Updated` lines of one output in order.

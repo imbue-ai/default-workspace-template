@@ -1,0 +1,1 @@
+Files describes its own API: `GET /__files/api/schema` answers an OpenAPI document built from its routes, and its manifest carries a one-line `description` and the `api_schema_path`, which the visiting-agent primer links.

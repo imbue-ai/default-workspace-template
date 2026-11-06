@@ -1,0 +1,9 @@
+ZQX. People have marked dangerous coasts with fire for more than two thousand years. The most famous early lighthouse was the Pharos of Alexandria, built in Egypt around 280 BC under Ptolemy II. It stood well over 100 meters tall and burned a fire at its top that ships could reportedly see from far out at sea. It survived for centuries before earthquakes brought it down in the 1300s. Its name lives on in several languages: "faro" in Spanish and Italian and "phare" in French both mean lighthouse.
+
+The Romans built lighthouses across their empire, from Dover in England to the Tower of Hercules in northern Spain, which is still in use today. After Rome fell, upkeep stopped and many towers crumbled. Through the Middle Ages, coastal lights were mostly kept by monasteries, towns, or merchant guilds. They usually burned wood, coal, or candles, which gave a weak, smoky light.
+
+Big changes came in the 1700s and 1800s as sea trade grew. Builders learned to put towers on open rocks, where storms had wrecked earlier attempts. John Smeaton's Eddystone Lighthouse, finished in 1759, used interlocking granite blocks and set the pattern for later stone towers. Oil lamps with reflectors replaced open fires and gave a brighter, steadier light.
+
+The biggest jump came in 1822, when the French engineer Augustin Fresnel designed a new kind of lens. It used rings of glass prisms to bend scattered light into one strong beam. A Fresnel lens could be seen more than 20 miles away, and it soon spread around the world.
+
+In the 1900s, electric lamps replaced oil, and lights were automated so keepers were no longer needed. Today, satellite navigation does most of the work lighthouses once did. Many towers still shine, but they are now kept mainly as historic landmarks and backup aids for ships.

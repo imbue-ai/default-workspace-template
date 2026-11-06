@@ -1,0 +1,1 @@
+The terminal page's background is now ttyd's own dark grey instead of black, so the moment before a terminal draws (and the terminal's messages, such as "The terminal is starting...") sit on the same surface as the terminal itself.

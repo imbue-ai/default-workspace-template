@@ -1,15 +1,20 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
+from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from flask.testing import FlaskClient
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
 from terminal_app.pages import (
     PageConfig,
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.primitives import VIEWER_ARGUMENT, TerminalTitle, TmuxSessionName
+from terminal_app.pty_page import PTY_PAGE_SCRIPT
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -52,6 +57,15 @@ def test_the_wrapper_page_frames_the_session_with_the_ptys_origin_label(
     }
 
 
+def test_the_wrapper_page_is_served_under_a_policy_admitting_its_inline_script_and_the_pty_frame(
+    pages_client: FlaskClient,
+) -> None:
+    page = pages_client.get("/")
+    assert page.status_code == 200
+    assert_document_policy_admits_page(page)
+    assert "frame-src http: https:" in page.headers["Content-Security-Policy"]
+
+
 def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
     response = pages_client.get("/")
 
@@ -77,7 +91,7 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     assert config["page"] == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": "",
     }
     assert session.json == config["page"]
@@ -159,7 +173,7 @@ def test_the_session_api_answers_what_the_page_refreshes_from(
     assert response.json == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": TEST_PTY_LABEL,
     }
 
@@ -182,19 +196,31 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
 def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
-    # A path naming no session, a path naming something no session can be called, a body of another shape, and
-    # no JSON at all: each brings a sweep and marks nothing.
+    # A path naming no session and a path naming something no session can be called: each brings a sweep and
+    # marks nothing.
     nameless = pages_client.post(
         "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-0000000000000001", "desktop_id": "home"}
     )
     odd_name = pages_client.post(
         "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-0000000000000002", "desktop_id": "home"}
     )
+
+    assert [r.status_code for r in (nameless, odd_name)] == [204, 204]
+    assert window_closed_posts == [None, None]
+
+
+def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(
+    pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
+) -> None:
+    # A body of another shape than the shell's hint, a hint missing its window, and no JSON at all: each is a 400.
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
+    partial = pages_client.post("/api/window-closed", json={"path": "/?session=terminal-1"})
     not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
 
-    assert [r.status_code for r in (nameless, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
-    assert window_closed_posts == [None, None, None, None]
+    assert [r.status_code for r in (odd_shape, partial, not_json)] == [400, 400, 400]
+    assert "JSON object" in odd_shape.get_json()["detail"]
+    assert "window_id" in partial.get_json()["detail"]
+    assert window_closed_posts == []
 
 
 def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:
@@ -204,6 +230,44 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
     assert response.mimetype == "text/javascript"
     assert response.text == TEST_APP_CONTRACT_SOURCE
     assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
+
+
+def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(pages_client: FlaskClient) -> None:
+    """Typing happens in the pty frame, on another origin, so the wrapper's own contract never sees it: the pty page
+    reports it as ``shell:input``, and the wrapper forwards exactly that type from its frame to the shell (the
+    multiplayer spec, section 4.3)."""
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in PTY_PAGE_SCRIPT
+    assert 'window.addEventListener(type, reportInput, { capture: true, passive: true })' in PTY_PAGE_SCRIPT
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert 'event.source === frame.contentWindow && data.type === "shell:input"' in wrapper
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in wrapper
+
+
+def test_the_wrapper_attaches_the_pty_as_a_viewer_when_the_shell_says_the_window_is_viewed(
+    pages_client: FlaskClient,
+) -> None:
+    """A window viewed on somebody else's desktop (the multiplayer spec, section 8.3) frames the pty with the viewer
+    argument the session script reads as a read-only attach that never sizes the window, and attaches again the
+    other way when the shell's word changes."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "onHandshake: (handshake) => takeViewing(handshake.isViewing)" in wrapper
+    assert f'(isViewing ? "&arg={VIEWER_ARGUMENT}" : "")' in wrapper
+
+
+def test_a_framed_wrapper_holds_its_first_pointing_of_the_pty_until_the_shells_handshake(
+    pages_client: FlaskClient,
+) -> None:
+    """Pointed before the shell has said whether the window is viewed, a viewed terminal would attach as a full
+    client and size its owner's window for a moment: while framed, the first pointing waits for the handshake (or
+    gives up after a grace and attaches plainly); unframed, the page points at once."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "let isHandshakeAwaited = window.parent !== window;" in wrapper
+    assert "if (!isHandshakeAwaited) {\n        pointFrameAt(" in wrapper
+    assert "const HANDSHAKE_GRACE_MS = 2000;" in wrapper
+    assert "if (isHandshakeAwaited) {\n    setTimeout(() => {" in wrapper
+    assert "}, HANDSHAKE_GRACE_MS);" in wrapper
+    # The first handshake points the held frame even when it says the window is not viewed.
+    assert "if (next === isViewing && !isFirstWord) return;" in wrapper
 
 
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
@@ -221,7 +285,7 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
     page = SessionPage(
         name=TmuxSessionName("terminal-1"),
         title=TerminalTitle("R&D <tests>"),
-        pty_path="/?arg=_&arg=session&arg=terminal-1",
+        pty_path="/?arg=_&arg=session&arg=terminal-1&arg=",
         pty_label="</script>",
     )
     page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
@@ -245,3 +309,24 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_the_page_follows_the_theme_contracts_terminal_palette_and_theme_ids() -> None:
+    page_html = render_page(PageConfig(session=None, page=None))
+
+    start = page_html.index("const THEME = ") + len("const THEME = ")
+    theme = json.loads(page_html[start : page_html.index(";\n", start)])
+
+    assert tuple(theme["paletteTokens"].values()) == TERMINAL_TOKENS
+    assert theme["paletteTokens"]["brightWhite"] == "--term-ansi-15"
+    assert theme["standard"] == STANDARD_THEME_ID
+    assert re.fullmatch(theme["idPattern"], "windows-2000") is not None
+    assert theme["bundlePrefix"] == "/_static/themes/"
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says(
+    pages_client: FlaskClient,
+) -> None:
+    assert_api_schema_describes_app(
+        pages_client, Path(__file__).resolve().parents[2] / "app.toml"
+    )

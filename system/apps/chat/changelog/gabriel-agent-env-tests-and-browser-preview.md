@@ -1,0 +1,3 @@
+The pytest configuration requires the pytest-workspace-env plugin (`required_plugins`), so a test run that cannot load it, and would let a test see the environment of the agent running it, stops before collecting anything.
+
+The real-claude background-task test names the Claude account it runs on: the default signed-in Claude account from the workspace's account store, passed to claude as its config dir. It used to rely on the agent's own `CLAUDE_CONFIG_DIR`, which the pytest-workspace-env plugin clears, so in a workspace it failed with "Not logged in". It is skipped when no Claude account is signed in.

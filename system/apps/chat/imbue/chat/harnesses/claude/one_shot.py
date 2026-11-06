@@ -18,16 +18,17 @@ from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import answer_on_first_model
+from imbue.chat.harnesses.one_shot import describe_model_name
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
 
 logger = _loguru_logger
 
-# Cheapest first, as aliases the pinned Claude Code resolves rather than dated ids, so each follows
-# the CLI's own idea of the current model of its family. None is the account's default model, for an
-# account that answers on neither.
-ONE_SHOT_MODEL_PREFERENCE: Final[tuple[str | None, ...]] = ("haiku", "sonnet", None)
+# The haiku alias the pinned Claude Code resolves rather than a dated id, so it follows the CLI's own
+# idea of the current Haiku; then None, the account's default model, for an account that refuses it.
+ONE_SHOT_MODEL_PREFERENCE: Final[tuple[str | None, ...]] = ("haiku", None)
 _TIMEOUT_SECONDS: Final = 60.0
 _SLOW_WARNING_SECONDS: Final = 15.0
 
@@ -105,15 +106,11 @@ class ClaudeOneShotCompletion(OneShotCompletion):
 
     def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         """The answer on the first model in ``ONE_SHOT_MODEL_PREFERENCE`` that gives one."""
-        failures: list[str] = []
-        for model in ONE_SHOT_MODEL_PREFERENCE:
-            try:
-                return self._complete_on(model, account_dir, system_prompt, prompt)
-            except OneShotCompletionTimeoutError:
-                raise
-            except OneShotCompletionError as e:
-                failures.append(f"{model or 'default model'}: {e}")
-        raise OneShotCompletionError("; ".join(failures))
+        return answer_on_first_model(
+            ONE_SHOT_MODEL_PREFERENCE,
+            lambda model: self._complete_on(model, account_dir, system_prompt, prompt),
+            describe_model_name,
+        )
 
     def _complete_on(self, model: str | None, account_dir: Path, system_prompt: str, prompt: str) -> str:
         env = claude_one_shot_env(os.environ, account_dir)

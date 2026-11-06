@@ -75,6 +75,11 @@ class AgentEventQueues:
         with self._lock:
             return bool(self._queues.get(chat_id))
 
+    def streamed_chat_ids(self) -> frozenset[str]:
+        """The chats with at least one stream open."""
+        with self._lock:
+            return frozenset(chat_id for chat_id, queues in self._queues.items() if queues)
+
     def broadcast(self, chat_id: str, event: dict[str, Any]) -> None:
         """Deliver one event to every live consumer for ``chat_id`` (the plugin-hook shape)."""
         self.broadcast_batch(chat_id, [event])

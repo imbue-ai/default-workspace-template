@@ -1,0 +1,6 @@
+@import "tailwindcss" source(none);
+/* The design system shared with every other frontend of the workspace (see system/libs/workspace_ui). The
+   Routines pages have nothing of their own beyond it. */
+@import "@imbue/workspace-ui/src/base.css";
+
+@source "./**/*.ts";

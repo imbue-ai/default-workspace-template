@@ -45,6 +45,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.pin is None
     assert row.window_closed_path is None
     assert row.message_handlers == ()
+    assert row.keybindings == ()
 
 
 def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
@@ -56,17 +57,18 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'label = "files-abcd1234"\n'
         f'icon = "{APP_ICON_MARKUP.replace(chr(34), chr(92) + chr(34))}"\n'
         'program = "files"\n'
-        'display_name = "File Viewer"\n'
+        'display_name = "Files"\n'
         "critical = false\n"
         "stop_when_no_windows = true\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
-        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
+        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
         'message_handlers = [{type = "minds:focus-chat", path = "/api/focus-chat"}, '
         '{type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/"]}]\n'
+        'keybindings = [{id = "rename", label = "Rename the selected entry", default_chords = ["f2"]}]\n'
     )
 
     rows = read_registry(registry)
@@ -80,7 +82,10 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("minds:focus-chat", "/api/focus-chat", None, ()),
         ("open:file", None, "{path}?view", ("{path}", "{path}/")),
     ]
-    assert row.display_name == "File Viewer"
+    assert [(action.id, action.label, action.default_chords) for action in row.keybindings] == [
+        ("rename", "Rename the selected entry", ("f2",)),
+    ]
+    assert row.display_name == "Files"
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.launch == "new"
@@ -88,16 +93,26 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         (launch_path.id, launch_path.label, launch_path.path, launch_path.params, launch_path.text_param)
         for launch_path in row.launch_paths
     ] == [
-        ("new", "New File Viewer", "/", ("path",), "path"),
+        ("new", "Files", "/", ("path",), "path"),
         ("recent", "Recent", "/recent", (), None),
         ("draft", "Draft", "/api/intake", ("message",), None),
+        ("app-chat", "Chat about this app", "/api/intake", ("app", "app_display_name"), None),
     ]
     # A row without a method is a GET launch path.
-    assert [(launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths] == [
+    assert [
+        (launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths
+    ] == [
         ("GET", {}, None),
         ("GET", {}, None),
         ("POST", {"target": "current_chat"}, "message"),
+        ("POST", {"target": "app_chat"}, None),
     ]
+    assert [launch_path.app_params for launch_path in row.launch_paths[:3]] == [None, None, None]
+    assert row.launch_paths[3].app_params is not None
+    assert (row.launch_paths[3].app_params.name, row.launch_paths[3].app_params.display_name) == (
+        "app",
+        "app_display_name",
+    )
     assert row.launcher_rank == 20
     assert row.pin is not None
     assert (row.pin.path, row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == (
@@ -216,7 +231,7 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_regi
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_scripts_error_for_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
+def test_register_app_reports_the_refusal_of_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
@@ -224,10 +239,11 @@ def test_register_app_reports_the_scripts_error_for_a_bad_manifest(tmp_path: Pat
         register_app(manifest_path, AppUrl("http://localhost:8300"))
 
 
-def test_register_app_needs_the_registration_script_under_the_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, registration_registry: Path) -> None:
+    (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text('name = "registered"\ndisplay_name = "Registered"\nicon = "icon.svg"\n')
+    registration_registry.write_text("[[apps]\nname = \n")
 
-    with pytest.raises(AppRegistrationError, match="not found"):
-        register_app(tmp_path / "app.toml", AppUrl("http://localhost:8300"))
+    with pytest.raises(AppRegistrationError, match="registration of"):
+        register_app(manifest_path, AppUrl("http://localhost:8300"))

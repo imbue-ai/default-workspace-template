@@ -29,6 +29,7 @@ from workspace_layout.primitives import WindowPath
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.api_models import MessageDeliveryView
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
 # A handler is one loopback request to an app that answers once it has asked the shell for what it wants; past the
@@ -178,11 +179,12 @@ def _refusal_detail(response: httpx.Response) -> str:
 
 
 @pure
-def message_delivery_wire_json(delivery: MessageDelivery) -> dict[str, Any]:
-    wire: dict[str, Any] = {"app": str(delivery.app), "status": delivery.status, "detail": delivery.detail}
-    if delivery.shown is not None:
-        wire["shown"] = delivery.shown.value
-        wire["has_no_desktop_window"] = delivery.has_no_desktop_window
-    if delivery.window_id is not None:
-        wire["window_id"] = str(delivery.window_id)
-    return wire
+def message_delivery_view(delivery: MessageDelivery) -> MessageDeliveryView:
+    return MessageDeliveryView(
+        app=str(delivery.app),
+        status=delivery.status,
+        detail=delivery.detail,
+        shown=delivery.shown,
+        has_no_desktop_window=delivery.has_no_desktop_window if delivery.shown is not None else None,
+        window_id=str(delivery.window_id) if delivery.window_id is not None else None,
+    )

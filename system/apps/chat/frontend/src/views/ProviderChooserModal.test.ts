@@ -31,6 +31,7 @@ const state: {
 
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
@@ -42,8 +43,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   getAccounts: () => state.accounts,
   areLanesLoaded: () => state.loaded,
   getFlow: () => state.flow,
-  loadLanes: async () => undefined,
-  loadAccounts: async () => undefined,
+  loadLanesAndAccountsWithRetry,
   deleteAccount: async () => undefined,
   startFlow,
   submitCode: async () => undefined,
@@ -124,6 +124,7 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
     name: "",
     label,
     reauth_method: "subscription",
+    signed_in_at: null,
   };
 }
 
@@ -132,6 +133,8 @@ beforeEach(() => {
   startFlow.mockClear();
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue(true);
+  loadLanesAndAccountsWithRetry.mockReset();
+  loadLanesAndAccountsWithRetry.mockResolvedValue(undefined);
   state.lanes = [lane()];
   state.accounts = [];
   state.loaded = true;
@@ -141,6 +144,14 @@ beforeEach(() => {
 describe("the provider chooser", () => {
   it("renders the lane list", () => {
     expect(render()).toContain("Anthropic");
+  });
+
+  it("marks its card, header, and title as the dialog parts a theme styles", () => {
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    const card = root.querySelector('[data-part="dialog"]');
+    expect(card?.getAttribute("role")).toBe("dialog");
+    expect(card?.querySelector('[data-part="dialog-header"] [data-part="dialog-title"]')?.textContent).not.toBe("");
   });
 
   it("renders a spinner before the lanes arrive", () => {
@@ -160,6 +171,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
       {
         id: "a2",
@@ -173,6 +185,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic 2 (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const text = render();
@@ -203,6 +216,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const root = document.createElement("div");
@@ -260,6 +274,35 @@ describe("the provider chooser", () => {
       status: { state: "ok", detail: null, account_id: "a1" },
     };
     expect(() => render()).not.toThrow();
+  });
+});
+
+describe("a provider list that cannot be loaded", () => {
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("offers Try again under the hook the e2e runner presses, and loads the list again", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValueOnce(new Error("Service Unavailable"));
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    await settled();
+    draw();
+
+    const retry = root.querySelector("[data-e2e=retry-providers]");
+    expect(root.textContent).toContain("Could not load providers");
+    expect(retry?.textContent).toBe("Try again");
+
+    state.loaded = true;
+    (retry as HTMLButtonElement).click();
+    await settled();
+    draw();
+
+    expect(loadLanesAndAccountsWithRetry).toHaveBeenCalledTimes(2);
+    expect(root.querySelector("[data-e2e=retry-providers]")).toBeNull();
+    expect(root.querySelector("[data-e2e=lane-anthropic]")).not.toBeNull();
   });
 });
 
@@ -346,6 +389,31 @@ describe("picking a signed-in account", () => {
 
     expect(root.textContent).toContain("Anthropic (Claude Code)");
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
+  });
+
+  it("offers a room under the providers when opened for a chat awaiting its first send, and hands it over", () => {
+    const onRoomChosen = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onRoomChosen, onDismissed });
+    const { root } = mount();
+
+    const text = root.textContent ?? "";
+    expect(text.indexOf("Chat room (no provider)")).toBeGreaterThan(text.indexOf("Anthropic (Claude Code)"));
+    root.querySelector<HTMLButtonElement>('[data-e2e="pick-room"]')!.click();
+
+    expect(onRoomChosen).toHaveBeenCalledOnce();
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("offers no room when opened to pick or add a provider", () => {
+    openProviderChooser({ onSignedIn: vi.fn() });
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
+    closeProviderChooser();
+
+    openProviderChooser();
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
   });
 });
 
@@ -524,7 +592,7 @@ describe("a sign-in finished in the browser", () => {
     expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
   });
 
-  it("shows no note on the one-time code, which does not need the setting", async () => {
+  it("shows no note on the one-time code, which carries none of its own", async () => {
     requestProviderRelay.mockResolvedValue(false);
     state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };

@@ -1,0 +1,1 @@
+The primer's apps table says what each app is for and where it describes its API: the gateway reads the manifest's `description` and `api_schema_path` off the registry row and renders the schema's address over the share beside the app's origins.

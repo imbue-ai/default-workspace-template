@@ -24,8 +24,15 @@ _STUCK_SWEEP_FIRST_WARNING_SECONDS: Final[float] = 120.0
 _STUCK_SWEEP_REPEAT_WARNING_SECONDS: Final[float] = 300.0
 
 
-def _compact_stale_opted_in_agents(names: Sequence[str]) -> list[str]:
-    return compact_stale_agents_if_enabled(names, compact_by_name=compact_stale_agents_by_name)
+def compact_stale_opted_in_agents(names: Sequence[str], provider_names: Sequence[str] | None = None) -> list[str]:
+    """Compact whichever of the named agents are stale. ``provider_names`` are the providers they are on, when
+    known: mngr then asks only those instead of first resolving every name through its whole discovery event log."""
+    return compact_stale_agents_if_enabled(
+        names,
+        compact_by_name=lambda mngr_ctx, agent_names: compact_stale_agents_by_name(
+            mngr_ctx, agent_names, provider_names=provider_names
+        ),
+    )
 
 
 def _ignore_compaction_request(agent_name: str) -> None:
@@ -74,7 +81,7 @@ class ChatAutoCompactor:
         list_opted_in_chat_agent_names: Callable[[], Sequence[str]],
         # Compacts whichever of the named agents are stale when the mngr config allows it; returns
         # the names it compacted.
-        compact: Callable[[Sequence[str]], Sequence[str]] = _compact_stale_opted_in_agents,
+        compact: Callable[[Sequence[str]], Sequence[str]] = compact_stale_opted_in_agents,
         on_compaction_requested: Callable[[str], None] = _ignore_compaction_request,
         # Bracket a plugin call with the names it was handed: the call returns only after every send,
         # so a compaction can start, and even finish, before its request is reported.

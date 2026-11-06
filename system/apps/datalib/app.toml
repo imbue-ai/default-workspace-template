@@ -5,6 +5,7 @@
 # carries the token as a preset, and a window opens at `/?token=...`.
 name = "datalib"
 display_name = "Datalib"
+description = "Datalib's own screens: the Manage screen and the source wizard over the store the datalib skill keeps."
 icon = "icon.svg"
 critical = false
 # A sync started from the Manage screen runs inside datalib-http and has to
@@ -16,6 +17,10 @@ program = "datalib"
 [default_shortcut]
 launch = "ui"
 mode = "focus"
+
+# Datalib's page is datalib-http's own; the window around it is themed.
+[theming]
+mode = "none"
 
 # Keep this table last: launch_datalib_http.py appends the token preset to it.
 [[launch_paths]]

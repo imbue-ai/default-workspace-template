@@ -75,6 +75,14 @@ class AccountBinding(ABC):
         a child without `PATH` never starts.
         """
 
+    def cli_env(self, account_dir: Path) -> dict[str, str]:
+        """The environment the chat app runs the harness's CLI under for one account, outside any agent.
+
+        ``account_env``, plus whatever the CLI must be told when no agent's launch sets it. Layered
+        over `os.environ` the same way.
+        """
+        return self.account_env(account_dir)
+
     @abstractmethod
     def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
         """Every file in an account folder that says the account is signed in, whoever wrote it."""
@@ -110,7 +118,7 @@ class AccountBinding(ABC):
         runs it again changes nothing.
         """
 
-    def move_sessions(
+    def move_sessions(  # noqa: B027
         self,
         agent_info: AgentInfo,
         # Where the files were found by an earlier attempt of this rebind, or None on its first.

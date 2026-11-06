@@ -57,7 +57,8 @@ export class InnerFramePool {
 
   /** Show ``chatId`` (creating its frame on first sight), hiding whatever was shown; null shows nothing. */
   show(chatId: string | null): void {
-    if (chatId !== null && !this.held.has(chatId)) this.create(chatId);
+    const isNewFrame = chatId !== null && !this.held.has(chatId);
+    if (isNewFrame) this.create(chatId);
     const previous = this.shownChatId;
     this.shownChatId = chatId;
     if (previous !== null && previous !== chatId) this.tell(previous, "hidden");
@@ -68,6 +69,9 @@ export class InnerFramePool {
       const held = this.held.get(chatId);
       if (held !== undefined) held.lastShownAt = Date.now();
       if (this.isRootShown) this.tell(chatId, "shown");
+      // A new page takes the keyboard as it loads; one switched back to has to be handed it, or the
+      // keyboard stays on the list row that picked it and the chat does not count as focused.
+      if (!isNewFrame && previous !== chatId && this.isRootShown) this.api(chatId)?.focus();
     }
     this.evict();
   }
@@ -129,6 +133,15 @@ export class InnerFramePool {
     const api = this.api(chatId);
     if (api === null) return false;
     api.prependDraft(text);
+    return true;
+  }
+
+  /** Hand ``hint`` to the live composer of ``chatId``'s page as its placeholder, focused; false when the page is not
+   *  loaded yet (the caller then stores the hint where the page's composer reads it on mount). */
+  hintComposer(chatId: string, hint: string): boolean {
+    const api = this.api(chatId);
+    if (api === null) return false;
+    api.hintComposer(hint);
     return true;
   }
 

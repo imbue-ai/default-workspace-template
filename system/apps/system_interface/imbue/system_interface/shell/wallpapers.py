@@ -2,7 +2,6 @@
 a user or an agent dropped under ``data/.apps/system_interface/wallpapers/``."""
 
 from pathlib import Path
-from typing import Any
 from typing import Final
 from typing import assert_never
 
@@ -91,6 +90,7 @@ def resolve_wallpaper_file(wallpaper: Wallpaper, directories: WallpaperDirectori
     return None
 
 
-@pure
-def wallpaper_listing_wire_json(listing: WallpaperListing) -> dict[str, Any]:
-    return {"kind": listing.kind.value, "name": str(listing.name), "url": listing.url}
+class WallpapersListing(FrozenModel):
+    """What ``GET /api/wallpapers`` answers: every wallpaper a desktop can wear."""
+
+    wallpapers: tuple[WallpaperListing, ...] = Field(description="The bundled wallpapers, then the files")

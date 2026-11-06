@@ -1,8 +1,14 @@
+import base64
+import hashlib
 import json
+import re
 import subprocess
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
+
+from werkzeug.test import TestResponse
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_MODULE_PATHS
@@ -53,9 +59,7 @@ def write_supervisord_conf(repo_root: Path, section_names: Sequence[str]) -> Pat
     return conf_path
 
 
-def write_supervisord_dropin(
-    repo_root: Path, file_stem: str, section_names: Sequence[str]
-) -> Path:
+def write_supervisord_dropin(repo_root: Path, file_stem: str, section_names: Sequence[str]) -> Path:
     """Create a ``system/supervisord.conf.d/<stem>.conf`` holding one empty block per section."""
     conf_path = repo_root / "system" / "supervisord.conf.d" / f"{file_stem}.conf"
     conf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +101,13 @@ def commit_everything(repo_root: Path, message: str) -> str:
     run_git(repo_root, ("add", "-A"))
     run_git(repo_root, ("commit", "-q", "-m", message))
     return run_git(repo_root, ("rev-parse", "HEAD")).strip()
+
+
+def commit_changes(repo_root: Path, changes: Mapping[str, str], message: str) -> str:
+    """Write each repo-relative file with its content and commit them, returning the new sha."""
+    for relative_path, content in changes.items():
+        write_repo_file(repo_root, relative_path, content)
+    return commit_everything(repo_root, message)
 
 
 def build_news_workspace(repo_root: Path) -> Path:
@@ -186,7 +197,9 @@ def build_selection_workspace(repo_root: Path) -> None:
         "system/apps/chat/imbue/chat/test_e2e.py",
         "import pytest\n\npytestmark = pytest.mark.browser\n\n\ndef test_page() -> None:\n    pass\n",
     )
-    write_repo_file(repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n"
+    )
 
     # The npm workspace
     write_repo_file(
@@ -200,7 +213,12 @@ def build_selection_workspace(repo_root: Path) -> None:
         json.dumps(
             {
                 "name": "@workspace/ui",
-                "scripts": {"test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+                "scripts": {
+                    "test": "vitest run",
+                    "lint": "eslint src/",
+                    "format:check": "prettier --check src",
+                    "typecheck": "tsc --noEmit",
+                },
             }
         ),
     )
@@ -212,7 +230,13 @@ def build_selection_workspace(repo_root: Path) -> None:
             {
                 "name": "chat-frontend",
                 "dependencies": {"@workspace/ui": "0.1.0"},
-                "scripts": {"build": "tsc --noEmit && vite build", "test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+                "scripts": {
+                    "build": "tsc --noEmit && vite build",
+                    "test": "vitest run",
+                    "lint": "eslint src/",
+                    "format:check": "prettier --check src",
+                    "typecheck": "tsc --noEmit",
+                },
             }
         ),
     )
@@ -231,8 +255,18 @@ def build_selection_workspace(repo_root: Path) -> None:
     )
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
-    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n"
+    )
     commit_everything(repo_root, "workspace")
+
+
+def declare_root_dependency(repo_root: Path, name: str) -> None:
+    """Make the selection workspace's root project depend on the member ``name``."""
+    root_pyproject = repo_root / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace('version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1)
+    )
 
 
 def remove_shell_modules(repo_root: Path) -> None:
@@ -280,3 +314,20 @@ name = "requests"
 version = "{requests_version}"
 source = {{ registry = "https://pypi.org/simple" }}
 """
+
+
+def assert_document_policy_admits_page(response: TestResponse) -> None:
+    """Fail unless ``response`` is an HTML page under the document policy that admits each of its inline scripts.
+
+    The hashes are recomputed here from the page as served, independently of the production code, so the
+    assertion holds exactly when a browser enforcing the header would run the page's own scripts.
+    """
+    assert response.mimetype == "text/html", response.mimetype
+    policy = response.headers["Content-Security-Policy"]
+    assert policy.startswith("default-src 'self'; "), policy
+    page = response.get_data(as_text=True)
+    for attributes, body in re.findall(r"<script\b([^>]*)>(.*?)</script>", page, re.IGNORECASE | re.DOTALL):
+        if not body or re.search(r"(?<![\w-])src\s*=", attributes, re.IGNORECASE):
+            continue
+        digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+        assert f"'sha256-{digest}'" in policy, (body[:80], policy)

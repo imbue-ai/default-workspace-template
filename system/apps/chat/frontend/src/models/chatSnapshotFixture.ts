@@ -9,6 +9,7 @@ export function chatSnapshotFixture(
   const { active_agent: agentOverrides, ...chatOverrides } = overrides;
   return {
     chat_id: chatId,
+    kind: "agent",
     title: chatId,
     name: chatId,
     project: null,
@@ -17,6 +18,7 @@ export function chatSnapshotFixture(
     agent_ids: [chatId],
     handoff: null,
     last_messaged_at: null,
+    awaiting_chat_ids: [],
     ...chatOverrides,
     active_agent: {
       agent_id: chatId,
@@ -30,6 +32,9 @@ export function chatSnapshotFixture(
       queued_messages: [],
       shoulder_tap_available: false,
       is_connecting: false,
+      is_resending_after_sign_in: false,
+      is_busy: false,
+      background_tasks: [],
       ...agentOverrides,
     },
   };
@@ -50,6 +55,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
     model_pick: null,
     error: null,
     failed_step: null,
+    is_fresh_start: false,
     ...overrides,
   };
 }
@@ -69,6 +75,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     model_pick: null,
     error: null,
     failed_step: null,
+    is_fresh_start: false,
     ...overrides,
   };
 }

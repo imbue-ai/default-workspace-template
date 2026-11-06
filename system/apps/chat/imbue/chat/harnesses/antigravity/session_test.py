@@ -1,7 +1,7 @@
 """Unit tests for agy's send: it enqueues, always, and never types."""
 
 from pathlib import Path
-from typing import Any
+from typing import NoReturn
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
@@ -22,13 +22,16 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
     # Each test gets a fresh queue and reading for this agent id.
     drop_tracker(state_dir.name)
     drop_turn_state(state_dir.name)
-    unused: Any = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
+
+    def unused(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("unused")
+
     return AntigravityHarnessSession.build(
         SessionDeps(
             harness=HarnessType.ANTIGRAVITY,
             state_dir=state_dir,
             model_state_path=state_dir / "model_state.json",
-            send_to_harness=lambda text: (sent.append(text), True)[1],
+            send_to_harness=lambda text, is_resent_when_unsure: (sent.append(text), SendOutcome.OK)[1],
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,

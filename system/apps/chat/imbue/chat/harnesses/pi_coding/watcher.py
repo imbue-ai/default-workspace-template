@@ -18,6 +18,10 @@ the enqueue replay only ever sees current-generation lines), and leaves only pop
 dead generation's drains -- including everything in the static files -- never pop
 current-generation entries). The queue is the watcher's alone: an archived agent has no
 live process whose inbox could be mirrored.
+
+pi records an assistant message only once it is finished, so the reply being written is read
+from ``pi_reply_draft``, where mngr's lifecycle extension keeps the text pi has streamed so far
+until the turn ends (``read_reply_draft``).
 """
 
 from __future__ import annotations
@@ -34,8 +38,11 @@ from imbue.chat.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.chat.harnesses.pi_coding.queue_tracker import PiQueueTracker
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
+from imbue.chat.harnesses.reply_draft_matching import is_landed_reply
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
@@ -57,6 +64,9 @@ _INBOX_RELATIVE = Path("pi_inbox")
 # launch/resume. Kept in sync with _PROCESS_STARTED_MARKER_NAME in plugin.py /
 # ``PiActivityTracker.marker_filename``.
 _PROCESS_STARTED_MARKER_RELATIVE = Path("pi_process_started")
+# The text of the assistant message pi is streaming, written by mngr_pi_coding's lifecycle
+# extension (its REPLY_DRAFT_NAME) and removed when the turn ends.
+_REPLY_DRAFT_RELATIVE = Path("pi_reply_draft")
 
 # The store's single lane: pi's whole timeline, across /new rotations.
 _LANE = "main"
@@ -327,6 +337,7 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
     """Watches a pi agent's native session files (+ inbox) and emits parsed UI events."""
 
     _inbox_path: Path
+    _reply_draft_path: Path
     _queue_tracker: PiQueueTracker
     _inbox_offset: int
     _inbox_line_count: int
@@ -342,6 +353,7 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
         self._init_store_watcher(agent_info.id, on_events)
         self._init_pi_state(agent_state_dir)
         self._inbox_path = agent_state_dir / _INBOX_RELATIVE
+        self._reply_draft_path = agent_state_dir / _REPLY_DRAFT_RELATIVE
 
         # Queue: the populator, the inbox cursor, a monotonic line counter (for stable
         # queued ids), the snapshot sink, and the last snapshot pushed (so a cycle that
@@ -371,6 +383,22 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
 
     def _on_user_turn_drained_locked(self) -> None:
         self._queue_tracker.leave()
+
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
+        """The reply pi is streaming, until the session file records it.
+
+        The lifecycle extension keeps the finished text in the file until the next message or
+        the end of the turn, so a draft that is already one of the latest replies is dropped.
+        """
+        baseline = self._reply_draft_baseline()
+        try:
+            text = self._reply_draft_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            text = ""
+        return ReplyDraft(
+            after_event_id=baseline.after_event_id,
+            text="" if is_landed_reply(text, baseline.landed_reply_texts) else text,
+        )
 
     # -- inbox / queue --------------------------------------------------------------------
 

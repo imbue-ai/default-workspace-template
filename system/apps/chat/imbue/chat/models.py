@@ -2,12 +2,17 @@ from datetime import datetime
 from enum import auto
 from pathlib import Path
 
+from app_schema.api_schema import ErrorResponse
+from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.roster import RosterParticipant
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_seed import SeedTurn
@@ -20,6 +25,7 @@ from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -29,6 +35,18 @@ from imbue.imbue_common.pure import pure
 
 class AgentCreationError(ValueError):
     """Raised when agent creation fails due to invalid input."""
+
+    ...
+
+
+class NoProviderAccountError(AgentCreationError):
+    """Raised when a create names no account and none is signed in: the user has to choose a provider first."""
+
+    ...
+
+
+class SignedOutAccountError(AgentCreationError):
+    """Raised when a create names an account that has been signed out since the caller read the account list."""
 
     ...
 
@@ -43,6 +61,20 @@ class AgentEventsStatus(FrozenModel):
 
     is_stream_healthy: bool = Field(description="Whether lifecycle events are actually reaching this instance")
     detail: str = Field(description="Human-readable explanation of the current state")
+
+
+class HealthResponse(FrozenModel):
+    """Response from GET /api/health: the probe's answer."""
+
+    status: str = Field(description="'ok' whenever the app answers at all")
+    is_frontend_built: bool = Field(description="Whether the built chat page is being served")
+    agent_events: AgentEventsStatus = Field(description="Whether agent lifecycle events are reaching this instance")
+
+
+class OkResponse(FrozenModel):
+    """The answer of a route that has nothing to say beyond that it did what was asked."""
+
+    status: str = Field(default="ok", description="'ok'")
 
 
 class AgentRenameError(ValueError):
@@ -80,6 +112,18 @@ class AgentListItem(FrozenModel):
     id: str = Field(description="The agent's unique identifier")
     name: str = Field(description="The agent's human-readable name")
     state: str = Field(description="The agent's lifecycle state")
+    chat_id: ChatId = Field(
+        description="The chat the agent belongs to: its own id unless it is a later agent of a chat"
+    )
+    is_busy: bool = Field(
+        description=(
+            "Whether the agent will resume on its own: it has a turn in flight, or it is its chat's active "
+            "agent and the chat has a pending background task"
+        )
+    )
+    background_tasks: tuple[BackgroundTask, ...] = Field(
+        description="The chat's pending background tasks, oldest first; empty unless the agent is the chat's active agent"
+    )
 
 
 class AgentListResponse(FrozenModel):
@@ -100,16 +144,50 @@ class SendMessageRequest(FrozenModel):
             "composer if it never committed. '' for legacy callers, which the backend then mints for."
         ),
     )
+    is_single_send: bool = Field(
+        default=False,
+        description=(
+            "Whether the user asked for this send from a failure notice, so it goes out once: a send that "
+            "comes back unconfirmed is not repeated automatically"
+        ),
+    )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
+    is_repeat: bool = Field(
+        default=False,
+        description=(
+            "Whether the page is sending again, under the same message_id, a request that got no answer: it is "
+            "then answered as the send it repeats was, a refusal included, and never delivered a second time"
+        ),
+    )
+
+
+class MeResponse(FrozenModel):
+    """What ``GET /api/me`` answers: the participant key of the requester (the multiplayer spec, section 5.4)."""
+
+    participant: ParticipantKey = Field(
+        description="The requester's participant key; ``owner`` on an unshared workspace"
+    )
+
+
+class ParticipantsResponse(FrozenModel):
+    """What ``GET /api/participants`` answers: the roster as the shell holds it, pictures reachable from this origin."""
+
+    participants: tuple[RosterParticipant, ...] = Field(description="Everyone who may be here, in roster order")
 
 
 class SendMessageResponse(FrozenModel):
     """Response from the message endpoint."""
 
-    status: str = Field(description="Status of the send operation: 'ok', or 'compaction_requested'")
+    status: str = Field(
+        description=(
+            "Status of the send operation: 'ok', 'resent' (delivered by a second send, mngr having been unable to "
+            "confirm the first, which may have landed too), 'compaction_requested', or 'withdrawn' (Stop took it "
+            "back while the agent was coming up, and nothing was delivered)"
+        )
+    )
 
 
 class SetModelChoiceRequest(FrozenModel):
@@ -202,6 +280,19 @@ class InterruptAgentResponse(FrozenModel):
     status: str = Field(description="Status of the interrupt operation")
 
 
+class ScreenCaptureResponse(FrozenModel):
+    """Response from GET /api/chats/{id}/screen: the agent's terminal pane as text."""
+
+    screen: str | None = Field(description="The pane's visible text (and scrollback when asked); None when it failed")
+    error: str | None = Field(default=None, description="Why the capture failed; None when it succeeded")
+
+
+class ChatWatchersResponse(FrozenModel):
+    """Response from GET /api/chats/{id}/watchers."""
+
+    watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
 class DrainToComposerResponse(FrozenModel):
     """Response from POST /api/chats/{id}/drain-to-composer.
 
@@ -274,13 +365,16 @@ class HandoffError(ValueError):
     ...
 
 
-class ErrorResponse(FrozenModel):
-    """Error response body."""
+class DisplayDecisionFields(FrozenModel):
+    """The render decision a not-yet-delivered message's text would get as a transcript user_message
+    (``harnesses.message_display``), so the page draws it as the row it will become."""
 
-    detail: str = Field(description="Human-readable error description")
+    display: DisplayKind | None = Field(default=None, description="The decision's kind; None for a plain message")
+    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
+    display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
 
 
-class QueuedMessageState(FrozenModel):
+class QueuedMessageState(DisplayDecisionFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -302,15 +396,6 @@ class QueuedMessageState(FrozenModel):
             "False for an ordinary parked queue chip."
         ),
     )
-    display: DisplayKind | None = Field(
-        default=None,
-        description=(
-            "The render decision the content would get as a transcript user_message "
-            "(``harnesses.message_display``); None for a plain message"
-        ),
-    )
-    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
-    display_body: str | None = Field(default=None, description="The decision's body, when it is not the content")
 
 
 class AgentStateItem(FrozenModel):
@@ -334,6 +419,13 @@ class AgentStateItem(FrozenModel):
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
             "COMPACTING / IDLE), or None when no activity tracking is available "
             "for this agent."
+        ),
+    )
+    is_turn_closing: bool = Field(
+        default=False,
+        description=(
+            "Whether the transcript has ended the agent's turn while its harness still marks one open (its "
+            "turn-end hooks are running, and may yet record a background task): busy and working, with no activity"
         ),
     )
     model_choice: ModelChoice | None = Field(
@@ -433,11 +525,11 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(FrozenModel):
+class HeldSendSnapshot(DisplayDecisionFields):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
-    text: str = Field(description="The message, verbatim")
+    text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
 
 
 class HandoffState(FrozenModel):
@@ -476,6 +568,13 @@ class HandoffState(FrozenModel):
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
     )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the chat had no user turn to carry over, so the switch only starts it on the target: the page "
+            "shows no handoff for it"
+        ),
+    )
 
 
 class SwitchChatRequest(SendMessageRequest):
@@ -483,7 +582,14 @@ class SwitchChatRequest(SendMessageRequest):
     switch, with the sender's client fields; empty for a switch made with nothing to say yet) plus the
     account the chat moves to and the model it should run on there."""
 
-    account_id: str = Field(description="The signed-in account the chat moves to")
+    account_id: str = Field(
+        default="", description="The signed-in account the chat moves to; empty for a switch to a room"
+    )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What the chat becomes: an agent chat on the account, or a room (the multiplayer spec, section "
+        "7.6), which runs on no account",
+    )
     model: ModelPick | None = Field(
         default=None,
         description=(
@@ -505,9 +611,22 @@ class SwitchChatResponse(FrozenModel):
 
 
 class HeldSendResponse(FrozenModel):
-    """Response from the message route while the chat is converging: the send is held for the successor."""
+    """Response from the message route while the chat is converging or still being created: the send is held
+    for the agent the chat is waiting on."""
 
     status: str = Field(description="'held'")
+    phase: HandoffPhase | None = Field(description="The phase the chat is in; None for a chat still being created")
+
+
+class SendFailureResponse(ErrorResponse):
+    """A send the chat could not take, with the kind of failure so the page knows what to offer."""
+
+    kind: str = Field(description="The failure's kind: what trying again can and cannot help with")
+
+
+class ConvergingResponse(ErrorResponse):
+    """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
+
     phase: HandoffPhase = Field(description="The phase the chat is in")
 
 
@@ -520,9 +639,12 @@ class HandoffCancelResponse(FrozenModel):
 
 class HandoffRetryRequest(FrozenModel):
     """Request body for POST /api/chats/{id}/handoff/retry: run a failed switch's last step again on an account
-    (a handoff's create, or a rebind's restart)."""
+    (a handoff's create, or a rebind's restart), or again as a room."""
 
-    account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
+    account_id: str = Field(
+        default="", description="The signed-in account to try; may differ from the failed attempt's; empty for a room"
+    )
+    kind: ChatKind = Field(default=ChatKind.AGENT, description="What to retry as: an agent chat, or a room")
 
 
 class HandoffRetryResponse(FrozenModel):
@@ -530,6 +652,20 @@ class HandoffRetryResponse(FrozenModel):
 
     status: str = Field(description="'converging' once the retry has begun")
     phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
+
+
+class BackgroundTaskSnapshot(FrozenModel):
+    """One pending background task as the chat pages show it."""
+
+    id: str = Field(description="The task's id within its source")
+    source: TaskSource = Field(description="Who recorded it: run_in_background, or harness (the harness's own)")
+    harness: str = Field(description="The harness that recorded a harness task; '' otherwise")
+    kind: str = Field(description="The harness's type for a harness task; '' otherwise")
+    description: str = Field(description="What the task is, as its writer described it")
+    started_at: str = Field(
+        description="When the task started (ISO 8601, UTC); for a harness task, when its turn-end hook first "
+        "recorded it, at the end of the turn that started it"
+    )
 
 
 class ActiveAgentSnapshot(FrozenModel):
@@ -555,16 +691,41 @@ class ActiveAgentSnapshot(FrozenModel):
             "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
         )
     )
+    is_resending_after_sign_in: bool = Field(
+        description=(
+            "Whether the account was signed in again and the chat app is restarting the agent to send it "
+            "the message its sign-in failure refused, if any"
+        )
+    )
+    is_busy: bool = Field(
+        description="Whether the agent will resume on its own: a turn is in flight, or a pending background task"
+    )
+    background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
+        description="The chat's pending background tasks, oldest first"
+    )
+
+
+class ResentSendSnapshot(FrozenModel):
+    """A message delivered by sending it a second time, whose first copy may have landed too."""
+
+    text: str = Field(description="What went to the agent, which its user turn holds")
+    sent_after: float = Field(description="Epoch seconds before the send began; an earlier turn is not this message")
+    closed_at: float | None = Field(
+        description="Epoch seconds the chat's next send began, or None before then: a later copy may be the user's own"
+    )
 
 
 class ChatSnapshot(FrozenModel):
     """One chat as the chat pages see it: what the ``chats_updated`` WebSocket message carries."""
 
     chat_id: ChatId = Field(description="The chat's id")
+    kind: ChatKind = Field(
+        description="What the chat is, from the harness its active agent runs: a room, or an agent chat"
+    )
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: ChatStatus = Field(description="The chat's status: working, idle, attention, stopped, or error")
+    status: ChatStatus = Field(description="The chat's status")
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(
@@ -573,6 +734,20 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
+    resent_sends: tuple[ResentSendSnapshot, ...] = Field(
+        default=(), description="The chat's recent messages delivered by sending them a second time, oldest first"
+    )
+    awaiting_chat_ids: tuple[ChatId, ...] = Field(
+        default=(),
+        description="The chats a mention from this room sent to and has not heard back from: the room's row shows "
+        "a working dot while one of them works (the multiplayer spec, section 7.4); empty for an agent chat",
+    )
+    participants: tuple[ParticipantKey, ...] = Field(
+        default=(),
+        description="Who has written in the chat (people and visiting agents, never the workspace agent), each "
+        "once, in order of first message: what the chat list's row shows when there are two or more (the "
+        "multiplayer spec, section 5.4)",
     )
 
 
@@ -600,6 +775,9 @@ class ChatListResponse(FrozenModel):
     """Response from GET /api/chats: every chat this app lists, as the pages see it."""
 
     chats: tuple[ChatSnapshot, ...] = Field(description="One snapshot per listed chat")
+    main_chat_id: ChatId | None = Field(
+        description="The workspace's main chat (``main_chat.py``), or None while it has no chat to take it"
+    )
 
 
 class CreateChatRequest(FrozenModel):
@@ -630,12 +808,6 @@ class CreateChatRequest(FrozenModel):
         "``account``, ``project``, ``chat_id``, ``chat_seq``, ``autocompact``) are refused, and a chat minted "
         "earlier keeps the ones it was minted with",
     )
-    is_installation_check_skipped: bool = Field(
-        default=False,
-        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
-        "so the update chat that repairs that can still be made (``message_chat.py --create`` asks for it on "
-        "every create); a chat minted earlier keeps its own",
-    )
     should_wait: bool = Field(
         default=False,
         description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
@@ -645,6 +817,15 @@ class CreateChatRequest(FrozenModel):
         default=None,
         description="The model the chat runs on, applied once the agent is up and before its first message; "
         "None for the harness's default",
+    )
+    project_id: str = Field(
+        default="",
+        description="The project the chat is started in, recorded as the agent's ``project`` label; empty for none",
+    )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What to create: an agent chat on the account, or a room (the multiplayer spec, section 7.3), "
+        "which runs on no account and takes no model",
     )
 
 
@@ -668,8 +849,9 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
-    # user's first send launches it on the signed-in account (with nothing signed in, the page
-    # asks for a provider in the composer's place).
+    # user's first send launches it on the signed-in account; with nothing signed in, the page
+    # asks for a provider in the composer's place, and that sign-in launches it with no message,
+    # the first send then carrying the seed (``AgentManager.carry_pending_seed``).
     AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()
@@ -692,21 +874,37 @@ class ProvisionalChat(FrozenModel):
     )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
-    is_installation_check_skipped: bool = Field(
-        default=False, description="Whether its create waves the claude version check"
-    )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
     is_seeded: bool = Field(
         default=False,
         description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
     )
+    held_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description="Messages sent while the create ran, delivered in order once the chat runs",
+    )
+    model_pick: ModelPick | None = Field(
+        default=None, description="The model chosen for it; None for its harness's default"
+    )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What it is being created as: an agent's chat, or a room, whose sends are attributed as a room's",
+    )
+
+
+class SetLaunchChoiceRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/launch-choice: the account and model a chat with no agent yet runs on."""
+
+    account_id: str = Field(description="The account it runs on")
+    model: ModelPick | None = Field(default=None, description="The model it runs on; None for the harness's default")
 
 
 class SeedChatRequest(FrozenModel):
     """Request body for POST /api/chats/seed: the conversation the Imbue Studio app had before the workspace existed."""
 
-    title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
+    # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
+    title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
 
 
@@ -715,12 +913,22 @@ class IntakeTarget(LowerCaseStrEnum):
 
     # A chat created for the text, on the named account or the workspace's default.
     NEW_CHAT = auto()
-    # The chat the window the text was typed into shows, else the most recently messaged one, else a new one.
+    # The main chat, else the most recently messaged one, else a new one.
+    MAIN_CHAT = auto()
+    # The chat the window the text was typed into shows, else the main chat, else the most recently messaged one,
+    # else a new one.
     CURRENT_CHAT = auto()
     # The one chat there is, else the chat the user picks from the root's picker, else a new one.
     CHAT_SELECTOR = auto()
+    # The chat about an app (the multiplayer spec, section 9.2): the one labelled ``app_chat`` with the app's
+    # registered name, else the one titled "<display name> Chat" (by the create's name-conflict rule), made with
+    # both on the default account when there is none.
+    APP_CHAT = auto()
     # The chat ``chat_id`` names.
     CHAT = auto()
+    # The Lounge (the multiplayer spec, section 7.5), made when there is none: what a click on a person in the
+    # desktop's tray drafts a mention into.
+    LOUNGE = auto()
 
 
 class IntakeRequest(FrozenModel):
@@ -747,6 +955,10 @@ class IntakeRequest(FrozenModel):
     window_path: str = Field(
         default="", description="The path of the window the text was typed into, which ``current_chat`` reads"
     )
+    app: str = Field(default="", description="The registered name of the app an ``app_chat`` intake is about")
+    app_display_name: str = Field(
+        default="", description="The display name of that app, which titles its chat and words the composer's hint"
+    )
 
 
 class IntakeResponse(FrozenModel):
@@ -762,6 +974,9 @@ class PendingIntakeView(FrozenModel):
     is_draft: bool = Field(description="Whether the text is drafted rather than sent")
     needs_pick: bool = Field(description="Whether the root has to offer the picker before the intake can be applied")
     chat_id: str | None = Field(description="The chat the intake resolved to; null for a choice")
+    hint: str | None = Field(
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
+    )
 
 
 class IntakeApplyRequest(FrozenModel):
@@ -778,6 +993,9 @@ class IntakeApplyResponse(FrozenModel):
     composer_text: str | None = Field(description="Text for the chat's composer, unsent; null when nothing is drafted")
     first_message: str | None = Field(
         description="The first message of a chat awaiting its first send with no account; the root launches it"
+    )
+    hint: str | None = Field(
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
     )
 
 
@@ -900,6 +1118,15 @@ class ClaudeAuthCredentialsRequest(FrozenModel):
     """
 
     credentials: SecretStr = Field(description="Env-var-style credential lines (KEY=VALUE per line)")
+
+
+class ClaudeAuthCredentialsResponse(FrozenModel):
+    """Response from POST /api/claude-auth/submit-credentials: the account the paste minted."""
+
+    account_id: str = Field(description="The minted account's id")
+    display: str = Field(description="The provider noun the account shows as")
+    logged_in: bool = Field(description="True: the account exists, which is the signed-in-with-Imbue flag")
+    auth_mode: str = Field(description="The auth mode the paste was understood as ('imbue', 'api_key', ...)")
 
 
 class LatchkeyPermissionInfo(FrozenModel):

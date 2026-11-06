@@ -1,5 +1,5 @@
 {
-  "description": "Shared test vectors for the geometry rules of contracts.md section 10. Both editors (shell/desktop_document.py and frontend/src/geometry/) run every case here; a rule is changed by changing this file first. Frames and pointer fractions are fractions of the backdrop; pixel cases carry their backdrop and metrics.",
+  "description": "Shared test vectors for the geometry rules of contracts.md section 10. Both editors (shell/desktop_document.py and frontend/src/geometry/) run every case here; a rule is changed by changing this file first. Frames and pointer fractions are fractions of the backdrop; pixel cases carry their backdrop and metrics. The fullscreen frame is the viewport, the backdrop plus the taskbar's band below it, which no frame in fractions of the backdrop reaches, so snap_frames spells it \"viewport\" and the fullscreen cases give it in pixels.",
   "cascade": [
     {"placed_count": 0, "expected": {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}},
     {"placed_count": 1, "expected": {"x": 0.08, "y": 0.1, "width": 0.6, "height": 0.7}},
@@ -16,9 +16,22 @@
   "snap_frames": {
     "SNAPPED_LEFT": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
     "SNAPPED_RIGHT": {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0},
-    "MAXIMIZED": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+    "MAXIMIZED": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+    "FULLSCREEN": "viewport"
   },
-  "fit_metrics": {"window_min_width": 320, "window_min_height": 240, "title_min_visible": 120, "title_bar_height": 36},
+  "fit_metrics": {"window_min_width": 320, "window_min_height": 240, "title_min_visible": 120, "title_bar_height": 36, "taskbar_height": 48},
+  "fullscreen": [
+    {
+      "name": "the viewport is the backdrop plus the taskbar's band below it",
+      "backdrop": {"width": 1000, "height": 800},
+      "expected": {"x": 0, "y": 0, "width": 1000, "height": 848}
+    },
+    {
+      "name": "a backdrop under the minimum window size is still the viewport, not raised to the minimum",
+      "backdrop": {"width": 300, "height": 200},
+      "expected": {"x": 0, "y": 0, "width": 300, "height": 248}
+    }
+  ],
   "fit": [
     {
       "name": "a frame inside the backdrop scales to pixels",

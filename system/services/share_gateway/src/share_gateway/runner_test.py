@@ -3,11 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from share_gateway.runner import (
-    POLL_INTERVAL_SECONDS,
-    _try_setup_inotify,
-    _wait_for_change_inotify,
-)
+from share_gateway.runner import POLL_INTERVAL_SECONDS
+from share_gateway.runner import _try_setup_inotify
+from share_gateway.runner import _wait_for_change_inotify
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="inotify is a Linux facility")
@@ -16,9 +14,7 @@ def test_share_env_write_wakes_the_watcher_before_the_poll_interval(
 ) -> None:
     share_env = tmp_path / "data" / ".secrets" / "share.env"
     inotify = _try_setup_inotify([share_env])
-    assert inotify is not None, (
-        "inotify_simple is a declared dependency, so the watch must be set up on Linux"
-    )
+    assert inotify is not None, "inotify_simple is a declared dependency, so the watch must be set up on Linux"
 
     share_env.write_text("RELAY_TOKEN=x\n")
 

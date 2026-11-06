@@ -12,6 +12,7 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { ChatRow } from "./rows";
+import { FIELD_PART, MENU_ITEM_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 const PICKER_WIDTH_PX = 440;
 const SEND_TITLE = "Send to which chat?";
@@ -29,9 +30,10 @@ export interface SendPickerAttrs {
   onDismiss: () => void;
 }
 
-/** The rows a query keeps: the chats that are agents, whose title the query matches. */
+/** The rows a query keeps: the chats that can take a message (agent chats and rooms), whose title the query
+ *  matches. A chat that is not an agent yet cannot take one, so it is not offered. */
 export function pickableRows(rows: readonly ChatRow[], query: string): ChatRow[] {
-  return rows.filter((row) => !row.isProvisional && matchesQuery(query, row.title));
+  return rows.filter((row) => row.kind !== "provisional" && matchesQuery(query, row.title));
 }
 
 export function SendPicker(): m.Component<SendPickerAttrs> {
@@ -66,6 +68,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
             placeholder: "Type to narrow the chats",
             value: query,
             class: inputClass(),
+            ...FIELD_PART,
             oncreate: (created: m.VnodeDOM) => (created.dom as HTMLInputElement).focus(),
             oninput: (event: InputEvent) => {
               query = (event.target as HTMLInputElement).value;
@@ -100,9 +103,11 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
                       role: "option",
                       "data-send-target": row.chatId,
                       "aria-selected": row === highlightedRow ? "true" : "false",
+                      "data-highlighted": row === highlightedRow ? "true" : "false",
                       class:
                         menuRowClass({ extra: "rounded-md text-(length:--font-size-row) text-primary" }) +
                         (row === highlightedRow ? " bg-fill-active" : ""),
+                      ...MENU_ITEM_PART,
                       onpointerenter: () => {
                         highlightIndex = shown.indexOf(row);
                       },

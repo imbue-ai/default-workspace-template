@@ -65,8 +65,12 @@ def inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
 SHELL_BACKGROUND_COLOR: Final[str] = "#fafaf8"
 
 VIEWPORT_META_NAME: Final[str] = "viewport"
-VIEWPORT_FIT_COVER: Final[str] = "viewport-fit=cover"
 _DEFAULT_VIEWPORT: Final[str] = "width=device-width, initial-scale=1.0"
+# What the shell's viewport always says, whatever the build's carries: draw under a phone's notch and home
+# indicator, and never zoom in on a focused field (iOS Safari zooms into any field set under 16px, in any frame, and
+# stays zoomed after it). A Safari tab still allows pinch-zoom past the cap; a home-screen app and Android Chrome
+# do not.
+_SHELL_VIEWPORT_DIRECTIVES: Final[dict[str, str]] = {"viewport-fit": "cover", "maximum-scale": "1"}
 
 _TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"<title>.*?</title>", re.IGNORECASE | re.DOTALL)
 _CONTENT_ATTRIBUTE_PATTERN: Final[re.Pattern[str]] = re.compile(r'\scontent="([^"]*)"', re.IGNORECASE)
@@ -103,33 +107,37 @@ def set_link_tag(html_content: str, rel: str, href: str, *, is_credentialed: boo
     return _replaced_or_added(html_content, _tag_pattern("link", "rel", rel), tag)
 
 
-def with_viewport_fit_cover(html_content: str) -> str:
-    """The document whose viewport lets the page draw under a phone's notch and home indicator: the build's
-    viewport with ``viewport-fit=cover`` added when it lacks it, or a viewport of its own when it has none."""
+def with_shell_viewport(html_content: str) -> str:
+    """The document whose viewport carries the shell's directives: the build's viewport with each of them set, or
+    the default viewport with them when the build has none."""
     match = _tag_pattern("meta", "name", VIEWPORT_META_NAME).search(html_content)
     content_match = _CONTENT_ATTRIBUTE_PATTERN.search(match.group(0)) if match is not None else None
-    if content_match is None:
-        return set_meta_tag(html_content, VIEWPORT_META_NAME, f"{_DEFAULT_VIEWPORT}, {VIEWPORT_FIT_COVER}")
-    content = html.unescape(content_match.group(1))
-    if VIEWPORT_FIT_COVER in content.replace(" ", ""):
-        return html_content
-    return set_meta_tag(html_content, VIEWPORT_META_NAME, f"{content}, {VIEWPORT_FIT_COVER}")
+    content = html.unescape(content_match.group(1)) if content_match is not None else _DEFAULT_VIEWPORT
+    kept = [
+        directive.strip()
+        for directive in content.split(",")
+        if directive.strip() and directive.split("=", 1)[0].strip().lower() not in _SHELL_VIEWPORT_DIRECTIVES
+    ]
+    required = [f"{key}={value}" for key, value in _SHELL_VIEWPORT_DIRECTIVES.items()]
+    return set_meta_tag(html_content, VIEWPORT_META_NAME, ", ".join([*kept, *required]))
 
 
 APPLE_WEB_APP_TITLE_META_NAME: Final[str] = "apple-mobile-web-app-title"
 THEME_COLOR_META_NAME: Final[str] = "theme-color"
 TOUCH_ICON_PATH: Final[str] = "/apple-touch-icon.png"
 MANIFEST_PATH: Final[str] = "/manifest.webmanifest"
+# The theme gallery: every theme worn by a page of sample parts (the workspace-themes plan, section 8.2).
+THEME_GALLERY_ROUTE: Final[str] = "/theme-gallery"
 
 
 def inject_install_tags(html_content: str, workspace_name: str, root_path: str) -> str:
     """What a phone saving the page to its home screen reads, which only the server knows: the workspace's name as
     the title and the tile's label, the page colour, the touch icon and the manifest under the shell's root path, and
-    a viewport that reaches under the notch. Each tag the build already carries is replaced rather than repeated."""
+    the shell's viewport. Each tag the build already carries is replaced rather than repeated."""
     html_content = set_document_title(html_content, workspace_name)
     html_content = set_meta_tag(html_content, APPLE_WEB_APP_TITLE_META_NAME, workspace_name)
     html_content = set_meta_tag(html_content, THEME_COLOR_META_NAME, SHELL_BACKGROUND_COLOR)
-    html_content = with_viewport_fit_cover(html_content)
+    html_content = with_shell_viewport(html_content)
     html_content = set_link_tag(
         html_content, "apple-touch-icon", f"{root_path}{TOUCH_ICON_PATH}", is_credentialed=False
     )

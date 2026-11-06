@@ -184,11 +184,10 @@ MANIFEST="template.md"
 MANIFEST_TOML="template.toml"
 THUMBNAIL="template.svg"
 
-# Substituted by the lead in publish-template §7 once the owner and repo name
-# are both known -- the README's "Open in Imbue Studio" button and its copyable
-# fallback both need the repo URL, which does not exist when this script runs.
-# §8's pre-push gate greps for any leftover, exactly as it does for the
-# placeholder thumbnail.
+# Replaced by `github_repo.py create` once the repo exists -- the README's "Open
+# in Imbue Studio" button and its copyable fallback both need the repo URL, which
+# does not exist when this script runs. The pre-push gate
+# (`validate_template.py --pre-push`) refuses a README that still carries it.
 REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
 
 # 0. validate that BASE_REF is a real, bootable default workspace template tree
@@ -229,7 +228,7 @@ while IFS=' ' read -r marker_sha marker_subject; do
     if [ "$marker_sha" != "$BASE_COMMIT" ] \
         && git merge-base --is-ancestor "$marker_sha" "$BASE_COMMIT"; then
         echo "build_template.sh: BASE REF INVALID: '${BASE_REF}' descends from this workspace's Initial workspace commit (${marker_sha}), so its tree and history carry the workspace's own work, not just the template" >&2
-        echo "build_template.sh: resolve the base with .agents/shared/scripts/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
+        echo "build_template.sh: resolve the base with .agents/shared/scripts/agents_shared/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
         exit 5
     fi
     break
@@ -268,20 +267,31 @@ done
 # Same problem, same fix, for the manifest tooling: the reset would remove these
 # from the worktree (and takes .venv with it, which is why the validator runs
 # under `uv run --no-project` against a snapshotted copy of the schema module
-# rather than importing it from the workspace).
-for tool_file in write_template_manifest.py validate_template.py; do
-    if [ ! -f "$SCRIPT_DIR/$tool_file" ]; then
-        echo "build_template.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
+# rather than importing it from the workspace). The snapshot keeps the skill's
+# own layout -- the entry files in scripts/, the publish_template_skill package in
+# python/ beside it -- because each entry file puts its ../python on sys.path.
+TOOL_PACKAGE="publish_template_skill"
+PACKAGE_DIR="$SCRIPT_DIR/../python/$TOOL_PACKAGE"
+for tool_file in "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$PACKAGE_DIR/__init__.py"; do
+    if [ ! -f "$tool_file" ]; then
+        echo "build_template.sh: $tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
         exit 1
     fi
-    cp "$SCRIPT_DIR/$tool_file" "$SCAN_TOOLS_DIR/"
+done
+mkdir "$SCAN_TOOLS_DIR/scripts" "$SCAN_TOOLS_DIR/python" "$SCAN_TOOLS_DIR/python/$TOOL_PACKAGE"
+cp "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$SCAN_TOOLS_DIR/scripts/"
+for module in "$PACKAGE_DIR"/*.py; do
+    case "$module" in
+        *_test.py) ;;
+        *) cp "$module" "$SCAN_TOOLS_DIR/python/$TOOL_PACKAGE/" ;;
+    esac
 done
 SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/template_manifest.py"
 if [ ! -f "$SCHEMA_MODULE" ]; then
     echo "build_template.sh: $SCHEMA_MODULE is missing (the manifest schema; no fallback exists); aborting before touching the worktree" >&2
     exit 1
 fi
-cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/"
+cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/python/"
 
 # Stage the manifest this publish will OVERRIDE, before the reset removes it.
 # Its identity plus [origin] become the newest lineage entry, and its own
@@ -481,10 +491,9 @@ manifest_toml_args+=(--repo-root "$REPO" --workspace-dir "$data_source" --secret
 # `uv run --no-project` (no workspace resolution, so none of the cold-base
 # fragility the smoke check warns about) rather than a bare python3: the writer
 # reads the previous manifest with tomllib, which is 3.11+, and the host's
-# python3 is not guaranteed to be that new. uv supplies a managed interpreter,
-# which makes this work the same everywhere instead of failing only on older
-# machines.
-if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${manifest_toml_args[@]}"; then
+# python3 is not guaranteed to be that new. pydantic is for the snapshotted schema
+# module, whose secret-reference scan the writer shares with the validator.
+if ! uv run --no-project --with 'pydantic>=2' python "$SCAN_TOOLS_DIR/scripts/write_template_manifest.py" "${manifest_toml_args[@]}"; then
     echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
@@ -645,7 +654,7 @@ new agent. This is the \`use-template\` skill's template path; in short:
    requirements).
 3. Ask whether they want to use the same connectors (e.g. their own Slack).
    If YES: ACTIVATE FIRST -- initiate every \`requires_permission\` line NOW
-   via a latchkey permission request (see the \`latchkey\` skill; the request
+   via a latchkey permission request (see the \`connect-external-service\` skill; the request
    opens the approval/login flow in the Imbue Studio app), wire up any
    \`requires_secret\` values, start the services, and get the app showing
    THE USER'S OWN DATA. Done for a data-backed app means the user can open it
@@ -706,10 +715,8 @@ THUMB_EOF
 #
 # The call-to-action points at the Studio trampoline page (a connector route
 # on the web chrome origin) rather than a bare imbue-studio:// URL, which
-# GitHub renders dead. Both it and the copyable fallback need the repo URL,
-# which does not exist yet (the repo name is confirmed in §6 and the owner
-# comes back from the create call in §8), so both carry
-# ${REPO_URL_PLACEHOLDER} for the lead to substitute before the push.
+# GitHub renders dead. Both it and the copyable fallback carry
+# ${REPO_URL_PLACEHOLDER} (see its definition above).
 
 cat > README.md <<README_EOF
 <p align="center">
@@ -857,7 +864,7 @@ fi
 # cold base rather than a full environment build that can fail on something
 # unrelated.
 if ! uv run --no-project --with 'pydantic>=2' python \
-    "$SCAN_TOOLS_DIR/validate_template.py" "$REPO" \
+    "$SCAN_TOOLS_DIR/scripts/validate_template.py" "$REPO" \
     --skip-apt-check --allow-unfinished; then
     echo "build_template.sh: the generated ${MANIFEST_TOML} did not validate (see above)" >&2
     exit 6
@@ -911,8 +918,8 @@ echo "    3. README.md has FILL-IN blocks for 'Why you care', 'How to use it', a
 echo "       making it yours'."
 echo "    4. ${THUMBNAIL} is a generic placeholder (marker comment inside). Replace the whole"
 echo "       file with a bespoke SVG for this app; it is also the README's hero graphic."
-echo "    5. Re-run the validator with NO --skip-apt-check and NO --allow-unfinished:"
-echo "         uv run --no-project --with 'pydantic>=2' python \\"
-echo "             .agents/skills/publish-template/scripts/validate_template.py ."
+echo "    5. Commit, then run the publishing workspace's copy of the validator (\$PT in"
+echo "       references/assembly-worker.md) with NO --skip-apt-check and NO --allow-unfinished:"
+echo "         uv run --no-project --with 'pydantic>=2' python \"\$PT/validate_template.py\" ."
 echo "       That run is the one that rejects an apt package which does not resolve in the"
-echo "       pinned mirror, and any placeholder you left behind. Then commit."
+echo "       pinned mirror, and any placeholder you left behind."

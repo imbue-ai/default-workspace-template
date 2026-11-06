@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.errors import RegistryReadError
+from app_manifest.primitives import AppName
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from loguru import logger
@@ -64,8 +65,14 @@ def read_share_domain(path: Path | None) -> str | None:
 
 
 @pure
-def app_views(entries: Sequence[AppInventoryEntry], share_domain: str | None) -> list[InventoryApp]:
-    return [app_view(entry, share_domain) for entry in entries]
+def app_views(
+    entries: Sequence[AppInventoryEntry], share_domain: str | None, theming_off: frozenset[AppName]
+) -> list[InventoryApp]:
+    return [app_view(entry, share_domain, theming_off) for entry in entries]
+
+
+def _no_theming_off() -> frozenset[AppName]:
+    return frozenset()
 
 
 class AppInventory(MutableModel):
@@ -85,6 +92,11 @@ class AppInventory(MutableModel):
         default=None,
         frozen=True,
         description="The file naming the domain the workspace was last shared under; None for a shell with no share",
+    )
+    theming_off: Callable[[], frozenset[AppName]] = Field(
+        default=_no_theming_off,
+        frozen=True,
+        description="The themeable apps whose theming is off, read for every listing (app_theming.json)",
     )
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = Field(
         default=None,
@@ -143,7 +155,7 @@ class AppInventory(MutableModel):
             return self._entry_by_name.get(app_name)
 
     def views(self) -> list[InventoryApp]:
-        return app_views(self.entries(), read_share_domain(self.share_domain_path))
+        return app_views(self.entries(), read_share_domain(self.share_domain_path), self.theming_off())
 
     @property
     def is_registry_read(self) -> bool:
@@ -273,6 +285,10 @@ class AppInventory(MutableModel):
             logger.opt(exception=e).error("The app inventory sweep failed; the next pass will retry")
 
     # The broadcast
+
+    def broadcast_if_changed(self) -> None:
+        """Send every window the apps, when they differ from what was last sent (an app's theming was turned on or off)."""
+        self._broadcast_if_changed()
 
     def _broadcast_if_changed(self) -> None:
         with self._broadcast_lock:

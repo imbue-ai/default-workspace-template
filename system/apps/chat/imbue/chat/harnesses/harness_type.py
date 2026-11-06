@@ -14,6 +14,9 @@ from enum import StrEnum
 
 from loguru import logger
 
+from imbue.chat.primitives import ChatKind
+from imbue.imbue_common.pure import pure
+
 
 class HarnessType(StrEnum):
     """A harness the chat app knows how to watch."""
@@ -28,9 +31,13 @@ class HarnessType(StrEnum):
     # this value MUST match the type, not the alias, or ``parse_harness`` falls through.
     ANTIGRAVITY = "antigravity"
     # Not a harness any agent runs: the pseudo-harness of a chat's seed segment, the turns
-    # the Imbue Studio app handed over when it created the workspace (``chat_seed.py``). Registered so
+    # written before any agent joined the chat (``chat_seed.py``). Registered so
     # the segment reads through the registry like any archived one.
     SEED = "seed"
+    # A chat room (the multiplayer spec, section 7.3): an mngr agent of the template's ``room`` type, whose
+    # process reads its pane into the room's transcript (``system/scripts/workspace_bare_scripts/room_agent.py``) and whose chat is a
+    # message log among the workspace's people with no AI agent.
+    ROOM = "room"
 
 
 # What an agent whose mngr type is not a harness is treated as. Such agents still get a
@@ -45,3 +52,9 @@ def parse_harness(agent_type: str | None) -> HarnessType:
     except ValueError:
         logger.debug("Agent type {!r} is not a harness; treating it as {}", agent_type, DEFAULT_HARNESS)
         return DEFAULT_HARNESS
+
+
+@pure
+def chat_kind_of(harness: HarnessType) -> ChatKind:
+    """What a chat running on ``harness`` is: a room on the room harness, a conversation with an agent otherwise."""
+    return ChatKind.ROOM if harness is HarnessType.ROOM else ChatKind.AGENT

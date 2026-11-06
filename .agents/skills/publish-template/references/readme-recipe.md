@@ -15,7 +15,8 @@ generates the structure; this is what goes in the FILL-IN blocks.
    the Studio trampoline page (`https://studio.imbue.com/open?git_url=...`),
    NEVER a bare `imbue-studio://` link, which GitHub renders dead. Both the
    button and the fallback carry the `MINDS_TEMPLATE_REPO_URL` placeholder
-   until the lead substitutes the real owner/repo in §7; do not fill it in
+   until the repo exists and `github_repo.py create` fills in the real
+   owner/repo; do not fill it in
    yourself and do not remove it.
 3. **Why you care.** One or two plain sentences on the problem it solves. Not
    how it is built -- why someone would want it.
@@ -47,7 +48,7 @@ list of defects.
 The README is a page, so the user reviews it as one. Paste its full text as
 your chat message -- the chat renders markdown, so they see the headings, the
 table, the hero, and the badge as a page rather than as source. This happens at
-the publish flow's §6 confirmation gate and is driven by the LEAD -- never by
+the publish flow's publish gate and is driven by the LEAD -- never by
 the assembly worker, whose worktree is background work and whose output the
 user has not asked to see yet.
 
@@ -70,9 +71,9 @@ reporting them as faults:
 asking. Edit `$WT/README.md` and paste the new text. Keep the generated
 structure: their objection is almost always about the WORDS, not the shape, and
 the hero, the Open in Imbue Studio call-to-action, and its
-`MINDS_TEMPLATE_REPO_URL` placeholder must all survive any rewrite -- the lead substitutes that
-placeholder in §7 and §8 blocks the push if it is missing. Loop until they are
-happy.
+`MINDS_TEMPLATE_REPO_URL` placeholder must all survive any rewrite: creating
+the repo fills the placeholder in, and the pre-push gate blocks a push that
+still has it. Loop until they are happy.
 
 ## Verify the published page
 
@@ -91,4 +92,5 @@ Chromium (drive it with the `agentic-browser-fleet` skill) and confirm:
   deliberate -- a pasted `/...` can be read as a slash command), and every other
   link resolves.
 
-Fix and re-push until the live page is clean.
+Fix and re-push until the live page is clean; `publish-template`'s step 9 says
+how to re-push onto the version just published.

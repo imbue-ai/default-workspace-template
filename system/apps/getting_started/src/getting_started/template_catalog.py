@@ -186,22 +186,51 @@ def resolve_thumbnail_url(catalog_url: str, thumbnail: str) -> str:
     return urljoin(catalog_url, thumbnail)
 
 
-@pure
-def template_wire_json(template: CatalogTemplate, catalog_url: str) -> dict[str, Any]:
-    document = template.model_dump(mode="json")
-    del document["thumbnail"]
-    document["thumbnail_url"] = resolve_thumbnail_url(catalog_url, template.thumbnail)
-    return document
+class TemplateEntry(FrozenModel):
+    """One published template as the catalog route answers it: the catalog's listing, its drawing resolved to a URL."""
+
+    slug: str = Field(description="Unique within the catalog; what a shelf refers to")
+    title: str = Field(description="The name a card shows")
+    description: str = Field(description="One or two sentences")
+    repository_url: str = Field(description="The repository an agent adopts it from")
+    what_it_is: str = Field(description="Several paragraphs, blank-line separated")
+    author: str = Field(description="Who published it; empty when unknown")
+    thumbnail_url: str = Field(description="The absolute URL of the drawing; empty for none")
+    version: str = Field(description="The published version, e.g. v1; empty when never tagged")
+    updated_at: str = Field(description="When the repository last changed, ISO 8601")
+    required_accounts: tuple[RequiredAccount, ...] = Field(description="Accounts to connect")
+    required_secrets: tuple[str, ...] = Field(description="Keys the adopter supplies")
+    needs_ai: bool = Field(description="Whether its code calls a model")
+    apt_packages: tuple[str, ...] = Field(description="System packages it installs")
+    choices: tuple[TemplateChoice, ...] = Field(description="Decisions left to the adopter")
+
+
+class CatalogDocument(FrozenModel):
+    """The ``catalog`` object the page reads: the templates with their drawings resolved to URLs, and the shelves."""
+
+    generated_at: str = Field(description="When the catalog was produced, ISO 8601; empty when unknown")
+    templates: tuple[TemplateEntry, ...] = Field(description="Every template, in catalog order")
+    shelves: tuple[CatalogShelf, ...] = Field(description="The browsing rows, in order")
 
 
 @pure
-def catalog_wire_json(catalog: TemplateCatalog, catalog_url: str) -> dict[str, Any]:
-    """The ``catalog`` object the page reads: the templates with their drawings resolved to URLs."""
-    return {
-        "generated_at": catalog.generated_at,
-        "templates": [template_wire_json(template, catalog_url) for template in catalog.templates],
-        "shelves": [shelf.model_dump(mode="json") for shelf in catalog.shelves],
-    }
+def template_wire(template: CatalogTemplate, catalog_url: str) -> TemplateEntry:
+    return TemplateEntry.model_validate(
+        {
+            **template.model_dump(exclude={"thumbnail"}),
+            "thumbnail_url": resolve_thumbnail_url(catalog_url, template.thumbnail),
+        }
+    )
+
+
+@pure
+def catalog_wire(catalog: TemplateCatalog, catalog_url: str) -> CatalogDocument:
+    """The catalog as the route answers it."""
+    return CatalogDocument(
+        generated_at=catalog.generated_at,
+        templates=tuple(template_wire(template, catalog_url) for template in catalog.templates),
+        shelves=catalog.shelves,
+    )
 
 
 class TemplateCatalogFetcherInterface(MutableModel, ABC):

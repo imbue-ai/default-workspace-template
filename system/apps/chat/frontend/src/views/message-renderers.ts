@@ -6,11 +6,19 @@
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
-import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
+import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { workspaceAgentSignature } from "../models/Participants";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
+import {
+  isResendingAfterSignIn,
+  isSignedInSince,
+  messagesToSendAgain,
+  resendStateOf,
+  sendAgain,
+} from "./auth-recovery";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -21,7 +29,9 @@ import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-c
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
+import { machineBubbles } from "./machine-bubbles";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
  *  `resolutionsByRequestId`, or null while the request awaits a decision (or
@@ -107,49 +117,6 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
   return toolResults;
 }
 
-/**
- * Hide auth-error turns from the pre-login prefix once login has recovered.
- *
- * A fresh chat with no Claude credentials produces a run of "Not logged in"
- * assistant messages before the user authenticates. Once login succeeds, the
- * first visible turn should be the first successful reply, not the prior
- * failed attempts.
- *
- * Restricted to the PREFIX of the transcript (turns that occurred before any
- * successful assistant message). A mid-session token expiration -- where the
- * user has already had successful exchanges before the auth error -- is left
- * intact, since the user may want to scroll back to see what they were doing.
- */
-export function computeAuthErrorHiddenEventIds(events: TranscriptEvent[]): Set<string> {
-  const hidden = new Set<string>();
-
-  let firstSuccessIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    if (ev.type === "assistant_message" && ev.is_auth_error !== true) {
-      firstSuccessIdx = i;
-      break;
-    }
-  }
-  if (firstSuccessIdx === -1) return hidden;
-
-  for (let i = 0; i < firstSuccessIdx; i++) {
-    const ev = events[i];
-    if (ev.type !== "assistant_message" || ev.is_auth_error !== true) continue;
-    hidden.add(ev.event_id);
-    for (let j = i - 1; j >= 0; j--) {
-      const prev = events[j];
-      if (prev.type === "user_message") {
-        hidden.add(prev.event_id);
-        break;
-      }
-      if (prev.type === "assistant_message") break;
-    }
-  }
-
-  return hidden;
-}
-
 export function countResolvedToolResults(
   toolCalls: ToolCall[] | undefined,
   toolResults: Map<string, ToolResultEvent>,
@@ -194,13 +161,19 @@ function resolvedResultSignature(
     .join("|");
 }
 
-/** The Chats-store input the auth-error note renders from: whether the chat is known yet, and
- *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
- *  the chat list can land after the transcript, and the switch link is only offered once it has. */
+/** The input outside the event that the auth-error note renders from: whether the chat is known
+ *  yet, which account it is bound to, and, once that account signed in again, the message offered
+ *  again and how its send went. The memo below has to carry it -- the chat list and the account
+ *  list can land after the transcript. */
 function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
   if (!event.is_auth_error) return "";
   const chat = getChatById(chatId);
-  return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
+  if (chat === undefined) return "unknown";
+  const bound = `bound:${chat.active_agent.account_id ?? ""}`;
+  if (!isSignedInSince(event, chatId)) return bound;
+  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
+  const resending = isResendingAfterSignIn(chatId) ? "resending" : "-";
+  return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id, prompts) ?? "-"}|${resending}`;
 }
 
 export function StableAssistantMessage(): m.Component<{
@@ -213,6 +186,9 @@ export function StableAssistantMessage(): m.Component<{
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
+  // The header over the run's first bubbles reads the roster, which lands beside the
+  // transcript (ensureParticipants); a row painted before then wears the fallback.
+  let renderedAgentSignature = "";
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
   return {
@@ -236,6 +212,7 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
+        workspaceAgentSignature() !== renderedAgentSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
         // real re-render to build one.
@@ -251,6 +228,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
+      renderedAgentSignature = workspaceAgentSignature();
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
 
@@ -392,7 +370,9 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
           { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-primary" },
           description,
         ),
-        agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
+        agentType
+          ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }), ...BADGE_PART }, agentType)
+          : null,
       ]),
       // The click-through needs the subagent session_id, which only arrives once the call is
       // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
@@ -486,6 +466,50 @@ function renderReauthAction(chatId: string): m.Children {
   ]);
 }
 
+/** A failed sign-in turn whose account has since been signed in again, wherever that happened: one
+ *  neutral line in place of the red failure, and the message it failed on to send again while the
+ *  turn is still the chat's newest. The provider's own text stays one click away. */
+function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text: string): m.Vnode {
+  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
+  const state = resendStateOf(event.event_id, prompts);
+  // An unconfirmed send may already be with the agent, so it gets the composer's unconfirmed
+  // wording: check before sending, and a button that says it sends again.
+  const offer =
+    state === "unconfirmed"
+      ? {
+          lead: " Couldn't confirm your message arrived. The agent may already have it, so check its terminal before you send it again. ",
+          label: "Send again",
+        }
+      : state === "failed"
+        ? { lead: " That didn't send. ", label: "Try again" }
+        : { lead: " ", label: "Send your message again" };
+  const action =
+    prompts === null || state === "sent"
+      ? null
+      : isResendingAfterSignIn(chatId)
+        ? " Sending your message again\u2026"
+        : [
+            offer.lead,
+            m(
+              "button",
+              {
+                type: "button",
+                class: REAUTH_ACTION_CLASS,
+                disabled: state === "sending",
+                onclick: () => void sendAgain(chatId, event.event_id, prompts),
+              },
+              offer.label,
+            ),
+          ];
+  return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-secondary" }, [
+    m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
+    m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-faint" }, [
+      m("summary", { class: "cursor-pointer" }, "See details"),
+      m(MarkdownContent, { content: text, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+    ]),
+  ]);
+}
+
 /** The grey note shown under a provider-fault API error: the failure is the model
  *  provider's, not ours. Wording nudged by kind; every harness's provider faults
  *  land here since they stamp the same is_provider_fault flag. */
@@ -572,6 +596,8 @@ export function renderAssistantRun(
   // fresh array here would leave it pushing into the flushed one.
   const pendingChips: ChipEntry[] = [];
   let isNoticeUnderRow = false;
+  // The run's first prose wears the agent's face and name; the rest of its bubbles follow under them.
+  const header = { isDrawn: false };
 
   // Anything that is not a tool chip ends the run in progress: the row has to
   // land above whatever interrupted it, in transcript order.
@@ -599,6 +625,7 @@ export function renderAssistantRun(
       children,
       pendingChips,
       flushChips,
+      header,
     );
   }
   flushChips();
@@ -638,6 +665,7 @@ function appendEventParts(
   children: m.Children[],
   pendingChips: ChipEntry[],
   flushChips: () => void,
+  header: { isDrawn: boolean },
 ): void {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -648,7 +676,9 @@ function appendEventParts(
   }
   if (textContent) {
     flushChips();
-    if (event.is_api_error || event.is_auth_error) {
+    if (event.is_auth_error && isSignedInSince(event, chatId)) {
+      children.push(renderSignedInAgain(event, chatId, textContent));
+    } else if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
       //
@@ -674,9 +704,17 @@ function appendEventParts(
         ]),
       );
     } else {
-      children.push(
-        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
-      );
+      // The agent speaking: the reply as one bubble, the run's first group headed by its face and name.
+      const bubbles = machineBubbles({
+        text: textContent,
+        timestamp: event.timestamp,
+        expansionKeyPrefix: event.event_id,
+        isHeaded: !header.isDrawn,
+      });
+      if (bubbles !== null) {
+        children.push(bubbles);
+        header.isDrawn = true;
+      }
     }
   }
   for (const toolCall of toolCalls) {

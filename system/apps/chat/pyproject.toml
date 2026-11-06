@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
+    "chat-background-tasks",
     "concurrency-group",
     "flask>=3.0",
     "flask-sock>=0.7",
@@ -18,21 +20,28 @@ dependencies = [
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
     "imbue-mngr-autocompact",
+    # The latchkey gateway's address, credentials and headers, read from the environment mngr injects.
+    "latchkey-access",
     "oom-priority",
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",
     "pyte>=0.8",
     "simple-websocket>=1.0",
+    # Resolves account-keyed settings (keybindings) for a request identity.
+    "workspace-profile",
     "tk-command-parsing",
     "tomlkit>=0.12",
     "watchdog>=4.0",
     "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
     "workspace-layout",
 ]
 license = {text = "FCL-1.0-MIT"}
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     "pytest>=9.0",
@@ -51,10 +60,13 @@ dev = [
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
+    # The stdlib-only scripts whose copies of this package's wire constants the tests pin.
+    "workspace-scripts",
+    "update-self-skill",
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
     # last verified clean against (see the system interface's pyproject).
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]
@@ -73,7 +85,11 @@ artifacts = [
 packages = ["imbue"]
 
 [tool.pytest.ini_options]
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",
@@ -111,7 +127,7 @@ omit = [
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 # Makes this directory ty's project (test_no_type_errors runs ty from here). ty
 # skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so
@@ -153,9 +169,10 @@ fail_under = 75
 
 [tool.coverage.paths]
 # Coverage data measured inside the workspace image on Modal (the
-# test-offload CI job) records the sandbox's paths; map them back so
+# test-offload CI job) records the sandbox's resolved paths (its
+# /home/user is a symlink to /mngr-vol/home); map them back so
 # the runner can combine the batches and enforce the floor above.
 source = [
     ".",
-    "/home/user/workspace/system/apps/chat/",
+    "/mngr-vol/home/workspace/system/apps/chat/",
 ]

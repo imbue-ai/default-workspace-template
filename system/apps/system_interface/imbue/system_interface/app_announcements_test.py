@@ -10,15 +10,16 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
+from event_streams.archive import compress_staged_streams
 
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_REL
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
+from imbue.system_interface.app_announcements import KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT
 from imbue.system_interface.app_announcements import announced_row_of
 from imbue.system_interface.app_announcements import announcements_path_from_environment
-from imbue.system_interface.app_announcements import compress_staged_announcements
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 
@@ -167,25 +168,23 @@ def test_an_announcement_carries_the_apps_display_name(
 ) -> None:
     """The stream is the only way the name users read leaves the workspace, and the minds desktop's share panel
     has nothing but the registered name to show without it."""
-    announcement_writer.announce(
-        _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
-    )
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
 
-    assert _events(announcement_writer.events_path)[0]["display_name"] == "File Viewer"
+    assert _events(announcement_writer.events_path)[0]["display_name"] == "Files"
 
 
 def test_a_renamed_app_is_re_announced(announcement_writer: AppAnnouncementWriter, tmp_path: Path) -> None:
     """An upgrade can change a manifest's display name alone, and consumers show it, so it must reach them
     even though the app's name, URL, and label are untouched."""
-    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
-
     announcement_writer.announce(
         _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
     )
 
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
+
     events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "files")]
-    assert events[1]["display_name"] == "File Viewer"
+    assert events[1]["display_name"] == "Files"
 
 
 def test_a_row_with_no_manifest_announces_an_empty_display_name() -> None:
@@ -285,7 +284,7 @@ def test_an_interrupted_archive_is_finished_and_only_the_newest_archives_are_kep
     # Left behind by a shell stopped after staging a stream but before compressing it.
     (tmp_path / "events.jsonl.20260501000000000000.archiving").write_bytes(b"staged\n")
 
-    compress_staged_announcements(events_path)
+    compress_staged_streams(events_path, kept_archive_count=KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT)
 
     assert sorted(path.name for path in tmp_path.glob("events.jsonl.*")) == [
         "events.jsonl.20260301000000000000.gz",

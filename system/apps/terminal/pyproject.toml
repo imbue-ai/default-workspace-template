@@ -3,9 +3,10 @@ name = "terminal-app"
 version = "0.1.0"
 description = "The terminal app: the wrapper pages over the workspace's tmux sessions (terminal-app), and ttyd on its own origin (terminal-pty)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
     "click>=8.1",
     "flask>=3.0",
     "imbue-common",
@@ -13,16 +14,19 @@ dependencies = [
     "loguru>=0.7",
     "pydantic>=2.0",
     "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
     "workspace-layout",
 ]
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     # The tests poll the app and its listener coming up through mngr's poller.
     "imbue-mngr",
     "httpx>=0.27",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]

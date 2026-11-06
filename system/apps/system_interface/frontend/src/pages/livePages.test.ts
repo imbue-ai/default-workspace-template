@@ -2,10 +2,11 @@
 /**
  * The live-page layer against a real store over the fake shell: pages are created for the shown
  * windows of the active desktop, laid over their windows' content boxes in the interleaved
- * stacking order, inert unless focused, hidden when minimized, destroyed when closed; they are
- * greeted after every load, told shown and hidden, and follow their windows' stored paths in
- * place or by reload; and their own ``shell:location``, ``shell:focused``, ``shell:open``, and
- * ``shell:start-with-text`` reach the store.
+ * stacking order, inert unless focused, hidden when minimized, parked while the windows in front
+ * cover them, destroyed when closed; they are greeted after every load, told shown and hidden,
+ * and follow their windows' stored paths in place or by reload; and their own
+ * ``shell:location``, ``shell:focused``, ``shell:open``, and ``shell:start-with-text`` reach the
+ * store.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,15 +17,20 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_NAVIGATE,
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
+import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
+import { resetThemeClientForTests, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
@@ -37,7 +43,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer } from "./livePages";
+import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -51,6 +57,7 @@ let store: DesktopStore;
 let backdrop: HTMLElement;
 let host: HTMLElement;
 let windows: HTMLElement;
+let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
@@ -75,6 +82,17 @@ function frameOf(windowId: string): HTMLIFrameElement {
 
 function wrapperOf(windowId: string): HTMLElement {
   return frameOf(windowId).parentElement as HTMLElement;
+}
+
+/** Whether a page is parked out of the browser's rendering: moved out of the viewport and invisible. */
+function isParked(wrapper: HTMLElement): boolean {
+  return wrapper.style.visibility === "hidden" && wrapper.style.transform !== "";
+}
+
+/** Draw a window's chrome at ``rect`` as the DOM would measure it now (a window still travelling included). */
+function drawChromeAt(windowId: string, rect: { left: number; top: number; width: number; height: number }): void {
+  const chrome = windows.querySelector(`[data-window-id="${windowId}"]`) as HTMLElement;
+  chrome.getBoundingClientRect = () => rect as DOMRect;
 }
 
 /** The messages a page's window received, by type. */
@@ -133,6 +151,29 @@ async function showIndependentWindow(placements: Placement[]): Promise<HTMLIFram
   return frameOf("win-4");
 }
 
+/** This client views Alice's desktop, whose windows ``placements`` place on her 2000x1600 backdrop: drawn in a
+ *  letterbox at half scale on this 1000x800 one. */
+async function viewAlicesDesktopAtHalfScale(placements: Placement[]): Promise<void> {
+  api.desktops = [
+    ...api.desktops,
+    desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      windows: placements.map((placement) => windowRecord(placement.window_id, "docs", `/${placement.window_id}`)),
+    }),
+  ];
+  setOwnIdentityForTesting({
+    owner: true,
+    user_id: "user-josh-0001",
+    email: "josh@example.com",
+    participant: "user:user-josh-0001",
+  });
+  api.ownerViewport = { width: 2000, height: 1600 };
+  api.writeLayout("alice", api.ownerLayoutClientId, { updated_at: "2026-10-29T00:00:00Z", placements });
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  await settle();
+  await store.switchDesktop("alice");
+}
+
 beforeEach(async () => {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
@@ -165,7 +206,13 @@ beforeEach(async () => {
   host = document.createElement("div");
   host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
   windows = document.createElement("div");
-  backdrop.append(host, windows);
+  // As the Backdrop nests them: the pages host and the windows layer inside the desktop's stage, the overview's
+  // tiles beside the stage under the backdrop's root.
+  backdrop.setAttribute(DESKTOP_ROOT_ATTRIBUTE, "home");
+  const stage = document.createElement("div");
+  stage.append(host, windows);
+  overviewTiles = document.createElement("div");
+  backdrop.append(stage, overviewTiles);
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
@@ -179,6 +226,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetEmbedderRelayForTesting();
+  resetThemeClientForTests();
+  resetPresenceForTesting();
   backdrop.remove();
 });
 
@@ -187,11 +236,14 @@ describe("creating and positioning", () => {
     const frame = frameOf("win-1");
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
     expect(frame.getAttribute("sandbox")).toContain("allow-same-origin");
+    // The Screen's viewer locks the pointer and the chrome's immersive mode goes fullscreen through this frame.
+    expect(frame.getAttribute("sandbox")).toContain("allow-pointer-lock");
+    expect(frame.getAttribute("allow")).toBe("clipboard-read; clipboard-write; fullscreen");
     const wrapper = wrapperOf("win-1");
     expect(wrapper.style.left).toBe("100px");
     expect(wrapper.style.top).toBe("60px");
     expect(wrapper.style.width).toBe("500px");
-    expect(wrapper.style.display).toBe("");
+    expect(isParked(wrapper)).toBe(false);
     // Placements: win-3 (missing, minimized) at 0, win-2 minimized at 1, win-1 focused at 2.
     expect(wrapper.style.zIndex).toBe("5");
     expect(wrapper.style.pointerEvents).toBe("auto");
@@ -244,18 +296,18 @@ describe("creating and positioning", () => {
     content.getBoundingClientRect = () => ({ left: 1, top: 2, width: 3, height: 4 }) as DOMRect;
     layer.placePage("win-1");
     layer.placePage("win-9");
-    expect(wrapper.style.display).toBe("none");
+    expect(isParked(wrapper)).toBe(true);
     expect(wrapper.style.left).toBe("250px");
   });
 
   it("hides a page while its window is being pulled out, and while it is out, and shows it again when back", async () => {
     const wrapper = wrapperOf("win-1");
-    expect(wrapper.style.display).toBe("");
+    expect(isParked(wrapper)).toBe(false);
     // The drag past the viewport: the chrome draws the window under the cursor, so no page here meanwhile.
     layer.setTornOutWindow("win-1");
-    expect(wrapper.style.display).toBe("none");
+    expect(isParked(wrapper)).toBe(true);
     layer.setTornOutWindow(null);
-    expect(wrapper.style.display).toBe("");
+    expect(isParked(wrapper)).toBe(false);
     // Pulled out: the page lives in the chrome's own desktop window, and this one keeps its frame for the return.
     api.writeLayout("home", CLIENT, {
       updated_at: null,
@@ -264,12 +316,12 @@ describe("creating and positioning", () => {
     socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
     await settle();
     layer.reconcile();
-    expect(wrapper.style.display).toBe("none");
+    expect(isParked(wrapper)).toBe(true);
     await store.reattachWindow("win-1", null);
     renderChrome();
     layer.reconcile();
     expect(wrapperOf("win-1")).toBe(wrapper);
-    expect(wrapper.style.display).toBe("");
+    expect(isParked(wrapper)).toBe(false);
   });
 
   it("makes every page but the focused one inert, and all of them during a gesture", () => {
@@ -283,11 +335,176 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
   });
 
+  it("makes every page inert while this window views somebody else's desktop, the focused one included", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // The owner's layout focuses win-a, and even the focused page takes no press on a viewed desktop (8.3).
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-a");
+    expect(wrapperOf("win-a").style.pointerEvents).toBe("none");
+    // The page is told it is viewed, so a terminal attaches to its session as a viewer.
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "alice", isViewing: true });
+
+    // Back on an own desktop, the focused page is interactive again.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+  });
+
+  it("raises nothing for a viewed page's focus, and greets a page again on its capabilities, viewed or not", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a"), windowRecord("win-b", "docs", "/b")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a"), placementRecord("win-b")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+    await store.switchDesktop("alice");
+    renderChrome("win-a", "win-b");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+
+    // The page under win-a focuses itself (a composer on load): the owner's stack is not this window's to change,
+    // and nothing is said about it.
+    messageFromPage("win-a", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(store.toasts.current()).toEqual([]);
+
+    // The page's contract module is up before its frame has loaded: it is greeted at once, viewed, so a terminal
+    // attaches as a viewer from its first attach.
+    const spy = spyOnFrame("win-a");
+    messageFromPage("win-a", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(spy.mock.calls.map((call) => call[0])).toMatchObject([
+      { type: SHELL_HANDSHAKE, windowId: "win-a", desktopId: "alice", isViewing: true },
+      { type: SHELL_THEME },
+    ]);
+
+    // Back on an own desktop, a page's focus raises its window again, and its capabilities greet it unviewed.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    const ownSpy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(ownSpy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "home", isViewing: false });
+  });
+
+  it("tells a shown page again when whether its desktop is viewed changes, and only then", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    // This client's own layout of Alice's desktop and her own both place win-a, so the page is the same one
+    // before and after the heartbeat says who the viewer is.
+    api.writeLayout("alice", CLIENT, { updated_at: "2026-10-29T00:00:00Z", placements: [placementRecord("win-a")] });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:01:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // Until the first heartbeat has answered, the desktop reads as this window's own: the page is not viewed.
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    const handshakes = (): unknown[] =>
+      spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_HANDSHAKE);
+    expect(handshakes()).toMatchObject([{ desktopId: "alice", isViewing: false }]);
+
+    // The answer lands and the desktop is somebody else's: the page is told once that it is viewed.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    store.takeViewerIdentityKnown();
+    await settle();
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(handshakes()).toMatchObject([{ isViewing: false }, { desktopId: "alice", isViewing: true }]);
+    layer.reconcile();
+    expect(handshakes()).toHaveLength(2);
+  });
+
+  it("lays a page over its content box in the stage's own pixels while a viewed desktop is drawn scaled down", async () => {
+    await viewAlicesDesktopAtHalfScale([placementRecord("win-a")]);
+    expect(store.viewingLetterbox()?.scale).toBe(0.5);
+
+    // The chrome and the host lie under the letterbox's half scale, so the box measures at half its size and
+    // offset on screen; the page's position and size are in the host's unscaled pixels, so both are doubled back.
+    renderChrome("win-a");
+    const content = windows.querySelector('[data-window-id="win-a"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 150, top: 80, width: 250, height: 200 }) as DOMRect;
+    host.getBoundingClientRect = () => ({ left: 100, top: 20, width: 1000, height: 800 }) as DOMRect;
+    layer.reconcile();
+    const wrapper = wrapperOf("win-a");
+    expect([wrapper.style.left, wrapper.style.top, wrapper.style.width, wrapper.style.height]).toEqual([
+      "100px",
+      "120px",
+      "500px",
+      "400px",
+    ]);
+    expect(wrapper.style.transform).toBe("");
+
+    // Back on an own desktop, a box measures as it is.
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect([wrapperOf("win-1").style.left, wrapperOf("win-1").style.width]).toEqual(["100px", "500px"]);
+  });
+
   it("hides a page when its window is minimized, keeping the same frame, and destroys it on close", async () => {
     const frame = frameOf("win-1");
     store.minimizeWindow("win-1");
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
     store.restoreWindow("win-1");
     layer.reconcile();
     expect(frameOf("win-1")).toBe(frame);
@@ -301,11 +518,11 @@ describe("creating and positioning", () => {
     const frame = frameOf("win-1");
     await store.switchDesktop("work");
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
     await store.switchDesktop("home");
     layer.reconcile();
     expect(frameOf("win-1")).toBe(frame);
-    expect(wrapperOf("win-1").style.display).toBe("");
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
   });
 
   it("hides the page of a stopped app nothing brings back, and reloads it at the window's stored path once the app runs again", async () => {
@@ -313,11 +530,11 @@ describe("creating and positioning", () => {
     const reloads = spyOnSrc("win-1");
     socket.deliver().onAppsUpdated([{ ...docs, is_running: false, program: "" }, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
     expect(reloads).toEqual([]);
     socket.deliver().onAppsUpdated([{ ...docs, program: "" }, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("");
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
     expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
   });
 
@@ -326,14 +543,169 @@ describe("creating and positioning", () => {
     const reloads = spyOnSrc("win-1");
     socket.deliver().onAppsUpdated([{ ...docs, is_running: false }, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("");
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
     socket.deliver().onAppsUpdated([docs, notes]);
     layer.reconcile();
     expect(reloads).toEqual([]);
   });
 });
 
+describe("covered pages", () => {
+  // Both windows sit at the first cascade frame of the 1000x800 backdrop, so win-2 in front covers win-1's page.
+  const CASCADE_RECT = { left: 50, top: 48, width: 600, height: 560 };
+
+  beforeEach(() => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    drawChromeAt("win-1", CASCADE_RECT);
+  });
+
+  it("parks the page the window in front covers, still shown to the page, and unparks it once uncovered", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(isParked(wrapperOf("win-2"))).toBe(false);
+    // Reloaded while covered, it is greeted as shown like any shown page.
+    load("win-1");
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+      SHELL_SHOWN,
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+      SHELL_SHOWN,
+    ]);
+    store.minimizeWindow("win-2");
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_HIDDEN);
+  });
+
+  it("counts the stopped placeholder in front as covering, but not a window with neither page nor placeholder", () => {
+    drawChromeAt("win-2", CASCADE_RECT);
+    socket.deliver().onAppsUpdated([docs, { ...notes, is_running: false, program: "" }]);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-2"))).toBe(true);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    // With its app unknown the window in front paints only its title bar, and the page behind shows through.
+    socket.deliver().onAppsUpdated([docs]);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+  });
+
+  it("unparks every covered page while a window is moved, which moves it with no reconcile, but not for a press", () => {
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    // A press that may still become a drag moves nothing yet.
+    layer.setGestureActive(true);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    store.beginWindowMove("win-2", { x: 300, y: 60 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+    store.endWindowMove({ x: 300, y: 60 });
+    layer.setGestureActive(false);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("parks a page whose content is below the backdrop, but not the focused window's, which keeps the keyboard", () => {
+    // Both dragged down until only their title bars show, win-2 last, so it is on top and focused.
+    const belowBackdrop = { x: 0.05, y: 1, width: 0.6, height: 0.7 };
+    store.setWindowFrame("win-1", belowBackdrop);
+    store.setWindowFrame("win-2", belowBackdrop);
+    for (const windowId of ["win-1", "win-2"]) drawChromeAt(windowId, { left: 50, top: 764, width: 600, height: 560 });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    frameOf("win-2").focus();
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(isParked(wrapperOf("win-2"))).toBe(false);
+    expect(document.activeElement).toBe(frameOf("win-2"));
+  });
+
+  it("keeps live a page below the backdrop while a fullscreen window behind it opens the taskbar's band", () => {
+    // win-3 fullscreen at the back, win-1 dragged down until only its title bar is in the backdrop, win-2 on top.
+    store.restoreWindow("win-3");
+    store.toggleFullscreen("win-3");
+    store.setWindowFrame("win-1", { x: 0.05, y: 1, width: 0.6, height: 0.7 });
+    store.raiseWindow("win-2");
+    drawChromeAt("win-3", { left: 0, top: 0, width: 1000, height: 848 });
+    drawChromeAt("win-1", { left: 50, top: 764, width: 600, height: 560 });
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual([
+      "win-3",
+      "win-1",
+      "win-2",
+    ]);
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+    // Out of fullscreen the backdrop clips the band again, and the page there is out of sight.
+    store.toggleFullscreen("win-3");
+    store.raiseWindow("win-2");
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("tests a viewed desktop's pages against the owner's backdrop the letterbox draws, not this one", async () => {
+    await viewAlicesDesktopAtHalfScale([
+      placementRecord("win-a", { frame: BOTTOM_RIGHT_QUARTER_FRAME }),
+      placementRecord("win-b"),
+    ]);
+    // win-a lies in the bottom right of Alice's 2000x1600 backdrop: beyond this 1000x800 one, inside the letterbox.
+    renderChrome("win-a", "win-b");
+    drawChromeAt("win-a", { left: 500, top: 400, width: 500, height: 400 });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(isParked(wrapperOf("win-a"))).toBe(false);
+  });
+
+  it("covers a page once the window travelling over it lands, and uncovers it as soon as the window leaves", () => {
+    // Placed over win-1, but still travelling there from the bottom right.
+    drawChromeAt("win-2", { left: 600, top: 450, width: 400, height: 350 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    // Sent back to the bottom right: drawn over win-1 still, but no longer going to be.
+    store.setWindowFrame("win-2", BOTTOM_RIGHT_QUARTER_FRAME);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+  });
+});
+
 describe("the contract", () => {
+  it("tells every greeted page a theme the shell wears, from the newest layer only", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    void wearTheme({ id: "mac-classic", revision: "r1" });
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+    ]);
+
+    spy.mockClear();
+    new LivePagesLayer(document.createElement("div"), store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    void wearTheme({ id: "windows-2000", revision: "r2" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("tells the pages a previewed theme is a preview, on a change and in the greeting, and when it is saved", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    void wearTheme({ id: "mac-classic", revision: "r1" }, document, { isRemembered: false });
+    load("win-1");
+    void wearTheme({ id: "mac-classic", revision: "r1" });
+    const themeMessages = spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_THEME);
+    expect(themeMessages).toEqual([
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+    ]);
+  });
+
   it("greets a page after every load with the window, desktop, and path, then says shown", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
@@ -345,7 +717,11 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
+        isViewing: false,
       },
+      // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_SHOWN },
     ]);
     store.minimizeWindow("win-1");
@@ -361,9 +737,48 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
+        isViewing: false,
       },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_HIDDEN },
     ]);
+  });
+
+  it("tells a hidden page again that it is hidden once its contract connects, after the load that first told it", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    // A shown page is greeted again and told nothing of its visibility: shown is what a page takes itself to be.
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+      SHELL_SHOWN,
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+    ]);
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    load("win-1");
+    spy.mockClear();
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+  });
+
+  it("tells a hidden page whose contract connects before its load that it is hidden once, not again on a reconcile", () => {
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+  });
+
+  it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {
+    store.setOpensLocalFiles(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {
@@ -582,7 +997,7 @@ describe("the contract", () => {
     layer.reconcile();
     socket.deliver().onDesktopsUpdated(api.desktops);
     layer.reconcile();
-    expect(wrapperOf("win-4").style.display).toBe("none");
+    expect(isParked(wrapperOf("win-4"))).toBe(true);
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_HIDDEN }]);
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
     // Back on its desktop, the stored path is the one the page is at, so nothing moves it.
@@ -646,7 +1061,7 @@ describe("the contract", () => {
     // Minimized: its page is hidden, and the browser can still restore focus to it.
     store.minimizeWindow("win-1");
     layer.reconcile();
-    expect(frameOf("win-1").parentElement?.style.display).toBe("none");
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
     messageFromPage("win-1", { type: SHELL_FOCUSED });
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
       is_minimized: true,
@@ -861,7 +1276,7 @@ describe("the phone's mount policy", () => {
     layer.reconcile();
     expect(layer.hasPage("win-1")).toBe(false);
     const shown = wrapperOf("win-2");
-    expect(shown.style.display).toBe("");
+    expect(isParked(shown)).toBe(false);
     expect([shown.style.left, shown.style.top, shown.style.width, shown.style.height]).toEqual([
       "0px",
       "0px",
@@ -870,7 +1285,7 @@ describe("the phone's mount policy", () => {
     ]);
     expect(shown.style.pointerEvents).toBe("auto");
     // The kept page is created even though it has never been shown, and stays out of sight.
-    expect(wrapperOf("win-3").style.display).toBe("none");
+    expect(isParked(wrapperOf("win-3"))).toBe(true);
   });
 
   it("gives a window shown again a fresh page, while the kept page lives on across the switch", () => {
@@ -889,5 +1304,179 @@ describe("the phone's mount policy", () => {
     layer.reconcile();
     expect(layer.hasPage("win-1")).toBe(false);
     expect(frameOf("win-3")).toBe(keptFrame);
+  });
+});
+
+describe("the overview (the multiplayer spec, section 8.2)", () => {
+  /** Stand in for the overview's tiles: one content box per window of the desktop, minimized ones included. */
+  function renderTiles(): void {
+    // The windows layer is gone while the overview is up; its tiles stand in, outside the stage.
+    windows.innerHTML = "";
+    overviewTiles.innerHTML = "";
+    for (const [windowId, left] of [
+      ["win-1", 40],
+      ["win-2", 340],
+      ["win-3", 640],
+    ] as const) {
+      const tile = document.createElement("div");
+      tile.setAttribute("data-window-id", windowId);
+      const content = document.createElement("div");
+      content.setAttribute("data-window-content", "");
+      content.getBoundingClientRect = () => ({ left, top: 100, width: 250, height: 200 }) as DOMRect;
+      tile.appendChild(content);
+      overviewTiles.appendChild(tile);
+    }
+  }
+
+  it("lays every page of the active desktop over its tile at the tile's scale, inert and above the scrim, the minimized ones too", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-3" ? null : 0.5) });
+    layer.reconcile();
+    // win-2 is minimized and had no page; the overview gives it one.
+    for (const windowId of ["win-1", "win-2"]) {
+      const wrapper = wrapperOf(windowId);
+      expect(wrapper.style.visibility).toBe("");
+      expect(wrapper.style.width).toBe("500px");
+      expect(wrapper.style.height).toBe("400px");
+      expect(wrapper.style.transform).toBe("scale(0.5)");
+      expect(wrapper.style.transformOrigin).toBe("top left");
+      expect(wrapper.style.pointerEvents).toBe("none");
+      expect(wrapper.style.zIndex).toBe("calc(var(--z-sticky) + 1)");
+    }
+    expect(wrapperOf("win-1").style.left).toBe("40px");
+    expect(wrapperOf("win-2").style.left).toBe("340px");
+    // A window the overview has no tile for stays hidden, and nothing holds the frame focus.
+    expect(host.querySelector('iframe[data-live-page="win-3"]')).toBeNull();
+    expect(document.activeElement).not.toBe(frameOf("win-1"));
+
+    // The overview goes: the pages lie over their windows again, at their own size and stacking.
+    layer.setOverview(null);
+    renderChrome();
+    layer.reconcile();
+    const wrapper = wrapperOf("win-1");
+    expect(wrapper.style.transform).toBe("");
+    expect(wrapper.style.width).toBe("500px");
+    expect(wrapper.style.left).toBe("100px");
+    expect(wrapper.style.pointerEvents).toBe("auto");
+    expect(wrapper.style.zIndex).toBe("5");
+    expect(isParked(wrapperOf("win-2"))).toBe(true);
+  });
+
+  it("keeps a page at its tile's scale when a tile's resize re-places it", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    const content = overviewTiles.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 40, top: 100, width: 300, height: 240 }) as DOMRect;
+    layer.placePage("win-1");
+    const wrapper = wrapperOf("win-1");
+    expect([wrapper.style.width, wrapper.style.height, wrapper.style.transform]).toEqual([
+      "600px",
+      "480px",
+      "scale(0.5)",
+    ]);
+  });
+
+  it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(wrapperOf("win-2").style.visibility).toBe("");
+  });
+});
+
+describe("input reports for the heartbeat (the app-usage-signals spec, sections 6.3 and 6.4)", () => {
+  /** Focus landing in one page is reported at most once per throttle interval: move the clock past it. */
+  function pastTheFocusThrottle(): void {
+    vi.setSystemTime(Date.now() + 21_000);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("notes a page's shell:input with its window and app", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    messageFromPage("win-2", { type: SHELL_INPUT });
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "input" },
+    ]);
+  });
+
+  it("notes focus landing in a page that binds no contract, from a raise and from the window's blur, and not in one that does", () => {
+    // The setup reconciled with win-1 focused before its page had loaded: a page that may still declare the
+    // contract, so the shell's own raise at boot says nothing.
+    expect(pendingInputReportsForTesting()).toEqual([]);
+
+    // Restoring win-2 raises a page that has not loaded either; once loaded and declaring nothing, a later raise
+    // of it is a landing the shell made.
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    load("win-2");
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    store.raiseWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-2", app: "notes", kind: "focus" }]);
+
+    // The person clicks into win-1's frame: the window loses focus to it, loaded or not. A second click within
+    // the throttle is not reported again; past it, it is.
+    frameOf("win-1").focus();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-2", app: "notes", kind: "focus" },
+      { window_id: "win-1", app: "docs", kind: "focus" },
+    ]);
+    resetPresenceForTesting();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    pastTheFocusThrottle();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
+
+    // A page that has declared its capabilities reports its own input: neither the window losing focus to it nor
+    // a raise of it says anything more.
+    resetPresenceForTesting();
+    pastTheFocusThrottle();
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    window.dispatchEvent(new Event("blur"));
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    messageFromPage("win-1", { type: SHELL_INPUT });
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "input" }]);
+
+    // The window losing focus to anything but a page's frame (the launcher's field) is nobody's landing.
+    resetPresenceForTesting();
+    host.focus();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+  });
+
+  it("forgets a page's capabilities on its reload, since a fresh page has declared nothing yet", () => {
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    resetPresenceForTesting();
+    pastTheFocusThrottle();
+    frameOf("win-1").focus();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+
+    load("win-1");
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
   });
 });

@@ -1,0 +1,10 @@
+# The Caretaker: a weekly look over the workspace that opens a chat only when something needs
+# attention. Off until the user turns it on, from the Routines app or with
+# `routines enable caretaker`; its own notes live under data/.state/caretaker/.
+title = "Weekly check-up"
+what = "Looks over the workspace once a week and opens a chat if something needs attention."
+every = "1w"
+at = "03:00"
+command = ["bash", "system/services/caretaker/caretaker_check.sh"]
+enabled = false
+timeout = "2h"

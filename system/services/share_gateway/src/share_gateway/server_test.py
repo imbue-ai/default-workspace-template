@@ -1,3 +1,7 @@
+import base64
+import hashlib
+import json
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -5,21 +9,39 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
-import json
-
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
+from share_grants.grants import load_grants
+from werkzeug.test import TestResponse
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
-from share_gateway.grants import load_grants
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
+from share_gateway.request_counts import DENIED_AGENT_ACCESS_UNCONFIGURED
+from share_gateway.request_counts import DENIED_AGENT_TOKEN
+from share_gateway.request_counts import DENIED_FOREIGN_HOST
+from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
+from share_gateway.request_counts import DENIED_NO_GRANT
+from share_gateway.request_counts import DENIED_NO_SESSION
+from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import METHOD_CLASS_READ
+from share_gateway.request_counts import METHOD_CLASS_WEBSOCKET
+from share_gateway.request_counts import METHOD_CLASS_WRITE
+from share_gateway.request_counts import OUTCOME_ALLOWED
+from share_gateway.request_counts import REQUESTER_KIND_AGENT
+from share_gateway.request_counts import REQUESTER_KIND_NONE
+from share_gateway.request_counts import REQUESTER_KIND_OWNER
+from share_gateway.request_counts import REQUESTER_KIND_USER
+from share_gateway.request_counts import RequestCounter
+from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
 from share_gateway.server import forwarded_client_ip
@@ -27,8 +49,6 @@ from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.testing import set_cookies_by_name
-
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _BROKER_URL = "https://accounts.example.com"
@@ -79,7 +99,13 @@ class _GatewayHarness:
         self.pending_logins = pending_logins
 
 
-def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN) -> _GatewayHarness:
+def _make_harness(
+    tmp_path: Path,
+    grants_text: str = _GRANTS,
+    chrome_origin: str = _CHROME_ORIGIN,
+    request_counter: RequestCounter | None = None,
+    admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
+) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
     materials = ShareMaterials(
@@ -102,6 +128,9 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         pending_logins=pending_logins,
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: {"ice_servers": [], "candidates": []},
+        admit_agent=admit_agent,
+        request_counter=request_counter,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -115,9 +144,8 @@ def _session_cookie_for(email: str, is_owner: bool = False, user_id: str = _BOB_
     return mint_session_cookie_value(_SIGNING_SECRET, identity, _DOMAIN)
 
 
-def _identity_header(response: object) -> dict[str, object]:
-    headers = getattr(response, "headers")
-    return json.loads(headers[IDENTITY_HEADER])
+def _identity_header(response: TestResponse) -> dict[str, object]:
+    return json.loads(response.headers[IDENTITY_HEADER])
 
 
 def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, str] | None = None) -> None:
@@ -404,9 +432,8 @@ def test_callback_clamps_foreign_next_to_the_shell_label(tmp_path: Path) -> None
     assert resp.headers["Location"] == f"https://{_SHELL_HOST}/"
 
 
-def _broker_query(response: object) -> dict[str, list[str]]:
-    headers = getattr(response, "headers")
-    location = headers["Location"]
+def _broker_query(response: TestResponse) -> dict[str, list[str]]:
+    location = response.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
     return parse_qs(location.removeprefix(f"{_BROKER_URL}/share/authorize?"), keep_blank_values=True)
 
@@ -553,6 +580,30 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     loading = harness.client.get("/_auth/loading")
     assert loading.status_code == 503
     assert "refresh" in loading.get_data(as_text=True)
+
+
+def _inline_style_hash(html: str) -> str:
+    style = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    return base64.b64encode(hashlib.sha256(style.encode("utf-8")).digest()).decode("ascii")
+
+
+def test_gateway_pages_carry_a_policy_admitting_exactly_their_stylesheet(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    loading = harness.client.get("/_auth/loading")
+    forbidden = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"unknown-00000000.{_DOMAIN}"))
+
+    assert forbidden.status_code == 403
+    for page in (loading, forbidden):
+        policy = page.headers["Content-Security-Policy"]
+        assert policy == PAGE_CONTENT_SECURITY_POLICY
+        # The hash is the page's actual stylesheet, so a browser enforcing the
+        # policy still renders the page as styled.
+        assert f"'sha256-{_inline_style_hash(page.get_data(as_text=True))}'" in policy
+        assert "default-src 'none'" in policy
+        assert "'unsafe-inline'" not in policy
+    assert "Content-Security-Policy" not in harness.client.get("/_health").headers
 
 
 def test_verify_hands_the_owner_the_identity_record(tmp_path: Path) -> None:
@@ -827,3 +878,159 @@ def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
     )
 
     assert resp.status_code == 401
+
+
+def test_connect_info_answers_what_the_stack_holds_without_caching(
+    tmp_path: Path,
+) -> None:
+    grants_path = tmp_path / "share_grants.toml"
+    grants_path.write_text(_GRANTS)
+    materials = ShareMaterials(
+        workspace_domain=_DOMAIN,
+        relay_token="tok",
+        connector_url="https://connector.example.com",
+        broker_url=_BROKER_URL,
+        chrome_origin=_CHROME_ORIGIN,
+    )
+    answers: list[dict[str, object]] = [
+        {"ice_servers": [], "candidates": []},
+        {
+            "ice_servers": [
+                {
+                    "urls": ["turn:t:3478?transport=udp"],
+                    "username": "u",
+                    "credential": "c",
+                }
+            ],
+            "candidates": [
+                {
+                    "host": "relay-us1.example",
+                    "port": 40123,
+                    "protocol": "tcp",
+                    "guest_port": 59000,
+                }
+            ],
+        },
+    ]
+    app = build_gateway_app(
+        materials=materials,
+        grants_path=grants_path,
+        signing_secret=_SIGNING_SECRET,
+        jwks_cache=JwksCache("https://accounts.example.com/share/jwks.json"),
+        jti_registry=SingleUseJtiRegistry(),
+        pending_logins=PendingLoginRegistry(),
+        auth_label=_AUTH_LABEL,
+        get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: answers[0],
+    )
+    client = app.test_client()
+    first = client.get("/connect-info")
+    assert first.status_code == 200
+    assert first.get_json() == {"ice_servers": [], "candidates": []}
+    assert first.headers["Cache-Control"] == "no-store"
+    answers.pop(0)
+    assert client.get("/connect-info").get_json() == answers[0]
+
+
+def _counted_keys(counter: RequestCounter) -> list[tuple[str, str, str, str, str, int]]:
+    return [
+        (
+            str(r["service"]),
+            str(r["requester_kind"]),
+            str(r["requester_id"]),
+            str(r["method_class"]),
+            str(r["outcome"]),
+            int(str(r["request_count"])),
+        )
+        for r in counter.drain(is_final=True)
+    ]
+
+
+def test_verify_counts_every_answer_by_service_requester_method_and_outcome(tmp_path: Path) -> None:
+    counter = RequestCounter(tmp_path / "events.jsonl")
+    harness = _make_harness(tmp_path, request_counter=counter)
+
+    # No session: an HTML navigation is bounced to the broker, a fetch gets 401; both are the same refusal.
+    harness.client.get("/_auth/verify", headers=_verify_headers())
+    harness.client.get("/_auth/verify", headers=_verify_headers(accept="application/json"))
+    # A hostname that is not the workspace's, and a POST from a foreign Origin.
+    harness.client.get("/_auth/verify", headers=_verify_headers(host="stranger.example.com"))
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="POST", origin="https://evil.example")
+    )
+    # The hosted chrome's preflight passes through, counted as nobody's.
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin=_CHROME_ORIGIN)
+    )
+    # A visitor on the workspace grant reads twice and opens a WebSocket; one on no grant is refused.
+    _install_session(harness.client, "bob@example.com")
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, is_websocket=True, origin=f"https://{_WEB_HOST}"),
+    )
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("eve@example.com", user_id="user-eve-9"))
+    harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+    # The owner writes, with no id of their own in the record.
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True, user_id="user-owner-1")
+    )
+    harness.client.get(
+        "/_auth/verify", headers=_verify_headers(host=_FILES_HOST, method="PUT", origin=f"https://{_FILES_HOST}")
+    )
+
+    assert sorted(_counted_keys(counter)) == sorted(
+        [
+            ("system_interface", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_NO_SESSION, 2),
+            ("", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_FOREIGN_HOST, 1),
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_WRITE, DENIED_ORIGIN, 1),
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, OUTCOME_ALLOWED, 1),
+            ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, OUTCOME_ALLOWED, 2),
+            ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_WEBSOCKET, OUTCOME_ALLOWED, 1),
+            ("web", REQUESTER_KIND_USER, "user-eve-9", METHOD_CLASS_READ, DENIED_NO_GRANT, 1),
+            ("files", REQUESTER_KIND_OWNER, "", METHOD_CLASS_WRITE, OUTCOME_ALLOWED, 1),
+        ]
+    )
+
+
+def test_verify_without_a_counter_still_answers(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+    assert harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST)).status_code == 200
+
+
+def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
+    # A bearer token with no agent access configured.
+    unconfigured_counter = RequestCounter(tmp_path / "unconfigured.jsonl")
+    unconfigured = _make_harness(tmp_path, request_counter=unconfigured_counter)
+    unconfigured.client.get(
+        "/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer not-a-token"}
+    )
+    assert _counted_keys(unconfigured_counter) == [
+        ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_AGENT_ACCESS_UNCONFIGURED, 1)
+    ]
+
+    # A bearer token the admitter refuses, and one it admits.
+    def _admit(token: str, service_name: str | None) -> AgentIdentity | None:
+        return AgentIdentity("agent-7", "helper", "owner") if token == "good" else None
+
+    agent_counter = RequestCounter(tmp_path / "agents.jsonl")
+    client = _make_harness(tmp_path, request_counter=agent_counter, admit_agent=_admit).client
+    client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer bad"})
+    client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Authorization": "Bearer good"})
+    assert sorted(_counted_keys(agent_counter)) == sorted(
+        [
+            ("web", REQUESTER_KIND_NONE, "", METHOD_CLASS_READ, DENIED_AGENT_TOKEN, 1),
+            ("web", REQUESTER_KIND_AGENT, "agent-7", METHOD_CLASS_READ, OUTCOME_ALLOWED, 1),
+        ]
+    )
+
+    # A visitor while the grants file is malformed: refused, and counted under their id.
+    misconfigured_counter = RequestCounter(tmp_path / "misconfigured.jsonl")
+    misconfigured = _make_harness(tmp_path, grants_text="this is = not toml [", request_counter=misconfigured_counter)
+    _install_session(misconfigured.client, "bob@example.com")
+    assert misconfigured.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST)).status_code == 503
+    assert _counted_keys(misconfigured_counter) == [
+        ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, DENIED_GRANTS_MISCONFIGURED, 1)
+    ]

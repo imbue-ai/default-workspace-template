@@ -1,9 +1,11 @@
 """Test helpers for the shell subpackage: registry rows and files, an inventory over them, and desktop records."""
 
 import json
+import os
 import queue
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
@@ -25,6 +27,8 @@ from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 from loguru import logger
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -45,8 +49,6 @@ from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
@@ -83,12 +85,15 @@ def registry_row_toml(
     launcher_rank: int | None = None,
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
     # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
-    # that takes drafted text, ``launch_methods`` the method of each that is not a GET, and ``launch_presets``
-    # the presets of each that declares any.
+    # that takes drafted text, ``launch_mention_params`` the param of each that takes a mention of a person,
+    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app, ``launch_methods``
+    # the method of each that is not a GET, and ``launch_presets`` the presets of each that declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
     launch_draft_params: Mapping[str, str] | None = None,
+    launch_mention_params: Mapping[str, str] | None = None,
+    launch_app_params: Mapping[str, tuple[str, str]] | None = None,
     launch_methods: Mapping[str, str] | None = None,
     launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
@@ -99,6 +104,7 @@ def registry_row_toml(
     message_handlers: Sequence[tuple[str, str]] = (),
     # Each ``show`` message handler as ``(type, show, showing)``.
     shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
+    theming_mode: str | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -126,6 +132,8 @@ def registry_row_toml(
         )
     if window_closed_path is not None:
         lines.append(f'window_closed_path = "{window_closed_path}"')
+    if theming_mode is not None:
+        lines.append(f'theming_mode = "{theming_mode}"')
     if message_handlers or shown_message_handlers:
         handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
         for kind, show, showing in shown_message_handlers:
@@ -146,6 +154,12 @@ def registry_row_toml(
         draft_param = (launch_draft_params or {}).get(launch_id)
         if draft_param is not None:
             lines.append(f'draft_param = "{draft_param}"')
+        mention_param = (launch_mention_params or {}).get(launch_id)
+        if mention_param is not None:
+            lines.append(f'mention_param = "{mention_param}"')
+        app_params = (launch_app_params or {}).get(launch_id)
+        if app_params is not None:
+            lines.append(f'app_params = {{ name = "{app_params[0]}", display_name = "{app_params[1]}" }}')
         method = (launch_methods or {}).get(launch_id)
         if method is not None:
             lines.append(f'method = "{method}"')
@@ -187,7 +201,7 @@ BUILTIN_SHORTCUT_APPS_WITH_CHAT: Final[tuple[str, ...]] = ("chat", *BUILTIN_SHOR
 
 def builtin_rows_toml_before_chat() -> tuple[str, ...]:
     """The rows of the built-in apps that register before the chat, shaped as their manifests make them: the shell
-    (internal), Getting Started, the file viewer, the browser, and the terminal."""
+    (internal), Getting Started, Files, the browser, and the terminal."""
     return (
         registry_row_toml("system_interface", "http://localhost:8000", is_internal=True, is_critical=True),
         registry_row_toml(
@@ -201,10 +215,10 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "files",
             TEST_FILES_URL,
-            display_name="File Viewer",
+            display_name="Files",
             launcher_rank=20,
             default_shortcut=("new", "new"),
-            launch_paths=[("new", "File Viewer", "/home/user/workspace/")],
+            launch_paths=[("new", "Files", "/home/user/workspace/")],
         ),
         registry_row_toml(
             "browser",
@@ -272,7 +286,7 @@ def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
 _RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
 _RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
 _RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
-    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
+    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows", "owner"}
 )
 
 
@@ -332,6 +346,7 @@ def build_inventory(
     broadcaster: WebSocketBroadcaster,
     prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] | None = None,
     share_domain_path: Path | None = None,
+    theming_off: Callable[[], frozenset[AppName]] | None = None,
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
@@ -339,6 +354,7 @@ def build_inventory(
         broadcaster=broadcaster,
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
         share_domain_path=share_domain_path,
+        theming_off=theming_off if theming_off is not None else frozenset,
     )
     inventory.reload_registry()
     inventory.refresh_liveness()
@@ -514,35 +530,33 @@ def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
-# The File Viewer (``system/apps/files``): dufs, a binary the workspace image installs, serving the workspace's
-# vendored and patched frontend. Tests that run the real viewer skip where dufs is not installed.
+# Files (``system/apps/files``): its server, serving the Files frontend's build.
 FILES_APP_DIRECTORY: Final[Path] = Path(__file__).resolve().parents[4] / "files"
-DUFS_BINARY: Final[str | None] = shutil.which("dufs")
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[6]
-# The workspace's own path, where the viewer's pages import the shell's app contract module from
-# (``files/assets/shell.js``): dufs serves the filesystem root, so the module's path there is its URL.
+# The workspace's own path, where Files' "not found" page imports the shell's app contract module from: Files serves
+# the filesystem root, so the module's path there is its URL.
 _WORKSPACE_ROOT: Final[PurePosixPath] = PurePosixPath("/home/user/workspace")
 
 
 @contextmanager
-def running_file_viewer(root: Path) -> Generator[str, None, None]:
-    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``, with the shell's built app contract
-    module at its workspace path under ``root``, where the viewer's pages import it; yields its loopback URL."""
-    assert DUFS_BINARY is not None, "dufs is not installed"
+def running_files(root: Path) -> Generator[str, None, None]:
+    """Run Files over ``root`` as it runs over ``/``, unregistered and with no gateway, with the shell's built app
+    contract module at its workspace path under ``root``; yields its loopback URL."""
     served_contract = root / _WORKSPACE_ROOT.relative_to("/") / SHELL_APP_CONTRACT_PATH
     served_contract.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(_REPO_ROOT / SHELL_APP_CONTRACT_PATH, served_contract)
     port = find_free_port()
     url = f"http://127.0.0.1:{port}"
-    command = [DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
-    command += ["--assets", str(FILES_APP_DIRECTORY / "assets"), str(root)]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    command = [sys.executable, "-m", "files_app.main", "--port", str(port), "--no-register"]
+    command += ["--static-dir", str(FILES_APP_DIRECTORY / "static"), "--root", str(root)]
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("LATCHKEY_")}
+    process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_for(
             lambda: is_server_answering(url),
             timeout=10.0,
             poll_interval=0.1,
-            error_message=f"dufs did not come up at {url}",
+            error_message=f"Files did not come up at {url}",
         )
         yield url
     finally:
@@ -550,19 +564,19 @@ def running_file_viewer(root: Path) -> Generator[str, None, None]:
         try:
             process.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
-            logger.warning("dufs at {} did not stop on SIGTERM; killing it", url)
+            logger.warning("Files at {} did not stop on SIGTERM; killing it", url)
             process.kill()
             process.wait(timeout=5.0)
 
 
-def file_viewer_registry_row(url: str) -> str:
-    """The File Viewer's registry row at ``url``, with the message handlers its own manifest declares."""
+def files_registry_row(url: str) -> str:
+    """Files' registry row at ``url``, with the message handlers its own manifest declares."""
     manifest = load_manifest(FILES_APP_DIRECTORY / "app.toml")
     return registry_row_toml(
         str(manifest.name),
         url,
         display_name=str(manifest.display_name),
-        launch_paths=(("new", "File Viewer", "/"),),
+        launch_paths=(("new", "Files", "/"),),
         message_handlers=[
             (str(handler.type), str(handler.path)) for handler in manifest.message_handlers if handler.path is not None
         ],

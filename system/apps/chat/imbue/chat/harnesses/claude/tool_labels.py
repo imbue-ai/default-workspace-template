@@ -12,8 +12,8 @@ from imbue.chat.harnesses.tool_labels import basename
 from imbue.chat.harnesses.tool_labels import first_string_value
 from imbue.chat.harnesses.tool_labels import mcp_caption
 from imbue.chat.harnesses.tool_labels import parse_input_preview
-from imbue.chat.harnesses.tool_labels import quoted
 from imbue.chat.harnesses.tool_labels import past_tense
+from imbue.chat.harnesses.tool_labels import quoted
 from imbue.chat.harnesses.tool_labels import shorten
 from imbue.chat.harnesses.tool_labels import stated_note
 from imbue.imbue_common.pure import pure

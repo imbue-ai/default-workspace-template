@@ -16,6 +16,7 @@ import m from "mithril";
 import { type CharacterElements, driveCharacter, paintAtRest } from "./characterView";
 import { applyMood, type CharacterMood, hover, jump, posture, press, releasePress, unhover } from "./poses";
 import { type BlobRig, createBlobRig } from "./rig";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { CHARACTER_COLOR } from "./stillFrame";
 
 /** The catalog id the workspace answers with this component instead of an image.
@@ -55,7 +56,7 @@ export interface ImbueCharacterAttrs {
    * the taskbar entries do it.
    */
   readonly size?: number;
-  /** Fill for the body. */
+  /** Fill for the body; the theme's avatar colour (`--desk-avatar-color`) when omitted. */
   readonly color?: string;
   /** What it is doing; the rig holds a pose per mood. */
   readonly mood: CharacterMood;
@@ -173,7 +174,9 @@ export function ImbueCharacter(): m.Component<ImbueCharacterAttrs> {
     },
 
     view(vnode) {
-      const { size, color = CHARACTER_COLOR, shadow = true, interactive = true } = vnode.attrs;
+      const { size, shadow = true, interactive = true } = vnode.attrs;
+      const color = vnode.attrs.color ?? `var(--desk-avatar-color, ${CHARACTER_COLOR})`;
+      const shadowInk = `var(--desk-avatar-shadow-color, ${SHADOW_INK})`;
       return m(
         "svg",
         {
@@ -183,6 +186,8 @@ export function ImbueCharacter(): m.Component<ImbueCharacterAttrs> {
           style: { overflow: "visible", touchAction: "none", color },
           role: "img",
           "aria-label": "imbue character",
+          ...partAttrs("avatar"),
+          "data-avatar-kind": "character",
           class: vnode.attrs.class,
           onpointerdown: (event: PointerEvent) => {
             if (!interactive || reducedMotion.matches) return;
@@ -208,9 +213,13 @@ export function ImbueCharacter(): m.Component<ImbueCharacterAttrs> {
                 m(
                   "defs",
                   m("radialGradient", { id: inkId }, [
-                    m("stop", { offset: "0", "stop-color": SHADOW_INK, "stop-opacity": SHADOW_ALPHA }),
-                    m("stop", { offset: "0.45", "stop-color": SHADOW_INK, "stop-opacity": SHADOW_ALPHA * 0.62 }),
-                    m("stop", { offset: "1", "stop-color": SHADOW_INK, "stop-opacity": 0 }),
+                    m("stop", { offset: "0", style: { stopColor: shadowInk }, "stop-opacity": SHADOW_ALPHA }),
+                    m("stop", {
+                      offset: "0.45",
+                      style: { stopColor: shadowInk },
+                      "stop-opacity": SHADOW_ALPHA * 0.62,
+                    }),
+                    m("stop", { offset: "1", style: { stopColor: shadowInk }, "stop-opacity": 0 }),
                   ]),
                 ),
                 m(
@@ -225,7 +234,11 @@ export function ImbueCharacter(): m.Component<ImbueCharacterAttrs> {
                 ),
               ])
             : null,
-          m("g", { "data-character-body": "true" }, m("path", { "data-character-path": "true", d: "", fill: color })),
+          m(
+            "g",
+            { "data-character-body": "true" },
+            m("path", { "data-character-path": "true", d: "", style: { fill: color } }),
+          ),
         ],
       );
     },

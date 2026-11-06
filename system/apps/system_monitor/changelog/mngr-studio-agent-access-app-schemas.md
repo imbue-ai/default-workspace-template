@@ -1,0 +1,1 @@
+Memory & disk describes its own API: `GET /api/schema` answers an OpenAPI document built from its routes, every route has a docstring the document carries as its summary, and its manifest carries a one-line `description` and the `api_schema_path`, which the visiting-agent primer links.

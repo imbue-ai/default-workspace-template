@@ -45,4 +45,4 @@ def test_non_image_paths_have_no_mime_type(url_path: str) -> None:
 def test_try_serve_file_returns_none_for_nonexistent_non_image_path() -> None:
     """A non-image path with no file behind it yields None, so the caller answers 404 for a
     multi-segment path (or serves a chat page for a one-segment key)."""
-    assert try_serve_file("agent/some-client-route-that-does-not-exist") is None
+    assert try_serve_file("agent/some-client-route-that-does-not-exist", is_download=False) is None

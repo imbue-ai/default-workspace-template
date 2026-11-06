@@ -14,6 +14,7 @@
  * Body content is passed as children: `m(Modal, { ... }, [ ...bodyNodes ])`.
  */
 
+import { partAttrs } from "../themes/parts";
 import m from "mithril";
 import { omitClassAttrs } from "./attrs";
 import { backdropDismissAttrs } from "./modalBackdrop";
@@ -34,11 +35,11 @@ export const MODAL_OVERLAY_CLASS =
   "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 " +
   "animate-[modal-overlay-in_150ms_ease-out]";
 
-const MODAL_CARD_CLASS =
+export const MODAL_CARD_CLASS =
   "modal-card w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 
-const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
+export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
 
 export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-primary";
 
@@ -49,7 +50,7 @@ export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-primary";
 
 export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-secondary`;
 
-const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
+export const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
 
 export interface ModalAttrs {
   // Called when the backdrop is dismissed (a primary mousedown on the overlay).
@@ -112,16 +113,20 @@ export function Modal(): m.Component<ModalAttrs> {
       if (width !== undefined) {
         cardAttrs.style = `width: ${width}px`;
       }
-      const headerContent = header ?? (title === undefined ? null : m("h3", { class: MODAL_TITLE_CLASS }, title));
+      const headerContent =
+        header ??
+        (title === undefined ? null : m("h3", { class: MODAL_TITLE_CLASS, ...partAttrs("dialog-title") }, title));
       return m(
         "div",
         { class: MODAL_OVERLAY_CLASS, ...omitClassAttrs(overlay ?? {}), ...backdropDismissAttrs(onDismiss) },
-        m("div", { class: MODAL_CARD_CLASS, ...cardAttrs }, [
+        m("div", { class: MODAL_CARD_CLASS, ...partAttrs("dialog"), ...cardAttrs }, [
           headerContent === null || headerContent === undefined
             ? null
-            : m("div", { class: MODAL_HEADER_CLASS }, headerContent),
+            : m("div", { class: MODAL_HEADER_CLASS, ...partAttrs("dialog-header") }, headerContent),
           vnode.children,
-          actions === undefined ? null : m("div", { class: MODAL_ACTIONS_CLASS }, actions),
+          actions === undefined
+            ? null
+            : m("div", { class: MODAL_ACTIONS_CLASS, ...partAttrs("dialog-actions") }, actions),
         ]),
       );
     },

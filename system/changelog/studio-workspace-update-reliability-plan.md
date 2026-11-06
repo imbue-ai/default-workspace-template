@@ -1,0 +1,3 @@
+Bug reports include the update flow's records from `data/.state/update-apply/` (schedule, run record, last dispatch and its create attempt, watchdog state, apply and emergency markers, provisioning-incomplete record, kept rollback point, and the dispatcher log's tail) as their own secret-scanned class; pre-apply snapshots and the dispatcher program are never included.
+
+`docs/system/blueprint/unattended-workspace-updates/` points to the unattended workspace updates plan in the mngr repo, and the routines spec (section 12) says the cron migration leaves the app's `update-self-dispatch` entry with cron.

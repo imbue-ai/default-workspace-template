@@ -1,0 +1,1 @@
+- The update-self launches in `shell/update_notice.py` carry the `# own-process` markers the launch rules now require: `outlives-caller` for the rollback, which restarts the shell that started it, and `other-tree` for `confirm-last`, which must run the checkout's current update-self rather than a copy the shell imported before the last apply.

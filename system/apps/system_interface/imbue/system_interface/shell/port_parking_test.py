@@ -1,5 +1,7 @@
 """Tests for port parking: the held port, the handoff on the first connection, and the pages."""
 
+import base64
+import hashlib
 from collections.abc import Callable
 from collections.abc import Iterator
 
@@ -137,3 +139,12 @@ def test_the_response_bytes_carry_the_page_length() -> None:
     assert f"Content-Length: {len(page.encode())}".encode() in head
     assert body == page.encode()
     assert "&lt;b&gt;" in page
+
+
+def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet() -> None:
+    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs")
+    head, _, _ = parked_response_bytes(ParkedPageKind.FAILED, page).partition(b"\r\n\r\n")
+    style = page.split("<style>", 1)[1].split("</style>", 1)[0]
+    digest = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
+    policy = f"default-src 'none'; style-src 'sha256-{digest}'; base-uri 'none'; form-action 'none'"
+    assert f"Content-Security-Policy: {policy}".encode() in head

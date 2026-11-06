@@ -125,8 +125,7 @@ class ModelChoice(FrozenModel):
 class SwitchMode(StrEnum):
     """How a harness's model bar behaves. ONE value per harness; it governs the
     model, effort, and fast axes uniformly. It has nothing to do with which axes
-    are *shown* -- that is decided purely by the matched model's data. claude and pi
-    use EAGER_THEN_RECONCILE; codex uses ON_CHANGE."""
+    are *shown* -- that is decided purely by the matched model's data."""
 
     # Optimistic: the chip moves on click, then reconciles from disk.
     EAGER_THEN_RECONCILE = "eager_then_reconcile"
@@ -137,12 +136,6 @@ class SwitchMode(StrEnum):
     # choice reads as instant while never showing a value the daemon has not accepted. The frontend
     # derives ``optimistic = switch_mode === "eager_then_reconcile"``, so this yields no overlay.
     ON_CHANGE = "on_change"
-    # Display-only: the bar REFLECTS the harness's model and cannot drive it. The frontend
-    # renders the slots non-interactive (a readonly trigger + "use the agent terminal"
-    # tooltip) and never opens a picker. antigravity uses it: agy's `/model` is an
-    # interactive TUI picker with no scriptable one-shot form, and its `--model` flag applies
-    # only at launch, so there is no mid-session switch to offer.
-    READ_ONLY = "read_only"
 
 
 class PickerMode(StrEnum):
@@ -163,8 +156,9 @@ class PickerMode(StrEnum):
 
 
 class HarnessCatalog(FrozenModel):
-    """The serializable, per-harness static half. IS the ``/api/harnesses`` wire
-    shape (dumped verbatim -- no endpoint-side field selection)."""
+    """The serializable, per-harness static half: the base of each entry ``/api/harnesses``
+    answers, published whole (no endpoint-side field selection); the server's
+    ``HarnessCatalogEntry`` adds the spec's declarations on top."""
 
     # The catalog, in display order.
     options: tuple[ModelOption, ...]
@@ -342,7 +336,7 @@ class HarnessModelResolver(ABC):
     the spec, beside ``catalog_factory`` -- deliberately NOT on this resolver, which is
     now write-only) -- so the resolver only owns the harness-specific WRITE side:
 
-    * :meth:`switch` -- apply a selection (a no-op for a display-only harness)
+    * :meth:`switch` -- apply a selection
     * :meth:`list_offered_models` -- the picker's offer set (only pi overrides it;
       its offer set is per-agent and auth-gated)
 

@@ -1,0 +1,11 @@
+Files says how each synced folder stands as Imbue Studio reports it, and, inside the Imbue Studio app, opens Studio's settings for what you share from your computer.
+
+- A synced folder's state comes from Imbue Studio on the computer instead of a guess made by comparing names on both sides. While it syncs, the circular arrows on its icon turn, and its tooltip reads "Syncing with Kims-Mac" over how far along it is ("25% done"); once it settles it reads "Up to date with Kims-Mac"; a sync that stopped shows the orange alert, its tooltip ("Sync with Kims-Mac stopped" over the first two lines of Studio's reason) and the folder itself say why, and the folder points to retrying it in Imbue Studio; a sync Imbue Studio has switched on but isn't running, mostly for a moment as Studio starts, reads "Not syncing with Kims-Mac right now"; a sync switched off in Studio leaves the folder a live one. A copy whose computer is asleep, or whose Imbue Studio is closed, is greyed out and reads "Kims-Mac isn't answering" rather than a guess.
+
+- A share whose computer isn't answering, live or synced, is greyed out in the sidebar, icon and all, in place of the crossed-out laptop after its name.
+
+- An empty synced folder that is syncing says so, and how far along it is, in place of "Empty".
+
+- The sidebar, and the folder you have open, keep up with Imbue Studio while a Files window is on screen: they check every few seconds while a folder is syncing and every 15 seconds otherwise, and right away when the window comes to the front. A file you add on your computer shows up in the open folder without leaving it, within a couple of seconds of reaching the workspace for a synced folder. However many Files windows are open, your computers are asked at most once every couple of seconds, and not at all while no Files window is on screen. A computer that is asleep, or whose Imbue Studio is closed, shows its shares as not answering instead of the whole list failing.
+
+- In the Imbue Studio app, Connected ends in "Manage connected files". It opens Studio's Permissions pane at Local files, where you share files and folders from your computer, stop sharing them, or turn syncing on; coming back to Files shows what changed. A plain browser, a phone, or a share link has no Studio around it, so the entry is not shown there.

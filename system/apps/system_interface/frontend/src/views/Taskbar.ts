@@ -1,23 +1,34 @@
 /**
- * The taskbar (plan section 4.10), left to right: the launcher field, one entry per window of
- * the active desktop in opening order, the system tray. Always visible on the desktop layout; a
+ * The taskbar (plan section 4.10; the multiplayer spec, section 6.1), left to right: the launcher field, the
+ * overview button, one entry per window of the active desktop in opening order, the system tray (the share button,
+ * the people, you, and the agent). While a desktop that is not the viewer's own is being viewed (section 8.3) the
+ * overview button is hidden and the tray gives way to the viewing chip. Always visible on the desktop layout; a
  * phone draws its own bar instead.
  */
 
 import m from "mithril";
-import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
+import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
+import { OverviewButton } from "./OverviewButton";
+import type { OverviewButtonAttrs } from "./OverviewButton";
 import { SystemTray } from "./SystemTray";
 import type { SystemTrayAttrs } from "./SystemTray";
 import { TaskbarEntry } from "./TaskbarEntry";
+import { ViewingChip } from "./tray/ViewingChip";
+import type { ViewingChipAttrs } from "./tray/ViewingChip";
 
 export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
-  readonly avatar: AvatarState;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
+  /** The overview button, between the launcher field and the window entries. */
+  readonly overview: OverviewButtonAttrs;
   readonly tray: SystemTrayAttrs;
+  /** The viewing chrome's chip while a desktop that is not the viewer's own is being viewed, which replaces the
+   *  tray and hides the overview button; null otherwise. */
+  readonly viewing: ViewingChipAttrs | null;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
 }
@@ -29,6 +40,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       "div",
       {
         "data-taskbar": "",
+        ...partAttrs("taskbar"),
         // No line along the top and no blur behind it: the surface alone.
         class: "taskbar relative h-(--desk-taskbar-height) shrink-0 bg-(--desk-taskbar-surface)",
       },
@@ -37,6 +49,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       // a radius, an inset, and the bar's box stays where the geometry expects it.
       m("div", { "data-taskbar-content": "", class: "taskbar-content flex h-full items-center gap-2 px-2" }, [
         m(LauncherField, attrs.launcher),
+        attrs.viewing === null ? m(OverviewButton, attrs.overview) : null,
         m(
           "div",
           {
@@ -50,20 +63,23 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
             // square at the strip's edge. The vertical room is the bar's own; the horizontal is
             // borrowed back with a negative margin, so the first entry keeps its distance from the
             // field beside it.
-            class: "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5",
+            // While a desktop that is not the viewer's own is viewed (section 8.3), the entries mirror the
+            // owner's windows and take no press: the viewed desktop is read-only.
+            class:
+              "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5" +
+              (attrs.viewing === null ? "" : " pointer-events-none"),
           },
           attrs.entries.map((entry) =>
             m(TaskbarEntry, {
               key: entry.window.id,
               entry,
-              avatar: attrs.avatar,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
             }),
           ),
         ),
-        m(SystemTray, attrs.tray),
+        attrs.viewing === null ? m(SystemTray, attrs.tray) : m(ViewingChip, attrs.viewing),
       ]),
     );
   },

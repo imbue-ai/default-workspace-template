@@ -199,14 +199,14 @@ class HarnessActivityTracker(ABC):
         """Whether an event at ``event_at`` may advance a tail signal at ``current_at``."""
         return event_at is None or current_at is None or event_at >= current_at
 
-    def _fold_extra_event(self, event: dict[str, Any], event_at: float | None) -> None:
+    def _fold_extra_event(self, event: dict[str, Any], event_at: float | None) -> None:  # noqa: B027
         """Fold one event into this harness's extra signals. No-op by default."""
 
     def _current_extra(self) -> tuple[Any, ...]:
         """This harness's extra cached signals, as folded so far. Empty by default."""
         return ()
 
-    def _reset_extra(self) -> None:
+    def _reset_extra(self) -> None:  # noqa: B027
         """Clear this harness's extra folded state. No-op by default."""
 
     def derive(

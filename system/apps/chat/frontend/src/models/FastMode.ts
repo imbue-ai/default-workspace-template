@@ -32,6 +32,10 @@ export const FAST_MODE_LABELS: Readonly<Record<FastModeMode, string>> = {
 /** The modes, in the order the chooser offers them, read off the table above. */
 export const FAST_MODES: readonly FastModeMode[] = Object.keys(FAST_MODE_LABELS) as FastModeMode[];
 
+/** What fast mode is, shown on hover over the model picker's fast row. */
+export const FAST_MODE_EXPLANATION =
+  "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to run, so turn it on when speed matters and leave it off otherwise.";
+
 /** What the model picker's fast row says for a state. */
 export function fastModeLabel(state: ChatFastModeState): string {
   const label = FAST_MODE_LABELS[state.mode];

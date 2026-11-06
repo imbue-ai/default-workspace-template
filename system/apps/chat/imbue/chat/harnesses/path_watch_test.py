@@ -10,6 +10,9 @@ import pytest
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
+from imbue.chat.testing import wait_until_true
+from imbue.chat.watcher_common import WakeOnChangeHandler
 
 
 class _StopGatedDirPath(Path):
@@ -157,3 +160,121 @@ def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Pat
     stop_started_at = time.monotonic()
     watcher.stop()
     assert time.monotonic() - stop_started_at < 2.0
+
+
+def _wait_for_thread_count(expected: int) -> None:
+    """Wait for the live watchdog thread count to reach ``expected``: an emitter's threads exit a moment after its
+    watch is unscheduled."""
+    wait_until_true(lambda: len(_live_watchdog_threads()) == expected, 5.0, f"{expected} live watchdog threads")
+
+
+def test_watchers_sharing_an_observer_watch_one_directory_with_the_threads_of_one(tmp_path: Path) -> None:
+    """Five watchers of one directory through one observer hold the threads one watcher holds, and stopping
+    some of them takes nothing away from the rest."""
+    before = len(_live_watchdog_threads())
+    shared = SharedWatchObserver.build()
+    derived = [threading.Event() for _ in range(5)]
+    watchers = [
+        PathWatcher.build((tmp_path,), derived_event.set, min_cycle_interval_seconds=0.0, watch_observer=shared)
+        for derived_event in derived
+    ]
+    try:
+        # A watcher derives only after subscribing, so each derive means its watch is in place.
+        watchers[0].start()
+        assert derived[0].wait(timeout=5.0)
+        threads_for_one = len(_live_watchdog_threads()) - before
+        assert threads_for_one > 0
+
+        for watcher, derived_event in zip(watchers[1:], derived[1:], strict=True):
+            watcher.start()
+            assert derived_event.wait(timeout=5.0)
+        assert len(_live_watchdog_threads()) - before == threads_for_one
+
+        for watcher in watchers[:4]:
+            watcher.stop()
+        assert len(_live_watchdog_threads()) - before == threads_for_one
+    finally:
+        for watcher in watchers:
+            watcher.stop()
+        shared.close()
+    _wait_for_thread_count(before)
+
+
+def test_shared_observer_delivers_a_directory_event_to_every_subscriber(tmp_path: Path) -> None:
+    shared = SharedWatchObserver.build()
+    first_changed, second_changed = threading.Event(), threading.Event()
+    first, second = WakeOnChangeHandler(first_changed), WakeOnChangeHandler(second_changed)
+    try:
+        assert shared.subscribe(tmp_path, False, first)
+        assert shared.subscribe(tmp_path, False, second)
+        (tmp_path / "written-91537.txt").write_text("x")
+        assert first_changed.wait(timeout=5.0)
+        assert second_changed.wait(timeout=5.0)
+    finally:
+        shared.close()
+
+
+def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_watch_added(tmp_path: Path) -> None:
+    """A directory's watch outlives every subscriber but the last, which still hears its events; the last one's
+    unsubscribe releases the watch and nothing else the observer holds."""
+    kept_dir, released_dir = tmp_path / "kept", tmp_path / "released"
+    kept_dir.mkdir()
+    released_dir.mkdir()
+    shared = SharedWatchObserver.build()
+    staying_changed, leaving_changed, other_changed = threading.Event(), threading.Event(), threading.Event()
+    staying = WakeOnChangeHandler(staying_changed)
+    leaving = WakeOnChangeHandler(leaving_changed)
+    other = WakeOnChangeHandler(other_changed)
+    try:
+        assert shared.subscribe(kept_dir, False, other)
+        threads_without_released_dir = len(_live_watchdog_threads())
+        assert shared.subscribe(released_dir, False, staying)
+        assert shared.subscribe(released_dir, False, leaving)
+        threads_with_released_dir = len(_live_watchdog_threads())
+        assert threads_with_released_dir > threads_without_released_dir
+
+        shared.unsubscribe(released_dir, False, leaving)
+        assert len(_live_watchdog_threads()) == threads_with_released_dir
+        (released_dir / "written-28461.txt").write_text("x")
+        assert staying_changed.wait(timeout=5.0)
+        assert not leaving_changed.is_set()
+
+        shared.unsubscribe(released_dir, False, staying)
+        _wait_for_thread_count(threads_without_released_dir)
+        (kept_dir / "written-28462.txt").write_text("x")
+        assert other_changed.wait(timeout=5.0)
+    finally:
+        shared.close()
+
+
+def test_a_shared_observer_with_nothing_left_to_watch_holds_no_thread_until_the_next_subscription(
+    tmp_path: Path,
+) -> None:
+    """A released watcher leaves no watch thread behind, even though the observer it watched through lives on."""
+    before = len(_live_watchdog_threads())
+    shared = SharedWatchObserver.build()
+    first = WakeOnChangeHandler(threading.Event())
+    later_changed = threading.Event()
+    try:
+        assert shared.subscribe(tmp_path, False, first)
+        shared.unsubscribe(tmp_path, False, first)
+        assert len(_live_watchdog_threads()) == before
+
+        assert shared.subscribe(tmp_path, False, WakeOnChangeHandler(later_changed))
+        (tmp_path / "written-61904.txt").write_text("x")
+        assert later_changed.wait(timeout=5.0)
+    finally:
+        shared.close()
+
+
+def test_a_closed_shared_observer_stops_its_threads_and_refuses_new_subscriptions(tmp_path: Path) -> None:
+    before = len(_live_watchdog_threads())
+    shared = SharedWatchObserver.build()
+    assert shared.subscribe(tmp_path, True, WakeOnChangeHandler(threading.Event()))
+    assert len(_live_watchdog_threads()) > before
+
+    shared.close()
+
+    _wait_for_thread_count(before)
+    assert not shared.subscribe(tmp_path, True, WakeOnChangeHandler(threading.Event()))
+    assert len(_live_watchdog_threads()) == before

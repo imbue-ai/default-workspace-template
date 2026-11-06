@@ -170,8 +170,8 @@ class SecretRequestStatus(LowerCaseStrEnum):
     SUPERSEDED = auto()
 
 
-class SecretRequest(FrozenModel):
-    """One filed request: what was asked for and how it was answered, never the answer itself."""
+class SecretRequestFields(FrozenModel):
+    """What a filed request records: what was asked for and how it was answered, never the answer itself."""
 
     request_id: SecretRequestId = Field(description="The id the card and the resolution notice share")
     chat_id: str = Field(description="The chat whose agent filed it, and whose transcript gets the notice")
@@ -184,10 +184,39 @@ class SecretRequest(FrozenModel):
     superseded_by: SecretRequestId | None = Field(default=None, description="The newer request for the same file")
     note: str | None = Field(default=None, description="The user's optional note on a decline")
 
+
+class SecretRequest(SecretRequestFields):
+    """One filed request, as the store keeps it."""
+
     @property
     def env_path(self) -> str:
         """The repo-relative path the card names and the notice reports."""
         return f"{DEFAULT_SECRETS_DIRECTORY.as_posix()}/{self.file}{ENV_FILE_SUFFIX}"
+
+
+class SecretRequestResponse(SecretRequestFields):
+    """A request as the routes answer it: its fields, the env file's path, and whether the notice reached its chat."""
+
+    env_path: str = Field(description="The repo-relative path of the env file the values go to")
+    is_notice_delivered: bool | None = Field(
+        default=None,
+        description="Whether the resolution notice reached the chat; null on a filing or a read, which send none",
+    )
+
+    @classmethod
+    def of(cls, request: SecretRequest, is_notice_delivered: bool | None) -> Self:
+        return cls(**request.model_dump(), env_path=request.env_path, is_notice_delivered=is_notice_delivered)
+
+
+class FiledSecretRequestResponse(SecretRequestResponse):
+    """The filing's answer: the request plus what a submit will do to the file that already exists."""
+
+    existing_variables: tuple[SecretVariableName, ...] = Field(
+        description="Variable names the env file already holds, so the card can say what a submit keeps"
+    )
+    overwrites: tuple[SecretVariableName, ...] = Field(
+        description="The requested names the file already holds, which a submit replaces"
+    )
 
 
 class FiledSecretRequest(FrozenModel):
@@ -204,14 +233,14 @@ class FiledSecretRequest(FrozenModel):
         description="Pending requests for the same file that this one closed"
     )
 
-    def as_wire(self) -> dict[str, Any]:
-        """The flat object the request script prints and the card reads: the request's fields plus the two lists."""
-        return {
-            **self.request.model_dump(mode="json"),
-            "env_path": self.request.env_path,
-            "existing_variables": list(self.existing_variables),
-            "overwrites": list(self.overwrites),
-        }
+    def as_response(self) -> FiledSecretRequestResponse:
+        """The flat answer the request script prints and the card reads: the request's fields plus the two lists."""
+        return FiledSecretRequestResponse(
+            **self.request.model_dump(),
+            env_path=self.request.env_path,
+            existing_variables=self.existing_variables,
+            overwrites=self.overwrites,
+        )
 
 
 class _EnvEntry(FrozenModel):

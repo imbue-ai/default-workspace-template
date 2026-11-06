@@ -3,15 +3,24 @@
 Every request to a shared origin passes through ``/_auth/verify`` (session
 cookie verified, identity re-checked against the grants file, Origin policy
 enforced, session cookie stripped from what the service sees, the verified
-identity handed on as ``X-Imbue-Identity``). Visitors without a session are
+identity handed on as ``X-Imbue-Identity``). A visiting agent presents a bearer
+admission token instead of a cookie; ``admit_agent`` resolves it against the
+agent grants and the agent's scope, and the identity handed on names the agent
+rather than an account. Visitors without a session are
 bounced to the accounts broker and land back on ``/_auth/callback``, which
 verifies the broker's handoff token and sets the workspace session cookie. A
 callback whose nonce or token no longer verifies (a reopened link, a slow
 redirect) heals itself: a visitor who already holds a session is sent on, and
 anyone else is sent through the broker once more; only a second failure shows
 the "Sign-in link expired" page.
+
+``GET /connect-info`` is the one route for the Screen service alone: it lives on the
+loopback port caddy never routes a visitor to (caddy reaches this app only for
+``/_auth/*``, ``/_agent/*`` and ``/_health``), and answers the relay credential and the media candidates.
 """
 
+import base64
+import hashlib
 import json
 import secrets
 import threading
@@ -25,26 +34,43 @@ from urllib.parse import urlencode
 from flask import Flask
 from flask import Response
 from flask import request
+from share_grants.grants import Grants
+from share_grants.grants import GrantsError
+from share_grants.grants import load_grants
+from share_grants.grants import upgrade_invites_in_file
 from werkzeug.datastructures import Headers
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
-from share_gateway.grants import Grants
-from share_gateway.grants import GrantsError
-from share_gateway.grants import load_grants
-from share_gateway.grants import upgrade_invites_in_file
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
+from share_gateway.identity import bearer_token_from_headers
+from share_gateway.identity import render_agent_identity_header
 from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.request_counts import DENIED_AGENT_ACCESS_UNCONFIGURED
+from share_gateway.request_counts import DENIED_AGENT_TOKEN
+from share_gateway.request_counts import DENIED_FOREIGN_HOST
+from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
+from share_gateway.request_counts import DENIED_NO_GRANT
+from share_gateway.request_counts import DENIED_NO_SESSION
+from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import OUTCOME_ALLOWED
+from share_gateway.request_counts import REQUESTER_KIND_AGENT
+from share_gateway.request_counts import REQUESTER_KIND_NONE
+from share_gateway.request_counts import REQUESTER_KIND_OWNER
+from share_gateway.request_counts import REQUESTER_KIND_USER
+from share_gateway.request_counts import RequestCounter
+from share_gateway.request_counts import classify_method
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -61,39 +87,56 @@ _SYSTEM_INTERFACE_SERVICE_NAME = "system_interface"
 # routes).
 _SHELL_SERVICE_NAME = "system_interface"
 
-_LOADING_PAGE = """<!DOCTYPE html>
+# The stylesheet the gateway's own pages inline; the page policy admits it by hash.
+_PAGE_STYLE = (
+    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
+    "height:100vh;margin:0;color:#334155}div{text-align:center}"
+)
+_PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
+
+# The gateway's own pages load nothing but their inline stylesheet. Stated in
+# full here because the frame-ancestors policy caddy adds governs embedding
+# only; the two headers compose by intersection.
+PAGE_CONTENT_SECURITY_POLICY = (
+    f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
+)
+
+_LOADING_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
 <title>Loading...</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Starting up&hellip;</h1>
 <p>This service is not ready yet. The page retries automatically.</p></div></body></html>
 """
 
-_FORBIDDEN_PAGE = """<!DOCTYPE html>
+_FORBIDDEN_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Not shared with you</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Not shared with you</h1>
 <p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
 """
 
-_EXPIRED_LOGIN_PAGE = """<!DOCTYPE html>
+_EXPIRED_LOGIN_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Sign-in link expired</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Sign-in link expired</h1>
 <p>This sign-in link was already used or has expired. Open the workspace link again.</p></div></body></html>
 """
 
-_MISCONFIGURED_PAGE = """<!DOCTYPE html>
+_MISCONFIGURED_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Sharing is misconfigured</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Sharing is misconfigured</h1>
 <p>This workspace's sharing settings could not be read, so nobody can be let in right now.
 The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
 """
+
+
+def _html_page(page: str, status: int) -> Response:
+    """One of the gateway's own pages, under the policy that admits exactly its contents."""
+    return Response(
+        page, status=status, mimetype="text/html", headers={"Content-Security-Policy": PAGE_CONTENT_SECURITY_POLICY}
+    )
 
 
 class PendingLogin:
@@ -168,6 +211,16 @@ def build_gateway_app(
     # service registered while shared is recognized without rebuilding the app.
     # Grants are keyed by service name, not label.
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # The current relay credential and media candidates for the Screen service (share_gateway.connect_info),
+    # read fresh on each call so an assignment re-poll or a credential refresh shows at once.
+    get_connect_info: Callable[[], dict[str, object]],
+    # Resolves a bearer admission token to the visiting agent's identity when
+    # its scope admits the named service; None answers 403. Absent (older
+    # callers, tests of the human path), every bearer request is refused.
+    admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
+    # Counts every request the verify handler answers (request_counts.py); None counts nothing (tests of the
+    # routes alone).
+    request_counter: RequestCounter | None = None,
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
@@ -177,13 +230,13 @@ def build_gateway_app(
     auth_host = f"{auth_label}.{workspace_domain}"
 
     def _forbidden() -> Response:
-        return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+        return _html_page(_FORBIDDEN_PAGE, status=403)
 
     def _expired_login() -> Response:
-        return Response(_EXPIRED_LOGIN_PAGE, status=403, mimetype="text/html")
+        return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
 
     def _misconfigured() -> Response:
-        return Response(_MISCONFIGURED_PAGE, status=503, mimetype="text/html")
+        return _html_page(_MISCONFIGURED_PAGE, status=503)
 
     def _apply_health_cors(response: Response) -> Response:
         """Echo the hosted-chrome origin so it can probe /_health with credentials.
@@ -240,9 +293,16 @@ def build_gateway_app(
             detail["services"] = {name: label for label, name in label_to_name.items()}
         return _apply_health_cors(Response(_json_body(detail), mimetype="application/json"))
 
+    @app.get("/connect-info")
+    def connect_info() -> Response:
+        # A relay credential is a bearer token: nothing may cache it on the way to the Screen service.
+        return Response(
+            _json_body(get_connect_info()), mimetype="application/json", headers={"Cache-Control": "no-store"}
+        )
+
     @app.get("/_auth/loading")
     def loading() -> Response:
-        return Response(_LOADING_PAGE, status=503, mimetype="text/html")
+        return _html_page(_LOADING_PAGE, status=503)
 
     @app.get("/_auth/verify")
     def verify() -> Response:
@@ -252,16 +312,24 @@ def build_gateway_app(
         registered_apps = get_registered_apps()
         label_to_name = build_label_to_name(registered_apps)
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
-        if not is_ours:
-            _log_denied("hostname is not one of this workspace's origins", host)
-            return _forbidden()
 
         # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
         # forward_auth block in the rendered Caddyfile).
         is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
+        method_class = classify_method(method, is_websocket_upgrade)
+
+        def _counted(response: Response, requester_kind: str, requester_id: str, outcome: str) -> Response:
+            if request_counter is not None:
+                request_counter.record(service_name or "", requester_kind, requester_id, method_class, outcome)
+            return response
+
+        if not is_ours:
+            _log_denied("hostname is not one of this workspace's origins", host)
+            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_FOREIGN_HOST)
 
         origin_header = request.headers.get("Origin")
-        if not is_request_origin_allowed(
+        bearer_token = bearer_token_from_headers(request.headers.get("Authorization"))
+        if bearer_token is None and not is_request_origin_allowed(
             method,
             origin_header,
             is_websocket_upgrade,
@@ -271,7 +339,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _forbidden()
+            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
@@ -279,17 +347,66 @@ def build_gateway_app(
         # the preflight through exposes nothing: the actual request that
         # follows it is session-checked as usual.
         if method.upper() == "OPTIONS" and chrome_origin and origin_header == chrome_origin:
-            return Response(status=200)
+            return _counted(Response(status=200), REQUESTER_KIND_NONE, "", OUTCOME_ALLOWED)
 
         cookie_header = request.headers.get("Cookie", "")
+
+        # A visiting agent presents its admission token as a bearer header. It
+        # is never ambient, so the Origin policy above is moot for it (the
+        # policy guards browsers' automatically attached cookies); the token
+        # alone is checked, against the agent grants rather than the human
+        # ones, and the agent's scope decides which origins it may reach.
+        if bearer_token is not None:
+            if admit_agent is None:
+                _log_denied("bearer token presented but agent access is not configured", host)
+                return _counted(
+                    Response("authentication required", status=401, mimetype="text/plain"),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_AGENT_ACCESS_UNCONFIGURED,
+                )
+            agent_identity = admit_agent(bearer_token, service_name)
+            if agent_identity is None:
+                _log_denied("bearer token is not a valid admission token for this origin", host)
+                return _counted(
+                    Response("forbidden", status=403, mimetype="text/plain"),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_AGENT_TOKEN,
+                )
+            return _counted(
+                Response(
+                    status=200,
+                    headers={
+                        "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+                        IDENTITY_HEADER: render_agent_identity_header(agent_identity),
+                    },
+                ),
+                REQUESTER_KIND_AGENT,
+                agent_identity.agent_id,
+                OUTCOME_ALLOWED,
+            )
+
         identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
+                return _counted(
+                    _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_NO_SESSION,
+                )
             _log_denied("no session on a non-HTML request", host)
-            return Response("authentication required", status=401, mimetype="text/plain")
+            return _counted(
+                Response("authentication required", status=401, mimetype="text/plain"),
+                REQUESTER_KIND_NONE,
+                "",
+                DENIED_NO_SESSION,
+            )
 
+        requester_kind = REQUESTER_KIND_OWNER if identity.is_owner else REQUESTER_KIND_USER
+        requester_id = "" if identity.is_owner else identity.user_id
         # The owner reaches every origin of their own workspace regardless of
         # the grants file (the broker vouched for ownership by user id). A
         # non-owner is re-checked against the grants file on every request so
@@ -299,12 +416,12 @@ def build_gateway_app(
                 grants = load_grants(grants_path)
             except GrantsError as exc:
                 _log_denied(f"grants file is missing or malformed (failing closed): {exc}", host)
-                return _misconfigured()
+                return _counted(_misconfigured(), requester_kind, requester_id, DENIED_GRANTS_MISCONFIGURED)
             if not grants.allows(
                 identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
-                return _forbidden()
+                return _counted(_forbidden(), requester_kind, requester_id, DENIED_NO_GRANT)
             _upgrade_invite(grants, identity)
 
         # Expose the caller's identity so caddy can copy it to the backend. It is
@@ -315,7 +432,7 @@ def build_gateway_app(
             "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
             IDENTITY_HEADER: render_identity_header(identity),
         }
-        return Response(status=200, headers=response_headers)
+        return _counted(Response(status=200, headers=response_headers), requester_kind, requester_id, OUTCOME_ALLOWED)
 
     @app.get("/_auth/callback")
     def callback() -> Response:

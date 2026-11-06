@@ -1,5 +1,4 @@
 import urllib.parse
-from typing import Any
 from typing import Final
 
 from app_manifest.manifest import describe_validation_error
@@ -71,15 +70,6 @@ class WindowClosedHint(FrozenModel):
     path: WindowPath = Field(description="The path the closed window's page was at")
     window_id: WindowId = Field(description="The window that closed")
     desktop_id: DesktopId = Field(description="The desktop it was on")
-
-
-@pure
-def parse_window_closed_hint(body: Any) -> WindowClosedHint | None:
-    """The hint a closed-window post carries, or None for a body of another shape."""
-    try:
-        return WindowClosedHint.model_validate(body, extra="ignore")
-    except ValidationError:
-        return None
 
 
 @pure

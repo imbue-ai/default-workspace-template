@@ -11,11 +11,15 @@ on the app's `ChatAppState`, which each handler reads via `get_state()`.
 
 from __future__ import annotations
 
-import json
+from typing import Final
 
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
-from flask import request
 from loguru import logger as _loguru_logger
 
 from imbue.chat.accounts import AccountError
@@ -23,16 +27,14 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import claude_env_from_paste
 from imbue.chat.harnesses.claude import auth
 from imbue.chat.models import ClaudeAuthCredentialsRequest
+from imbue.chat.models import ClaudeAuthCredentialsResponse
 from imbue.chat.models import ClaudeAuthStatusResponse
-from imbue.chat.models import ErrorResponse
 from imbue.chat.state import get_state
 
 logger = _loguru_logger
 
-
-def _json_response(content: object, status_code: int = 200) -> Response:
-    body = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-    return Response(body, status=status_code, mimetype="application/json")
+STATUS_ROUTE: Final[str] = "/api/claude-auth/status"
+SUBMIT_CREDENTIALS_ROUTE: Final[str] = "/api/claude-auth/submit-credentials"
 
 
 def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
@@ -48,7 +50,7 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
     # container's service log shows only the access line for the 4xx/5xx,
     # leaving no server-side trace of what actually went wrong.
     logger.warning("Returning claude-auth error response ({}): {}", status_code, detail)
-    return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
+    return error_response(detail, status_code)
 
 
 def get_status() -> Response:
@@ -58,7 +60,7 @@ def get_status() -> Response:
         status = service.get_auth_status()
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
-    return _json_response(_status_to_response(status).model_dump())
+    return model_response(_status_to_response(status))
 
 
 def submit_credentials() -> Response:
@@ -72,10 +74,7 @@ def submit_credentials() -> Response:
     The strict parse rejects unmanaged keys and mixed-mode pastes with a 400 before
     anything is written.
     """
-    try:
-        body = ClaudeAuthCredentialsRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
+    body = parse_request_body(ClaudeAuthCredentialsRequest)
     pasted = body.credentials.get_secret_value().strip()
     if not pasted:
         return _error_response("credentials must be a non-empty string")
@@ -94,14 +93,22 @@ def submit_credentials() -> Response:
     # rejects a bare key outright -- and it ran after the account was already committed and
     # outside the try, so pasting a plain `sk-ant-...` (what the keys page hands you) minted
     # the account, made it the MRU, and then answered 500.
-    return _json_response(
-        {
-            "account_id": account.id,
-            "display": account.display,
-            "logged_in": True,
-            "auth_mode": auth.derive_auth_mode(claude_env_from_paste(pasted)).value,
-        }
+    return model_response(
+        ClaudeAuthCredentialsResponse(
+            account_id=account.id,
+            display=account.display,
+            logged_in=True,
+            auth_mode=auth.derive_auth_mode(claude_env_from_paste(pasted)).value,
+        )
     )
+
+
+ROUTE_TABLE: Final[RouteTable] = {
+    ("GET", STATUS_ROUTE): RouteModels(response_model=ClaudeAuthStatusResponse),
+    ("POST", SUBMIT_CREDENTIALS_ROUTE): RouteModels(
+        request_model=ClaudeAuthCredentialsRequest, response_model=ClaudeAuthCredentialsResponse
+    ),
+}
 
 
 def register_routes(application: Flask) -> None:
@@ -111,5 +118,5 @@ def register_routes(application: Flask) -> None:
     app's `ChatAppState`; `main.build_production_state` (or the test state
     builder) places them there before the app serves requests.
     """
-    application.add_url_rule("/api/claude-auth/status", view_func=get_status, methods=["GET"])
-    application.add_url_rule("/api/claude-auth/submit-credentials", view_func=submit_credentials, methods=["POST"])
+    application.add_url_rule(STATUS_ROUTE, view_func=get_status, methods=["GET"])
+    application.add_url_rule(SUBMIT_CREDENTIALS_ROUTE, view_func=submit_credentials, methods=["POST"])

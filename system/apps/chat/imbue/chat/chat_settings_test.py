@@ -12,7 +12,7 @@ from imbue.chat.chat_settings import FastModeMode
 def test_an_absent_settings_file_reads_as_the_defaults(tmp_path: Path) -> None:
     store = ChatSettingsStore(path=tmp_path / "settings.json")
     assert store.read() == ChatSettings(
-        fast_mode_default=FastModeMode.AUTO,
+        fast_mode_default=FastModeMode.OFF,
         fast_mode_turn_limit=DEFAULT_FAST_MODE_TURN_LIMIT,
         is_fast_mode_notice_shown=False,
         autocompact_default=True,

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.model import ClaudeModelResolver
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -17,6 +19,8 @@ from imbue.chat.harnesses.pi_coding.model import _parse_list_models
 from imbue.chat.harnesses.pi_coding.model import _supported_thinking_levels
 from imbue.chat.harnesses.pi_coding.model import build_catalog
 from imbue.chat.harnesses.pi_coding.model import flush_pi_queue_atomic
+from imbue.chat.harnesses.registry import get_catalog
+from imbue.chat.testing import put_stand_in_pi_on_path
 
 
 def _agent_info(tmp_path: Path) -> AgentInfo:
@@ -30,7 +34,7 @@ def _agent_info(tmp_path: Path) -> AgentInfo:
     )
 
 
-# --- effort derivation (pi's getSupportedThinkingLevels) ------------------------
+# effort derivation (pi's getSupportedThinkingLevels)
 
 
 def test_non_reasoning_model_supports_only_off() -> None:
@@ -53,7 +57,7 @@ def test_reasoning_model_no_map_drops_xhigh_and_max() -> None:
     assert _supported_thinking_levels({"reasoning": True}) == ("off", "minimal", "low", "medium", "high")
 
 
-# --- catalog build (efforts are verbatim strings) -------------------------------
+# catalog build (efforts are verbatim strings)
 
 
 def _write_provider(data_dir: Path, provider: str, models: dict[str, Any]) -> None:
@@ -91,7 +95,17 @@ def test_build_catalog_tags_and_string_efforts(tmp_path: Path) -> None:
     assert all(not opt.supports_fast for opt in catalog.options)
 
 
-# --- pi --list-models parsing (the authed offer set) ----------------------------
+def test_the_pi_catalog_is_read_from_the_pi_on_path_even_after_another_pi_was_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put_stand_in_pi_on_path(tmp_path / "first", "openrouter", ["vendor/first-model"], monkeypatch)
+    assert [option.id for option in get_catalog(HarnessType.PI_CODING).options] == ["openrouter/vendor/first-model"]
+
+    put_stand_in_pi_on_path(tmp_path / "second", "groq", ["vendor/second-model"], monkeypatch)
+    assert [option.id for option in get_catalog(HarnessType.PI_CODING).options] == ["groq/vendor/second-model"]
+
+
+# pi --list-models parsing (the authed offer set)
 
 
 def test_parse_list_models_takes_provider_and_model_columns() -> None:
@@ -114,7 +128,7 @@ def test_parse_list_models_empty_output_is_empty() -> None:
     assert _parse_list_models("") == ()
 
 
-# --- resolver -------------------------------------------------------------------
+# resolver
 
 
 def test_list_offered_models_defaults_to_whole_catalog_for_non_pi(tmp_path: Path) -> None:
@@ -163,7 +177,7 @@ def test_switch_twice_leaves_only_the_latest_intent(tmp_path: Path) -> None:
     assert json.loads(control_path.read_text()) == {"model_id": "openai/gpt-5", "thinking_level": "high"}
 
 
-# --- the locked atomic flush writer ---------------------------------------------
+# the locked atomic flush writer
 # The send-in-flight branch (a held ``message.lock`` -> SEND_IN_FLIGHT, no write) is pinned in
 # server_test.py beside its codex sibling, where the bounded-wait constant is patched down; the
 # uncontended path is unit-tested here.

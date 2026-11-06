@@ -61,8 +61,9 @@ Cases, most clearly applyable first:
   `--cpus` / `--memory` / `--disk`, `--restart`), or a runtime/provider flag
   (`runsc` / `docker_runtime` / `install_gvisor_runtime`) -- is
   **rebuild-only for the current workspace** (it still governs future
-  creates). Flag it as needing a workspace recreate, like an image-level
-  `Dockerfile` hunk; do not imply it is in effect.
+  creates). Flag it as needing a workspace recreate, like a pending-recreate
+  `Dockerfile` hunk, saying what the running workspace lacks until then; do
+  not imply it is in effect.
 
 **Escape hatch (`stuck`).** `stuck` has exactly one condition in this
 guide: leaving the running workspace on the old provisioning would **break
@@ -77,8 +78,8 @@ When a merge bumps a *global* dependency (a `setup_system.sh` or installer
 pin, or a `Dockerfile` toolchain pin), a provisioner pin goes live whoever
 consumes it: the apply re-runs the provisioner whenever a file it reads
 changed, with every pin taken from the merged tree, so no single pin can be
-held back. A `Dockerfile` pin is rebuild-only whoever consumes it, like any
-image-level hunk; the verdicts below are for a provisioner pin. What you decide is what the report says about each **dependent**
+held back. A `Dockerfile` pin is rebuild-only whoever consumes it, like a
+pending-recreate `Dockerfile` hunk; the verdicts below are for a provisioner pin. What you decide is what the report says about each **dependent**
 of the new version. Your worktree cannot validate the pair -- worktree
 isolation isolates the repo tree, not the host-global toolchain, so your env
 still has the old dep; do **not** globally install the new one to test, that

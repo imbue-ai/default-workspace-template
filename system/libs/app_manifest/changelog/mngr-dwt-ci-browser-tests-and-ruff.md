@@ -1,0 +1,1 @@
+Gave the package its own ruff config (one import per line, like its sibling apps), which its code was already written in, and fixed the few findings under it so `ruff check`, which CI now runs, passes. No behavior change.

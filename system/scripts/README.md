@@ -1,13 +1,21 @@
 # system/scripts/
 
-Provisioning and utility scripts:
+Provisioning and utility scripts. Their Python lives in one of two packages
+here (one uv project, `pyproject.toml`): `workspace_bare_scripts/`, which the
+system `python3` runs with no venv and which imports only the standard library
+(and the stdlib-only libraries its hook stubs put on `sys.path`), and
+`workspace_scripts/`, whose modules run from the root venv (`uv run --no-sync`).
+A module runs by its own path; an entry stub at `system/scripts/<name>.py` is
+kept only where something outside this release runs that path or the script
+needs a directory put on `sys.path`, and each stub says which. See
+`.agents/shared/references/running-python.md`.
 
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
-  `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
-  (vendored byte-identically into `.agents/skills/update-self/scripts/`, which
-  the apply runs as a self-contained unit), and the boot-convergence units in
+  `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `workspace_bare_scripts/tool_env.py`
+  (vendored byte-identically into `.agents/skills/update-self/python/update_self_skill/`,
+  which the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
@@ -30,6 +38,10 @@ Provisioning and utility scripts:
   type's `config_overrides`. Existing reviewer settings still control gates;
   the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
   workspace-trust consent governs hook execution.
+- Session start: `session_start_sync.sh`, claude's and codex's `SessionStart`
+  hook (wired in `.claude/settings.json` and `.codex/hooks.json`). It never
+  relocks: it syncs the venv `--frozen` from the committed `uv.lock`, and when
+  that lock has drifted from `pyproject.toml` it tells the agent so once.
 - Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`. It prints
   nothing; it records each agent's live model state for the chat model bar.
 - Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
@@ -37,12 +49,27 @@ Provisioning and utility scripts:
   replacement for `mngr message <agent>`; `--create` makes a new chat there
   the same way, with `mngr create` as the backoff; `--interrupt` first restarts
   the chat's agent through the chat app's interrupt route, keeping its
-  conversation and resending anything queued for it, with `mngr start --restart` as the backoff), `run_in_background.py` (run a
+  conversation and resending anything queued for it, with `mngr start --restart` as the backoff), `rename_chat.py` (rename the
+  chat under one title to another through the chat app's rename route, for an
+  app whose display name changed; the `build-app` skill runs it),
+  `workspace_bare_scripts/room_agent.py` (the `room` agent type's process: it
+  reads what `mngr message <room>` types into its pane into the room's
+  transcript, and is run by its path from `.mngr/settings.toml`),
+  `workspace_bare_scripts/run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
   harness; how a lead waits for a worker's report; vendored byte-identically into
-  `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
-  through), `with_secrets.py` (run a
+  `.agents/skills/update-self/python/update_self_skill/`, whose staged copy update-self waits
+  through), `background_tasks.py` (the background tasks each chat is waiting
+  on, one marker file per task under `data/.apps/chat/background_tasks/<chat-id>/`,
+  written by `run_in_background.py` and by Claude's Stop hook; `list` and
+  `is-busy` ask the chat app and fall back to the files; a thin entry point over
+  the `system/libs/chat_background_tasks` library, which everything else imports),
+  `claude_background_task_hooks.py` (Claude's Stop and SessionStart hooks,
+  wired in `.claude/settings.json`, that record Claude's own background tasks as
+  markers; the Claude-specific logic lives in this script, over the same
+  library's markers),
+  `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
@@ -50,12 +77,12 @@ Provisioning and utility scripts:
   conversation the Imbue Studio app had before the workspace existed; run through
   `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration).
+  interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
-- The changelog gate: `check_changelog_entries.py`.
+- The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
-Cohesive machinery lives in packages instead: the recurring-job/automation
-scripts in `system/libs/automations/`, the Caretaker check in
+Cohesive machinery lives in packages instead: the routines runner and its
+cron env wrapper in `system/libs/routines/`, the Caretaker check in
 `system/services/caretaker/`, the OOM entry points in
 `system/services/oom_priority/bin/`, the terminal tmux helpers in
 `system/apps/terminal/`, and the github-sync git hook in

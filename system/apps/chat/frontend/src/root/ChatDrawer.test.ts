@@ -12,6 +12,7 @@ const verbs = vi.hoisted(() => ({
   stopChat: vi.fn(async (_chatId: string) => undefined),
   startChat: vi.fn(async (_chatId: string) => undefined),
   renameChat: vi.fn(async (_chatId: string, _title: string) => undefined),
+  makeMainChat: vi.fn(async (_chatId: string) => undefined),
   destroyChat: vi.fn(async (_chatId: string) => undefined),
 }));
 vi.mock("./verbs", () => verbs);
@@ -21,10 +22,11 @@ import { ChatDrawer } from "./ChatDrawer";
 import { MIN_RAIL_WIDTH_PX, initRailWidth } from "./railWidth";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import type { ChatRailAttrs } from "./ChatRail";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 
 function row(chatId: string, title: string, status = "idle"): ChatRow {
-  return { chatId, title, status, labels: {}, agentIds: [chatId], lastActiveMs: null, isProvisional: false };
+  return chatRowFixture(chatId, { title, status });
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests", "stopped")];
@@ -115,7 +117,12 @@ describe("ChatDrawer", () => {
     expect(onPick).not.toHaveBeenCalled();
     const menuRows = [...document.querySelectorAll<HTMLElement>(".chat-rail-menu [data-menu-row]")];
     // The stopped chat offers to restart rather than stop.
-    expect(menuRows.map((menuRow) => menuRow.textContent)).toEqual(["Rename", "Restart chat", "Delete chat"]);
+    expect(menuRows.map((menuRow) => menuRow.textContent)).toEqual([
+      "Rename",
+      "Make main chat",
+      "Restart chat",
+      "Delete chat",
+    ]);
 
     document.querySelector<HTMLElement>('.chat-rail-menu [data-menu-row="start"]')?.click();
     expect(verbs.startChat).toHaveBeenCalledWith("agent-2");
@@ -168,11 +175,11 @@ describe("ChatDrawer under a mouse", () => {
 
     expect(panel.className).not.toContain("w-[86%]");
     expect(rail.style.width).toBe("320px");
-    // The rail's head and dense rows: "New chat" spelled out, a rename pencil rather than a kebab.
+    // The rail's head and dense rows: "New chat" spelled out, a rename pencil beside the hover kebab.
     expect(panel.querySelector(".chat-rail-new")?.textContent).toBe("New chat");
     expect(panel.querySelector(".chat-rail-row")?.className).not.toContain("min-h-11");
-    expect(panel.querySelector("[data-chat-row-menu]")).toBeNull();
     expect(panel.querySelector(".chat-rail-rename")).not.toBeNull();
+    expect(panel.querySelector("[data-chat-row-menu]")?.className).toContain("group-hover:opacity-100");
   });
 
   it("picks the chat on screen again when its row is clicked, which is what closes the drawer", () => {

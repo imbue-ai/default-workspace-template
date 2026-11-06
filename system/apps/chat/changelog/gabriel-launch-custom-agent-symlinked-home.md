@@ -1,0 +1,1 @@
+The coverage path map now names `/mngr-vol/home/workspace/system/apps/chat/`, the resolved path the `test-offload` CI sandbox records now that its `/home/user` is a symlink to `/mngr-vol/home` (the layout of an imbue_cloud workspace). Without it the runner could not combine the sandbox batches against the coverage floor.

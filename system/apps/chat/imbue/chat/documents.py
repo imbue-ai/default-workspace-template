@@ -28,6 +28,8 @@ PRIMARY_AGENT_ID_META_NAME: Final[str] = "system-interface-agent-id"
 CHAT_ID_META_NAME: Final[str] = "system-interface-chat-id"
 CHAT_AGENT_ID_META_NAME: Final[str] = "system-interface-chat-agent-id"
 CHAT_SESSION_ID_META_NAME: Final[str] = "system-interface-chat-session-id"
+# The chat's kind (``agent`` or ``room``), so a room's page draws itself as one before the room list arrives.
+CHAT_KIND_META_NAME: Final[str] = "system-interface-chat-kind"
 # The terminal app's origin label, which the chat's terminal back face is served from.
 TERMINAL_LABEL_META_NAME: Final[str] = "system-interface-terminal-label"
 
@@ -112,6 +114,10 @@ def inject_chat_identity_meta_tags(html_content: str, chat_id: str, agent_id: st
     with_chat = inject_meta_tag(html_content, CHAT_ID_META_NAME, chat_id)
     with_agent = inject_meta_tag(with_chat, CHAT_AGENT_ID_META_NAME, agent_id)
     return inject_meta_tag(with_agent, CHAT_SESSION_ID_META_NAME, session_id)
+
+
+def inject_chat_kind_meta_tag(html_content: str, kind: str) -> str:
+    return inject_meta_tag(html_content, CHAT_KIND_META_NAME, kind)
 
 
 def inject_terminal_label_meta_tag(html_content: str, terminal_label: str) -> str:

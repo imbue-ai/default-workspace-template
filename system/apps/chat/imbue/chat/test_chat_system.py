@@ -20,6 +20,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import environment_without_own_agent_identity
 from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.api.observe import is_observe_writer_running
@@ -41,10 +42,13 @@ def _running_observer(
     isolated host dir's profile; its stderr goes to ``log_path`` so a failure can say why.
     """
     work_dir.mkdir(exist_ok=True)
-    env = {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
     with open(log_path, "ab") as log:
         process = subprocess.Popen(
-            ["mngr", "observe", "--quiet"], cwd=work_dir, env=env, stdout=log, stderr=subprocess.STDOUT
+            ["mngr", "observe", "--quiet"],
+            cwd=work_dir,
+            env=environment_without_own_agent_identity(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
         )
         try:
             yield process
@@ -96,7 +100,7 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
             )
             listed = client.get("/api/chats")
             assert listed.status_code == 200
-            assert listed.get_json() == {"chats": []}
+            assert listed.get_json() == {"chats": [], "main_chat_id": None}
 
         # The observer is gone. Nothing changes under the follower's directory watch, so the
         # outage is noticed by the fallback poll (ten seconds); the list stays served meanwhile.

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import EntryMode
 from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
@@ -18,10 +19,12 @@ from pydantic import ValidationError
 from workspace_layout.answers import ClientView
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -37,12 +40,18 @@ from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 CLIENTS_FILENAME: Final[str] = "clients.json"
-CLIENTS_FILE_VERSION: Final[int] = 2
+CLIENTS_FILE_VERSION: Final[int] = 3
 # The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
 # CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, ``_folded_if_legacy`` (reading the
-# file straight through ``parse_versioned_document``), and clients_test's version-one test around late October
-# 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
+# file through ``_folded_if_floating_default`` alone), and clients_test's version-one test around late October
+# 2026, once every workspace has written a version-2 or later clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
+# The file from when pinned entries floated by default: dragging one saved its whole presentation, the default
+# floating mode included, so a stored mode there is no sign the user chose it.
+# CLEANUP: drop ``_FLOATING_DEFAULT_CLIENTS_FILE_VERSION``, ``_in_taskbar_client``, ``_folded_if_floating_default``,
+# and clients_test's version-two test around early January 2027, once every workspace has written a version-3
+# clients.json (the first write after this release does).
+_FLOATING_DEFAULT_CLIENTS_FILE_VERSION: Final[int] = 2
 
 # A client unseen for this long is dropped, together with every layout it owns.
 CLIENT_RETENTION: Final[timedelta] = timedelta(days=90)
@@ -59,6 +68,9 @@ class _StoredClient(FrozenModel):
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: datetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
+    participant: ParticipantKey | None = Field(
+        default=None, description="Who the client last arrived as; None for a record from before the key was kept"
+    )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
@@ -73,6 +85,9 @@ class _StoredClient(FrozenModel):
     desktop_moved_by: PageId | None = Field(
         default=None,
         description="The page whose report wrote the current desktop revision; None when an op or an arrival did",
+    )
+    viewport: Viewport | None = Field(
+        default=None, description="The backdrop size the client's desktop layout last reported; None until it has"
     )
 
 
@@ -102,9 +117,11 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         active_desktop=stored.active_desktop,
         last_seen=stored.last_seen,
         user_id=stored.user_id,
+        participant=stored.participant,
         entries=stored.entries,
         shown_history=stored.shown_history,
         desktop_revision=stored.desktop_revision,
+        viewport=stored.viewport,
     )
 
 
@@ -132,8 +149,39 @@ def _folded_if_legacy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     if raw is None or raw.get("version") != _LEGACY_CLIENTS_FILE_VERSION or not isinstance(raw.get("clients"), dict):
         return raw
     return {
-        "version": CLIENTS_FILE_VERSION,
+        "version": _FLOATING_DEFAULT_CLIENTS_FILE_VERSION,
         "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
+    }
+
+
+@pure
+def _in_taskbar_client(entry: Any) -> Any:
+    """A version-2 entry as version 3 reads it: every pinned entry in the taskbar with no floating position."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("entries"), dict):
+        return entry
+    return {
+        **entry,
+        "entries": {
+            app: {**presentation, "mode": EntryMode.BAR.value, "position": None}
+            if isinstance(presentation, dict)
+            else presentation
+            for app, presentation in entry["entries"].items()
+        },
+    }
+
+
+@pure
+def _folded_if_floating_default(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A version-2 document as a version-3 one, entry by entry; any other document (or none) as it is."""
+    if (
+        raw is None
+        or raw.get("version") != _FLOATING_DEFAULT_CLIENTS_FILE_VERSION
+        or not isinstance(raw.get("clients"), dict)
+    ):
+        return raw
+    return {
+        "version": CLIENTS_FILE_VERSION,
+        "clients": {client_id: _in_taskbar_client(entry) for client_id, entry in raw["clients"].items()},
     }
 
 
@@ -171,7 +219,10 @@ class ClientStore(MutableModel):
 
     def _read_unlocked(self) -> ClientsDocument:
         document = parse_versioned_document(
-            _folded_if_legacy(read_json_object(self._path())), ClientsDocument, CLIENTS_FILE_VERSION, self._path()
+            _folded_if_floating_default(_folded_if_legacy(read_json_object(self._path()))),
+            ClientsDocument,
+            CLIENTS_FILE_VERSION,
+            self._path(),
         )
         return document if document is not None else ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
 
@@ -214,8 +265,10 @@ class ClientStore(MutableModel):
                     active_desktop=report.active_desktop,
                     last_seen=stamped,
                     user_id=previous.user_id if previous is not None else None,
+                    participant=previous.participant if previous is not None else None,
                     entries=previous.entries if previous is not None else {},
                     shown_history=previous.shown_history if previous is not None else (),
+                    viewport=previous.viewport if previous is not None else None,
                 ),
                 is_revised_regardless=is_redirected,
                 mover=report.page_id,
@@ -241,9 +294,15 @@ class ClientStore(MutableModel):
         )
 
     def record_arrival(
-        self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
+        self,
+        client_id: ClientId,
+        user_id: UserId | None,
+        participant: ParticipantKey,
+        desktop_id: DesktopId,
+        now: datetime,
     ) -> ClientReportOutcome:
-        """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
+        """Record a client's arrival (the shell page loading): the user it arrived as, the participant key it
+        arrived under, and the desktop it lands on."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
             client_id,
@@ -251,8 +310,10 @@ class ClientStore(MutableModel):
                 active_desktop=desktop_id,
                 last_seen=stamped,
                 user_id=user_id,
+                participant=participant,
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
+                viewport=previous.viewport if previous is not None else None,
             ),
             is_revised_regardless=False,
             mover=None,
@@ -324,6 +385,17 @@ class ClientStore(MutableModel):
             client_id,
             lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
+                to_update(previous.field_ref().last_seen, stamped),
+            ),
+        )
+
+    def set_viewport(self, client_id: ClientId, viewport: Viewport, now: datetime) -> ClientRecord:
+        """Store the backdrop size a recorded client's desktop layout reported; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
+                to_update(previous.field_ref().viewport, viewport),
                 to_update(previous.field_ref().last_seen, stamped),
             ),
         )

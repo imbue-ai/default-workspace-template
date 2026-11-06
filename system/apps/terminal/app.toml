@@ -1,5 +1,7 @@
 name = "terminal"
 display_name = "Terminal"
+description = "Web terminals inside the workspace, one per window."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 # The terminal program serves the wrapper pages on 7681; ttyd runs on the terminal-pty origin
 # (system/apps/terminal_pty/app.toml, port 7683).
@@ -38,3 +40,8 @@ command = [
 env = {MINDS_APPS_FILE = "{registry}"}
 copies = {store = "data/.apps/terminal"}
 health_path = "/api/health"
+
+# A terminal shows a program's output in xterm, whose look is not the workspace's; the window around it is themed,
+# and the theme's terminal palette reaches xterm (docs/system/blueprint/workspace-themes/, section 4.1).
+[theming]
+mode = "none"

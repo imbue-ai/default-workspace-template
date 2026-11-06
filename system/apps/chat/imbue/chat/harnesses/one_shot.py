@@ -9,7 +9,16 @@ its own.
 
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TypeVar
+
+from loguru import logger as _loguru_logger
+
+from imbue.imbue_common.pure import pure
+
+logger = _loguru_logger
 
 
 class OneShotCompletionError(RuntimeError):
@@ -18,6 +27,36 @@ class OneShotCompletionError(RuntimeError):
 
 class OneShotCompletionTimeoutError(OneShotCompletionError):
     """The harness's CLI did not answer in time; another model would wait as long, so no fallback is tried."""
+
+
+_ModelT = TypeVar("_ModelT")
+
+
+@pure
+def describe_model_name(model: str | None) -> str:
+    """A model named by its id, None meaning the account's default, as a failure names it."""
+    return model or "default model"
+
+
+def answer_on_first_model(
+    models: Sequence[_ModelT],
+    complete_on: Callable[[_ModelT], str],
+    describe: Callable[[_ModelT], str],
+) -> str:
+    """``complete_on``'s answer on the first of ``models`` that gives one.
+
+    Raises ``OneShotCompletionError`` naming every model's failure (by ``describe``), or the first timeout as it is.
+    """
+    failures: list[str] = []
+    for model in models:
+        try:
+            return complete_on(model)
+        except OneShotCompletionTimeoutError:
+            raise
+        except OneShotCompletionError as e:
+            logger.info("One-shot completion on {} failed: {}", describe(model), e)
+            failures.append(f"{describe(model)}: {e}")
+    raise OneShotCompletionError("; ".join(failures))
 
 
 class OneShotCompletion(ABC):

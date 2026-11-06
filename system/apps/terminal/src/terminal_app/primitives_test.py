@@ -86,7 +86,7 @@ def test_session_page_path_is_the_wrapper_page_for_the_session() -> None:
 
 
 def test_pty_path_carries_the_ttyd_arguments_in_dispatch_order() -> None:
-    assert pty_path_for_session(TmuxSessionName("terminal-2"), None) == "/?arg=_&arg=session&arg=terminal-2"
+    assert pty_path_for_session(TmuxSessionName("terminal-2"), None) == "/?arg=_&arg=session&arg=terminal-2&arg="
 
 
 def test_pty_path_escapes_the_workdir() -> None:

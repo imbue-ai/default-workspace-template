@@ -13,6 +13,7 @@
  */
 
 import m from "mithril";
+import { MENU_ITEM_PART, MENU_PART, partAttrs } from "../themes/parts";
 
 import { icon } from "./icons";
 import { MENU_ROW_FOCUS, MENU_ROW_SLAB, menuCardClass } from "./menu";
@@ -108,6 +109,7 @@ export function Dropdown<V extends string>(): m.Component<DropdownAttrs<V>> {
       "div",
       {
         class: LIST_CLASS,
+        ...MENU_PART,
         role: "listbox",
         [DROPDOWN_PART_ATTR]: "list",
         // As wide as the field it drops from, so the two read as one control.
@@ -125,6 +127,7 @@ export function Dropdown<V extends string>(): m.Component<DropdownAttrs<V>> {
             role: "option",
             "aria-selected": isPicked ? "true" : "false",
             [DROPDOWN_OPTION_ATTR]: option.value,
+            ...MENU_ITEM_PART,
             class: `${OPTION_CLASS} ${isPicked ? OPTION_PICKED_CLASS : OPTION_IDLE_CLASS}`,
             onclick: (event: MouseEvent) => {
               event.stopPropagation();
@@ -155,6 +158,7 @@ export function Dropdown<V extends string>(): m.Component<DropdownAttrs<V>> {
           {
             type: "button",
             class: TRIGGER_CLASS,
+            ...partAttrs("select"),
             role: "combobox",
             "aria-haspopup": "listbox",
             "aria-expanded": isOpen ? "true" : "false",

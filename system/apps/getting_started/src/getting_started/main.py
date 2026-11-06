@@ -13,9 +13,6 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import register_app
 from getting_started.config import Config
 from getting_started.config import load_config
-from getting_started.first_window import FirstWindowLedger
-from getting_started.first_window import FirstWindowOpener
-from getting_started.first_window import LEDGER_FILENAME
 from getting_started.pages import build_pages_blueprint
 from getting_started.serving import app_url_port
 from getting_started.serving import serve_in_background
@@ -24,16 +21,12 @@ from getting_started.state_files import DEFAULT_STATE_DIRECTORY
 from getting_started.template_catalog import build_template_catalog_store
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
-from workspace_layout.client import ShellLayoutClient
-from workspace_layout.shell_url import shell_base_url
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/getting_started/app.toml")
 APP_NAME: Final[AppName] = AppName("getting-started")
 # The frontend's build output, inside the package.
 DEFAULT_STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
-# One loopback request the shell answers without work.
-SHELL_TIMEOUT_SECONDS: Final[float] = 2.0
 
 
 class GettingStartedArguments(FrozenModel):
@@ -41,13 +34,13 @@ class GettingStartedArguments(FrozenModel):
 
     manifest_path: Path = Field(description="The app.toml to register")
     app_url: AppUrl = Field(description="Where the page is served")
-    state_dir: Path = Field(description="The app's state directory: the catalog cache and the first-visit ledger")
+    state_dir: Path = Field(description="The app's state directory: the catalog cache")
     static_directory: Path = Field(description="The frontend's built bundle")
     catalog_url: str = Field(description="Where the template catalog is fetched from; empty disables it")
     host: str = Field(description="The address the page server binds")
     is_registered: bool = Field(
-        description="Whether this boot is the workspace's Getting Started: it registers the manifest and opens the "
-        "first-visit window. A preview boots unregistered and does neither, since both would reach the live workspace."
+        description="Whether this boot is the workspace's Getting Started, which registers the manifest. A preview "
+        "boots unregistered and does not, since that would re-point the live row."
     )
 
 
@@ -65,32 +58,18 @@ def build_pages_app(arguments: GettingStartedArguments) -> Flask:
     return app
 
 
-def build_first_window_opener(arguments: GettingStartedArguments) -> FirstWindowOpener:
-    return FirstWindowOpener(
-        app=APP_NAME,
-        ledger=FirstWindowLedger(path=arguments.state_dir / LEDGER_FILENAME),
-        shell=ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=SHELL_TIMEOUT_SECONDS),
-    )
-
-
 def run_getting_started_app(arguments: GettingStartedArguments, wait_for_shutdown: Callable[[], int]) -> int:
-    """Serve the page, start the first-visit opener, register the app, and wait for SIGTERM or SIGINT.
+    """Serve the page, register the app, and wait for SIGTERM or SIGINT.
 
-    An unregistered boot (a preview beside the live app) skips the opener and the registration: the
-    opener would open a window of the registered app in the live desktop, and the registration would
-    point the live row at the preview.
+    An unregistered boot (a preview beside the live app) skips the registration, which would point the
+    live row at the preview. The app opens no window of its own: a new workspace opens on the welcome
+    chat, and the desktop's tour introduces the apps.
     """
-    opener = build_first_window_opener(arguments)
     with serve_in_background(arguments.host, app_url_port(arguments.app_url), build_pages_app(arguments)):
         if arguments.is_registered:
-            opener.start()
-        try:
-            if arguments.is_registered:
-                with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
-                    register_app(arguments.manifest_path, arguments.app_url)
-            return wait_for_shutdown()
-        finally:
-            opener.stop()
+            with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
+                register_app(arguments.manifest_path, arguments.app_url)
+        return wait_for_shutdown()
 
 
 def arguments_from_config(
@@ -121,7 +100,7 @@ def arguments_from_config(
     type=click.Path(path_type=Path),
     default=DEFAULT_STATE_DIRECTORY,
     show_default=True,
-    help="The app's state directory (the catalog cache and the first-visit ledger)",
+    help="The app's state directory (the catalog cache)",
 )
 @click.option(
     "--static-dir",
@@ -136,8 +115,8 @@ def arguments_from_config(
     "is_unregistered",
     is_flag=True,
     default=False,
-    help="Skip the registration and the first-visit window: a throwaway boot, such as a preview, that must not "
-    "re-point the live Getting Started row or open a window in the live desktop",
+    help="Skip the registration: a throwaway boot, such as a preview, that must not re-point the live Getting "
+    "Started row",
 )
 def main(manifest_path: Path, state_dir: Path, static_directory: Path, is_unregistered: bool) -> None:
     """Run the Getting Started app: the ways into the workspace, each starting a chat through the desktop."""

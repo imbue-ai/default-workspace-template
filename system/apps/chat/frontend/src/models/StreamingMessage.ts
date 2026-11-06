@@ -8,8 +8,20 @@
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
-import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
+import {
+  appendEvents,
+  fetchEvents,
+  getEventCount,
+  getFirstOffset,
+  getLastEventId,
+  hasMoreAfter,
+  isTranscriptLoaded,
+  requestEventsAfter,
+  type TranscriptEvent,
+} from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { addChatActivityListener, addChatsUpdatedListener } from "./Chats";
+import { applyReplyDraftFrame, clearReplyDraft, isReplyDraftFrame } from "./ReplyDrafts";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -70,6 +82,11 @@ export function connectToStream(chatId: string): void {
     if (raw === null) {
       return;
     }
+    // A draft is not a transcript event: it is held beside the transcript, never in it.
+    if (isReplyDraftFrame(raw)) {
+      applyReplyDraftFrame(chatId, raw);
+      return;
+    }
     const event = raw as TranscriptEvent;
     const pending = inFlightSnapshotBuffersByChat.get(chatId);
     if (pending !== undefined) {
@@ -83,6 +100,7 @@ export function connectToStream(chatId: string): void {
     if (activeStreams.get(chatId) === eventSource) {
       eventSource.close();
       activeStreams.delete(chatId);
+      clearReplyDraft(chatId);
       console.warn(`[si-sse] stream error for chat ${chatId}`);
       scheduleReconnectWithSnapshot(chatId);
     }
@@ -180,7 +198,100 @@ export function disconnectFromStream(chatId: string): void {
     eventSource.close();
     activeStreams.delete(chatId);
   }
+  clearReplyDraft(chatId);
 }
+
+// The most events one catch-up request fetches; a longer run is fetched by the next one.
+const CATCH_UP_LIMIT = 200;
+
+/**
+ * Fetch what the live stream should have delivered after the last event the page holds.
+ *
+ * The stream is a low-latency hint and the transcript route the source of truth, and nothing
+ * else notices an event the stream never carried (one written between the snapshot and the
+ * stream registering, or one a stalled connection swallowed): it stays missing until the
+ * page reloads. So whenever a turn ends, and whenever the page is shown again, the page asks
+ * the route what follows its last event. Missing events at the end are appended in place;
+ * one missing inside the window (the route places the window's end further along than the
+ * page does) reloads the transcript with the stream, as a reconnect does.
+ */
+export async function catchUpLiveTail(chatId: string): Promise<void> {
+  const lastEventId = getLastEventId(chatId);
+  if (lastEventId === null || !isTranscriptLoaded(chatId) || hasMoreAfter(chatId)) {
+    return;
+  }
+  const heldEnd = getFirstOffset(chatId) + getEventCount(chatId);
+  let result;
+  try {
+    result = await requestEventsAfter(chatId, lastEventId, CATCH_UP_LIMIT);
+  } catch (error) {
+    console.warn(`[si-sse] catch-up fetch failed for chat ${chatId}`, error);
+    return;
+  }
+  // Where the route places the first event after the held last one, and how long it says the
+  // transcript is. Either beyond the window means an event the stream never carried sits
+  // inside the window, where appending cannot put it.
+  const offset = result.offset ?? heldEnd;
+  const total = result.total ?? heldEnd + result.events.length;
+  const isMissingInside = result.events.length === 0 ? total > heldEnd : offset > heldEnd;
+  if (isMissingInside) {
+    console.warn(`[si-sse] chat ${chatId} is missing events the stream did not deliver; reloading it`);
+    await loadSnapshotWithStream(chatId).catch((error: unknown) => {
+      console.warn(`[si-sse] reload after a missed event failed for chat ${chatId}`, error);
+    });
+    return;
+  }
+  // A window the stream moved while the fetch was out is checked again on the next trigger.
+  if (result.events.length === 0 || getLastEventId(chatId) !== lastEventId) {
+    return;
+  }
+  console.warn(`[si-sse] caught up ${result.events.length} event(s) the stream did not deliver for chat ${chatId}`);
+  appendEvents(chatId, result.events);
+  if (result.events.length === CATCH_UP_LIMIT) {
+    await catchUpLiveTail(chatId);
+  }
+}
+
+// The last chat status each streamed chat was seen with, to see a turn end by its status.
+const lastStatusByChat = new Map<string, string>();
+
+/**
+ * Catch up every streamed chat whose turn just ended, and every streamed chat when the page is shown again.
+ *
+ * A turn's end is seen two ways, since either can be all the page gets: the activity reaching
+ * IDLE (as soon as the reply lands), and the chat's status leaving `working` (once the turn's
+ * hooks finish, or when the chat reads as stopped without its activity ever having moved).
+ */
+function installCatchUpTriggers(): void {
+  addChatActivityListener((chatId, previous, current) => {
+    if (current === "IDLE" && previous !== null && previous !== "IDLE" && activeStreams.has(chatId)) {
+      void catchUpLiveTail(chatId);
+    }
+  });
+  addChatsUpdatedListener((chats) => {
+    const previousByChat = new Map(lastStatusByChat);
+    // Rebuilt from each push, so a chat that left the list leaves the map with it.
+    lastStatusByChat.clear();
+    for (const chat of chats) {
+      lastStatusByChat.set(chat.chat_id, chat.status);
+      const previous = previousByChat.get(chat.chat_id);
+      if (previous === "working" && chat.status !== "working" && activeStreams.has(chat.chat_id)) {
+        void catchUpLiveTail(chat.chat_id);
+      }
+    }
+  });
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        for (const chatId of activeStreams.keys()) {
+          void catchUpLiveTail(chatId);
+        }
+      }
+    });
+  }
+}
+
+installCatchUpTriggers();
 
 // Compatibility shims
 export function getStreamingMessage(_chatId: string): StreamingMessage | null {

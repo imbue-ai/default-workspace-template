@@ -5,7 +5,7 @@
  * An app registers its icon as SVG markup (`forward_port.py --icon`), the
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
- * untrusted: every surface that draws an app goes through
+ * untrusted: every surface that draws an app's registered icon goes through
  * `appIconMarkup`/`appIconMarkupForApp` here, and nothing inlines a registry
  * string on its own.
  *
@@ -243,6 +243,9 @@ function normalizeRoot(root: Element, sizePx: number): boolean {
   }
   root.setAttribute("width", String(sizePx));
   root.setAttribute("height", String(sizePx));
+  // Parsed as HTML, the svg keeps no namespace an author left out, and markup without it does not decode as an
+  // image on its own (a theme derives its icon from this markup as a `data:image/svg+xml` URL).
+  root.setAttribute("xmlns", SVG_NAMESPACE);
   // Decoration beside a label that already names the app, exactly like the
   // built-in glyphs, and never a tab stop.
   root.setAttribute("aria-hidden", "true");

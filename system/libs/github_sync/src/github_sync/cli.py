@@ -1,6 +1,6 @@
 """CLI for github-sync: the service loop plus the helpers the skill drives.
 
-`uv run github-sync run` is what the [program:github-sync] supervisord block
+`github-sync run` is what the [program:github-sync] supervisord block
 executes; the remaining subcommands are one-shot steps invoked by the
 github-sync skill during enable / disable / status.
 """

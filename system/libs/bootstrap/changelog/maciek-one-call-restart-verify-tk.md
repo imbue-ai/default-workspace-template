@@ -1,0 +1,1 @@
+- The README bounces an app after a code change with `verify_app.py <name> --restart`, which skips the 30 s `startsecs` wait, and keeps `supervisorctl restart <name>` for a daemon with no port.

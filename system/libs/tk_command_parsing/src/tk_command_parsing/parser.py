@@ -16,11 +16,12 @@ tokenizing -- that is the lexer's one blind spot here, and the only place the
 raw string is scanned char by char.
 
 This module is intentionally **stdlib-only**: the PreToolUse gate hooks in
-``system/scripts/`` -- ``agent_tk_standalone_check.py``,
-``agent_latchkey_request_check.py`` and ``agent_block_pipe_tail_head_check.py``
--- import it under a bare ``python3`` with
-no virtualenv, so it must not pull in any third-party dependency. That is also
-why the records below are ``typing.NamedTuple`` rather than a pydantic model.
+``system/scripts/workspace_bare_scripts/`` -- ``agent_tk_standalone_check.py``,
+``agent_latchkey_request_check.py``, ``agent_block_pipe_tail_head_check.py``,
+``agent_block_foreground_sleep_check.py`` and ``agent_secrets_guard_check.py`` --
+import it under a bare ``python3`` with no virtualenv, so it must not pull in any
+third-party dependency. That is also why the records below are
+``typing.NamedTuple`` rather than a pydantic model.
 """
 
 from __future__ import annotations
@@ -37,6 +38,11 @@ _PUNCT = "();<>|&"
 # A leading ``VAR=value`` assignment. It is benign before a command (the shell
 # still runs the command in place), so it is skipped when locating the verb.
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
+
+# Shell keywords that can sit before a command in the same segment (`do sleep 30`).
+_LEADING_KEYWORDS = frozenset(
+    {"do", "then", "else", "elif", "if", "while", "until", "time", "!", "{"}
+)
 
 # The command names that identify a tk invocation, after stripping any path
 # prefix (``system/vendor/tk/ticket`` -> ``ticket``).
@@ -100,6 +106,18 @@ def parse_command(command: str) -> ParsedCommand | None:
     return ParsedCommand(segments=tuple(segments))
 
 
+def command_words(segment: CommandSegment) -> list[str]:
+    """The words of the command ``segment`` runs: its words past any leading
+    ``VAR=value`` assignments and the shell keywords that can precede a command
+    (``do``, ``then``, ``if``, ``time``, ``{``, ...), so ``do sleep 30`` and
+    ``A=1 cat f`` yield ``sleep 30`` and ``cat f``.
+    """
+    words = list(segment.words)
+    while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
+        words.pop(0)
+    return words
+
+
 def flag_values(args: Sequence[str], flag: str) -> list[str]:
     """Every value passed to ``flag`` within ``args``, in order.
 
@@ -153,7 +171,8 @@ def _newlines_to_semicolons(cmd: str) -> str:
     """Replace unquoted newlines with `;` so they read as command separators.
 
     A newline inside quotes (e.g. a multi-line close summary) is preserved.
-    Backslash escapes the next char outside single quotes, matching the shell.
+    Backslash escapes the next char outside single quotes, matching the shell;
+    an unquoted backslash-newline is a line continuation and is dropped.
     A `#` that begins a word (at the start, or after whitespace or a shell
     metacharacter) starts a comment that the shell ends at the newline, so the
     comment body is dropped here too -- otherwise shlex (which has no newlines
@@ -178,8 +197,14 @@ def _newlines_to_semicolons(cmd: str) -> str:
                 prev = "\n"
             continue
         if escaped:
-            out.append(ch)
             escaped = False
+            if ch == "\n" and quote is None:
+                # A line continuation: the shell drops the backslash and the
+                # newline, joining the two lines into one.
+                out.pop()
+                prev = out[-1] if out else None
+                continue
+            out.append(ch)
             prev = ch
             continue
         if quote != "'" and ch == "\\":

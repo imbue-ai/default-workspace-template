@@ -1,6 +1,7 @@
 # Stop apps that have no windows
 
 Status: agreed design (2026-09-28), implemented on `mngr/stop-closed-apps`.
+The browser's rows and decision 3's browser clause are superseded by the Screen spec ([screen/spec.md](screen/spec.md), 2026-10-17): the browser app is gone, the browser is a launch path of the `screen` app, which declares `stop_when_no_windows = false` and never stops for emptiness.
 Audience: implementers of the shell (`system/apps/system_interface`), `system/libs/app_manifest`, `system/scripts/forward_port.py`, the share gateway (`system/services/share_gateway`), the built-in app manifests, the `build-app` skill, and the supervisord drop-ins.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md)) and the window-bound resources spec ([window-bound-resources.md](window-bound-resources.md)) in one place: what happens to an app's *process* once nobody is looking at the app.
@@ -27,11 +28,11 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
 - The terminal and the browser collect their *resources* (a tmux session, Chromium) once no window shows them (window-bound-resources spec, Part B), told by the shell's close hint (`window_closed_path`) and by a 90 second sweep over `GET /api/desktops`.
   The shell itself destroys nothing.
 - `mngr forward` answers a backend it cannot reach with a 503 whose HTML body polls the same URL every second and reloads on any other status; the share gateway's caddy answers a bare 502 for a registered service whose backend is down, and serves its own auto-refreshing loading page only for origins it has no route for.
-- Getting Started opens its first-visit window from a thread of its own process, which polls the shell for a connected client (`system/apps/getting_started/src/getting_started/first_window.py`).
-  Stopped before anyone has visited, it would never deliver that window.
+- Getting Started opened its first-visit window from a thread of its own process, which polled the shell for a connected client, until the new onboarding (October 2026) left a new workspace on the welcome chat alone, with the desktop's tour introducing the apps.
+  The rule below that holds a stop until a client has visited was written for that window and is kept: it costs nothing and keeps the first visit's apps running.
 - The `app-watcher` service is a 40 MB process whose one job is to diff `data/.state/apps.toml` on change and append `service_registered` and `service_deregistered` events to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, which the minds desktop reads to discover an app's origins.
   The shell watches the same file with the same intent (`shell/inventory.py`).
-- A scaffolded user app registers itself as the first half of its own program command (`forward_port.py --manifest ... && <entry>`), runs its uv tool entry point directly (no `uv run`), and carries `startsecs = 30` and `startretries = 5`.
+- A scaffolded user app registers itself as the first half of its own program command (`forward_port.py --manifest ... && <entry>`), execs its entry point from its own project's venv after syncing it (`system/apps/<package>/.venv/bin/<name>`, no `uv run`), and carries `startsecs = 30` and `startretries = 5`.
 
 ## 2. Decisions
 
@@ -39,7 +40,7 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
    The workspace guarantees that every registered loopback URL accepts a connection: while an app is stopped, the shell holds its port.
 2. The manifest field is `stop_when_no_windows`, a boolean, default `false`, and `critical = true` forces it `false`.
    It governs only the automatic stop of Part D; Quit (Part E) is offered for every stoppable app whatever the field says, and a stopped app always wakes through Part B whatever the field says.
-3. Built-in defaults: `files` and `getting-started` declare `true`; `browser` declares `false`, since agents drive its browsers with no window at all (the agentic-browser-fleet skill, through the coordinator's CDP proxy) and stopping the coordinator closes every Chromium it runs, while Chromium itself already stops on the close hint; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
+3. Built-in defaults: `files`, `getting-started`, `routines`, and `system-monitor` declare `true`; `browser` declares `false`, since agents drive its browsers with no window at all (the agentic-browser-fleet skill, through the coordinator's CDP proxy) and stopping the coordinator closes every Chromium it runs, while Chromium itself already stops on the close hint; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
    The build-app scaffold writes `stop_when_no_windows = true` into every new manifest, so a user app's manifest states the rule outright.
 4. The grace period before an automatic stop is 60 seconds, cancelled by any window of the app opening; Quit has none.
 5. An app is stopped for having no windows only once a client has arrived at the shell since the shell started.
@@ -96,6 +97,8 @@ The program lines that end in `&& <entry>` without `exec` (`system_interface`, a
 | `files` | false | true |
 | `browser` | false | false |
 | `getting-started` | false | true |
+| `system-monitor` | false | true |
+| `routines` | false | true |
 
 `system/test_app_manifests.py` pins the table.
 The browser's manifest keeps its `window_closed_path`, so Chromium still stops on the close hint, and declares `false`: the coordinator serves browsers that agents drive with no window (decision 3), so Part D must not stop it.
@@ -198,7 +201,7 @@ On every pass of the lifecycle sweep, for each app that is stoppable, whose row 
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
 - with at least one window, or not `internal` and with a per-app share grant (decision 12), clear the app's idle mark;
-- with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
+- with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset or was set for another process of the program (supervisord's `pid` changed: the program was started again, so a restart gets the whole grace period), and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
 The idle mark lives in the manager's memory: a shell restart starts the 60 seconds over, which is the safe direction.

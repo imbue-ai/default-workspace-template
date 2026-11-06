@@ -1,0 +1,1 @@
+The Datalib manifest carries a one-line `description` of what the app is for, which the visiting-agent primer shows; datalib-http is another program's server, so the app declares no API document of its own.

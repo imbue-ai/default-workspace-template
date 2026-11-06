@@ -84,7 +84,7 @@ def is_signed_in(
     # folder would commit as signed in, become the most-recently-used, and launch every later
     # chat with no credential. The question is whether THIS FOLDER is authenticated.
     env = {k: v for k, v in os.environ.items() if k not in MANAGED_AUTH_ENV_KEYS}
-    env.update(build_account_binding(harness).account_env(account_dir))
+    env.update(build_account_binding(harness).cli_env(account_dir))
     try:
         finished = runner(
             command=list(command),

@@ -69,3 +69,25 @@ Feature: Ticket ID Resolution
     When I run "ticket link cccc dddd"
     Then the command should succeed
     And ticket "link-cccc" should have "link-dddd" in links
+
+  Scenario: Empty ID error
+    Given a ticket exists with ID "abc-1234" and title "Only ticket"
+    When I run "ticket show ''"
+    Then the command should fail
+    And the output should contain "Error: empty ticket ID"
+
+  Scenario: Empty ID does not close the only regular ticket among steps
+    Given a ticket exists with ID "lease-1234" and title "Another agent's lease"
+    And a step record exists with ID "abc-step-0001" and title "A step"
+    And a step record exists with ID "abc-step-0002" and title "Another step"
+    When I run "ticket close '' 'Done'"
+    Then the command should fail
+    And the output should contain "Error: empty ticket ID"
+    And ticket "lease-1234" should have field "status" with value "open"
+
+  Scenario: Whitespace-only ID error
+    Given a ticket exists with ID "abc-1234" and title "Only ticket"
+    When I run "ticket start '   '"
+    Then the command should fail
+    And the output should contain "Error: empty ticket ID"
+    And ticket "abc-1234" should have field "status" with value "open"

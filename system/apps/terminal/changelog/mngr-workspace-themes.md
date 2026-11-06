@@ -1,0 +1,1 @@
+The terminal's colors follow the workspace's theme: a theme's terminal palette (`--term-*` tokens) recolors the terminal live, and the terminal keeps its own colors under a theme that sets none. The terminal declares `[theming] mode = "none"`, so its output and its own page are otherwise left alone: the palette is read without the theme's rules styling the page.

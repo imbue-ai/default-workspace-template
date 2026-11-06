@@ -3,8 +3,15 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyPresence, resetPresenceForTesting } from "../model/Presence";
-import { appRecord, avatarStateRecord, desktopRecord, presentUserRecord, windowRecord } from "../testing/records";
+import { resetPresenceForTesting } from "../model/Presence";
+import {
+  appRecord,
+  avatarStateRecord,
+  desktopRecord,
+  rosterParticipantRecord,
+  windowRecord,
+} from "../testing/records";
+import type { SystemTrayAttrs } from "./SystemTray";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
@@ -13,10 +20,32 @@ afterEach(() => {
   resetPresenceForTesting();
 });
 
+/** A tray with an empty roster, no chrome, and the default avatar. */
+function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
+  return {
+    roster: [],
+    viewer: null,
+    now: new Date("2026-10-25T12:00:00Z"),
+    hopping: new Set(),
+    ringed: new Set(),
+    isShareOffered: false,
+    avatar: avatarStateRecord(),
+    workspaceName: "Atlas",
+    isAgentAttending: false,
+    isAvatarFloating: false,
+    onPersonClick: vi.fn(),
+    onAgentClick: vi.fn(),
+    onAgentContextMenu: vi.fn(),
+    onPersonHoverStart: vi.fn(),
+    onAgentHoverStart: vi.fn(),
+    onHoverEnd: vi.fn(),
+    ...overrides,
+  };
+}
+
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
   const attrs: TaskbarAttrs = {
-    avatar: avatarStateRecord(),
     entries: [
       {
         window: windowRecord("win-1", "docs", "/a", { title: "Plan" }),
@@ -46,7 +75,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         isDetached: false,
         isFocused: false,
         isPinned: true,
-        look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
+        look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null, isWindowShown: true },
       },
     ],
     openEntryMenuWindowId: null,
@@ -61,14 +90,9 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       onRunSecondary: vi.fn(),
       onRise: vi.fn(),
     },
-    tray: {
-      desktops: [desktopRecord("home"), desktopRecord("work")],
-      activeDesktopId: "home",
-      isDesktopsMenuOpen: false,
-      onSwitchDesktop: vi.fn(),
-      onOpenDesktopsMenu: vi.fn(),
-      onDesktopContextMenu: vi.fn(),
-    },
+    overview: { isOpen: false, onToggle: vi.fn() },
+    viewing: null,
+    tray: trayAttrs(),
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
     ...overrides,
@@ -88,7 +112,6 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
     expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
-    expect(entries[2].getAttribute("data-entry-style")).toBe("avatar");
     expect(entries[0].getAttribute("aria-label")).toBe("Plan");
     (entries[1] as HTMLElement).click();
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
@@ -130,13 +153,10 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([true, false]);
   });
 
-  it("does not dim the avatar when its window is minimized, the way it dims an app's icon", () => {
-    // The fixture's third entry is the pinned chat in the avatar style, minimized. A dimmed icon reads
-    // as "not on screen"; a dimmed character reads as unwell.
+  it("dims a minimized pinned entry's icon like any other window's", () => {
     const entries = [...render().querySelectorAll("[data-taskbar-entry]")];
     expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
-    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([false, true, false]);
-    expect(entries[2].getAttribute("data-mood")).not.toBeNull();
+    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([false, true, true]);
   });
 
   it("writes each window's title on its entry, with the whole of it in a bubble above", () => {
@@ -157,18 +177,19 @@ describe("Taskbar", () => {
     ]);
   });
 
-  it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood", () => {
-    const stale = avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } });
-    const taskbar = render({ avatar: stale });
+  it("draws a pinned entry as a plain entry like any other window's: the avatar creature lives in the tray", () => {
+    const taskbar = render();
     const entry = taskbar.querySelector('[data-taskbar-entry="win-3"]') as HTMLElement;
-    expect(entry.getAttribute("data-mood")).toBe("working");
-    expect(entry.getAttribute("data-stale")).toBe("true");
-    expect(entry.getAttribute("data-hover-tooltip")).toBe("Docs (status may be out of date)");
-    expect(entry.querySelector("svg")).toBeNull();
-    expect(entry.querySelector("img")?.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");
-    const ordinary = taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
-    expect(ordinary.getAttribute("data-mood")).toBeNull();
-    expect(ordinary.querySelector("svg")).not.toBeNull();
+    expect(entry.getAttribute("data-mood")).toBeNull();
+    expect(entry.getAttribute("data-hover-tooltip")).toBe("Docs");
+    expect(entry.querySelector("svg")).not.toBeNull();
+    expect(entry.querySelector("img")).toBeNull();
+  });
+
+  it("drops the agent from the tray while the avatar floats: one creature, there or here", () => {
+    expect(render().querySelector("[data-tray-agent]")).not.toBeNull();
+    const floating = render({ tray: trayAttrs({ isAvatarFloating: true }) });
+    expect(floating.querySelector("[data-tray-agent]")).toBeNull();
   });
 
   it("asks for an entry's menu on a right click", () => {
@@ -180,39 +201,71 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
-    const onSwitchDesktop = vi.fn();
-    const taskbar = render({
-      tray: {
-        desktops: [desktopRecord("home"), desktopRecord("work")],
-        activeDesktopId: "home",
-        isDesktopsMenuOpen: false,
-        onSwitchDesktop,
-        onOpenDesktopsMenu: vi.fn(),
-        onDesktopContextMenu: vi.fn(),
-      },
-    });
+  it("asks for the agent entry's menu on a right click, keeping the browser's own menu away", () => {
+    const onAgentContextMenu = vi.fn();
+    const taskbar = render({ tray: trayAttrs({ onAgentContextMenu }) });
+    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 60 });
+    (taskbar.querySelector("[data-tray-agent]") as HTMLElement).dispatchEvent(rightClick);
+    expect(onAgentContextMenu).toHaveBeenCalledWith(50, 60);
+    expect(rightClick.defaultPrevented).toBe(true);
+  });
+
+  it("carries the launcher field, the overview button before the entries, and the tray with the agent and nobody else while the roster is empty", () => {
+    const onToggle = vi.fn();
+    const taskbar = render({ overview: { isOpen: false, onToggle } });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
-    const switches = [...taskbar.querySelectorAll("[data-desktop-switch]")];
-    expect(switches.map((element) => element.getAttribute("data-desktop-switch"))).toEqual(["home", "work"]);
-    expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
-    (switches[1] as HTMLElement).click();
-    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
-    expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
+    expect(taskbar.querySelector("[data-tray-agent]")).not.toBeNull();
+    expect(taskbar.querySelector("[data-tray-widget='people']")).toBeNull();
+    expect(taskbar.querySelector("[data-tray-share]")).toBeNull();
+    const button = taskbar.querySelector('[data-tray-widget="overview"]') as HTMLElement;
+    expect(button.getAttribute("aria-label")).toBe("Manage Desktops");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.nextElementSibling?.getAttribute("data-taskbar-entries")).toBe("");
+    button.click();
+    expect(onToggle).toHaveBeenCalledTimes(1);
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 
-  it("draws the Presence widget in front of Desktops once two users are connected", () => {
-    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
-    const taskbar = render();
+  it("replaces the tray with the viewing chip and hides the overview button while viewing somebody else's desktop", () => {
+    const onStopViewing = vi.fn();
+    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
+    const taskbar = render({
+      viewing: {
+        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
+        owner: alice,
+        color: alice.color,
+        onStopViewing,
+      },
+    });
+    expect(taskbar.querySelector('[data-tray-widget="overview"]')).toBeNull();
+    expect(taskbar.querySelector("[data-system-tray]")).toBeNull();
+    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
+    expect(chip.getAttribute("data-viewing-desktop")).toBe("alice");
+    expect(chip.textContent).toContain("Alice");
+    expect(chip.textContent).toContain("Alice's desk");
+    expect(chip.style.backgroundColor).toBe("rgb(59, 91, 169)");
+    (chip.querySelector("[data-stop-viewing]") as HTMLElement).click();
+    expect(onStopViewing).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the share button under a chrome, the people before the viewer, and the agent last", () => {
+    const roster = [
+      rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true }),
+      rosterParticipantRecord("user:user-bob-4471", { display_name: "Bob" }),
+      rosterParticipantRecord("workspace-agent", { kind: "workspace_agent", display_name: "Atlas" }),
+    ];
+    const onAgentClick = vi.fn();
+    const taskbar = render({
+      tray: trayAttrs({ roster, viewer: "user:user-josh-0001", isShareOffered: true, onAgentClick }),
+    });
     const tray = taskbar.querySelector("[data-system-tray]") as HTMLElement;
-    expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
-      "presence",
-      "desktops",
-    ]);
-    expect(
-      [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),
-    ).toEqual(["user-bob-4471", "user-owner-9c21"]);
+    const order = [...tray.querySelectorAll("[data-tray-share], [data-tray-person], [data-tray-agent]")].map(
+      (element) =>
+        element.getAttribute("data-tray-person") ?? (element.hasAttribute("data-tray-share") ? "share" : "agent"),
+    );
+    expect(order).toEqual(["share", "user:user-bob-4471", "user:user-josh-0001", "agent"]);
+    (tray.querySelector("[data-tray-agent]") as HTMLElement).click();
+    expect(onAgentClick).toHaveBeenCalledTimes(1);
   });
 
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {

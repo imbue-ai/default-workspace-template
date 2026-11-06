@@ -84,7 +84,7 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    a white card.
 
    The prompts are plain-language requests written so the mind's own skills
-   (`build-app`, `latchkey`, `manage-scheduled-tasks`, `launch-task`,
+   (`build-app`, `latchkey`, `manage-routines`, `launch-task`,
    `fetch-process-show`, `do-something-new`) match on them; they name no skill.
    With no app on the machine whose action takes a `message`, the tiles are
    disabled and say so in a tooltip.
@@ -114,7 +114,7 @@ actions:
   machine and walks the user through its requirements.
 - **Create a new machine from this**: starts a new chat whose first message asks
   the mind to create a fresh Mind machine from the template's repository (the
-  `minds-api` skill does that) and to walk the user through anything it needs.
+  `imbue-studio` skill does that) and to walk the user through anything it needs.
 
 Both close the dialog; the new chat replaces the launcher in the pane, as any tile
 does. Both stand down exactly as the prompt tiles do: disabled, with the same tooltip,

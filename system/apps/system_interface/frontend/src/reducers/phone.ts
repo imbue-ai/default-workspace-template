@@ -84,7 +84,7 @@ export function windowsSheetRows(state: DesktopState): PhoneWindowRow[] {
 /** The start sheet's rows: the launcher's, its window rows narrowed to the windows the phone lists (of the
  *  pinned windows, the active desktop's alone). */
 export function startSheetRows(state: DesktopState, query: string): LauncherMenuRows {
-  const menu = launcherRowsOf(state, query);
+  const menu = launcherRowsOf(state, query, { isTourOffered: false });
   const listedIds = new Set(phoneWindows(state).map((window) => window.id));
   const windowRows = menu.windowRows.filter((row) => listedIds.has(row.window.id));
   return {

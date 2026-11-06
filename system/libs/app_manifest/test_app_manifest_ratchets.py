@@ -1,13 +1,14 @@
 from pathlib import Path
 
+from inline_snapshot import snapshot
+
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
-from inline_snapshot import snapshot
 
 _DIR = Path(__file__).parent
 
 
-# --- Code safety ---
+# Code safety
 
 
 def test_prevent_todos() -> None:
@@ -38,7 +39,7 @@ def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(0))
 
 
-# --- Exception handling ---
+# Exception handling
 
 
 def test_prevent_bare_except() -> None:
@@ -53,7 +54,7 @@ def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
-# --- Import style ---
+# Import style
 
 
 def test_prevent_inline_imports() -> None:
@@ -64,7 +65,7 @@ def test_prevent_relative_imports() -> None:
     rc.check_relative_imports(_DIR, snapshot(0))
 
 
-# --- Banned libraries and patterns ---
+# Banned libraries and patterns
 
 
 def test_prevent_asyncio_import() -> None:

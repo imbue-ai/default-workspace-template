@@ -15,7 +15,7 @@ def _publish(
     return cgroup_meminfo.publish_once(cgroup_dir, target, kernel_release, 1760000000)
 
 
-def test_headroom_adds_reclaimable_page_cache_and_slab_to_the_free_part(
+def test_headroom_adds_only_the_inactive_file_cache_to_the_free_part(
     tmp_path: Path,
 ) -> None:
     write_fake_cgroup(
@@ -30,7 +30,9 @@ def test_headroom_adds_reclaimable_page_cache_and_slab_to_the_free_part(
             "slab_unreclaimable": _GIB,
         },
     )
-    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (8 * _GIB, 3 * _GIB)
+    # Active file cache and reclaimable slab are what the kernel thrashes near the
+    # limit rather than frees, so they are not counted as available.
+    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (8 * _GIB, 2 * _GIB + _GIB // 4)
 
 
 def test_headroom_is_clamped_to_the_limit_and_to_zero(tmp_path: Path) -> None:
@@ -68,7 +70,7 @@ def test_the_three_ways_a_cgroup_gives_no_headroom_are_told_apart(
         == cgroup_meminfo.PublishOutcome.UNREADABLE
     )
     # memory.stat too: the gen-2 publisher skips the round rather than counting
-    # the reclaimable share as zero, and the two must stay in step.
+    # the inactive file cache as zero, and the two must stay in step.
     (tmp_path / "memory.current").write_text("4096\n")
     (tmp_path / "memory.stat").unlink()
     assert (

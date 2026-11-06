@@ -96,12 +96,17 @@ Soft on purpose: a block here would fight the agent over a judgement call (wheth
 action is substantive), and the cost of being wrong is a missing timeline node, not a broken
 repo.
 
-### P6. A `tk start` or `tk close` must be the only thing in its tool call
+### P6. A `tk start` or `tk close` shares its tool call only with other tk commands
 `agent_tk_standalone.sh` -> `agent_tk_standalone_check.py` -- **hard block.**
 
-Chaining (`cd x && tk start s1`) or redirecting a step transition drops it out of the progress
-view, so the timeline silently disagrees with what happened. `tk create` is exempt -- it may
-be batched, because creating the plan up front is the intended usage.
+A `cd` prefix (`cd x && tk start s1`), real work in the same command, or a redirect drops a
+step transition out of the progress view, so the timeline silently disagrees with what
+happened. A sequence of tk lifecycle commands (`tk close s1 "done"; tk start s2`, or a batch
+of creates followed by the first start) is allowed: the view applies the `Updated` lines of
+one output in transcript order, so a step boundary costs one tool call. `tk create` on its
+own is exempt -- it may be batched, because creating the plan up front is the intended usage.
+Capturing a create's id to start it in the same call (`S1=$(tk create ...); tk start "$S1"`)
+is blocked as a command before the start: the assignment swallows the `Created` line.
 
 Tokenising again lives in the `.py`, single-sourced with P3.
 
@@ -177,6 +182,26 @@ P3 for the secret card: `request_secret.py` prints the filed request as JSON, an
 the card's password inputs from that echo in the same call's result. So the call stands alone,
 for exactly the reasons P3 gives, and the same files enforce it -- the checker counts a run of
 the request script as a filing alongside a POST to the permission-requests host.
+
+### P11. A command must not wait on a foreground `sleep` of 5 seconds or more
+`agent_block_foreground_sleep.sh` -> `agent_block_foreground_sleep_check.py` -- **hard block.**
+
+A timed sleep is a guess at how long something else takes, and it holds the agent's turn for the
+whole guess: a message to the agent waits until it ends, and so does the agent when the thing it
+waits on finished early. The agent waits on the event instead -- a command run in the background
+(`run_in_background.py`) wakes it when it ends, and a state is checked with short sleeps
+(`until curl -sf URL; do sleep 1; done`). A sleep is judged wherever it runs as a command of its
+own, chained, alone, or in a loop or branch body; one under 5 seconds is allowed, and so is one
+in a list the command sends to the background with `&`, one that is only an argument (the command
+handed to `run_in_background.py`), or one in a call claude runs with `run_in_background`. A wait
+that really is about time belongs inside a background command. `AGENTS.md` carries the same rule
+as prose.
+
+The checker reads segments, not the shell's grouping, so it is a seatbelt with known gaps: a `;`
+inside a backgrounded group (`{ sleep 30; } &`) and a heredoc body holding a sleep are blocked, and
+a sleep behind a wrapper (`timeout`, `nohup`, `exec`, `env`), one with a non-literal duration, or
+one cleared by an inner `&` (`sleep 30 && (cmd &)`) gets through. The checker's docstring lists them
+all.
 
 ## The rule that keeps this honest
 

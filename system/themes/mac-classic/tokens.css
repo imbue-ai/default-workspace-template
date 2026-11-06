@@ -1,0 +1,87 @@
+/* Classic Mac: black ink on white paper. Chicago (the display face) sets titles, buttons, menus, and
+   headings, as it did on the Mac; body text is Geneva and code Monaco. The theme ships no fonts: each face
+   is used where the machine has it, and otherwise the nearest installed one stands in. */
+:root {
+  --c-bg: #ffffff;
+  --c-bg-sidebar: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-composer: #ffffff;
+  --c-bg-code: #ffffff;
+  --c-bg-user-bubble: #ffffff;
+  --c-fill-hover: rgb(0 0 0 / 0.08);
+  --c-fill-active: rgb(0 0 0 / 0.16);
+  --c-text-primary: #000000;
+  --c-text-secondary: #000000;
+  --c-text-faint: #555555;
+  --c-border: #000000;
+  --c-border-faint: #000000;
+  --c-border-strong: #000000;
+  --c-border-code: #000000;
+  --c-accent: #000000;
+  --c-accent-hover: #000000;
+  --c-accent-light: rgb(0 0 0 / 0.08);
+  --c-text-on-accent: #ffffff;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #ffffff;
+  --c-inverse-surface: #000000;
+  --c-inverse-surface-hover: #000000;
+  --c-shadow-raised: 1px 1px 0 #000000;
+  --c-shadow-overlay: 2px 2px 0 #000000;
+  --font-sans: Geneva, "Helvetica Neue", sans-serif;
+  --font-mono: Monaco, Menlo, ui-monospace, monospace;
+  --font-display: Chicago, Charcoal, Geneva, "Helvetica Neue", sans-serif;
+  --weight-semibold: 400;
+  --weight-bold: 400;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+
+  /* The 50% gray of the System 6 desktop: a one-pixel checker. An SVG with no size of its own takes the
+     backdrop's, and its pattern tiles in CSS pixels, so the wallpaper's cover sizing cannot stretch it. */
+  --desk-default-wallpaper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25'%3E%3Cdefs%3E%3Cpattern id='d' width='2' height='2' patternUnits='userSpaceOnUse'%3E%3Crect width='1' height='1'/%3E%3Crect x='1' y='1' width='1' height='1'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3Crect width='100%25' height='100%25' fill='url(%23d)'/%3E%3C/svg%3E");
+  --desk-window-radius: 0px;
+  --desk-window-shadow: 1px 1px 0 #000000;
+  --desk-taskbar-surface: #ffffff;
+  --desk-taskbar-entry-shadow: none;
+  /* The avatar: solid black, with no soft pool under it, which a one-bit screen cannot draw. */
+  --desk-avatar-color: #000000;
+  --desk-avatar-shadow-color: transparent;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: 2px 2px 0 #000000;
+  --desk-shortcut-label-shadow: none;
+  --desk-toast-radius: 0px;
+  --desk-phone-sheet-radius: 0px;
+  --desk-phone-tile-radius: 0px;
+
+  /* The terminal: white paper, black ink. */
+  --term-background: #ffffff;
+  --term-foreground: #000000;
+  --term-cursor: #000000;
+  /* xterm keeps a selected cell's own text color, so the selection is a gray black text reads on. */
+  --term-selection: #aaaaaa;
+  --term-ansi-0: #000000;
+  --term-ansi-1: #000000;
+  --term-ansi-2: #000000;
+  --term-ansi-3: #000000;
+  --term-ansi-4: #000000;
+  --term-ansi-5: #000000;
+  --term-ansi-6: #000000;
+  --term-ansi-7: #808080;
+  --term-ansi-8: #555555;
+  --term-ansi-9: #000000;
+  --term-ansi-10: #000000;
+  --term-ansi-11: #000000;
+  --term-ansi-12: #000000;
+  --term-ansi-13: #000000;
+  --term-ansi-14: #000000;
+  /* Bright white, like white, is gray: white ink vanishes on the white paper. */
+  --term-ansi-15: #808080;
+
+  --theme-stripes: repeating-linear-gradient(#000000 0 1px, transparent 1px 2px);
+}
+/* A touch screen keeps its own finger-sized bar. */
+:root:not([data-touch]) {
+  --desk-title-bar-height: 20px;
+}

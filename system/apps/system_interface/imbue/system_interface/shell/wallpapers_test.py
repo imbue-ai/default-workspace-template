@@ -5,9 +5,9 @@ from workspace_layout.primitives import WallpaperName
 from workspace_layout.records import Wallpaper
 
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
+from imbue.system_interface.shell.wallpapers import WallpapersListing
 from imbue.system_interface.shell.wallpapers import list_wallpapers
 from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
-from imbue.system_interface.shell.wallpapers import wallpaper_listing_wire_json
 
 
 def test_wallpapers_are_listed_bundled_first_with_accepted_images_only(tmp_path: Path) -> None:
@@ -22,7 +22,7 @@ def test_wallpapers_are_listed_bundled_first_with_accepted_images_only(tmp_path:
     (files / "bad name!.png").write_bytes(b"png")
     directories = WallpaperDirectories(bundled=bundled, files=files)
 
-    listed = [wallpaper_listing_wire_json(listing) for listing in list_wallpapers(directories)]
+    listed = WallpapersListing(wallpapers=tuple(list_wallpapers(directories))).model_dump(mode="json")["wallpapers"]
     assert listed == [
         {"kind": "bundled", "name": "apricot-coast", "url": "/wallpapers/bundled/apricot-coast"},
         {"kind": "bundled", "name": "dunes", "url": "/wallpapers/bundled/dunes"},

@@ -7,7 +7,10 @@ import {
   HEARTBEAT_INTERVAL_MS,
   applyPresence,
   getOwnIdentity,
+  getOwnParticipant,
   getPresentUsers,
+  notePageInput,
+  pendingInputReportsForTesting,
   resetPresenceForTesting,
   startPresenceHeartbeat,
 } from "./Presence";
@@ -56,24 +59,126 @@ afterEach(() => {
 });
 
 describe("startPresenceHeartbeat", () => {
-  it("posts an empty heartbeat at once, then every interval while visible", async () => {
-    const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" } }));
+  it("posts a heartbeat at once, then every interval while visible, carrying how long ago it saw input", async () => {
+    const requests = stubFetch(() =>
+      jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" }, participant: "user:u1" }),
+    );
 
-    startPresenceHeartbeat();
+    startPresenceHeartbeat("client-1");
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toContain("/api/presence/heartbeat");
     expect(requests[0].method).toBe("POST");
-    expect(requests[0].body).toBe("");
+    expect(JSON.parse(requests[0].body)).toEqual({
+      input_age_seconds: null,
+      client_id: "client-1",
+      input_windows: [],
+    });
 
+    vi.setSystemTime(new Date("2026-10-22T10:00:05Z"));
+    window.dispatchEvent(new Event("keydown"));
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
     expect(requests).toHaveLength(2);
-    expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b" });
+    // The age, not the moment: the shell stamps the moment by its own clock, so this page's clock cannot skew it.
+    expect(JSON.parse(requests[1].body)).toEqual({
+      input_age_seconds: HEARTBEAT_INTERVAL_MS / 1000,
+      client_id: "client-1",
+      input_windows: [],
+    });
+    expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b", participant: "user:u1" });
+    expect(getOwnParticipant()).toBe("user:u1");
+  });
+
+  it("counts input a page reported (shell:input) like the window's own, since app frames never bubble here", async () => {
+    const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true }, participant: "owner" }));
+    startPresenceHeartbeat("client-1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.setSystemTime(new Date("2026-10-22T11:00:00Z"));
+    notePageInput("win-1", "docs", "input");
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+
+    expect(JSON.parse(requests[1].body)).toEqual({
+      input_age_seconds: HEARTBEAT_INTERVAL_MS / 1000,
+      client_id: "client-1",
+      input_windows: [{ window_id: "win-1", app: "docs", kind: "input" }],
+    });
+  });
+
+  it("reports each window once per heartbeat with input outranking focus, and focus alone says nobody is active", async () => {
+    const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true }, participant: "owner" }));
+    startPresenceHeartbeat("client-1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    notePageInput("win-1", "docs", "focus");
+    notePageInput("win-1", "docs", "input");
+    notePageInput("win-1", "docs", "focus");
+    notePageInput("win-2", "notes", "focus");
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "focus" },
+    ]);
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(JSON.parse(requests[1].body).input_windows).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "focus" },
+    ]);
+    // Reported once: the next heartbeat carries only what was noted since.
+    expect(pendingInputReportsForTesting()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(JSON.parse(requests[2].body).input_windows).toEqual([]);
+
+    // Focus landing in a window the shell may have raised itself is not the person being active: the age still
+    // counts from the input report three heartbeats ago.
+    notePageInput("win-3", "notes", "focus");
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(JSON.parse(requests[3].body).input_age_seconds).toBe((3 * HEARTBEAT_INTERVAL_MS) / 1000);
+  });
+
+  it("keeps the reports of a heartbeat that did not get through for the next one", async () => {
+    let answer: "offline" | "refused" | "ok" = "offline";
+    const requests = stubFetch(() => {
+      if (answer === "offline") throw new Error("offline");
+      if (answer === "refused") return jsonResponse(503);
+      return jsonResponse(200, { identity: { owner: true }, participant: "owner" });
+    });
+    startPresenceHeartbeat("client-1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    notePageInput("win-1", "docs", "input");
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(JSON.parse(requests[1].body).input_windows).toHaveLength(1);
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "input" }]);
+
+    answer = "refused";
+    notePageInput("win-1", "docs", "focus");
+    notePageInput("win-2", "notes", "input");
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    // The kept report outranks the focus noted meanwhile, and the new window joins it.
+    expect(pendingInputReportsForTesting()).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "input" },
+    ]);
+
+    answer = "ok";
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    expect(JSON.parse(requests[3].body).input_windows).toEqual([
+      { window_id: "win-1", app: "docs", kind: "input" },
+      { window_id: "win-2", app: "notes", kind: "input" },
+    ]);
+    expect(pendingInputReportsForTesting()).toEqual([]);
+  });
+
+  it("knows the owner of an unshared workspace by the owner key, with no account", async () => {
+    stubFetch(() => jsonResponse(200, { identity: { owner: true }, participant: "owner" }));
+    startPresenceHeartbeat("client-1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getOwnIdentity()).toEqual({ owner: true, user_id: null, email: null, participant: "owner" });
   });
 
   it("stops while the tab is hidden and heartbeats again the moment it is visible", async () => {
     const requests = stubFetch(() => jsonResponse(204));
-    startPresenceHeartbeat();
+    startPresenceHeartbeat("client-1");
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveLength(1);
 
@@ -90,10 +195,10 @@ describe("startPresenceHeartbeat", () => {
     let status = 200;
     stubFetch(() =>
       status === 200
-        ? jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" } })
+        ? jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" }, participant: "user:u1" })
         : jsonResponse(204),
     );
-    startPresenceHeartbeat();
+    startPresenceHeartbeat("client-1");
     await vi.advanceTimersByTimeAsync(0);
     expect(getOwnIdentity()).not.toBeNull();
 
@@ -112,7 +217,7 @@ describe("startPresenceHeartbeat", () => {
         return true;
       },
     });
-    startPresenceHeartbeat();
+    startPresenceHeartbeat("client-1");
     await vi.advanceTimersByTimeAsync(0);
 
     window.dispatchEvent(new Event("pagehide"));
@@ -128,7 +233,7 @@ describe("startPresenceHeartbeat", () => {
       if (isFailing) throw new Error("offline");
       return jsonResponse(204);
     });
-    startPresenceHeartbeat();
+    startPresenceHeartbeat("client-1");
     await vi.advanceTimersByTimeAsync(0);
     isFailing = false;
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);

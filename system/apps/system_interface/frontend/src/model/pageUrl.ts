@@ -94,3 +94,11 @@ export function windowAtBackendUrl(
   });
   return app === undefined ? null : { app, path: `${link.pathname}${link.search}` };
 }
+
+/** The app's pin page when ``path`` is that page in some state of its own (the chat's ``/?chat=<id>``), else null:
+ *  such a link belongs in the window already showing the page rather than in another. */
+export function pinPageOfLink(app: AppRecord, path: string): string | null {
+  const pinPage = app.pin?.path;
+  if (pinPage === undefined || path === pinPage) return null;
+  return path.split(/[?#]/, 1)[0] === pinPage ? pinPage : null;
+}

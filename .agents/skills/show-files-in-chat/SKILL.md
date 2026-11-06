@@ -1,6 +1,6 @@
 ---
 name: show-files-in-chat
-description: Show a file to the user in chat. Display an image inline (chart, plot, screenshot, diagram, rendered figure, photo), or link any file or folder (PDF, CSV, log, zip, spreadsheet, a project folder, ...) so a click opens it in the File Viewer. Use whenever you have a file on disk you want the user to see or download, or want to embed an image from a public URL.
+description: Show a file to the user in chat. Display an image inline (chart, plot, screenshot, diagram, rendered figure, photo), or link any file or folder (PDF, CSV, log, zip, spreadsheet, a project folder, ...) so a click opens it in Files. Use whenever you have a file on disk you want the user to see or download, or want to embed an image from a public URL.
 metadata:
   author: imbue
 ---
@@ -12,7 +12,7 @@ user directly -- there is no upload step and no external hosting. The chat serve
 a file at its absolute on-disk path, so the path you write in the markdown
 doubles as the URL the user's browser fetches for an image, and names the file a
 link opens. Images render inline; a link to any other file or folder opens it in
-the File Viewer, inside the workspace.
+Files, inside the workspace.
 
 ## Where to put the file
 
@@ -52,7 +52,7 @@ syntax):
 [Q4 report (PDF)](/home/user/workspace/data/documents/q4-report.pdf)
 ```
 
-Clicking the link opens the file in a File Viewer window on the user's desktop
+Clicking the link opens the file in a Files window on the user's desktop
 (or raises the one already showing it): text as read-only source, PDFs, images,
 audio and video shown, anything else offered as a download there. A link to a
 folder opens that folder's listing the same way:
@@ -80,7 +80,7 @@ local absolute-path form for files you produced on this machine.
 
 - Both images and file links require an **absolute** path (starting with `/`)
   that points at a file that actually exists on disk; a link to a missing path
-  opens the File Viewer's "not found" page.
+  opens Files' "not found" page.
 - If an image shows a broken-image icon, the usual cause is a relative or
   mistyped path, or an extension that is not one of the inline image formats
   above (a non-image extension is treated as a download, not an inline image).

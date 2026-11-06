@@ -13,6 +13,14 @@ The ``*_process_started`` marker (touched by mngr on every startup/resume) is th
 boundary the stale-tail guard compares against: a transcript tail older than the
 current process is left over from a turn this process never ran and must not show
 "Thinking..." indefinitely after a mid-turn restart.
+
+Activity and lifecycle describe the agent; *busy* describes its chat. A chat is busy
+when its agent will resume on its own: its active agent's activity is THINKING or
+TOOL_RUNNING (a turn in flight), or the chat has a pending background task, a live
+marker in its directory (``chat_background_tasks``) whose completion starts a turn.
+mngr reads such a parked agent as WAITING; a pending permission request is not
+busy, and neither is a process that will never wake the agent. A busy chat with no
+turn in flight reads ``background`` (``agent_manager.chat_status_for_agent``).
 """
 
 from datetime import datetime
@@ -99,6 +107,10 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # marker before the observe stream reports RUNNING, leaving the reported state at WAITING the
 # whole time.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
+
+# The lifecycle of an agent whose process exited while its tmux pane lives on: a crash, a kill, an
+# out-of-memory shed of the process. A deliberate stop takes the pane with it and reads STOPPED.
+EXITED_LIFECYCLE_STATE: str = "DONE"
 
 # The lifecycle verdict meaning "could not observe", not "dead": mngr maps provider and probe
 # failures here (see mngr's ``AgentLifecycleState.UNKNOWN``). Consumers treat it as

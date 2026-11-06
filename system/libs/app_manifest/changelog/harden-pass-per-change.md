@@ -1,0 +1,5 @@
+New `app-manifest pass-scope --creation <type>:<name> [...] [--diff-base REF] [--lead-ref REF] [--out FILE]` writes the scope file for a harden pass over several creations (`app:`, `skill:`, `service:`, `shared:`): each creation's footprint, and one diff split into the files some creation accounts for and those none does. A standalone service (or an app with no `app.toml` yet) is scoped by its directory plus its package-named and `<name>-<role>` programs. A creation named twice, directly or by an app's name and package directory, is refused.
+
+With `--lead-ref`, the diff separates the pass's own work from other chats': it gains `fork_point` (unaffected by milestones the lead merged), `others` (changed files in no footprint and not the pass's own), and `lockfile_base` (where a changed `uv.lock` is compared from, so the hardened change's own upgrade is tested). `outside_footprint` lists only the pass's own changes.
+
+`select-tests --scope-file FILE` selects every changed file except `others`, and refuses a scope file with no fork point or whose diff does not reach `HEAD`, and a dirty working tree.

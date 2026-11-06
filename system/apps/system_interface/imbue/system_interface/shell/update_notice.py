@@ -2,7 +2,7 @@
 
 An apply run with ``--keep-rollback-point`` (the update-app careful flow, never update-self's
 own) leaves ``data/.state/update-apply/last-good.json`` behind: what it landed, the copies it
-kept, and the critical apps and supervisord programs it touched. The shell reads that record
+kept, and the apps and supervisord programs it touched. The shell reads that record
 for ``GET /api/updates/pending``, watches the file so every window learns of a change (a
 rollback's progress, its outcome, the record cleared) as it lands, and runs the two verbs only a
 person closes the notice with: ``confirm-last`` (drop the record, and the copies with it when no
@@ -45,6 +45,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # scripts), and where a rollback launched from here writes what it printed.
 LAST_GOOD_RECORD_REL: Final[str] = "data/.state/update-apply/last-good.json"
 ROLLBACK_LOG_REL: Final[str] = "data/.state/update-apply/rollback-last.log"
+# own-process: outlives-caller -- a rollback restarts the shell that launches it
+# own-process: other-tree -- confirm-last must be the checkout's current update-self, and the shell restarts only when an apply touches it
 UPDATE_SELF_SCRIPT_REL: Final[str] = ".agents/skills/update-self/scripts/update_self.py"
 
 # A confirm deletes the kept copies, which can be a whole tool environment; generous, but bounded
@@ -64,7 +66,10 @@ class UpdateNotice(FrozenModel):
     merge_sha: str = Field(description="The merge the apply landed")
     applied_at: float = Field(description="When the apply finished, seconds since the epoch")
     driven_by: str = Field(description="The agent (or person) that ran the apply, as it named itself")
-    apps: tuple[str, ...] = Field(description="The critical apps whose program or bundle the apply changed")
+    apps: tuple[str, ...] = Field(
+        description="The apps included in the rollback: each critical app whose program or bundle the apply "
+        "changed, and every other app of the harden pass it landed"
+    )
     programs: tuple[str, ...] = Field(description="The supervisord programs a rollback restarts")
     needs_system_services_restart: bool = Field(
         description="Whether the diff reached the workspace's own setup, so a rollback restores the files but "

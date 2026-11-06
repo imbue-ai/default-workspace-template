@@ -19,10 +19,10 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
-import { getChatById } from "../models/Chats";
+import { getChatById, launchChat } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
-import { effortInEffect, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
+import { effortInEffect, startingEffort } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -42,6 +42,7 @@ import { harnessLabel } from "./harness-labels";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import { raiseFailureNotice, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The value of the model select's first row: no pick, so the target harness's default on a handoff and the
  *  agent's own model on a rebind. */
@@ -130,6 +131,29 @@ export function beginSwitchToAccountId(chatId: string, accountId: string): void 
   if (account !== null) beginSwitchTo(chatId, account);
 }
 
+/** Make the chat a room (the multiplayer spec, section 7.6): a switch with nothing to hand over, since the room
+ *  takes no prompt; the conversation so far stays as the chat's earlier segments. Nothing to pick, so no dialog. */
+export async function switchToRoom(chatId: string): Promise<void> {
+  setPendingAccount(chatId, null);
+  try {
+    await switchChat(chatId, "", "", mintMessageId(), null, "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make this chat a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
+}
+
+/** Launch a chat awaiting its first send as a room, with nothing said yet (section 7.3): what the provider
+ *  chooser's room row comes to when the awaiting chat's provider chip or its no-provider notice opened it. */
+export async function launchAwaitingChatAsRoom(chatId: string): Promise<void> {
+  try {
+    await launchChat(chatId, "", "", "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
+}
+
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {
   setPendingAccount(chatId, null);
   try {
@@ -183,10 +207,9 @@ export function closeSwitchDialog(): void {
   m.redraw();
 }
 
-/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown,
- *  and for a harness whose model the chat app cannot switch, where no pick could be applied. */
+/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown. */
 function currentModelIdentity(chat: ChatSnapshot | undefined): ModelIdentity | null {
-  if (chat === undefined || getHarnessCatalog(chat.active_agent.harness)?.switch_mode === "read_only") return null;
+  if (chat === undefined) return null;
   const choice = chat.active_agent.model_choice;
   if (choice === null || choice.matched === null) return null;
   return {
@@ -235,15 +258,10 @@ function renderPicker(dialog: OpenDialog): m.Children {
     );
   }
   if (dialog.options.length === 0) {
-    // A harness whose model the chat app cannot switch lands here by having no options at all, so
-    // the usual "change it afterwards" is the one thing it must not say: the bar will refuse too.
-    const isModelReadOnly = getHarnessCatalog(dialog.target.harness)?.switch_mode === "read_only";
     return m(
       "p",
       { class: "switch-dialog-no-models text-(length:--font-size-helper) text-secondary" },
-      isModelReadOnly
-        ? `${whenNothingIsPicked}, which is changed from the agent's terminal, not from the chat.`
-        : `${whenNothingIsPicked}; you can change it once it is running.`,
+      `${whenNothingIsPicked}; you can change it once it is running.`,
     );
   }
   const option = chosenOption(dialog);
@@ -253,6 +271,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
       "select",
       {
         class: inputClass({ extra: "switch-dialog-model" }),
+        ...partAttrs("select"),
         "aria-label": "Model",
         value: dialog.modelId,
         onchange: (event: Event) => {
@@ -278,6 +297,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
           "select",
           {
             class: inputClass({ extra: "switch-dialog-effort" }),
+            ...partAttrs("select"),
             "aria-label": "Reasoning effort",
             value: dialog.effort ?? "",
             onchange: (event: Event) => {

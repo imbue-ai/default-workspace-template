@@ -1,0 +1,1 @@
+`memory_candidates.py` no longer lists the main chat as an idle chat to stop. The chat app starts the main chat again as soon as it stops, so stopping it frees nothing that lasts. The agents section adds a note naming the main chat instead, so a reader knows why it is missing.

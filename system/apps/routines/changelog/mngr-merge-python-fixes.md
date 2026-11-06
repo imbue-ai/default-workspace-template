@@ -1,0 +1,1 @@
+A preview of the Routines app (update-app's, or update-self's check of a customized app) now boots the app's own `routines-app` entry point. Its `[preview]` table named no command, so the preview ran the program's name, `routines`, which in the workspace venv is the routines library's command line rather than the app, and no preview of it ever came up.
