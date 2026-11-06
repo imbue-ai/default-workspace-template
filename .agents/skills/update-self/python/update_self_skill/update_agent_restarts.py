@@ -28,6 +28,7 @@ from enum import Enum
 from pathlib import Path
 
 from update_self_skill.run_in_background import (
+    AGENT_ID_ENV,
     messenger_argv,
     wrap_background_task_report,
 )
@@ -43,9 +44,6 @@ SELF_RESTART_DIR_REL = Path("data") / ".tasks" / "update-self" / "self-restart"
 SELF_RESTART_NOTE_NAME = "note.md"
 SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
 SELF_RESTART_LOG_NAME = "helper.log"
-
-# The variable mngr tags an agent's processes with and kills them by on a stop.
-AGENT_ID_ENV = "MNGR_AGENT_ID"
 
 STOPPED_CHAT_STATUS = "stopped"
 # Cross-layer contract with the chat app's interrupt route (its ``InterruptAgentRequest`` and its
