@@ -37,6 +37,9 @@ dependencies = [
     # `uv run --no-sync routines ...` from the repo root, so its console script must
     # survive a sync of the root closure too.
     "routines",
+    # Agents run `uv run --no-sync disk-headroom` from the repo root where they would run df,
+    # so its console script must survive a sync of the root closure too.
+    "disk-headroom",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -93,11 +96,20 @@ dev = [
     # (the CI job that runs the suites inside the workspace image).
     "pytest-workspace-env",
     # system/test_no_type_errors.py, pinned to the version every project's ratchet uses.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [tool.uv]
 package = false
+# Supply-chain cooldown, the same two-week window as mngr-internal: the resolver only
+# adopts a registry release once it has been public this long, so a compromised release
+# has time to be noticed and yanked before a relock can pull it in. A rolling window
+# rather than a pinned timestamp, since nothing here advances one. uv before 0.10 drops
+# a relative value silently and discards the lockfile, so the version floor is what
+# makes the window load-bearing; the image and CI run UV_VERSION from
+# system/scripts/setup_system.sh.
+required-version = ">=0.10"
+exclude-newer = "14 days"
 
 [tool.uv.workspace]
 # Every built-in library, service and app, named one by one: these share this one
@@ -118,6 +130,8 @@ members = [
     "system/libs/app_schema",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
+    "system/libs/disk_headroom",
+    "system/libs/event_streams",
     "system/libs/github_sync",
     "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
@@ -160,6 +174,7 @@ pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
 share-grants = { workspace = true }
+event-streams = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 workspace-themes = { workspace = true }
@@ -168,6 +183,7 @@ workspace-layout = { workspace = true }
 workspace-profile = { workspace = true }
 latchkey-access = { workspace = true }
 routines = { workspace = true }
+disk-headroom = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 chat = { workspace = true }
 files-app = { workspace = true }
@@ -182,16 +198,16 @@ terminal-app = { workspace = true }
 workspace-scripts = { workspace = true }
 agents-shared = { workspace = true }
 update-self-skill = { workspace = true }
-imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/imbue_common" }
-imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr" }
-imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_claude" }
-imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_codex" }
-imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_pi_coding" }
-imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_opencode" }
-imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_antigravity" }
-imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_autocompact" }
-concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/concurrency_group" }
-imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "c1adfc3a6ab8ef7c76c411ce88e13b85d7545a8a", subdirectory = "libs/mngr_ttyd" }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/imbue_common" }
+imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr" }
+imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_claude" }
+imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_codex" }
+imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_pi_coding" }
+imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_opencode" }
+imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_autocompact" }
+concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]

@@ -9,6 +9,11 @@ lead running the update, every member of its chat, every worker it launched (the
 ``update-self`` worker), and the ``is_primary=true`` services agent. A lead may also name agents
 to pause for memory earlier in the run; those are paused whatever their state.
 
+The workspace's main chat is stopped like any other busy chat, but the chat app starts it again
+as soon as it finds it stopped, without a resume prompt, so it is interrupted rather than held:
+it sits idle through the apply, and the resume tells it what happened without starting it.
+Naming it for memory is refused, since what stopping it frees comes straight back.
+
 Pausing a busy-waiting agent stops its background runners first, so their reports cannot revive
 it mid-apply; the commands they ran go into the record and the resume note, so the agent knows
 to run them again. A pause is ``mngr stop``; a resume is ``mngr start`` followed by the note
@@ -24,6 +29,7 @@ command line names its chat and the command it runs; a host without it (macOS) h
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -95,6 +101,13 @@ AGENT_NAME_ENV = "MNGR_AGENT_NAME"
 
 CHAT_ID_ENV = "MINDS_CHAT_ID"
 
+# The chat app's record of which chat is the workspace's main chat (its ``DEFAULT_CHAT_DATA_DIR``
+# and ``MAIN_CHAT_FILENAME``), copied because update-self is standard library only; a test writes
+# it through the chat app's own store.
+MAIN_CHAT_FILE = Path("data") / ".apps" / "chat" / "main_chat.json"
+
+MAIN_CHAT_ID_KEY = "chat_id"
+
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess[str]]
 
 
@@ -104,6 +117,10 @@ class AgentListingError(Exception):
 
 class UnknownAgentError(Exception):
     """A name the lead asked to pause is not a chat or worker this workspace runs."""
+
+
+class MainChatPauseError(Exception):
+    """A name the lead asked to pause is the main chat's, which the chat app starts again at once."""
 
 
 @dataclass(frozen=True)
@@ -164,6 +181,34 @@ class PauseTarget:
     agent: ListedAgent
     runners: tuple[BackgroundRunner, ...]
     lead_chat_id: str
+    is_main_chat: bool
+
+
+def read_main_chat_id(repo_root: Path) -> str | None:
+    """The chat the chat app keeps as the main chat; None when there is none, or, with a warning, when
+    its file cannot be read."""
+    path = repo_root / MAIN_CHAT_FILE
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        _warn_main_chat_unknown(f"could not read {path} ({exc})")
+        return None
+    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else ""
+    if chat_id is None:
+        return None
+    if not isinstance(chat_id, str) or not chat_id:
+        _warn_main_chat_unknown(f"{path} does not name a chat")
+        return None
+    return chat_id
+
+
+def _warn_main_chat_unknown(reason: str) -> None:
+    print(
+        f"warning: {reason}, so the main chat is treated like any other chat",
+        file=sys.stderr,
+    )
 
 
 def run_command(
@@ -316,11 +361,13 @@ def select_pause_targets(
     runners: Sequence[BackgroundRunner],
     lead: LeadIdentity,
     requested_names: Sequence[str],
+    main_chat_id: str | None,
 ) -> list[PauseTarget]:
     """What to pause: the busy chats and workers, or exactly the ones the lead named.
 
-    A named agent that is not a live chat or worker of this workspace (or is the lead's own) is
-    refused rather than skipped, so a typo cannot read as a pause that happened.
+    A named agent that is not a live chat or worker of this workspace (or is the lead's own, or
+    the main chat's) is refused rather than skipped, so a typo cannot read as a pause that happened.
+    A busy main chat is chosen like any other, marked so the pause records it as interrupted.
     """
     by_id = {agent.id: agent for agent in agents}
     candidates = [
@@ -330,6 +377,18 @@ def select_pause_targets(
         and not agent.is_primary
         and not _is_the_leads_own(agent, lead, by_id)
     ]
+    main_chat_names = sorted(
+        {
+            agent.name
+            for agent in candidates
+            if agent.chat_id == main_chat_id and agent.name in requested_names
+        }
+    )
+    if main_chat_names:
+        raise MainChatPauseError(
+            f"{', '.join(main_chat_names)} is the main chat, which the chat app starts again as"
+            " soon as it stops, so it cannot be paused"
+        )
     runners_by_chat: dict[str, list[BackgroundRunner]] = {}
     for runner in runners:
         runners_by_chat.setdefault(runner.chat_id, []).append(runner)
@@ -357,6 +416,7 @@ def select_pause_targets(
             agent=agent,
             runners=tuple(runners_by_chat.get(agent.chat_id, ())),
             lead_chat_id=_lead_chat_id(agent, agents) if agent.is_worker else "",
+            is_main_chat=agent.chat_id == main_chat_id,
         )
         for agent in chosen
     ]
@@ -371,7 +431,8 @@ def pause(
     """Pause each target -- its runners first, then the agent -- recording each as it goes.
 
     Returns the problems, one line each; an agent ``mngr stop`` could not stop is left out of
-    the record, since there is nothing for the resume to bring back.
+    the record, since there is nothing for the resume to bring back. The main chat is recorded as
+    already restarted, since the chat app starts it again itself.
     """
     problems: list[str] = []
     for target in targets:
@@ -403,8 +464,15 @@ def pause(
                 is_worker=target.agent.is_worker,
                 lead_chat_id=target.lead_chat_id,
                 interrupted_tasks=tasks,
+                is_restarted=target.is_main_chat,
             )
         )
+        if target.is_main_chat:
+            print(
+                f"Interrupted the main chat {target.agent.name} ({target.agent.id}); the chat app"
+                " starts it again at once, idle."
+            )
+            continue
         kind = "background agent" if target.agent.is_worker else "chat"
         print(f"Paused {kind} {target.agent.name} ({target.agent.id}).")
     return problems
