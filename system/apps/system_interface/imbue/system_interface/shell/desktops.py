@@ -277,6 +277,13 @@ def _target_sort_key(target: ShortcutTarget) -> tuple[str, str]:
     return (str(target.app), str(target.launch))
 
 
+@pure
+def _offered_without_a_record(desktops: Sequence[Desktop], rows: Sequence[RegistryRow]) -> frozenset[ShortcutTarget]:
+    """What counts as offered when no record can be read: the first default shortcut of every app with a shortcut on
+    ``desktops``, as a record of apps would have said."""
+    return first_default_shortcut_targets(rows, frozenset(target.app for target in shortcut_targets_on(desktops)))
+
+
 class DesktopStore(MutableModel):
     """Reads and writes ``desktops.json``, ``desktop_themes.json`` and ``default_shortcuts_offered.json`` under the
     shell's state lock."""
@@ -357,13 +364,6 @@ class DesktopStore(MutableModel):
         )
         write_json_atomic(self._offered_path(), document.model_dump(mode="json"))
 
-    def _offered_without_a_record(
-        self, desktops: Sequence[Desktop], rows: Sequence[RegistryRow]
-    ) -> frozenset[ShortcutTarget]:
-        """What counts as offered when no record can be read: the first default shortcut of every app with a
-        shortcut on ``desktops``, as a record of apps would have said."""
-        return first_default_shortcut_targets(rows, frozenset(target.app for target in shortcut_targets_on(desktops)))
-
     def _record_offered_unlocked(
         self, targets: AbstractSet[ShortcutTarget], desktops_before: Sequence[Desktop], rows: Sequence[RegistryRow]
     ) -> None:
@@ -376,9 +376,7 @@ class DesktopStore(MutableModel):
         if recorded is None and desktops_before and not rows:
             return
         kept = (
-            recorded
-            if recorded is not None and desktops_before
-            else self._offered_without_a_record(desktops_before, rows)
+            recorded if recorded is not None and desktops_before else _offered_without_a_record(desktops_before, rows)
         )
         offered = kept | targets
         if offered != recorded:
@@ -424,7 +422,7 @@ class DesktopStore(MutableModel):
             if not desktops:
                 return DesktopsChangeOutcome(desktops=desktops, is_written=False)
             recorded = self._read_offered_unlocked(rows)
-            offered = recorded if recorded is not None else self._offered_without_a_record(desktops, rows)
+            offered = recorded if recorded is not None else _offered_without_a_record(desktops, rows)
             kept = (
                 tuple(without_shortcuts_of_unregistered_apps(desktop, rows) for desktop in desktops)
                 if rows
