@@ -1,0 +1,226 @@
+# The App Store's curated catalog (see catalog.py for the schema and the rules every entry is checked against).
+#
+# Every entry was verified on 2026-11-05 in a workspace container: the pinned version installs with its recipe, the
+# launch argv serves the app at / on 127.0.0.1 with all of its state under {data_dir}, and the app answers when
+# reached through the forwarder (a foreign Host and Origin) and framed from another origin. disk_mb is the
+# environment's size after a first run, rounded up. memory_idle_mb is the app's process tree with nobody using it;
+# memory_in_use_mb is the same tree while one person uses it the ordinary way (one notebook open and run, a
+# 50,000-row database browsed and queried, a flow deployed, 200 notes or events saved), rounded up. The store checks
+# fit against the in-use figure. When you bump a version, re-verify all of that and re-measure.
+#
+# Placeholders: {port}, {data_dir} (the app's own data folder), {env_dir} (its environment), and, in a launch argv or
+# env only, {origin_label} (the first label of the app's own hostname, minted at registration). A literal brace in an
+# argument is written doubled ({{ and }}).
+#
+# A slug is the installed app's name and supervisord program, so it is lowercase letters and digits only, and the
+# store's generated drop-in for it (system/supervisord.conf.d/<slug>.conf) must be listed in .gitignore.
+#
+# The categories are the store's filters, in the order the page shows them (after "All apps"); every app carries one
+# or more of their keys in its tags.
+
+[[categories]]
+key = "data"
+title = "Data and notebooks"
+
+[[categories]]
+key = "automation"
+title = "Automation"
+
+[[categories]]
+key = "notes"
+title = "Notes and knowledge"
+
+[[categories]]
+key = "organize"
+title = "Organize your life"
+
+[[apps]]
+slug = "jupyterlab"
+tags = ["data"]
+title = "JupyterLab"
+description = "Notebooks, code and data side by side: the standard place to work in Python."
+about = "JupyterLab is a notebook and code environment for Python. Write code, see charts and tables beside it, keep notes in Markdown, and browse the files the notebooks work on. Each open notebook runs its own Python process, which is counted in the in-use memory here; each further open notebook adds about 150 MB."
+author = "Project Jupyter"
+license = "BSD-3-Clause"
+homepage_url = "https://jupyter.org"
+source_url = "https://github.com/jupyterlab/jupyterlab"
+version = "4.6.5"
+icon = "jupyterlab.svg"
+recipe = { kind = "python", requirement = "jupyterlab==4.6.5" }
+resources = { disk_mb = 160, memory_idle_mb = 100, memory_in_use_mb = 270 }
+
+[apps.launch]
+# The workspace's forwarder gates access, so Jupyter's own token and password are off; allow_remote_access accepts the
+# forwarded Host header, and the CSP header lets the desktop frame it. Jupyter's cookie-based write check (_xsrf)
+# cannot work here: the desktop frames the app from another site, and its cookie never reaches Jupyter there. It is off,
+# and allow_origin_pat does that job without a cookie instead: a browser stamps every write with the page's Origin,
+# and Jupyter refuses (404) any whose origin is not this app's own -- its workspace-minted, random origin label.
+# The container runs as root, hence --allow-root.
+argv = [
+    "{env_dir}/bin/jupyter-lab",
+    "--no-browser",
+    "--allow-root",
+    "--ip=127.0.0.1",
+    "--port={port}",
+    "--ServerApp.root_dir={data_dir}",
+    "--IdentityProvider.token=",
+    "--ServerApp.password=",
+    "--ServerApp.allow_remote_access=True",
+    "--ServerApp.disable_check_xsrf=True",
+    "--ServerApp.allow_origin_pat=^https?://{origin_label}\\.[^/]+$",
+    "--ServerApp.tornado_settings={{\"headers\":{{\"Content-Security-Policy\":\"frame-ancestors *\"}}}}",
+    "--LabApp.user_settings_dir={data_dir}/.jupyter/lab/user-settings",
+    "--LabApp.workspaces_dir={data_dir}/.jupyter/lab/workspaces",
+]
+env = { JUPYTER_CONFIG_DIR = "{data_dir}/.jupyter", JUPYTER_DATA_DIR = "{data_dir}/.local/share/jupyter", JUPYTER_RUNTIME_DIR = "{data_dir}/.local/share/jupyter/runtime", IPYTHONDIR = "{data_dir}/.ipython" }
+
+[[apps]]
+slug = "marimo"
+tags = ["data"]
+title = "marimo"
+description = "Reactive Python notebooks, saved as plain scripts, that re-run what depends on your change."
+about = "marimo is a Python notebook where changing a cell re-runs the cells that depend on it, so what you see always matches the code. Notebooks are saved as ordinary Python files and can be run as small apps. Opening a notebook starts a Python process, which is counted in the in-use memory here."
+author = "marimo"
+license = "Apache-2.0"
+homepage_url = "https://marimo.io"
+source_url = "https://github.com/marimo-team/marimo"
+version = "0.25.2"
+icon = "marimo.svg"
+recipe = { kind = "python", requirement = "marimo==0.25.2" }
+resources = { disk_mb = 180, memory_idle_mb = 95, memory_in_use_mb = 220 }
+
+[apps.launch]
+argv = [
+    "{env_dir}/bin/marimo",
+    "edit",
+    "{data_dir}",
+    "--headless",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}",
+    "--no-token",
+    "--skip-update-check",
+]
+env = { XDG_CONFIG_HOME = "{data_dir}/.config", XDG_STATE_HOME = "{data_dir}/.state", XDG_CACHE_HOME = "{data_dir}/.cache" }
+
+[[apps]]
+slug = "datasette"
+tags = ["data"]
+title = "Datasette"
+description = "Explore SQLite databases in the browser: browse, filter, query, and get an API for every table."
+about = "Datasette turns SQLite databases into a website you can browse, filter and query with SQL, with a JSON API for every table. Put .db files in its folder in Files and restart it to pick them up."
+author = "Simon Willison"
+license = "Apache-2.0"
+homepage_url = "https://datasette.io"
+source_url = "https://github.com/simonw/datasette"
+version = "0.65.5"
+icon = "datasette.svg"
+recipe = { kind = "python", requirement = "datasette==0.65.5" }
+resources = { disk_mb = 25, memory_idle_mb = 60, memory_in_use_mb = 80 }
+
+[apps.launch]
+argv = ["{env_dir}/bin/datasette", "serve", "{data_dir}", "--host", "127.0.0.1", "--port", "{port}"]
+
+[[apps]]
+slug = "nodered"
+tags = ["automation"]
+title = "Node-RED"
+description = "Wire together APIs, devices and online services as visual flows in a drag-and-drop editor."
+about = "Node-RED is a low-code editor for small automations: drag nodes onto a canvas, wire them together, and deploy. Flows can call web APIs, transform data, run on a schedule and much more, with thousands of community nodes to add."
+author = "OpenJS Foundation"
+license = "Apache-2.0"
+homepage_url = "https://nodered.org"
+source_url = "https://github.com/node-red/node-red"
+version = "5.0.9"
+icon = "nodered.svg"
+recipe = { kind = "node", package = "node-red@5.0.9" }
+resources = { disk_mb = 100, memory_idle_mb = 220, memory_in_use_mb = 250 }
+
+[apps.launch]
+# Node-RED has no host flag: the editor binds through the uiHost setting.
+argv = [
+    "{env_dir}/node_modules/.bin/node-red",
+    "--userDir",
+    "{data_dir}",
+    "--port",
+    "{port}",
+    "-D",
+    "uiHost=127.0.0.1",
+    "--no-telemetry",
+]
+
+[[apps]]
+slug = "tiddlywiki"
+tags = ["notes", "organize"]
+title = "TiddlyWiki"
+description = "A personal wiki and notebook of small linked notes you can tag, search and rearrange."
+about = "TiddlyWiki is a non-linear notebook: write small notes, link and tag them, and arrange them into stories. Every note is saved as a file in its folder in Files."
+author = "Jeremy Ruston"
+license = "BSD-3-Clause"
+homepage_url = "https://tiddlywiki.com"
+source_url = "https://github.com/TiddlyWiki/TiddlyWiki5"
+version = "5.4.1"
+icon = "tiddlywiki.svg"
+recipe = { kind = "node", package = "tiddlywiki@5.4.1" }
+resources = { disk_mb = 40, memory_idle_mb = 170, memory_in_use_mb = 280 }
+
+[apps.launch]
+init_argv = ["{env_dir}/node_modules/.bin/tiddlywiki", "{data_dir}/wiki", "--init", "server"]
+argv = ["{env_dir}/node_modules/.bin/tiddlywiki", "{data_dir}/wiki", "--listen", "host=127.0.0.1", "port={port}"]
+
+[[apps]]
+slug = "radicale"
+tags = ["organize"]
+title = "Radicale"
+description = "A small calendar and contacts server your phone and laptop can sync with."
+about = "Radicale keeps calendars, to-do lists and address books and shares them over the standard CalDAV and CardDAV protocols, so the calendar and contacts apps you already use can sync with it. Its own page shows a sign-in form: any name and password get in, since the workspace already controls who can reach it."
+author = "Kozea"
+license = "GPL-3.0-or-later"
+homepage_url = "https://radicale.org"
+source_url = "https://github.com/Kozea/Radicale"
+version = "3.9.0"
+icon = "radicale.svg"
+recipe = { kind = "python", requirement = "radicale==3.9.0" }
+resources = { disk_mb = 10, memory_idle_mb = 45, memory_in_use_mb = 55 }
+
+[apps.launch]
+# --config "" reads no system or user config file; --auth-type none since the workspace gates access.
+argv = [
+    "{env_dir}/bin/radicale",
+    "--config",
+    "",
+    "--server-hosts",
+    "127.0.0.1:{port}",
+    "--storage-filesystem-folder",
+    "{data_dir}/collections",
+    "--auth-type",
+    "none",
+    "--logging-level",
+    "warning",
+]
+
+[[apps]]
+slug = "excalidraw"
+tags = ["notes"]
+title = "Excalidraw"
+description = "A hand-drawn style whiteboard for sketching diagrams, wireframes and ideas."
+about = "Excalidraw is a virtual whiteboard with a hand-drawn feel: boxes, arrows, text and freehand sketches, with a shape library and export to PNG, SVG or its own file format. Your drawings are saved in your browser, and can be saved to and opened from files. This is the ready-made copy Excalidraw's own team publishes, so installing it needs no build; inside a workspace window it hides its sharing and live collaboration, which rely on excalidraw.com's servers."
+author = "Excalidraw"
+license = "MIT"
+homepage_url = "https://excalidraw.com"
+source_url = "https://github.com/excalidraw/excalidraw"
+version = "2026-05-06"
+icon = "excalidraw.svg"
+# The ready-made site from Excalidraw's own Docker Hub image (excalidraw/excalidraw, the linux/amd64 "latest" published
+# 2026-05-06, built from their main branch): the one layer that holds the built site is fetched by its digest and only
+# that folder is kept, then served by a pinned http-server. Building from source instead needed about 3 GB of memory,
+# more than many workspaces have. Installed through the store on 2026-11-05: a 22 MB download, 8 seconds, about 60 MB
+# of memory, and 47 MB kept (the 44 MB site and its server); its server holds about
+# 160 MB.
+recipe = { kind = "image_site", image = "excalidraw/excalidraw", published = "2026-05-06", layer = "sha256:8a4eeabc2c25585b772281b723d6f3d6b65ccdcb4090bbc8a64e275772fe5ed2", path = "usr/share/nginx/html", node_tools = ["http-server@14.1.1"] }
+resources = { disk_mb = 50, memory_idle_mb = 160, memory_in_use_mb = 170 }
+
+[apps.launch]
+# The drawing runs in the browser; the server only hands out the built site.
+argv = ["{env_dir}/node_modules/.bin/http-server", "{env_dir}/site", "-p", "{port}", "-a", "127.0.0.1", "-s"]
