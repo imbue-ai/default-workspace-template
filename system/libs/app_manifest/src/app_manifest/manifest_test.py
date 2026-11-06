@@ -44,6 +44,7 @@ def _full_manifest_data() -> dict[str, object]:
         "icon": "icon.svg",
         "critical": False,
         "stop_when_no_windows": True,
+        "uses_microphone": True,
         "priority": "files",
         "program": "files",
         "internal": False,
@@ -84,6 +85,12 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.default_mode is EntryMode.FLOATING
     assert manifest.window_closed_path == "/api/window-closed"
     assert manifest.stop_when_no_windows is True
+    assert manifest.uses_microphone is True
+
+
+def test_uses_microphone_defaults_to_false() -> None:
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
+    assert manifest.uses_microphone is False
 
 
 def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> (

@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => {
   // vnode-only tests, but imports must not explode).
   const listeners = new Map<string, ((event: unknown) => void)[]>();
   globalThis.document ??= {
+    // Nothing in it to find: the composer reads the page's base path off a meta tag when dictation starts.
+    querySelector: () => null,
     addEventListener: (type: string, fn: (event: unknown) => void) => {
       listeners.set(type, [...(listeners.get(type) ?? []), fn]);
     },
@@ -96,6 +98,38 @@ const mocks = vi.hoisted(() => {
     accountsLoaded: true,
     listeners,
     agent,
+    // Whether the page offers dictation, and the dictation the composer made: a stand-in whose state the test
+    // sets and whose events the test fires, as the engine would.
+    isDictationSupported: false,
+    makeFakeDictation: () => ({
+      state: "idle",
+      isHeld: false,
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      retryHeld: vi.fn(),
+      discardHeld: vi.fn(),
+      dispose: vi.fn(),
+    }),
+    dictation: null as null | {
+      state: string;
+      isHeld: boolean;
+      start: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      cancel: ReturnType<typeof vi.fn>;
+      retryHeld: ReturnType<typeof vi.fn>;
+      discardHeld: ReturnType<typeof vi.fn>;
+      dispose: ReturnType<typeof vi.fn>;
+    },
+    dictationEvents: null as null | {
+      onStateChange(state: string): void;
+      onProgress(loadedBytes: number, totalBytes: number): void;
+      onLevel(level: number): void;
+      onFinalWords(words: string): void;
+      onTentativeWords(words: string): void;
+      onUtteranceEnd(): void;
+      onProblem(problem: unknown): void;
+    },
   };
 });
 
@@ -234,8 +268,25 @@ vi.mock("../models/Providers", () => ({
   loadAccounts: () => mocks.loadAccounts(),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
+vi.mock("@imbue/workspace-voice/src/dictation", () => ({
+  createDictation: (_options: unknown, events: NonNullable<typeof mocks.dictationEvents>) => {
+    mocks.dictation = mocks.makeFakeDictation();
+    mocks.dictationEvents = events;
+    return mocks.dictation;
+  },
+}));
+vi.mock("@imbue/workspace-voice/src/support", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@imbue/workspace-voice/src/support")>()),
+  isDictationSupported: () => mocks.isDictationSupported,
+  pageDictationOptions: () => ({
+    engineId: "moonshine-base",
+    preferredDevice: null,
+    assetBase: "https://chat.test/assets/voice/",
+  }),
+}));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
+import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
@@ -2370,5 +2421,198 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 
     expect(mocks.loadAccounts).not.toHaveBeenCalled();
+  });
+});
+
+describe("MessageInput dictation", () => {
+  const CHAT = "agent-dictating";
+
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.isDictationSupported = true;
+    mocks.dictation = null;
+    mocks.dictationEvents = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.isDictationSupported = false;
+  });
+
+  function composer() {
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: CHAT } } as never);
+    return { component, render };
+  }
+
+  /** Press the mic, and have the engine report the state a start reaches. */
+  function startDictating(render: () => unknown, state = "listening") {
+    const mic = findByAttr(render(), "aria-label", "Dictate");
+    expect(mic, "the mic should be offered").toBeTruthy();
+    (mic!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+    setDictationState(state);
+  }
+
+  function setDictationState(state: string) {
+    mocks.dictation!.state = state;
+    mocks.dictationEvents!.onStateChange(state);
+  }
+
+  function textareaValue(render: () => unknown): unknown {
+    return findByTag(render(), "textarea")?.attrs?.value;
+  }
+
+  it("offers the mic beside Send only where the page can dictate", () => {
+    mocks.isDictationSupported = false;
+    expect(findByAttr(composer().render(), "aria-label", "Dictate")).toBeUndefined();
+    mocks.isDictationSupported = true;
+    const tree = composer().render();
+    const toolbar = flatten(tree).filter((vnode) => vnode.tag === "button");
+    const labels = toolbar.map((vnode) => vnode.attrs?.["aria-label"]);
+    expect(labels.indexOf("Dictate")).toBe(labels.indexOf("Send message") - 1);
+  });
+
+  it("locks the box while listening, shows the words at the caret, and saves only the final ones", () => {
+    const { render } = composer();
+    expect(findByTag(render(), "textarea")?.attrs?.readonly).toBe(false);
+    startDictating(render);
+    expect(findByTag(render(), "textarea")?.attrs?.readonly).toBe(true);
+    const mic = findByAttr(render(), "aria-label", "Stop dictation");
+    expect(mic?.attrs?.["aria-pressed"]).toBe("true");
+    mocks.dictationEvents!.onTentativeWords("hello the");
+    expect(textareaValue(render)).toBe("hello the");
+    expect(localStorage.getItem(`message-text:${CHAT}`)).toBeNull();
+    mocks.dictationEvents!.onFinalWords("Hello there.");
+    mocks.dictationEvents!.onTentativeWords("");
+    mocks.dictationEvents!.onUtteranceEnd();
+    expect(textareaValue(render)).toBe("Hello there.");
+    expect(localStorage.getItem(`message-text:${CHAT}`)).toBe("Hello there.");
+    // The mic stops what it started.
+    (mic!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.stop).toHaveBeenCalledTimes(1);
+    setDictationState("idle");
+    expect(findByTag(render(), "textarea")?.attrs?.readonly).toBe(false);
+  });
+
+  it("finishes the words first when Enter comes while dictating, then sends once", async () => {
+    const { render } = composer();
+    startDictating(render);
+    mocks.dictationEvents!.onFinalWords("Ship it.");
+    const onkeydown = findByTag(render(), "textarea")!.attrs!.onkeydown as (event: unknown) => void;
+    onkeydown({
+      key: "Enter",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault: () => {},
+    });
+    expect(mocks.dictation!.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    // Send shows the wait and stays put.
+    const send = findByAttr(render(), "aria-label", "Send message");
+    expect(send?.attrs?.["aria-disabled"]).toBe("true");
+    setDictationState("idle");
+    render();
+    await flushAsync();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).toHaveBeenCalledWith(CHAT, "Ship it.", expect.any(String));
+  });
+
+  it("drops the unfinished words on Escape and keeps the final ones", () => {
+    const { render } = composer();
+    startDictating(render);
+    mocks.dictationEvents!.onFinalWords("Keep this.");
+    mocks.dictationEvents!.onTentativeWords("but not this");
+    expect(textareaValue(render)).toBe("Keep this. but not this");
+    const onkeydown = findByTag(render(), "textarea")!.attrs!.onkeydown as (event: unknown) => void;
+    onkeydown({
+      key: "Escape",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault: () => {},
+    });
+    expect(mocks.dictation!.cancel).toHaveBeenCalledTimes(1);
+    // What the engine does on cancel.
+    mocks.dictationEvents!.onTentativeWords("");
+    mocks.dictationEvents!.onUtteranceEnd();
+    setDictationState("idle");
+    expect(textareaValue(render)).toBe("Keep this.");
+    expect(localStorage.getItem(`message-text:${CHAT}`)).toBe("Keep this.");
+  });
+
+  it("tells the user what went wrong over the composer, with Retry only where it can help", () => {
+    const { render } = composer();
+    startDictating(render, "idle");
+    mocks.dictationEvents!.onProblem({ kind: "missing", message: "No microphone was found.", canRetry: true });
+    let tree = render();
+    expect(renderedText(tree)).toContain("No microphone was found.");
+    const retry = findByClass(tree, "message-input-dictation-retry");
+    (retry!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.start).toHaveBeenCalledTimes(2);
+    mocks.dictationEvents!.onProblem({ kind: "blocked", message: "The microphone is blocked.", canRetry: false });
+    tree = render();
+    expect(findByClass(tree, "message-input-dictation-retry")).toBeUndefined();
+    (findByClass(tree, "message-input-dictation-dismiss")!.attrs!.onclick as () => void)();
+    expect(renderedText(render())).not.toContain("The microphone is blocked.");
+  });
+
+  it("offers Retry and Discard for words that could not be transcribed", () => {
+    const { render } = composer();
+    startDictating(render, "idle");
+    mocks.dictation!.isHeld = true;
+    mocks.dictationEvents!.onProblem({ kind: "held", message: "Some words are held.", canRetry: true });
+    const tree = render();
+    (findByClass(tree, "message-input-dictation-retry")!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.retryHeld).toHaveBeenCalledTimes(1);
+    (findByClass(tree, "message-input-dictation-discard")!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.discardHeld).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles dictation from the shortcut anywhere on the page, and lets go of it when the composer leaves", () => {
+    const windowListeners = new Map<string, unknown>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, fn: unknown) => windowListeners.set(type, fn),
+      removeEventListener: (type: string) => windowListeners.delete(type),
+    });
+    try {
+      const { render } = composer();
+      const root = findByClass(render(), "message-input mx-auto")!;
+      (root.attrs!.oncreate as () => void)();
+      const keydowns = mocks.listeners.get("keydown") ?? [];
+      const onShortcut = keydowns[keydowns.length - 1];
+      // Cmd on a Mac, Ctrl elsewhere: the composer reads the platform off the navigator, and so does this.
+      const isApple = isApplePlatform(navigator);
+      const chord = {
+        key: "M",
+        ctrlKey: !isApple,
+        altKey: false,
+        shiftKey: true,
+        metaKey: isApple,
+        preventDefault: vi.fn(),
+      };
+      onShortcut(chord);
+      expect(chord.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+      onShortcut({
+        key: "m",
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: false,
+        preventDefault: vi.fn(),
+      });
+      expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+      expect(windowListeners.has("pagehide")).toBe(true);
+      (root.attrs!.onremove as () => void)();
+      expect(mocks.dictation!.dispose).toHaveBeenCalledTimes(1);
+      expect(mocks.listeners.get("keydown")).not.toContain(onShortcut);
+      expect(windowListeners.has("pagehide")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

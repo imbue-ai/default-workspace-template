@@ -3121,8 +3121,20 @@ def create_application(state: ChatAppState) -> Flask:
     attach_state(application, state)
     # A message's markdown embeds images from anywhere, and passes raw HTML through the sanitizer,
     # whose default tag list admits <video> and <audio> as it does <img>; the sanitizer decides
-    # which tags render, and these two directives admit exactly what it renders.
-    attach_document_policy(application, {"img-src": "* data: blob:", "media-src": "* data: blob:"})
+    # which tags render, and these two directives admit exactly what it renders. The composer's
+    # dictation runs its speech models in the page (the workspace-voice-input spec in the mngr
+    # repository, D7): compiling their WebAssembly needs 'wasm-unsafe-eval', which admits nothing
+    # but WebAssembly, and the model files come straight from Hugging Face, whose downloads
+    # redirect to its regional CDN hosts under hf.co; scripts still load only from the chat's origin.
+    attach_document_policy(
+        application,
+        {
+            "script-src": "'self' 'wasm-unsafe-eval'",
+            "connect-src": "'self' https://huggingface.co https://*.hf.co",
+            "img-src": "* data: blob:",
+            "media-src": "* data: blob:",
+        },
+    )
     # The handoff borrows the watchers and the send path from here; wired where the routes
     # are, so a manager built by a test that never assembles the app refuses to hand off.
     state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))

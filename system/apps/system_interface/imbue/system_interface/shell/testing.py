@@ -100,6 +100,7 @@ def registry_row_toml(
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
     stop_when_no_windows: bool = False,
+    uses_microphone: bool = False,
     # Each message handler as ``(type, path)``.
     message_handlers: Sequence[tuple[str, str]] = (),
     # Each ``show`` message handler as ``(type, show, showing)``.
@@ -118,6 +119,7 @@ def registry_row_toml(
         f"internal = {'true' if is_internal else 'false'}",
         f"system = {'true' if is_system else 'false'}",
         f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
+        f"uses_microphone = {'true' if uses_microphone else 'false'}",
     ]
     if program is not None:
         lines.append(f'program = "{program}"')
