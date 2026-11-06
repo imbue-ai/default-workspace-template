@@ -75,7 +75,7 @@ def _command_run(
 
 
 def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> None:
-    chat_run = suite_command(SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "pytest", "-m", ""))
+    chat_run = suite_command(SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "--no-sync", "pytest", "-m", ""))
     failed_ids = tuple(f"imbue/chat/test_page.py::test_{index}" for index in range(12))
     report = SuiteRunReport(
         runs=(
@@ -86,11 +86,13 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
                 failed_ids,
                 ("imbue/chat/test_page.py::test_cleared",),
                 suite_command(
-                    SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "pytest", "--no-cov", "-m", "", "rerun")
+                    SuiteKind.PYTEST,
+                    "system/apps/chat",
+                    ("uv", "run", "--no-sync", "pytest", "--no-cov", "-m", "", "rerun"),
                 ),
             ),
             _command_run(
-                suite_command(SuiteKind.FULL_ROOT, ".", ("uv", "run", "pytest")),
+                suite_command(SuiteKind.FULL_ROOT, ".", ("uv", "run", "--no-sync", "pytest")),
                 CommandOutcome.FLAKY,
                 1,
                 flaky_test_ids=("system/libs/x/test_x.py::test_once",),
@@ -99,7 +101,7 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
                 suite_command(SuiteKind.FRONTEND_BUILD, "system", ("npm", "run", "build")), CommandOutcome.FAILED, None
             ),
             _command_run(
-                suite_command(SuiteKind.PYTEST, ".", ("uv", "run", "pytest", "system/libs/y")),
+                suite_command(SuiteKind.PYTEST, ".", ("uv", "run", "--no-sync", "pytest", "system/libs/y")),
                 CommandOutcome.SHED,
                 -9,
                 shed_records=(ShedRecord(timestamp=_MOMENT, pid=4242, comm=None),),
@@ -109,7 +111,7 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
     )
 
     assert render_report(report, Path("out") / "summary.json") == snapshot("""\
-failed: (cd system/apps/chat && uv run pytest -m '')
+failed: (cd system/apps/chat && uv run --no-sync pytest -m '')
     output: out/pytest.log
     rerun output: out/pytest-rerun.log
     failed: imbue/chat/test_page.py::test_0
@@ -124,15 +126,15 @@ failed: (cd system/apps/chat && uv run pytest -m '')
     failed: imbue/chat/test_page.py::test_9
     and 2 more
     passed on rerun: imbue/chat/test_page.py::test_cleared
-    rerun these: (cd system/apps/chat && uv run pytest --no-cov -m '' rerun)
-flaky: uv run pytest
+    rerun these: (cd system/apps/chat && uv run --no-sync pytest --no-cov -m '' rerun)
+flaky: uv run --no-sync pytest
     output: out/full_root.log
     rerun output: out/full_root-rerun.log
     passed on rerun: system/libs/x/test_x.py::test_once
 failed: (cd system && npm run build)
     output: out/frontend_build.log
     timed out after 3 hours
-shed: uv run pytest system/libs/y
+shed: uv run --no-sync pytest system/libs/y
     output: out/pytest.log
     memory guard killed a process (pid 4242) at 2026-10-28T12:00:00+00:00
 note: a note from the selection
