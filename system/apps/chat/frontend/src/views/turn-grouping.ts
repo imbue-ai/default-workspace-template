@@ -662,11 +662,11 @@ export function buildSections(
     user_event: UserMessageEvent | null,
     key: string,
     isNewRequest: boolean,
-    is_after_switch = false,
+    isAfterSwitch = false,
   ): void => {
     const previous = current;
     carryover = previous === null ? [] : openStepsAtEnd(previous);
-    current = ensureSection(user_event, key, is_after_switch);
+    current = ensureSection(user_event, key, isAfterSwitch);
     if (isNewRequest) setCarryoverDormant(current);
     else continueCarryover(previous, current);
   };
@@ -705,7 +705,7 @@ export function buildSections(
         openingTurnOf(e),
         `section-switch-${e.event_id}`,
         /* isNewRequest */ true,
-        /* is_after_switch */ true,
+        /* isAfterSwitch */ true,
       );
       continue;
     }
