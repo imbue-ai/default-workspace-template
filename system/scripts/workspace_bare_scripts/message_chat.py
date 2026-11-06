@@ -62,11 +62,11 @@ interrupt route (the process is replaced and resumes its own conversation, any
 turn in progress ends, and messages queued for it are resent as one turn), then
 sends the message, if one was given, the same way as any other. A refusal is
 final there too, and so is a resend of the queue that failed after the restart
-(1, nothing sent); a resend that landed behind a dialog is a blocked send (7,
-and the message still follows it). Only when the chat app cannot take the
-restart does ``mngr start --restart --no-resume`` do it, and ``mngr message``
-then carries the text. A restart with no message exits 0 once the agent is
-back.
+(1, nothing sent); a resend that landed behind a dialog is a blocked send (7
+when no message follows; a message still follows it, and its send's code is
+the exit). Only when the chat app cannot take the restart does
+``mngr start --restart --no-resume`` do it, and ``mngr message`` then carries
+the text. A restart with no message exits 0 once the agent is back.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
