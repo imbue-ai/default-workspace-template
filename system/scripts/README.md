@@ -3,7 +3,7 @@
 Provisioning and utility scripts. Their Python lives in one of two packages
 here (one uv project, `pyproject.toml`): `workspace_bare_scripts/`, which the
 system `python3` runs with no venv and which imports only the standard library
-(and the stdlib-only libraries its hook stubs put on `sys.path`), and
+(and the stdlib-only libraries its entry stubs put on `sys.path`), and
 `workspace_scripts/`, whose modules run from the root venv (`uv run --no-sync`).
 A module runs by its own path; an entry stub at `system/scripts/<name>.py` is
 kept only where something outside this release runs that path or the script
