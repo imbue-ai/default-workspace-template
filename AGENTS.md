@@ -194,7 +194,7 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 
 **Before editing any code that belongs to a supervisord program -- an app (a window the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it. It reads the app's `app.toml` first: a critical app (the shell, the chat, the terminal, or any app that declares `critical = true`) and the shared `system/libs/workspace_ui/`, `system/libs/workspace_layout/`, and `system/libs/workspace_themes/` libraries take its careful flow, which never edits the served tree.
 
-Quick look-and-feel requests (a colour, a font size, showing or hiding an element) may go from the chat app straight to a separate quick-change agent and never reach you; `data/.apps/chat/quick_changes.jsonl` lists them and what was done (see `update-app`, "Quick look-and-feel changes"). Check it before editing an app, and do not redo those changes.
+Quick look-and-feel requests may go from the chat app straight to a separate quick-change agent and never reach you; `data/.apps/chat/quick_changes.jsonl` lists them (see `update-app`).
 
 Apps and background services both run as supervisord programs, each declared in its own `system/supervisord.conf.d/<name>.conf` (pulled in by an `[include]` glob in `system/supervisord.conf`, which holds only the daemon's own config).
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
