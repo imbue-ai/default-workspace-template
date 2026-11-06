@@ -5,9 +5,9 @@ it starts, so an update that changes one of them reaches a running agent only wh
 is restarted. A restart keeps the conversation: each harness resumes its own session.
 
 ``restart_idle_agents`` asks the chat app to restart every running chat it lists, other than
-the pass's own chat, its worker, and the chats the pass's resume started after the update
-landed, if that chat has ended its turn, and reports the ones the chat app left running because
-they were busy. ``start_self_restart`` detaches a helper (``restart_self_when_idle``) that
+the pass's own chat, its worker, the chats the pass's resume started after the update landed,
+and rooms (whose agent is the room's reader, not a harness), if that chat has ended its turn,
+and reports the ones the chat app left running because they were busy. ``start_self_restart`` detaches a helper (``restart_self_when_idle``) that
 restarts the pass's own chat once its last turn ends and sends it a note to confirm the restart
 to the user (or, when the restart does not happen, a note saying so).
 
@@ -44,10 +44,11 @@ SELF_RESTART_NOTE_NAME = "note.md"
 SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
 SELF_RESTART_LOG_NAME = "helper.log"
 
-# Cross-layer contract with the chat app (its chat list's ``ChatStatus``, and its interrupt route's
-# ``InterruptAgentRequest`` and 409 answers); ``system/apps/chat``'s server tests pin these four
-# against it.
+# Cross-layer contract with the chat app (its chat list's ``ChatStatus`` and ``ChatKind``, and its
+# interrupt route's ``InterruptAgentRequest`` and 409 answers); ``system/apps/chat``'s server tests
+# pin these five against it.
 STOPPED_CHAT_STATUS = "stopped"
+ROOM_CHAT_KIND = "room"
 INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}
 BUSY_WITH_FIELD = "busy_with"
 # What the chat app's 409 for a chat mid-handoff carries instead of ``BUSY_WITH_FIELD``.
@@ -81,6 +82,8 @@ class ListedChat:
     title: str
     # The chat app's status for the chat (its ``ChatStatus`` wire value).
     status: str
+    # What the chat is (its ``ChatKind`` wire value): an agent chat, or a room.
+    kind: str
 
 
 class InterruptVerdict(Enum):
@@ -114,6 +117,7 @@ def parse_chat_list(answer_text: str) -> list[ListedChat]:
                 name=str(raw.get("name") or ""),
                 title=str(raw.get("title") or raw.get("name") or chat_id),
                 status=str(raw.get("status") or ""),
+                kind=str(raw.get("kind") or ""),
             )
         )
     return chats
@@ -202,7 +206,8 @@ def restart_idle_agents(
 
     A stopped chat needs nothing, since its next start loads what the update installed, and
     neither does one in ``started_after_landing`` (chat ids the pass's resume started after the
-    update landed); one deleted since the list was read is skipped. Raises
+    update landed), nor a room, whose agent runs no harness; one deleted since the list was
+    read is skipped. Raises
     ``ChatListUnavailableError`` when there is no chat list to act on.
     """
     report: dict[str, list[dict[str, str]]] = {
@@ -213,7 +218,11 @@ def restart_idle_agents(
     for chat in fetch_chat_list(repo_root, http, monotonic, sleep):
         if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
             continue
-        if chat.status == STOPPED_CHAT_STATUS or chat.chat_id in started_after_landing:
+        if (
+            chat.status == STOPPED_CHAT_STATUS
+            or chat.kind == ROOM_CHAT_KIND
+            or chat.chat_id in started_after_landing
+        ):
             continue
         outcome = interrupt_if_idle(repo_root, chat.chat_id, http)
         entry = {"chat_id": chat.chat_id, "title": chat.title}

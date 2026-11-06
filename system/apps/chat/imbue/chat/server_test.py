@@ -3110,17 +3110,20 @@ def test_the_restart_clients_ask_for_what_the_interrupt_route_takes_and_read_wha
     mock_run.assert_not_called()
 
 
-def test_update_selfs_agent_restarts_read_a_stopped_chat_and_a_switching_one_as_this_app_answers(
+def test_update_selfs_agent_restarts_read_a_stopped_chat_a_room_and_a_switching_one_as_this_app_answers(
     tmp_path: Path,
 ) -> None:
-    """update-self's agent restarts skip a chat the list calls stopped, and name a chat that refuses
-    the restart mid-switch by the refusal's handoff field; both are its own copies of this app's
-    wire names, which a rename here would leave reading a stopped chat as one to restart."""
+    """update-self's agent restarts skip a chat the list calls stopped and a room, and name a chat
+    that refuses the restart mid-switch by the refusal's handoff field; all are its own copies of
+    this app's wire names, which a rename here would leave reading a stopped chat or a room as one
+    to restart."""
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
     switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
     stopped = f"agent-{uuid4().hex}"
     _register_agent(app, stopped, "Chat-2", "STOPPED")
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(state_of(app).agent_manager, room, name="Lounge", harness=HarnessType.ROOM)
 
     listed = client.get("/api/chats").get_json()["chats"]
     refused = client.post(
@@ -3130,6 +3133,7 @@ def test_update_selfs_agent_restarts_read_a_stopped_chat_and_a_switching_one_as_
     assert [chat["status"] for chat in listed if chat["chat_id"] == stopped] == [
         update_agent_restarts.STOPPED_CHAT_STATUS
     ]
+    assert [chat["kind"] for chat in listed if chat["chat_id"] == room] == [update_agent_restarts.ROOM_CHAT_KIND]
     assert refused.status_code == 409
     assert update_agent_restarts.HANDOFF_PHASE_FIELD in refused.get_json()
 

@@ -33,17 +33,20 @@ _DELIVERY_DEADLINE_SECONDS = 8.0
 _ONLY_IF_IDLE = {"only_if_idle": True}
 
 
-def _chat(chat_id: str, title: str, status: str, name: str = "") -> dict[str, Any]:
+def _chat(
+    chat_id: str, title: str, status: str, name: str = "", kind: str = "agent"
+) -> dict[str, Any]:
     """One chat of ``GET /api/chats``, in the chat app's ``ChatSnapshot`` shape (the fields read here)."""
     return {
         "chat_id": chat_id,
         "title": title,
         "name": name or title.lower().replace(" ", "-"),
         "status": status,
+        "kind": kind,
     }
 
 
-def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_answer_reported(
+def test_every_chat_but_the_pass_its_worker_stopped_ones_and_rooms_is_asked_and_its_answer_reported(
     fake_chat_app: FakeChatAppServer,
 ) -> None:
     fake_chat_app.answers = [
@@ -58,6 +61,7 @@ def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_an
                     _chat("agent-dialog", "Inbox", "attention"),
                     _chat("agent-handoff", "Notes", "working"),
                     _chat("agent-stopped", "Old chat", "stopped"),
+                    _chat("agent-room", "Lounge", "idle", kind="room"),
                     _chat("agent-deleted", "Gone", "idle"),
                     _chat("agent-failing", "Budget", "idle"),
                 ]
