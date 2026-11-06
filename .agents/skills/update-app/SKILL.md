@@ -107,7 +107,12 @@ or send it to one already running when it fits with that subagent's work. After
 each change it makes, a look-and-feel subagent refreshes the user's window (`uv
 run --no-sync workspace-layout refresh --app <name>`) so the change shows at
 once. Send every other request to one subagent, started with `model: "opus"`, as
-soon as it arrives, including the first one. A list of changes in one message is
+soon as it arrives, including the first one: pass it on word for word, without
+saying what order to do it in. That subagent works the way you would without
+subagents: it takes on each request as it arrives and works on all the open ones
+together, folding a new request into the work in progress rather than finishing
+one before starting the next. Your job is to pass messages through, so they never
+wait in your queue. A list of changes in one message is
 several requests, so each change in the list goes to a subagent as above.
 Leave each building subagent's `isolation` unset, so every subagent edits the
 live app directly. Subagents run in the background, so
