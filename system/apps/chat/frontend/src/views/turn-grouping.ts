@@ -647,6 +647,16 @@ export function buildSections(
     builders.push(section);
     return section;
   };
+  // Close the current section, carrying its open steps over, and open the next. A turn the user
+  // started is a new request, so the carried-over steps wait until the agent takes them up again;
+  // any other break continues the request the closed section was answering.
+  const breakSection = (user_event: UserMessageEvent | null, key: string, isNewRequest: boolean): void => {
+    const previous = current;
+    carryover = previous === null ? [] : openStepsAtEnd(previous);
+    current = ensureSection(user_event, key);
+    if (isNewRequest) setCarryoverDormant(current);
+    else continueCarryover(previous, current);
+  };
 
   // The node a switch just closed, until the successor's first turn-making event: the handoff
   // prompt lands on it rather than in the successor's section. Hidden lines the successor's
@@ -676,11 +686,9 @@ export function buildSections(
         lastSwitched = { key: e.event_id, request: null, events: [], switch: e, prompt: null };
         current.entries.push({ kind: "handoff", node: lastSwitched });
       }
-      carryover = openStepsAtEnd(current);
-      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
       // The successor starts on the message the user switched with, so a step the retiring
       // agent left open does not take its answer unless it takes the step up.
-      setCarryoverDormant(current);
+      breakSection(openingTurnOf(e), `section-switch-${e.event_id}`, /* isNewRequest */ true);
       continue;
     }
     if (e.type === "user_message") {
@@ -721,10 +729,7 @@ export function buildSections(
         lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
-        const previous = current;
-        carryover = previous === null ? [] : openStepsAtEnd(previous);
-        current = ensureSection(null, `section-after-${e.event_id}`);
-        continueCarryover(previous, current);
+        breakSection(null, `section-after-${e.event_id}`, /* isNewRequest */ false);
         continue;
       }
       // The chat app's notice that a secret card was answered: the same break as a
@@ -737,10 +742,7 @@ export function buildSections(
         if (requestId !== null) resolutionsByRequestId.set(requestId, secretResolution);
         const note = secretResolutionNoteOf(e);
         if (requestId !== null && note !== null) secretNotesByRequestId.set(requestId, note);
-        const previous = current;
-        carryover = previous === null ? [] : openStepsAtEnd(previous);
-        current = ensureSection(null, `section-after-${e.event_id}`);
-        continueCarryover(previous, current);
+        breakSection(null, `section-after-${e.event_id}`, /* isNewRequest */ false);
         continue;
       }
       if (
@@ -770,16 +772,7 @@ export function buildSections(
       // module docstring): close the prior section (carrying open steps) and open a new one
       // headed by the message.
       lastSwitched = null;
-      const previous = current;
-      carryover = previous === null ? [] : openStepsAtEnd(previous);
-      current = ensureSection(e, `section-${e.event_id}`);
-      if (isGenuineUserTurn(e)) {
-        // The user moved on: a step the agent left open belongs to the earlier request, so an
-        // answer to this one does not join it unless the agent takes the step up again.
-        setCarryoverDormant(current);
-      } else {
-        continueCarryover(previous, current);
-      }
+      breakSection(e, `section-${e.event_id}`, isGenuineUserTurn(e));
       continue;
     }
     if (e.type === "assistant_message") {
