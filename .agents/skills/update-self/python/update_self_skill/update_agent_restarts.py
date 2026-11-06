@@ -22,7 +22,7 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -198,15 +198,17 @@ def interrupt_if_idle(
 def restart_idle_agents(
     repo_root: Path,
     own_chat_id: str,
+    started_after_landing: Collection[str],
     http: HttpClient,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, list[dict[str, str]]]:
     """Restart every idle chat but the pass's own and its worker's; the report of what happened.
 
-    A stopped chat needs nothing, since its next start loads what the update installed; one
-    deleted since the list was read is skipped. Raises ``ChatListUnavailableError`` when there
-    is no chat list to act on.
+    A stopped chat needs nothing, since its next start loads what the update installed, and
+    neither does one in ``started_after_landing`` (chat ids the pass's resume started after the
+    update landed); one deleted since the list was read is skipped. Raises
+    ``ChatListUnavailableError`` when there is no chat list to act on.
     """
     report: dict[str, list[dict[str, str]]] = {
         "restarted": [],
@@ -216,7 +218,7 @@ def restart_idle_agents(
     for chat in fetch_chat_list(repo_root, http, monotonic, sleep):
         if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
             continue
-        if chat.status == STOPPED_CHAT_STATUS:
+        if chat.status == STOPPED_CHAT_STATUS or chat.chat_id in started_after_landing:
             continue
         outcome = interrupt_if_idle(repo_root, chat.chat_id, http)
         entry = {"chat_id": chat.chat_id, "title": chat.title}

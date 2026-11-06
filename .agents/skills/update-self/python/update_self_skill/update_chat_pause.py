@@ -574,6 +574,7 @@ def resume(
             )
             continue
         entry.is_restarted = True
+        entry.is_started_after_landing = landed_ref is not None
         save()
         print(f"Started {entry.name} ({entry.id}) again.")
 

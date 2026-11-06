@@ -656,8 +656,21 @@ def _cmd_restart_agents(args: argparse.Namespace) -> int:
     chat_id = _chat_id_or_complain(args)
     if not chat_id:
         return 1
+    repo_root = _repo_root(args).resolve()
+    status = read_run_status(repo_root)
+    started_after_landing = (
+        set()
+        if status is None
+        else {
+            entry.chat_id
+            for entry in status.stopped_agents
+            if entry.is_started_after_landing
+        }
+    )
     try:
-        report = restart_idle_agents(_repo_root(args).resolve(), chat_id, HttpClient())
+        report = restart_idle_agents(
+            repo_root, chat_id, started_after_landing, HttpClient()
+        )
     except ChatListUnavailableError as exc:
         print(f"error: no agent was restarted: {exc}", file=sys.stderr)
         return 1

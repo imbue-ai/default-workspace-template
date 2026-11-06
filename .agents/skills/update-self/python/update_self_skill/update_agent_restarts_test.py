@@ -98,7 +98,7 @@ def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_an
     }
 
     report = update_agent_restarts.restart_idle_agents(
-        fake_chat_app.workspace, _OWN_CHAT, update_runtime.HttpClient()
+        fake_chat_app.workspace, _OWN_CHAT, set(), update_runtime.HttpClient()
     )
 
     assert fake_chat_app.interrupts == [
@@ -199,7 +199,7 @@ def test_a_restart_the_chat_app_cannot_take_is_reported_failed_not_forced(
     )
 
     report = update_agent_restarts.restart_idle_agents(
-        _registered_workspace(tmp_path), _OWN_CHAT, http
+        _registered_workspace(tmp_path), _OWN_CHAT, set(), http
     )
 
     assert report["restarted"] == [] and report["left_running"] == []

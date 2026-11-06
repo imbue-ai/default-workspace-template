@@ -856,7 +856,8 @@ that no longer imports, a consumer the report names that the update broke:
   every running chat and background agent is still on what it loaded before
   the apply. Restart the idle ones now; a restart keeps each conversation.
   This chat and the update's worker are left out (this chat restarts last, in
-  §6):
+  §6), and so is every chat and background agent 5b paused and brought back
+  after the update landed, which started on what it installed:
 
   ```bash
   python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
