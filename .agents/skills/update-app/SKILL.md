@@ -359,7 +359,7 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
+  URL=$(uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
@@ -368,7 +368,7 @@ where the data dies. Encode these, cheapest first:
       --project system/apps/<package> \
       -- <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
+  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
 
   `--project` boots a user-built app (a standalone project with its own lock and
@@ -389,7 +389,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
+  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -450,7 +450,7 @@ where the data dies. Encode these, cheapest first:
   confirm the real data survived, and only then remove the snapshot:
 
   ```bash
-  du -sh data/.apps/<name>; df -h /var/tmp    # the copy must leave several GB free
+  du -sh data/.apps/<name>; uv run --no-sync disk-headroom /var/tmp    # the copy must leave several GB free
   cp -a data/.apps/<name> /var/tmp/<name>-pre-<change>
   # ...run the change, confirm the real data survived...
   rm -rf /var/tmp/<name>-pre-<change>

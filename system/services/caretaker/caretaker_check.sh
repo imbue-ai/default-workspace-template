@@ -101,9 +101,16 @@ if [ -d /var/log/supervisor ]; then
     [ -n "$error_logs" ] && add_finding "fresh error output in: $(echo "$error_logs" | tr '\n' ' ')"
 fi
 
-# 3. Disk nearly full. The env override exists for tests.
+# 3. Disk nearly full, as the workspace can use it: disk-headroom also sees a cloud machine's disk
+# quota, which can run out before the disk df reports on. The env override exists for tests.
 disk_threshold="${MINDS_CARETAKER_DISK_THRESHOLD:-85}"
-disk_used=$(df -P / | awk 'NR==2 {gsub("%",""); print $5}')
+if command -v uv >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
+    && disk_used=$(uv run --no-sync disk-headroom --json / | jq -er '.used * 100 / (.used + .free) | ceil'); then
+    :
+else
+    log "could not read the disk through disk-headroom; falling back to df, which cannot see a disk quota"
+    disk_used=$(df -P / | awk 'NR==2 {gsub("%",""); print $5}')
+fi
 [ "$disk_used" -ge "$disk_threshold" ] && add_finding "disk is ${disk_used}% full"
 
 # 4. The OOM guard shed processes since the last check.
