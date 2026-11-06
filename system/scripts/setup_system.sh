@@ -1,4 +1,5 @@
-#!/usr/bin/env bash # Shared system-toolchain setup for default-workspace-template hosts.
+#!/usr/bin/env bash
+# Shared system-toolchain setup for default-workspace-template hosts.
 #
 # Installs the repo-independent toolchain: system packages, language runtimes,
 # and pinned CLIs. This is the single source of truth for that setup -- the
