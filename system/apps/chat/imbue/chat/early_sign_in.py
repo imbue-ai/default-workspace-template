@@ -127,6 +127,7 @@ def _asset(filename: str) -> Response:
     try:
         return send_from_directory(current_app.config[_STATIC_DIRECTORY_CONFIG_KEY] / "assets", filename)
     except NotFound:
+        logger.warning("The chooser page asked for an asset that is not built: {}", filename)
         return Response(status=404)
 
 
