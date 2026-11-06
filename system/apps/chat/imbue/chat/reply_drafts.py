@@ -5,8 +5,8 @@ would otherwise show a reply seconds after the agent's terminal does. One thread
 is looking at for its draft (``AgentSessionWatcher.read_reply_draft``) a few times a second and sends
 any change on the chat's stream as an ``assistant_draft`` frame: ``{"type": "assistant_draft",
 "agent_id", "after_event_id", "text"}``, with ``text`` empty once there is no draft. The frame is
-not a transcript event (it has no ``event_id`` and nothing stores it); the page shows it at the
-end of the transcript until the reply itself lands.
+not a transcript event (it has no ``event_id`` and nothing stores it); the page shows it where the
+reply will land (in the open step, else at the end of the transcript) until the reply itself lands.
 
 The work is bounded by what the user is looking at: only a chat a page streams *and* reports
 shown and focused (its presence, ``presence.py``) is read, so background chats, chats in a hidden

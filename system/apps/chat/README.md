@@ -250,12 +250,15 @@ reads the reply being written off the agent's terminal pane three times a
 second, through mngr's `stream_snapshot` converter
 (`harnesses/claude/reply_draft.py`), and sends what changed:
 `{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
-shows the draft after the transcript while `after_event_id` is still the last
-event it holds, so the reply landing replaces it at once; an empty `text`
-clears it. A draft that matches a reply the transcript already holds is never
-sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. Codex also writes an agent message to its
-rollout only once it is finished; its draft comes from the
+shows the draft while `after_event_id` is still the last event it holds, so the
+reply landing replaces it at once; an empty `text` clears it. It shows where the
+reply will land: while a step is open, as that step's caption (or at the end of
+its work, when the step is expanded), and otherwise after the transcript. A step
+left open from an earlier turn takes it only once the agent works in it again
+in the new turn. A draft that matches a reply the transcript already holds is
+never sent. The terminal's rendering loses heading levels and code-fence
+languages, which the landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
 rollout holds the message's id. Pi records an assistant message only on
@@ -911,6 +914,15 @@ the chat is switching to another agent or account (or once it has switched).
 Which messages a sign-in error refused goes by timestamp, on both the page
 (`auth-recovery.ts`) and the chat app: claude can write the error into its
 transcript ahead of the message it refused.
+
+A sign-in error only shows to someone looking at the chat, so the chat app also
+tells the Imbue Studio app's feed (`sign_in_notices.py`,
+`imbue_studio_notifications.py`). A chat's refusals form a run, from its first
+live reply flagged `is_auth_error` to its next reply that is not, and only the
+run's first refusal is posted: one notification as the chat's own agent, so a
+click opens the chat, carrying the chat's watchers as `watched_by`, so a reader
+already in the chat gets no toast. The backlog a watcher reads when it starts is
+history and is never announced.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
