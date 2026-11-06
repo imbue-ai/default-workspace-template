@@ -7,9 +7,9 @@ is restarted. A restart keeps the conversation: each harness resumes its own ses
 ``restart_idle_agents`` asks the chat app to restart every running chat it lists, other than
 the pass's own chat, its worker, and the chats the pass's resume started after the update
 landed, if that chat has ended its turn, and reports the ones the chat app left running because
-they were busy. ``start_self_restart`` restarts the pass's own chat
-once its last turn ends, from a detached helper, and sends it a note to confirm the restart to
-the user (or, when the restart does not happen, a note saying so).
+they were busy. ``start_self_restart`` detaches a helper (``restart_self_when_idle``) that
+restarts the pass's own chat once its last turn ends and sends it a note to confirm the restart
+to the user (or, when the restart does not happen, a note saying so).
 
 Every restart is the chat app's interrupt route with ``only_if_idle``: the chat app knows which
 agent a chat runs on and what it is doing, decides at the moment of the restart, and refuses
