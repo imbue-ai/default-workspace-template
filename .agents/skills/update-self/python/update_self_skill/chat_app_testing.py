@@ -20,7 +20,6 @@ class FakeChatAppServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _FakeChatAppHandler)
         self.workspace = workspace
         self.answers: list[tuple[int, object]] = [(200, {"chats": []})]
-        self.list_reads = 0
         self.interrupt_answers: dict[str, list[tuple[int, object]]] = {}
         self.interrupts: list[tuple[str, object]] = []
 
@@ -45,7 +44,6 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
         if self.path != "/api/chats":
             self._respond(404, {"detail": f"unknown path {self.path}"})
             return
-        server.list_reads += 1
         # The last scripted answer repeats, so a test scripts only the transitions it is about.
         self._respond(
             *(server.answers.pop(0) if len(server.answers) > 1 else server.answers[0])
