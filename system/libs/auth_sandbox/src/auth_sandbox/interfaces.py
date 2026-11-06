@@ -15,7 +15,7 @@ class SignInLatchkeyInterface(MutableModel, ABC):
 
     @abstractmethod
     def initialize(self) -> None:
-        """Check the binary and write minds' part of ``config.json`` (its merge keeps the browser entry)."""
+        """Write minds' part of ``config.json`` (its merge keeps the browser entry)."""
 
     @abstractmethod
     def auth_browser(self, service_name: str, account: str | None) -> tuple[bool, str]:

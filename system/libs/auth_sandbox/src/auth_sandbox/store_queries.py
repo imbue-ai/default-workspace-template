@@ -1,6 +1,6 @@
 """The two read-only questions the commands answer the chrome with, in latchkey's own JSON: what latchkey knows of a
-service (``auth-sandbox-prepare --describe``), and which accounts the sandbox's store holds for it (printed by the
-sign-in commands on success, so the chrome knows which account it is transferring).
+service (``auth-sandbox-sign-in``, and ``auth-sandbox-prepare --describe``), and which accounts the sandbox's store
+holds for it (printed by the sign-in commands on success, so the chrome knows which account it is transferring).
 
 Both run against the sandbox's store under the session's key, offline, so neither waits on the network.
 """

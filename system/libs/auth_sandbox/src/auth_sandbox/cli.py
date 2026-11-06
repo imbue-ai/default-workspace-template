@@ -5,11 +5,13 @@ Exit codes: 0 when the command did what it says; 1 when latchkey refused (its re
 stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (the session file, the
 key and settings prepare keeps from it, the values file, or the latchkey binary and its config themselves), or a
 file or directory of the sandbox's cannot be read or written (2 is click's own code for a usage error, which no retry
-in the sandbox cures). Nothing here prints a key, and no key is ever in an argument.
+in the sandbox cures); 4 when the browser sign-in was asked of a service that takes typed credentials instead.
+Nothing here prints a key, and no key is ever in an argument.
 """
 
 import json
 import os
+import shutil
 import sys
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -19,6 +21,7 @@ from pathlib import Path
 import click
 from imbue.mngr_latchkey.core import Latchkey, LatchkeyError
 from loguru import logger
+from pydantic import JsonValue
 
 from auth_sandbox.claim import CLAIM_POLL_INTERVAL_SECONDS, ClaimPaths, serve_claim
 from auth_sandbox.environment import sandbox_identity, sign_in_environment
@@ -52,7 +55,7 @@ from auth_sandbox.set_credentials import (
     read_and_remove_values_file,
     run_set_credentials,
 )
-from auth_sandbox.sign_in import SignInOutcome, run_sign_in
+from auth_sandbox.sign_in import SignInOutcome, offers_browser_sign_in, run_sign_in
 from auth_sandbox.store_queries import (
     describe_service,
     store_environment,
@@ -62,6 +65,7 @@ from auth_sandbox.template_config import render_template_config
 
 EXIT_REFUSED = 1
 EXIT_MISSING_MATERIAL = 3
+EXIT_TYPED_CREDENTIALS_NEEDED = 4
 
 _runtime_dir_option = click.option(
     "--runtime-dir",
@@ -95,10 +99,16 @@ def _apply_sign_in_environment(environment: Mapping[str, str]) -> None:
 
 def _build_latchkey(paths: SandboxPaths, latchkey_binary: str) -> LatchkeyAdapter:
     """The desktop's wrapper over the sandbox's directory, with the session's key and fingerprint in the
-    environment."""
+    environment.
+
+    The binary is only looked up, not run: the wrapper would let a missing one escape its flows as a process
+    error rather than a ``LatchkeyError``, and the image build has already checked its version.
+    """
     key = read_key(paths.latchkey_key_path)
     settings = read_session_settings(paths.session_settings_path)
     paths.latchkey_directory.mkdir(parents=True, exist_ok=True)
+    if shutil.which(latchkey_binary) is None:
+        raise MissingMaterialError(f"no latchkey at {latchkey_binary}")
     _apply_sign_in_environment(
         sign_in_environment(
             os.environ,
@@ -114,14 +124,28 @@ def _build_latchkey(paths: SandboxPaths, latchkey_binary: str) -> LatchkeyAdapte
     )
 
 
-def _print_stored_accounts(latchkey_binary: str, service: str) -> None:
-    """What a sign-in command prints on success: the store's accounts for the service, which name the account the
+def _stored_accounts(latchkey_binary: str, service: str) -> dict[str, JsonValue]:
+    """The store's accounts for the service, which a sign-in command prints on success to name the account the
     chrome transfers. Run in the environment ``_build_latchkey`` put into this process."""
     with _exit_on_sandbox_failure():
-        accounts = stored_accounts(
+        return stored_accounts(
             SubprocessLatchkeyRunner(), latchkey_binary, os.environ, service
         )
-    click.echo(json.dumps({"accounts": accounts}))
+
+
+def _describe_for_sign_in(latchkey_binary: str, service: str) -> dict[str, JsonValue]:
+    """What latchkey knows of the service, in the environment ``_build_latchkey`` put into this process.
+
+    A description latchkey fails to give is ``{}``, which signs in through the browser, as the desktop does when
+    ``services info`` has no answer; its reason goes to stderr.
+    """
+    try:
+        return describe_service(
+            SubprocessLatchkeyRunner(), latchkey_binary, os.environ, service
+        )
+    except LatchkeyCommandError as e:
+        click.echo(f"{e}; signing in through the browser", err=True)
+        return {}
 
 
 def _finish(outcome: SignInOutcome) -> None:
@@ -136,9 +160,8 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
     """Turn a command's failure into the exit code of the module docstring, its message on stderr.
 
     A material that is missing or malformed exits 3: the session file and what prepare keeps from it, the values
-    file, and the ``latchkey`` the desktop's wrapper cannot run (``Latchkey.initialize`` raises ``LatchkeyError``
-    for a binary that is absent or too old and for a config it cannot parse; a refusal of its own it answers as a
-    result, not an exception). So does a file or directory of the sandbox's that cannot be read or written (an ``OSError``,
+    file, a ``latchkey`` binary that is not there, and a latchkey config the merge cannot parse (``LatchkeyError``;
+    a refusal of its own the desktop's wrapper answers as a result, not an exception). So does a file or directory of the sandbox's that cannot be read or written (an ``OSError``,
     the config's included), which no retry in the sandbox cures either. A ``latchkey`` query that failed (the
     description, or the listing after a stored credential) exits 1 with its reason.
     """
@@ -168,19 +191,45 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
         "that can refuses an account the sandbox's fresh store does not hold, so the chrome names none there."
     ),
 )
+@click.option(
+    "--fresh",
+    "is_fresh",
+    is_flag=True,
+    help=(
+        "Start the browser without the machine's session (adding a new account): the browser state prepare "
+        "installed is removed first."
+    ),
+)
 @_runtime_dir_option
 @_latchkey_binary_option
 def sign_in_command(
-    service: str, account: str | None, runtime_dir: Path, latchkey_binary: str
+    service: str,
+    account: str | None,
+    is_fresh: bool,
+    runtime_dir: Path,
+    latchkey_binary: str,
 ) -> None:
-    """Run latchkey's browser sign-in for SERVICE on the Screen, storing the credential in the sandbox; print the
-    store's accounts for SERVICE as {"accounts": ...}."""
+    """Run latchkey's browser sign-in for SERVICE on the Screen, storing the credential in the sandbox; print
+    {"accounts": <the store's accounts for SERVICE>, "services_info": <what latchkey knows of SERVICE>}.
+
+    A service that takes typed credentials instead launches nothing: the command prints {"services_info": ...}
+    and exits 4.
+    """
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
     with _exit_on_sandbox_failure():
-        outcome = run_sign_in(_build_latchkey(paths, latchkey_binary), service, account)
+        latchkey = _build_latchkey(paths, latchkey_binary)
+        services_info = _describe_for_sign_in(latchkey_binary, service)
+    if not offers_browser_sign_in(services_info):
+        click.echo(json.dumps({"services_info": services_info}))
+        sys.exit(EXIT_TYPED_CREDENTIALS_NEEDED)
+    with _exit_on_sandbox_failure():
+        if is_fresh:
+            paths.latchkey_browser_state_path.unlink(missing_ok=True)
+        outcome = run_sign_in(latchkey, service, account)
     _finish(outcome)
-    _print_stored_accounts(latchkey_binary, service)
+    accounts = _stored_accounts(latchkey_binary, service)
+    click.echo(json.dumps({"accounts": accounts, "services_info": services_info}))
 
 
 @click.command()
@@ -213,7 +262,7 @@ def set_credentials_command(
             _build_latchkey(paths, latchkey_binary), service, account, values
         )
     _finish(outcome)
-    _print_stored_accounts(latchkey_binary, service)
+    click.echo(json.dumps({"accounts": _stored_accounts(latchkey_binary, service)}))
 
 
 @click.command()
@@ -226,21 +275,23 @@ def set_credentials_command(
 @click.option(
     "--describe",
     "service",
-    required=True,
-    help="The service whose `latchkey services info --offline` JSON to print.",
+    default=None,
+    help="A service whose `latchkey services info --offline` JSON to print once the session is installed.",
 )
 @_runtime_dir_option
 @_latchkey_binary_option
 def prepare_command(
-    session_file: Path, service: str, runtime_dir: Path, latchkey_binary: str
+    session_file: Path, service: str | None, runtime_dir: Path, latchkey_binary: str
 ) -> None:
-    """Install the session file's key, browser state and settings; print what latchkey knows of the service, or {}
-    when it knows no such service."""
+    """Install the session file's key, browser state and settings; with --describe, print what latchkey knows of
+    the service, or {} when it knows no such service."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
     with _exit_on_sandbox_failure():
         material = read_and_remove_session_file(session_file)
         install_session(material, paths)
+        if service is None:
+            return
         description = describe_service(
             SubprocessLatchkeyRunner(),
             latchkey_binary,

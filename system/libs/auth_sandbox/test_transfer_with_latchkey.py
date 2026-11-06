@@ -1,6 +1,7 @@
 """The session's key against the real latchkey CLI (the one setup_system.sh installs in the image): prepare lands the
-machine's browser state under the dialog's key K, a credential the sandbox stores under K is printed as its account,
-and the files the chrome carries to the VM merge there with K as the source key, as the VM's apply-state does."""
+machine's browser state under the dialog's key K, the sign-in describes a service that takes typed credentials and
+launches nothing for it, a credential the sandbox stores under K is printed as its account, and the files the chrome
+carries to the VM merge there with K as the source key, as the VM's apply-state does."""
 
 import base64
 import json
@@ -12,9 +13,11 @@ from pathlib import Path
 
 import pytest
 from auth_sandbox.cli import (
+    EXIT_TYPED_CREDENTIALS_NEEDED,
     prepare_command,
     render_config_command,
     set_credentials_command,
+    sign_in_command,
 )
 from auth_sandbox.environment import sandbox_identity, sign_in_environment
 from auth_sandbox.runtime_files import SandboxPaths
@@ -74,8 +77,7 @@ def _prepare(
     latchkey_binary: str,
     key: SecretStr,
     browser_state: bytes | None,
-    service: str,
-) -> dict[str, object]:
+) -> None:
     session_file = paths.runtime_dir / "session.json"
     session_file.write_text(
         json.dumps(
@@ -94,8 +96,6 @@ def _prepare(
         [
             "--session-file",
             str(session_file),
-            "--describe",
-            service,
             "--runtime-dir",
             str(paths.runtime_dir),
             "--latchkey-binary",
@@ -103,10 +103,23 @@ def _prepare(
         ],
     )
     assert result.exit_code == 0, result.output
+    assert result.output == ""
     assert not session_file.exists()
-    # The chrome parses the whole of stdout as the description.
-    assert result.stdout.count("\n") == 1
-    return json.loads(result.stdout)
+
+
+def _sign_in_variables(paths: SandboxPaths, key: SecretStr) -> dict[str, None]:
+    """The variables a sign-in command puts into this process; naming them in a runner's `env` has it restore
+    each of them afterwards."""
+    return dict.fromkeys(
+        sign_in_environment(
+            {},
+            sandbox_identity(
+                {}, SessionSettings(workspace_host_id=None, timezone=None)
+            ),
+            paths.latchkey_directory,
+            key,
+        )
+    )
 
 
 def _machine_browser_state(
@@ -118,23 +131,18 @@ def _machine_browser_state(
     ).read_bytes()
 
 
-def test_prepare_lands_the_machines_browser_state_under_the_session_key_and_describes_the_service(
+def test_prepare_lands_the_machines_browser_state_under_the_session_key(
     booted_sandbox: SandboxPaths, latchkey_binary: str, tmp_path: Path
 ) -> None:
     key = _key()
 
-    described = _prepare(
+    _prepare(
         booted_sandbox,
         latchkey_binary,
         key,
         _machine_browser_state(latchkey_binary, tmp_path, key),
-        "slack",
     )
 
-    auth_options = described["authOptions"]
-    assert isinstance(auth_options, list)
-    assert "browser" in auth_options
-    assert described["credentials"] == {}
     assert booted_sandbox.latchkey_key_path.read_text() == key.get_secret_value() + "\n"
     assert (
         read_browser_state(
@@ -146,13 +154,35 @@ def test_prepare_lands_the_machines_browser_state_under_the_session_key_and_desc
     assert list_accounts(latchkey_binary, booted_sandbox.latchkey_directory, key) == {}
 
 
-def test_prepare_answers_nothing_for_a_service_latchkey_does_not_know(
-    booted_sandbox: SandboxPaths, latchkey_binary: str
+def test_a_sign_in_for_a_service_that_takes_typed_credentials_describes_it_and_exits_4(
+    booted_sandbox: SandboxPaths, latchkey_binary: str, tmp_path: Path
 ) -> None:
-    assert (
-        _prepare(booted_sandbox, latchkey_binary, _key(), None, "no-such-service") == {}
+    key = _key()
+    _prepare(
+        booted_sandbox,
+        latchkey_binary,
+        key,
+        _machine_browser_state(latchkey_binary, tmp_path, key),
     )
-    assert not booted_sandbox.latchkey_browser_state_path.exists()
+
+    result = CliRunner().invoke(
+        sign_in_command,
+        [
+            "aws",
+            "--runtime-dir",
+            str(booted_sandbox.runtime_dir),
+            "--latchkey-binary",
+            latchkey_binary,
+        ],
+        env=_sign_in_variables(booted_sandbox, key),
+    )
+
+    assert result.exit_code == EXIT_TYPED_CREDENTIALS_NEEDED, result.output
+    services_info = json.loads(result.stdout.splitlines()[-1])["services_info"]
+    assert services_info["authOptions"] == ["set"]
+    assert isinstance(services_info["setCredentialsExample"], str)
+    assert services_info["credentials"] == {}
+    assert list_accounts(latchkey_binary, booted_sandbox.latchkey_directory, key) == {}
 
 
 def test_a_credential_stored_under_the_session_key_is_printed_and_merges_into_the_vms_store(
@@ -164,18 +194,9 @@ def test_a_credential_stored_under_the_session_key_is_printed_and_merges_into_th
         latchkey_binary,
         key,
         _machine_browser_state(latchkey_binary, tmp_path, key),
-        "slack",
     )
     values_file = booted_sandbox.runtime_dir / "values.json"
     values_file.write_text(json.dumps({"values": {"token": "xoxc-typed"}}))
-    # The command puts the sign-in environment into this process; naming those variables in `env` has the
-    # runner restore each of them afterwards.
-    sign_in_variables = sign_in_environment(
-        {},
-        sandbox_identity({}, SessionSettings(workspace_host_id=None, timezone=None)),
-        booted_sandbox.latchkey_directory,
-        key,
-    )
 
     stored = CliRunner().invoke(
         set_credentials_command,
@@ -190,7 +211,7 @@ def test_a_credential_stored_under_the_session_key_is_printed_and_merges_into_th
             "--latchkey-binary",
             latchkey_binary,
         ],
-        env=dict.fromkeys(sign_in_variables),
+        env=_sign_in_variables(booted_sandbox, key),
     )
 
     assert stored.exit_code == 0, stored.output

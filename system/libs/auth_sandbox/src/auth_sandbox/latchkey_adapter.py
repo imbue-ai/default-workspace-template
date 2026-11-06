@@ -16,6 +16,7 @@ from auth_sandbox.interfaces import (
     LatchkeyRunnerInterface,
     SignInLatchkeyInterface,
 )
+from auth_sandbox.template_config import merge_minds_config
 
 # The queries read a local store offline; the desktop budgets a few seconds for one and this is generous.
 _QUERY_TIMEOUT_SECONDS = 60.0
@@ -25,7 +26,8 @@ class LatchkeyAdapter(SignInLatchkeyInterface):
     """The desktop's ``Latchkey`` wrapper, pointed at the sandbox's directory.
 
     The wrapper reads the encryption key through ``LATCHKEY_ENCRYPTION_KEY`` in the process environment (its
-    operator override), which the command sets from the sandbox's key file before building this.
+    operator override), which the command sets from the sandbox's key file before building this. ``initialize``
+    is the wrapper's config merge without its ``latchkey --version`` run (``template_config``).
     """
 
     latchkey: Latchkey = Field(
@@ -34,7 +36,7 @@ class LatchkeyAdapter(SignInLatchkeyInterface):
     )
 
     def initialize(self) -> None:
-        self.latchkey.initialize()
+        merge_minds_config(self.latchkey.latchkey_directory)
 
     def auth_browser(self, service_name: str, account: str | None) -> tuple[bool, str]:
         return self.latchkey.auth_browser(service_name, account=account)

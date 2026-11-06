@@ -9,8 +9,8 @@ from pydantic import SecretStr
 from auth_sandbox.cli import (
     EXIT_MISSING_MATERIAL,
     EXIT_REFUSED,
+    EXIT_TYPED_CREDENTIALS_NEEDED,
     _finish,
-    _print_stored_accounts,
     prepare_command,
     render_config_command,
     set_credentials_command,
@@ -116,48 +116,183 @@ def test_a_credential_latchkey_did_not_store_is_a_refusal_with_its_reason(
     assert capsys.readouterr().err == ""
 
 
-def _fake_latchkey(tmp_path: Path, body: str) -> Path:
-    """A stand-in ``latchkey`` that records its arguments and then runs ``body``."""
-    executable = tmp_path / "latchkey"
+_SLACK_INFO = {"type": "built-in", "authOptions": ["browser", "set"], "credentials": {}}
+_AWS_INFO = {"type": "built-in", "authOptions": ["set"], "credentials": {}}
+_LISTING = {
+    "slack": {"me@example.com": {"credentialType": "browser"}},
+    "linear": {"": {"credentialType": "rawCurl"}},
+}
+
+
+def _fake_latchkey(
+    tmp_path: Path,
+    services_info: str,
+    auth_list: str = json.dumps(_LISTING),
+    auth_browser_exit: int = 0,
+) -> Path:
+    """A stand-in ``latchkey`` that logs each invocation (and whether the store held a browser state then) and
+    answers ``services info``, ``auth list`` and ``auth browser`` as told."""
+    executable = tmp_path / "bin" / "latchkey"
+    executable.parent.mkdir()
+    log = tmp_path / "argv.log"
     executable.write_text(
-        f'#!/bin/sh\nprintf "%s\\n" "$*" > "{tmp_path / "argv.log"}"\n{body}\n'
+        "#!/bin/sh\n"
+        'state=absent; [ -e "$LATCHKEY_DIRECTORY/browser_state.json.enc" ] && state=present\n'
+        f'printf "%s [%s]\\n" "$*" "$state" >> "{log}"\n'
+        'case "$1 $2" in\n'
+        f"  'services info') {services_info} ;;\n"
+        f"  'auth list') echo '{auth_list}' ;;\n"
+        f"  'auth browser') echo 'Error: Login cancelled by the user' >&2; exit {auth_browser_exit} ;;\n"
+        "esac\n"
     )
     executable.chmod(0o755)
     return executable
 
 
-def test_a_stored_credential_prints_the_services_accounts_as_the_last_line(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def _invocations(tmp_path: Path) -> list[str]:
+    return (tmp_path / "argv.log").read_text().splitlines()
+
+
+def _sign_in(runtime_dir: Path, latchkey: Path, *options: str) -> tuple[int, str, str]:
+    # The command puts the sign-in environment into this process; naming those variables in `env` has the
+    # runner restore each of them afterwards, set or not before.
+    sign_in_variables = sign_in_environment(
+        {},
+        sandbox_identity({}, SessionSettings(workspace_host_id=None, timezone=None)),
+        runtime_dir,
+        SecretStr("key"),
+    )
+    result = CliRunner().invoke(
+        sign_in_command,
+        [
+            *options,
+            "--runtime-dir",
+            str(runtime_dir),
+            "--latchkey-binary",
+            str(latchkey),
+        ],
+        env={**dict.fromkeys(sign_in_variables), "LATCHKEY_GATEWAY": None},
+    )
+    return result.exit_code, result.stdout, result.stderr
+
+
+def _prepared_with_browser_state(runtime_dir: Path) -> Path:
+    _prepared(runtime_dir)
+    state = runtime_dir / "latchkey" / "browser_state.json.enc"
+    state.parent.mkdir()
+    state.write_bytes(b"machine session")
+    return state
+
+
+def test_a_browser_sign_in_prints_the_accounts_and_the_description_as_the_last_line(
+    tmp_path: Path,
 ) -> None:
-    # The chrome parses the last stdout line to name the account it transfers.
-    listing = {
-        "slack": {"me@example.com": {"credentialType": "browser"}},
-        "linear": {"": {"credentialType": "rawCurl"}},
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    state = _prepared_with_browser_state(runtime_dir)
+    latchkey = _fake_latchkey(tmp_path, f"echo '{json.dumps(_SLACK_INFO)}'")
+
+    exit_code, stdout, _ = _sign_in(
+        runtime_dir, latchkey, "slack", "--account", "me@example.com"
+    )
+
+    assert exit_code == 0
+    # The chrome parses the last stdout line to name the account it transfers and how the service signs in.
+    assert json.loads(stdout.splitlines()[-1]) == {
+        "accounts": {"me@example.com": {"credentialType": "browser"}},
+        "services_info": _SLACK_INFO,
     }
-    latchkey = _fake_latchkey(tmp_path, f"echo '{json.dumps(listing)}'")
-    _print_stored_accounts(str(latchkey), "slack")
-    captured = capsys.readouterr()
-    assert json.loads(captured.out.splitlines()[-1]) == {
-        "accounts": {"me@example.com": {"credentialType": "browser"}}
-    }
-    assert captured.err == ""
-    assert (tmp_path / "argv.log").read_text().strip() == "auth list --offline"
+    # One description, the sign-in with the machine's session in place, the listing; no `latchkey --version`.
+    assert _invocations(tmp_path) == [
+        "services info slack --offline [present]",
+        "auth browser slack --strict --account me@example.com [present]",
+        "auth list --offline [present]",
+    ]
+    assert state.read_bytes() == b"machine session"
+    # The sign-in merged minds' part into the config, which the boot script copies into an empty directory here.
+    assert "registeredServices" in json.loads(
+        (runtime_dir / "latchkey" / "config.json").read_text()
+    )
+
+
+def test_a_fresh_sign_in_starts_without_the_machines_session(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    state = _prepared_with_browser_state(runtime_dir)
+    latchkey = _fake_latchkey(tmp_path, f"echo '{json.dumps(_SLACK_INFO)}'")
+
+    exit_code, _, _ = _sign_in(runtime_dir, latchkey, "slack", "--fresh")
+
+    assert exit_code == 0
+    assert "auth browser slack --strict [absent]" in _invocations(tmp_path)
+    assert not state.exists()
+
+
+def test_a_service_that_takes_typed_credentials_exits_4_with_its_description_and_launches_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    state = _prepared_with_browser_state(runtime_dir)
+    latchkey = _fake_latchkey(tmp_path, f"echo '{json.dumps(_AWS_INFO)}'")
+
+    exit_code, stdout, _ = _sign_in(runtime_dir, latchkey, "aws", "--fresh")
+
+    assert exit_code == EXIT_TYPED_CREDENTIALS_NEEDED
+    assert json.loads(stdout.splitlines()[-1]) == {"services_info": _AWS_INFO}
+    assert _invocations(tmp_path) == ["services info aws --offline [present]"]
+    assert state.exists()
+
+
+def test_a_service_latchkey_cannot_describe_signs_in_through_the_browser(
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    _prepared(runtime_dir)
+    latchkey = _fake_latchkey(tmp_path, "echo 'Error: Failed to decrypt.' >&2; exit 1")
+
+    exit_code, stdout, stderr = _sign_in(runtime_dir, latchkey, "slack")
+
+    assert exit_code == 0
+    assert json.loads(stdout.splitlines()[-1])["services_info"] == {}
+    assert "describing slack failed: Error: Failed to decrypt." in stderr
+    assert "auth browser slack --strict [absent]" in _invocations(tmp_path)
+
+
+def test_a_refused_browser_sign_in_exits_1_with_latchkeys_reason_and_prints_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    _prepared(runtime_dir)
+    latchkey = _fake_latchkey(
+        tmp_path, f"echo '{json.dumps(_SLACK_INFO)}'", auth_browser_exit=1
+    )
+
+    exit_code, stdout, stderr = _sign_in(runtime_dir, latchkey, "slack")
+
+    assert exit_code == EXIT_REFUSED
+    assert stdout == ""
+    assert stderr.strip().splitlines()[-1] == "Error: Login cancelled by the user"
 
 
 def test_a_failed_listing_after_a_stored_credential_is_a_refusal_with_its_reason(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
 ) -> None:
     # Exit 1 is what the chrome retries in the same sandbox, where the credential is already stored.
-    latchkey = _fake_latchkey(tmp_path, "echo 'Error: Failed to decrypt.' >&2\nexit 1")
-    with pytest.raises(SystemExit) as refused:
-        _print_stored_accounts(str(latchkey), "slack")
-    assert refused.value.code == EXIT_REFUSED
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert (
-        captured.err.strip()
-        == "listing the stored accounts failed: Error: Failed to decrypt."
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    _prepared(runtime_dir)
+    latchkey = _fake_latchkey(
+        tmp_path, f"echo '{json.dumps(_SLACK_INFO)}'", auth_list="not json"
     )
+
+    exit_code, stdout, stderr = _sign_in(runtime_dir, latchkey, "slack")
+
+    assert exit_code == EXIT_REFUSED
+    assert stdout == ""
+    assert "listing the stored accounts printed no JSON" in stderr
 
 
 def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> None:
@@ -265,6 +400,41 @@ def test_prepare_installs_the_session_before_it_asks_latchkey(tmp_path: Path) ->
     }
     assert not session_file.exists()
     assert _KEY not in result.output
+
+
+def test_prepare_without_describe_installs_the_session_and_prints_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    session_file = runtime_dir / "session.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "latchkey_key": _KEY,
+                "browser_state": base64.b64encode(b"machine session").decode("ascii"),
+            }
+        )
+    )
+    result = CliRunner().invoke(
+        prepare_command,
+        [
+            "--session-file",
+            str(session_file),
+            "--runtime-dir",
+            str(runtime_dir),
+            "--latchkey-binary",
+            "/nonexistent/latchkey",
+        ],
+    )
+    # Nothing runs latchkey, so the binary it would have run does not matter.
+    assert result.exit_code == 0, result.output
+    assert result.output == ""
+    assert (runtime_dir / "latchkey_key").read_text() == _KEY + "\n"
+    assert (
+        runtime_dir / "latchkey" / "browser_state.json.enc"
+    ).read_bytes() == b"machine session"
+    assert not session_file.exists()
 
 
 def test_render_config_writes_the_template_with_the_browser_entry(
