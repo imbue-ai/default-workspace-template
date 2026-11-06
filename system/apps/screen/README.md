@@ -174,6 +174,14 @@ logged and treated the same way.
 - Every response carries `Content-Security-Policy: frame-ancestors <SCREEN_FRAME_ANCESTORS>`,
   replacing any `frame-ancestors` directive a response already had.
 
+The hosted chrome frames the viewer at `/?owner_token=<token>&strip=off`; the redirect keeps
+`strip=off`. With it (`frontend/src/viewer_options.ts`; any other value, or none, changes
+nothing) the viewer hides its control row, since the chrome draws its own: the screencast alert
+with its "Retry now" and a refused verb's or a drop's notice show as a small banner over the top
+of the stage while they apply, and nothing otherwise. With no Take control button, a press or a
+key on the stage while another human session holds control takes control (every session is the
+owner's here); the press itself is not sent, input flows once the lease is this session's.
+
 ## The browser
 
 The browser is a launch path of the Screen, not an app (spec section 16): one Fortress
@@ -457,7 +465,10 @@ reads as "use the server's own candidate". The answer is never written to disk a
 route forbids caching: a relay credential is a bearer token.
 
 The viewer (`frontend/src/webrtc.ts`, `candidates.ts`, `ice_policy.ts`) fetches
-`connect-info` before signaling, builds its peer connection with the ICE servers and
+`connect-info` before signaling (as the page loads it asks for `/api/state`, `/api/session` and
+`connect-info` at once, `startup.ts`, and its first signaling uses that answer unless it is
+older than 30 seconds or was asked without the relay servers the request wants; a session asked
+for before the stack runs is refused and asked for again once it runs), builds its peer connection with the ICE servers and
 `iceTransportPolicy: "all"`, and for every server candidate neko sends emits one copy per
 `candidates` entry of the same protocol with the address and port replaced and a distinct
 foundation, dropping the original (unless `candidates` is empty). A connection that is not

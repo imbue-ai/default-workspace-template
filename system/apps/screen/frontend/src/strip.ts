@@ -1,7 +1,8 @@
 /** The strip above the stage (spec sections 4.2, 4.3 and 5.4): who has control, Take control, Give control back, the
  *  queue, the media path's status (loud when the picture is the screencast, with Retry), a Details toggle for the
  *  path's particulars, the mute control (audio is off per session until unmuted), and the pointer-lock control where
- *  it applies (spec section 12). */
+ *  it applies (spec section 12). As a banner (the viewer's ``strip=off``, section 11) it carries only the alert with
+ *  Retry and the notices, over the stage, and is hidden while neither applies. */
 
 import type { ControlDocument } from "./state";
 import { describeController, isOwnSessionController, isUnclaimedHandoff } from "./state";
@@ -32,6 +33,8 @@ export interface StripActions {
   onRetry: () => void;
   /** The Details panel opened (true) or closed. */
   onToggleDetails: (isOpen: boolean) => void;
+  /** Whether the strip is the banner over the stage rather than the control row above it. */
+  isBanner: boolean;
 }
 
 export class Strip {
@@ -46,12 +49,14 @@ export class Strip {
   private readonly takeButton = document.createElement("button");
   private readonly returnButton = document.createElement("button");
   private readonly muteButton = document.createElement("button");
+  private readonly isBanner: boolean;
   private transientStatus = "";
   private streamStatusText = "";
   private isDetailsOpen = false;
 
   constructor(actions: StripActions) {
-    this.element.className = "screen-strip";
+    this.isBanner = actions.isBanner;
+    this.element.className = this.isBanner ? "screen-strip screen-strip--banner" : "screen-strip";
     this.element.dataset.screenStrip = "true";
     this.who.className = "screen-strip__who";
     this.who.dataset.screenController = "true";
@@ -88,6 +93,11 @@ export class Strip {
     this.muteButton.dataset.screenMute = "true";
     this.muteButton.addEventListener("click", () => actions.onToggleAudio());
     this.setAudioEnabled(false);
+    if (this.isBanner) {
+      this.element.append(this.alert, this.status);
+      this.element.hidden = true;
+      return;
+    }
     this.element.append(
       this.who,
       this.waiting,
@@ -113,6 +123,14 @@ export class Strip {
   showStatus(message: string): void {
     this.transientStatus = message;
     this.status.textContent = message || this.streamStatusText;
+    this.syncBanner();
+  }
+
+  /** The banner shows while it has something to say: the alert, or a notice or transient line. */
+  private syncBanner(): void {
+    if (!this.isBanner) return;
+    this.status.hidden = !this.status.textContent;
+    this.element.hidden = this.alert.hidden && this.status.hidden;
   }
 
   update(
@@ -131,7 +149,8 @@ export class Strip {
     const isScreencast = streamStatus === "screencast";
     this.alert.hidden = !isScreencast;
     this.alertText.textContent = isScreencast ? describeStreamStatus(streamStatus) : "";
-    this.streamStatusText = isScreencast ? "" : describeStreamStatus(streamStatus);
+    // The banner leaves the quiet statuses to the overlays, which say the same over the stage.
+    this.streamStatusText = isScreencast || this.isBanner ? "" : describeStreamStatus(streamStatus);
     this.status.textContent = notice ?? (this.transientStatus || this.streamStatusText);
     this.status.classList.toggle("screen-strip__status--notice", notice !== null);
     this.status.dataset.screenStreamStatus = streamStatus;
@@ -140,5 +159,6 @@ export class Strip {
     // for a handoff nobody has claimed, so the agent can be resumed without first taking the Screen.
     const mayGiveBack = isOwn || (isUnclaimedHandoff(control) && isOwner && ownSessionId !== null);
     this.returnButton.hidden = !(mayGiveBack && control.waiting.length > 0);
+    this.syncBanner();
   }
 }

@@ -183,10 +183,10 @@ def test_own_origin_requests_and_navigations_from_elsewhere_are_admitted(
 def test_the_owner_token_sets_both_session_cookies_and_redirects_without_itself(
     gated_client: FlaskClient, owner_gate: OwnerGate, owner_token: str
 ) -> None:
-    answer = gated_client.get(f"/?owner_token={owner_token}&view=compact", environ_base=_TUNNEL)
+    answer = gated_client.get(f"/?owner_token={owner_token}&strip=off", environ_base=_TUNNEL)
 
     assert answer.status_code == 302
-    assert answer.headers["Location"] == "/?view=compact"
+    assert answer.headers["Location"] == "/?strip=off"
     assert answer.headers["Cache-Control"] == "no-store"
     set_cookies = _set_cookies_by_name(answer)
     assert set(set_cookies) == {OWNER_SESSION_COOKIE_NAME, PARTITIONED_OWNER_SESSION_COOKIE_NAME}

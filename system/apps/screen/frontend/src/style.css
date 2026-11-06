@@ -195,6 +195,31 @@
   outline-offset: -3px;
 }
 
+/* The strip as a banner over the top of the stage (the viewer's strip=off): only the alert and the notices, shown
+   while one applies. */
+.screen-strip--banner {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 1rem);
+  min-height: 0;
+  padding: 0.25rem 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  border: 1px solid #262c33;
+  border-radius: 0.5rem;
+  background: rgba(22, 26, 31, 0.92);
+}
+
+.screen-strip--banner[hidden] {
+  display: none;
+}
+
+.screen-strip--banner .screen-strip__alert {
+  white-space: normal;
+}
+
 .screen-strip__status[data-screen-clipboard-status] {
   opacity: 0.9;
 }

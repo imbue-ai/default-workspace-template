@@ -15,9 +15,21 @@ import { EMPTY_CONNECT_INFO } from "./state";
 
 export type StreamStatus = "idle" | "connecting" | "connected" | "failed" | "screencast";
 
+/** A ``connect-info`` answer asked for ahead of the first request (the viewer asks at page load, ``startup.ts``). */
+export interface PrefetchedConnectInfo {
+  /** Whether it was asked for with the relay servers. */
+  readonly isRelay: boolean;
+  readonly answer: Promise<ConnectInfo>;
+  /** ``performance.now()`` when it was asked for. */
+  readonly askedAt: number;
+}
+
 // How long after the server closed its peer a new one is asked for, and after a failed connect-info fetch another
 // is tried.
 const REREQUEST_MS = 1500;
+// How old a prefetched connect-info may be for the first request to use it rather than ask again: a relay
+// credential in it expires, and a first request that late followed a slow start.
+const PREFETCH_MAX_AGE_MS = 30_000;
 
 export class NekoStream {
   private pc: RTCPeerConnection | null = null;
@@ -31,6 +43,7 @@ export class NekoStream {
   /** Counts requests, so the answer to a connect-info fetch a later request superseded asks for nothing. */
   private requestGeneration = 0;
   private status: StreamStatus = "idle";
+  private primed: PrefetchedConnectInfo | null = null;
   readonly policy: IcePolicy;
   private readonly onStatus: (status: StreamStatus) => void;
 
@@ -96,7 +109,7 @@ export class NekoStream {
     const generation = ++this.requestGeneration;
     const isRelay = readNeedsRelay(pageStorage());
     this.showConnecting();
-    fetchConnectInfo(isRelay)
+    (this.takePrimed(isRelay) ?? fetchConnectInfo(isRelay))
       .then((connectInfo) => {
         if (generation !== this.requestGeneration || this.isReleased) return;
         this.connectInfo = connectInfo;
@@ -113,6 +126,19 @@ export class NekoStream {
         console.error("[screen] connect-info failed", error);
         this.retryTimer = window.setTimeout(() => this.request(videoId), REREQUEST_MS);
       });
+  }
+
+  /** Hand the next request a ``connect-info`` answer already asked for; it is used once, by that request, when it
+   *  was asked with the relay servers exactly when the request would ask with them and is still fresh. */
+  primeConnectInfo(prefetched: PrefetchedConnectInfo): void {
+    this.primed = prefetched;
+  }
+
+  private takePrimed(isRelay: boolean): Promise<ConnectInfo> | null {
+    const primed = this.primed;
+    this.primed = null;
+    if (primed === null || primed.isRelay !== isRelay) return null;
+    return performance.now() - primed.askedAt <= PREFETCH_MAX_AGE_MS ? primed.answer : null;
   }
 
   /** Whether a peer is up or being set up. */

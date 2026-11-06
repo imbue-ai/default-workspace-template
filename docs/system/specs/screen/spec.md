@@ -94,6 +94,7 @@ A strip at the top names who has control: "You", "<name>", "Agent <name>", or "N
 When someone else has control, the strip offers "Take control"; input from a non-controlling viewer is not sent.
 When an agent has control, the Screen is dimmed slightly, the agent's name is shown, and "Take control" is there, as in the browser app's agent overlay; a URL the human asked to open while an agent drives is held and offered as it is today.
 "Give control back" appears for the human who took it from an agent, so the agent can resume (the browser's `return_to_agents`), and for the owner while a handoff waits unclaimed.
+A viewer opened with `?strip=off` (the auth sandbox's frame in the hosted chrome, which draws its own controls) has no strip: the screencast alert with "Retry now" (section 5.4) and the notices (a refused verb's reason, a drop's result) show as a small banner over the top of the stage while they apply, and a press or a key on the stage while another human session holds control takes control (in gate mode every session is the owner's); the press itself is not sent.
 
 Several humans may watch at once, each from their own client; the controller's cursor is the remote one, and other viewers' cursors are shown as neko's inactive cursors.
 
@@ -339,6 +340,7 @@ Chromium profiles stay under `$MNGR_HOST_DIR/browser-profiles/` and the tab mani
 A page in the `workspace_ui` npm workspace, built into the service's static output: the video element, the strip, the overlays (starting, stopped, agent has control, screencast fallback), the mobile controls, and no in-page chat.
 It imports the app contract and connects with `capabilities: {navigation: false, closeChord: true}`; its location report is `/` with the title from `state`; `onCloseRequest` sends Ctrl+W to the remote as a key chord rather than closing the window.
 It speaks neko's events directly (section 2.3) for signaling, input, cursors, clipboard and screen updates, and the service's `/api/ws` for everything else.
+As the page loads it asks for `/api/state`, `/api/session` and `/api/connect-info` at once: a session asked for before the stack runs is refused and asked for again once the state says it runs, and the first signaling uses the prefetched `connect-info` unless it is older than 30 seconds or was asked without the relay servers the request wants.
 Keys are mapped from `KeyboardEvent.code` to X keysyms with neko's own table, copied under its Apache-2.0 notice into `system/libs/workspace_ui`.
 They are read from a hidden text input inside the stage, which takes the focus the stage is given: a browser extension that binds letters as commands (Vimium and its kin) stands down for an editable element and for nothing else, so keys typed at the stage itself never reached the Screen.
 Input is sent only while this viewer's session is the controller and the viewer is visible.
