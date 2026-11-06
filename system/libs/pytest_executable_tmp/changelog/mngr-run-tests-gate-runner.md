@@ -1,0 +1,1 @@
+The plugin no longer moves a session's temporary files to `/var/tmp` when `/tmp` cannot run them; it stops the session instead, as it already did for an explicit `--basetemp` or `PYTEST_DEBUG_TEMPROOT`. Workspaces mount `/tmp` with `exec`, so pytest's temporary files now stay on `/tmp` in every run.

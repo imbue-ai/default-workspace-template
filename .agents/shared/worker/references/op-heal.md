@@ -25,7 +25,7 @@ then -- once the fix is implemented and verified per `type-app.md` -- report
 Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
-- Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
+- Tests run: <the test gate's commands (run-tests) and Playwright -- all pass>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 - Screenshots reviewed: <pages/states you eyeballed>

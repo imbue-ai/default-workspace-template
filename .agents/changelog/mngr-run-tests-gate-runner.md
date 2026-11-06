@@ -1,0 +1,1 @@
+The test gate in a harden pass and in an update is now `app-manifest run-tests` instead of running each line `select-tests` prints. It reruns failed tests once to tell a flaky test from a failing one, and tells a command the memory guard killed from a failure, so the guides only cover what to do with each outcome. `select-tests` stays for looking at what a change would run.
