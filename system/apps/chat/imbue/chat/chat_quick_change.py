@@ -6,8 +6,9 @@ user's and the agent's):
 
 1. Is this a quick look-and-feel change to an app (a colour, font size, spacing, showing or hiding an
    element, light/dark styling, restyling a page) that needs no new features, data or backend work?
-2. Does it change or depend on something the user asked for earlier that the agent has not yet said
-   is done? (A follow-up on unfinished work stays with the chat's own agent, which is doing that work.)
+2. Is it blocked by earlier requested work that is not finished: does it style something not built
+   yet, or revise an unfinished request? (Such a message stays with the chat's own agent, which is
+   doing that work. Restyling a page that is still being changed elsewhere is not blocked.)
 
 The send waits for the answer before anything is delivered (at most ``ROUTING_TIMEOUT_SECONDS``), so
 a routed message never enters the chat agent's conversation:
@@ -111,7 +112,7 @@ _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
 
 QUICK_CHANGE_QUESTION: Final[str] = "quick_look_and_feel_change"
-PENDING_WORK_QUESTION: Final[str] = "depends_on_unfinished_work"
+PENDING_WORK_QUESTION: Final[str] = "blocked_by_unfinished_work"
 JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     QUICK_CHANGE_QUESTION: {
         "type": "noul",
@@ -135,16 +136,20 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     PENDING_WORK_QUESTION: {
         "type": "noul",
         "instructions": (
-            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. Does "
-            "new_message change or depend on something the user asked for earlier in this conversation that "
-            "the agent has not yet said is done?"
+            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. Is "
+            "new_message blocked by earlier requested work that is not finished: can it only be done once "
+            "something the user asked for earlier exists?"
         ),
         "criteria": {
             "true": (
-                "new_message adjusts, extends or relies on earlier requested work that the agent has not "
-                "reported as finished, or refers to something that does not exist yet."
+                "new_message changes or styles something that does not exist yet because the agent has not "
+                "built it (for example, styling a button the agent has not added), or it revises an earlier "
+                "request that is not finished."
             ),
-            "false": ("new_message stands on its own, or only touches things the agent has already said are done."),
+            "false": (
+                "new_message can be done on the app as it is now, even if other parts of the same page are "
+                "still being changed."
+            ),
         },
     },
 }
