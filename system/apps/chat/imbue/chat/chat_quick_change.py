@@ -128,7 +128,8 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
                 "no new data, no backend or behaviour change."
             ),
             "false": (
-                "Anything else: building a new app, adding a feature or data, fixing behaviour, a question, "
+                "Anything else: building a new app, adding a feature or data, adding a control the user operates (a "
+                "toggle, switch, button, collapsible or expandable section), fixing behaviour, a question, "
                 "conversation, or a styling request bundled with other work."
             ),
         },
@@ -136,19 +137,25 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     PENDING_WORK_QUESTION: {
         "type": "noul",
         "instructions": (
-            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. Is "
-            "new_message blocked by earlier requested work that is not finished: can it only be done once "
-            "something the user asked for earlier exists?"
+            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. First "
+            "name the part of the app that new_message changes. Then answer: is that part something the user "
+            "earlier asked the agent to add, build or change, which no later agent reply says is done, live or "
+            "added?"
         ),
         "criteria": {
             "true": (
-                "new_message changes or styles something that does not exist yet because the agent has not "
-                "built it (for example, styling a button the agent has not added), or it revises an earlier "
-                "request that is not finished."
+                "The part new_message changes was itself requested earlier and is not reported done. That includes: a "
+                "part the agent's latest reply says it is adding, building, drawing or working on, or has only "
+                "acknowledged ('On it', 'Building it now', 'Drawing the diagram now', 'Got it', 'Will do' all mean "
+                "not done yet); any piece of such a part (the caption of a diagram still being drawn, the background "
+                "of a shelf still being built); restyling a whole app that is still being built; and a revision of an "
+                "earlier change request whose result the agent has not reported done (for example a different colour "
+                "for a background the user asked to recolour a moment ago)."
             ),
             "false": (
-                "new_message can be done on the app as it is now, even if other parts of the same page are "
-                "still being changed."
+                "The part new_message changes already exists in the app, or the agent has said it is done. A part the "
+                "user only described, pointed at or complained about earlier counts as existing. The agent building "
+                "other, different things at the same time does not matter."
             ),
         },
     },
