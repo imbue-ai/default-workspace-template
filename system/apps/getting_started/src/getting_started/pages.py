@@ -98,11 +98,7 @@ def build_pages_blueprint(
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     register_api_schema_route(
-        blueprint,
-        DEFAULT_API_SCHEMA_PATH,
-        title=APP_DISPLAY_NAME,
-        description=APP_DESCRIPTION,
-        route_table=ROUTE_TABLE,
+        blueprint, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
     )
     register_workspace_theme_route(blueprint)
     # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
@@ -178,9 +174,7 @@ def build_pages_blueprint(
     def app_contract() -> ResponseReturnValue:
         """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
-            return error_response(
-                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
-            )
+            return error_response(f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND)
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 
