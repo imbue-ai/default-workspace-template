@@ -32,13 +32,12 @@ from update_self_skill.run_in_background import (
     messenger_argv,
     wrap_background_task_report,
 )
+from update_self_skill.update_chat_pause import UPDATE_WORKER_NAME
 from update_self_skill.update_probes import registry_app_url
 from update_self_skill.update_runtime import HttpClient, Runner
 
 CHAT_APP_NAME = "chat"
 CHATS_PATH = "/api/chats"
-# The flow's worker, which the pass stops itself once it has consumed the worker's report.
-UPDATE_WORKER_NAME = "update-self"
 
 SELF_RESTART_DIR_REL = Path("data") / ".tasks" / "update-self" / "self-restart"
 SELF_RESTART_NOTE_NAME = "note.md"
