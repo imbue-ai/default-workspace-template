@@ -3047,6 +3047,30 @@ def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
         assert response.get_json()["busy_with"] == "working"
 
 
+@pytest.mark.parametrize(
+    ("data", "content_type", "expected_status"),
+    [
+        # A script or curl posting without a JSON content type still gets the busy chat left alone.
+        ('{"only_if_idle": true}', "text/plain", 409),
+        ('{"only_if_idle": "sometimes"}', "application/json", 400),
+        ('{"only_if_idle": true, "force": true}', "application/json", 400),
+        ("[]", "application/json", 400),
+        ("not json", "application/json", 400),
+    ],
+)
+def test_an_interrupt_body_is_honoured_whatever_its_content_type_and_a_malformed_one_restarts_nothing(
+    client: FlaskClient, app: Flask, data: str, content_type: str, expected_status: int
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", "RUNNING")
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", data=data, content_type=content_type)
+
+    assert response.status_code == expected_status
+    mock_run.assert_not_called()
+
+
 @pytest.mark.parametrize("queued_block", ["first message\nsecond message", ""])
 def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: FlaskClient, queued_block: str) -> None:
     """Unlike the flush, an empty queue still restarts: the caller asked for the restart itself."""

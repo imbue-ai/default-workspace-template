@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
@@ -33,6 +34,7 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -45,6 +47,7 @@ from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
+from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
@@ -1565,7 +1568,7 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             400,
         )
 
-    interrupt_request = InterruptAgentRequest.model_validate(request.get_json(silent=True) or {})
+    interrupt_request = _parse_interrupt_request()
     if interrupt_request.only_if_idle:
         busy_with = get_state().agent_manager.restart_busy_reason_for_chat(ChatId(chat_id))
         if busy_with is not None:
@@ -1595,6 +1598,23 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
 
     return model_response(InterruptAgentResponse(status="ok"))
+
+
+def _parse_interrupt_request() -> InterruptAgentRequest:
+    """The interrupt's optional body: none, as the stop button posts, is the plain interrupt.
+
+    ``parse_request_body`` requires a body, so the view parses it here, the same way: as JSON
+    whatever its content type, and a body that is not the model's shape is a 400.
+    """
+    if not request.get_data():
+        return InterruptAgentRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return InterruptAgentRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
 def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
