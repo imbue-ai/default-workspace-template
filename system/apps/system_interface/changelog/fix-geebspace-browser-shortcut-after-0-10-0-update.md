@@ -4,7 +4,7 @@ An app can now have several default desktop shortcuts. The Screen gets both a Sc
 
 - `default_shortcuts_offered.json` records which `(app, launch)` shortcuts were offered, not which apps (version 2). That way a workspace that already had the Screen shortcut still gets the Browser one. The old list of apps is read as each app's first shortcut and rewritten on the first read.
 
-- An app whose shortcuts were dropped is cleared from that record, so it gets its default shortcuts back if it registers again. A shortcut the user removed themselves still stays removed.
+- The shortcuts that were dropped are cleared from that record, so an app that registers again gets them back. A shortcut the user removed themselves still stays removed.
 
 - The app list in `GET /api/inventory` carries `default_shortcuts` (a list) in place of `default_shortcut`.
 

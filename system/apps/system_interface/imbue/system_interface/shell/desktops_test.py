@@ -241,6 +241,29 @@ def test_an_app_that_leaves_the_registry_loses_its_shortcuts_and_is_offered_them
     assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_chat)
 
 
+def test_an_app_that_returns_is_offered_only_the_shortcuts_it_lost_not_one_the_user_removed(tmp_path: Path) -> None:
+    with_screen = read_registry(
+        write_registry(
+            tmp_path / "registry" / "apps.toml",
+            builtin_chat_row_toml(),
+            screen_row_toml([("screen", "focus"), ("browser", "focus")]),
+        )
+    )
+    without_screen = read_registry(write_registry(tmp_path / "registry" / "chat_only.toml", builtin_chat_row_toml()))
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_screen))
+    store.remove_shortcut("home", AppName("screen"), LaunchPathId("browser"))
+
+    assert store.reconcile_shortcuts_with(without_screen).is_written is True
+    (returned,) = store.reconcile_shortcuts_with(with_screen).desktops
+
+    assert [(app, launch) for app, launch, _, _ in targets_and_cells(returned)] == [
+        ("chat", "root"),
+        ("screen", "screen"),
+    ]
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_screen)
+
+
 def test_a_registry_with_no_rows_drops_no_shortcut(tmp_path: Path) -> None:
     """An empty read is a registry nothing has registered in yet (or one that was removed), never every app retired."""
     _, with_chat = builtin_registry_rows(tmp_path / "registry")

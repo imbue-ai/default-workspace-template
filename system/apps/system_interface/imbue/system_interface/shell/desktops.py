@@ -413,11 +413,11 @@ class DesktopStore(MutableModel):
     def reconcile_shortcuts_with(self, rows: Sequence[RegistryRow]) -> DesktopsChangeOutcome:
         """The desktops, after every desktop drops the shortcuts of apps no row registers
         (``without_shortcuts_of_unregistered_apps``) and holds each default shortcut not yet offered
-        (``with_default_shortcuts_offered``), with the record holding what is offered. An app whose shortcuts were
-        dropped leaves the record, so it is offered its defaults again if it registers again; an app the user had
-        already taken off every desktop stays offered, so that removal sticks. desktops.json is written only when a
-        desktop changed. A registry with no rows is one nothing has registered in yet, never one every app left, so it
-        drops nothing and leaves the record as it is."""
+        (``with_default_shortcuts_offered``), with the record holding what is offered. Each dropped shortcut's target
+        leaves the record, so it is offered again if its app registers again; a default shortcut the user had already
+        taken off every desktop stays offered, so that removal sticks. desktops.json is written only when a desktop
+        changed. A registry with no rows is one nothing has registered in yet, never one every app left, so it drops
+        nothing and leaves the record as it is."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             desktops = document.desktops if document is not None else ()
@@ -430,8 +430,8 @@ class DesktopStore(MutableModel):
                 if rows
                 else desktops
             )
-            dropped_apps = {target.app for target in shortcut_targets_on(desktops) - shortcut_targets_on(kept)}
-            offered = frozenset(target for target in offered if target.app not in dropped_apps)
+            dropped = shortcut_targets_on(desktops) - shortcut_targets_on(kept)
+            offered = offered - dropped
             reconciled = tuple(with_default_shortcuts_offered(desktop, rows, offered) for desktop in kept)
             changed_count = sum(1 for after, before in zip(reconciled, desktops, strict=True) if after is not before)
             if changed_count:
@@ -439,8 +439,11 @@ class DesktopStore(MutableModel):
             newly_offered = default_shortcut_targets(rows) - offered
             if rows and offered | newly_offered != recorded:
                 self._write_offered_unlocked(offered | newly_offered)
-        if dropped_apps:
-            logger.info("Removed the desktop shortcuts of {}, which no app registry row names", sorted(dropped_apps))
+        if dropped:
+            logger.info(
+                "Removed the desktop shortcuts of {}, which no app registry row names",
+                sorted({target.app for target in dropped}),
+            )
         if newly_offered:
             logger.info(
                 "Offered the default shortcuts {} ({} desktop(s) changed)",

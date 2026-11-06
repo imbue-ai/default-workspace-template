@@ -176,7 +176,7 @@ and the profile cache.
   the `(app, launch)` targets offered so far, so a shortcut the user removed
   stays removed. The same pass drops the shortcuts of an app no registry row
   names (an app a release retired, whose row the update removed), and takes
-  that app off the record so it is offered again if it comes back. A client
+  those shortcuts off the record so they are offered again if it comes back. A client
   record holds the client's active desktop, when it was last seen, and the
   user it last arrived as;
   clients unseen for a while are pruned with their placement files.
