@@ -331,9 +331,12 @@ Selection reads only what the workspace declares. A path selects:
   beneath each directory the app's manifest references (a referenced skill
   drives the app's surface);
 - the app whose manifest references it (`[[references]]`), or whose program a
-  supervisord block holds; a supervisord block also selects
-  `oom_priority`'s `oom_tag_service_test.py`, which checks that every program
-  block names its OOM band;
+  supervisord block holds; a supervisord block also selects the two checks
+  that read every program block: `oom_priority`'s `oom_tag_service_test.py`,
+  which checks that every program block names its OOM band, and
+  `system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py`, which
+  checks that neither the system interface's nor the chat app's program waits
+  on the critical path;
 - for a `uv.lock` change, every member that depends on a package the lock
   upgraded (a package only added selects nothing beyond the member whose
   `pyproject.toml` added it);
@@ -381,9 +384,8 @@ the root `README.md`, `AGENTS.md` and `CLAUDE.md`, and markdown under
 `.agents/`, `docs/` and `data/` outside a changelog, blueprint, specs or vendor
 directory) also runs the always-run set: the test files in `system/*.py`, the
 cross-cutting `system/scripts` guards, and the checks that read every skill's
-prose. A listed guard git does not track (an always-run one, or the OOM band
-check a supervisord block selects) fails the selection rather than dropping out
-of it. A change made only of documentation selects nothing.
+prose. A listed guard git does not track (an always-run one, or a check a
+supervisord block selects) fails the selection rather than dropping out of it. A change made only of documentation selects nothing.
 
 `system/apps/chat` and `system/apps/system_interface` run as their own pytest
 roots: workspace members with their own pytest configuration, which the root
