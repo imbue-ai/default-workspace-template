@@ -35,6 +35,7 @@ from app_manifest.content_security_policy import attach_document_policy
 from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
+from flask import current_app
 from flask import send_from_directory
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -53,6 +54,7 @@ from imbue.chat.state import DEFAULT_STATIC_DIRECTORY
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.mngr.cli.output_helpers import write_human_line
 
 logger = _loguru_logger
 
@@ -103,36 +105,50 @@ class EarlySignIn(MutableModel):
             )
 
 
+_EARLY_SIGN_IN_CONFIG_KEY: Final[str] = "imbue.chat.early_sign_in.early_sign_in"
+_AUTH_FLOWS_CONFIG_KEY: Final[str] = "imbue.chat.early_sign_in.auth_flows"
+_STATIC_DIRECTORY_CONFIG_KEY: Final[str] = "imbue.chat.early_sign_in.static_directory"
+
+
+def _sign_in_document() -> Response:
+    """The chooser page, served at the root of its own origin, so its base path is empty."""
+    document_path = current_app.config[_STATIC_DIRECTORY_CONFIG_KEY] / SIGN_IN_DOCUMENT_FILENAME
+    html_content = inject_base_path_meta_tag(document_path.read_text(), "")
+    return document_response(html_content, is_frontend_built=True)
+
+
+def _asset(filename: str) -> Response:
+    """The page's built bundle, by the hashed name the document links; a plain 404 for a missing one."""
+    try:
+        return send_from_directory(current_app.config[_STATIC_DIRECTORY_CONFIG_KEY] / "assets", filename)
+    except NotFound:
+        return Response(status=404)
+
+
+def _status() -> Response:
+    early_sign_in: EarlySignIn = current_app.config[_EARLY_SIGN_IN_CONFIG_KEY]
+    return model_response(early_sign_in.status(current_app.config[_AUTH_FLOWS_CONFIG_KEY]))
+
+
+def _done() -> Response:
+    early_sign_in: EarlySignIn = current_app.config[_EARLY_SIGN_IN_CONFIG_KEY]
+    early_sign_in.mark_done()
+    return model_response(OkResponse())
+
+
 def build_early_sign_in_application(
     early_sign_in: EarlySignIn, auth_flows: AuthFlowService, static_directory: Path
 ) -> Flask:
     """The chooser page, its assets and theme, the account routes, and the status routes."""
     application = Flask(__name__, static_folder=None)
+    application.config[_EARLY_SIGN_IN_CONFIG_KEY] = early_sign_in
+    application.config[_AUTH_FLOWS_CONFIG_KEY] = auth_flows
+    application.config[_STATIC_DIRECTORY_CONFIG_KEY] = static_directory
     attach_document_policy(application, {})
-
-    def sign_in_document() -> Response:
-        document_path = static_directory / SIGN_IN_DOCUMENT_FILENAME
-        # Served at the root of its own origin, so the base path is empty.
-        html_content = inject_base_path_meta_tag(document_path.read_text(), "")
-        return document_response(html_content, is_frontend_built=True)
-
-    def asset(filename: str) -> Response:
-        try:
-            return send_from_directory(static_directory / "assets", filename)
-        except NotFound:
-            return Response(status=404)
-
-    def status() -> Response:
-        return model_response(early_sign_in.status(auth_flows))
-
-    def done() -> Response:
-        early_sign_in.mark_done()
-        return model_response(OkResponse())
-
-    application.add_url_rule("/", view_func=sign_in_document, methods=["GET"])
-    application.add_url_rule("/assets/<path:filename>", view_func=asset, methods=["GET"])
-    application.add_url_rule("/api/early-sign-in", view_func=status, methods=["GET"])
-    application.add_url_rule("/api/early-sign-in/done", view_func=done, methods=["POST"])
+    application.add_url_rule("/", view_func=_sign_in_document, methods=["GET"])
+    application.add_url_rule("/assets/<path:filename>", view_func=_asset, methods=["GET"])
+    application.add_url_rule("/api/early-sign-in", view_func=_status, methods=["GET"])
+    application.add_url_rule("/api/early-sign-in/done", view_func=_done, methods=["POST"])
     register_workspace_theme_route(application)
     accounts_endpoints.register_routes(application, auth_flows)
     return application
@@ -175,8 +191,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     application = build_early_sign_in_application(early_sign_in, auth_flows, DEFAULT_STATIC_DIRECTORY)
     server = make_threaded_server("127.0.0.1", args.port, application)
     threading.Thread(target=server.serve_forever, name="early-sign-in-server", daemon=True).start()
-    sys.stdout.write(STARTUP_LINE_PREFIX + json.dumps({"port": server.server_port}) + "\n")
-    sys.stdout.flush()
+    write_human_line(STARTUP_LINE_PREFIX + json.dumps({"port": server.server_port}))
 
     is_hung_up = threading.Event()
     threading.Thread(target=_wait_for_hang_up, args=(is_hung_up,), name="early-sign-in-stdin", daemon=True).start()
