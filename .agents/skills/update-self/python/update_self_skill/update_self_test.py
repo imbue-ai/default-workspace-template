@@ -9404,22 +9404,24 @@ def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
 def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
     # The settings file is absent from the tree the agents started from, so its pin reads as
     # unset; that tree still names its Antigravity installer by version, as before its rename.
-    def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
     def _write(rel: str, text: str) -> None:
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    _git("init", "-q")
-    _git("config", "user.email", "test@example.com")
-    _git("config", "user.name", "test")
+    _git_in(tmp_path, "init", "-q")
+    _git_in(tmp_path, "config", "user.email", "test@example.com")
+    _git_in(tmp_path, "config", "user.name", "test")
     _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
     _write("system/scripts/agy_install-1.4.3.sh", _AGY_INSTALLER_BEFORE)
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "before")
-    _git("mv", "system/scripts/agy_install-1.4.3.sh", "system/scripts/agy_install.sh")
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "before")
+    _git_in(
+        tmp_path,
+        "mv",
+        "system/scripts/agy_install-1.4.3.sh",
+        "system/scripts/agy_install.sh",
+    )
     _write(
         "system/scripts/agy_install.sh",
         _AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7"),
@@ -9430,8 +9432,8 @@ def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -
     )
     _write(update_classification.MNGR_SETTINGS_PATH, _SETTINGS_BEFORE)
     _write(".pi/extensions/policy_guards.ts", "export default () => {};\n")
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "after")
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "after")
 
     code = update_self.main(
         [
