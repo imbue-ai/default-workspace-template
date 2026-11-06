@@ -1545,7 +1545,8 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     answered 409, its ``busy_with`` saying what it is doing. With ``keep_queue``
     the messages queued for the agent are resent to it as one turn after the
     restart, as the flush does, instead of dying with the process; a resend that
-    fails is a 500 too, though the restart has happened.
+    fails is a 500 too, though the restart has happened. A body that is not an
+    ``InterruptAgentRequest`` is a 400, and nothing is restarted.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
