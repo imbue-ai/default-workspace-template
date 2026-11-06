@@ -54,6 +54,7 @@ members = [
     "notify-user-skill",
     "oom-priority",
     "publish-template-skill",
+    "publish-to-github-pages-skill",
     "pytest-executable-tmp",
     "pytest-workspace-env",
     "routines",
@@ -3070,6 +3071,17 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "update-self-skill", editable = ".agents/skills/update-self/python" },
 ]
+
+[[package]]
+name = "publish-to-github-pages-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/publish-to-github-pages/python" }
+dependencies = [
+    { name = "playwright" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "playwright" }]
 
 [[package]]
 name = "pycparser"
