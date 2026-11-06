@@ -495,10 +495,11 @@ class DesktopStore(MutableModel):
         return self.add_desktop(desktop, shortcut_targets_on((desktop,)), rows)
 
     def add_desktop(
-        self, desktop: Desktop, default_shortcut_targets: AbstractSet[ShortcutTarget], rows: Sequence[RegistryRow]
+        self, desktop: Desktop, offered_targets: AbstractSet[ShortcutTarget], rows: Sequence[RegistryRow]
     ) -> Desktop:
-        """Append a fully formed desktop (a created or a seeded one), recording as offered the default shortcut
-        targets it holds and dropping any theme choice its id left behind; an id already taken conflicts."""
+        """Append a fully formed desktop (a created or a seeded one), recording ``offered_targets`` (the default
+        shortcut targets it holds) as offered and dropping any theme choice its id left behind; an id already taken
+        conflicts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             existing_desktops = document.desktops if document is not None else ()
@@ -508,7 +509,7 @@ class DesktopStore(MutableModel):
                     f"Desktop name {desktop.name!r} conflicts with existing desktop {existing.name!r} "
                     f"(both shorten to '{desktop.id}')"
                 )
-            self._record_offered_unlocked(default_shortcut_targets, existing_desktops, rows)
+            self._record_offered_unlocked(offered_targets, existing_desktops, rows)
             self._forget_desktop_themes_unlocked({desktop.id})
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
