@@ -151,8 +151,12 @@ directly from a venv, never under `uv run`. A built-in one runs from the root
 venv:
 
 ```ini
-command=python3 system/services/oom_priority/bin/oom_tag_service.py host-backup bash -c "uv sync --all-packages --frozen && exec .venv/bin/host-backup"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py host-backup python3 system/scripts/wait_for_critical_path.py bash -c "uv sync --all-packages --frozen && exec .venv/bin/host-backup"
 ```
+
+Its `wait_for_critical_path.py` prefix holds each start until the system
+interface and the chat app accept connections, for at most 30 seconds (see
+`system/scripts/README.md`); it does not change how the entry point runs.
 
 Under `uv run`, a `uv` process would stay resident as the program's parent
 for its whole life (about 19 MB each), sit between supervisord and the

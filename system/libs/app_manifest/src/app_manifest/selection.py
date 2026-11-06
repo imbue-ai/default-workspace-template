@@ -87,7 +87,10 @@ _GUARD_DIRECTORY: Final[str] = "system"
 _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
 # The checks outside the always-run set that read every real supervisord program block.
-_WIRING_GUARDS: Final[tuple[str, ...]] = ("system/services/oom_priority/bin/oom_tag_service_test.py",)
+_WIRING_GUARDS: Final[tuple[str, ...]] = (
+    "system/services/oom_priority/bin/oom_tag_service_test.py",
+    "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
+)
 # The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
 # and the checks that read every skill's prose, which a change to any one skill can break.
 ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
