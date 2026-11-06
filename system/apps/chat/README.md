@@ -930,7 +930,11 @@ answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 The same chooser can run before the workspace is up. On an Imbue Cloud create
 the Imbue Studio app runs `chat-early-sign-in`, this package's second console
 script (`early_sign_in.py`), over SSH as soon as the machine answers, and shows
-its page on the creation page. It serves the chooser on its own (`sign_in.html`)
+its page on the creation page. Studio starts it through
+`system/scripts/start_early_sign_in.sh`, which runs it the way supervisord runs
+this app (from the repo root, the workspace venv active, supervisord's
+environment), so the sign-in CLIs see the environment they see once the
+workspace is up. It serves the chooser on its own (`sign_in.html`)
 and the account routes above, driven by an `AuthFlowService` of its own, on a
 loopback port it names in one startup line (`early-sign-in: {"port": <port>}`),
 plus `GET /api/early-sign-in` (whether a sign-in is under way, whether the user

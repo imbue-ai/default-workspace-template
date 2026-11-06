@@ -1,9 +1,8 @@
-"""``chat-early-sign-in`` as the Imbue Studio app runs it: it names its port, serves, and ends on hang-up."""
+"""The early sign-in as the Imbue Studio app starts it, through its launcher: it names its port, serves, and ends on hang-up."""
 
 import json
 import os
 import subprocess
-import sys
 import urllib.request
 from pathlib import Path
 
@@ -11,18 +10,21 @@ import pytest
 
 from imbue.chat.early_sign_in import STARTUP_LINE_PREFIX
 
+_LAUNCHER = Path(__file__).resolve().parents[2] / "scripts" / "start_early_sign_in.sh"
+
 
 @pytest.mark.timeout(60)
 def test_the_program_names_its_port_serves_and_clears_its_staging_store_on_hang_up(tmp_path: Path) -> None:
     home = tmp_path / "home"
     leftover = home / ".minds-early-sign-in" / ".minds" / "accounts" / "0f3c9a"
     leftover.mkdir(parents=True)
-    env = dict(os.environ)
+    # Not marked as running under pytest: the launcher starts the program from the checkout's root, whose
+    # mngr settings a process under pytest may not load, as a workspace's own programs load them.
+    env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
     env.update({"HOME": str(home), "MINDS_ACCOUNTS_ROOT": str(tmp_path / "live-accounts")})
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "imbue.chat.early_sign_in"],
-        # Outside this checkout, whose mngr settings a process under pytest may not load.
+        ["bash", str(_LAUNCHER)],
         cwd=tmp_path,
         env=env,
         stdin=subprocess.PIPE,
