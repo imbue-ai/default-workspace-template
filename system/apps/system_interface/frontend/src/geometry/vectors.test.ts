@@ -9,11 +9,16 @@ import {
   MAXIMIZED_FRAME,
   SNAPPED_LEFT_FRAME,
   SNAPPED_RIGHT_FRAME,
+  VIEWPORT_FRAME,
+  backdropFrameOf,
   cascadeFrame,
   clampFrameIntoUnitSquare,
   fitFrameToBackdrop,
+  fitStateFrame,
+  frameForState,
   snapZoneForRelease,
   unsnapFrame,
+  viewportRect,
 } from "./frames";
 import { gridDimensions, nearestFreeCell, placeShortcuts, readingOrderCell } from "./grid";
 
@@ -30,13 +35,15 @@ interface Size {
 interface Vectors {
   cascade: { placed_count: number; expected: Frame }[];
   clamp_frame: { frame: Frame; expected: Frame }[];
-  snap_frames: Record<WindowState, Frame>;
+  snap_frames: Record<WindowState, Frame | "viewport">;
   fit_metrics: {
     window_min_width: number;
     window_min_height: number;
     title_min_visible: number;
     title_bar_height: number;
+    taskbar_height: number;
   };
+  fullscreen: { name: string; backdrop: Size; expected: Frame }[];
   fit: { name: string; frame: Frame; backdrop: Size; expected: Frame }[];
   snap_threshold: number;
   snap_zone: { pointer: { x: number; y: number }; backdrop: Size; expected: WindowState | null }[];
@@ -68,6 +75,14 @@ interface Vectors {
 
 const vectors = JSON.parse(readFileSync(VECTORS_PATH, "utf-8")) as Vectors;
 
+const FIT_METRICS = {
+  windowMinWidth: vectors.fit_metrics.window_min_width,
+  windowMinHeight: vectors.fit_metrics.window_min_height,
+  titleMinVisible: vectors.fit_metrics.title_min_visible,
+  titleBarHeight: vectors.fit_metrics.title_bar_height,
+  taskbarHeight: vectors.fit_metrics.taskbar_height,
+};
+
 function expectFrameClose(actual: Frame, expected: Frame): void {
   expect(actual.x).toBeCloseTo(expected.x, 9);
   expect(actual.y).toBeCloseTo(expected.y, 9);
@@ -91,17 +106,24 @@ describe("the shared geometry vectors", () => {
     expect(SNAPPED_LEFT_FRAME).toEqual(vectors.snap_frames.SNAPPED_LEFT);
     expect(SNAPPED_RIGHT_FRAME).toEqual(vectors.snap_frames.SNAPPED_RIGHT);
     expect(MAXIMIZED_FRAME).toEqual(vectors.snap_frames.MAXIMIZED);
+    const own: Frame = { x: 0.1, y: 0.1, width: 0.3, height: 0.3 };
+    expect(frameForState(own, "FULLSCREEN")).toBe(VIEWPORT_FRAME);
+    expect(vectors.snap_frames.FULLSCREEN).toBe(VIEWPORT_FRAME);
+    expect(backdropFrameOf(VIEWPORT_FRAME)).toEqual(MAXIMIZED_FRAME);
+    expect(backdropFrameOf(own)).toBe(own);
   });
 
   it("fit", () => {
-    const metrics = {
-      windowMinWidth: vectors.fit_metrics.window_min_width,
-      windowMinHeight: vectors.fit_metrics.window_min_height,
-      titleMinVisible: vectors.fit_metrics.title_min_visible,
-      titleBarHeight: vectors.fit_metrics.title_bar_height,
-    };
     for (const vector of vectors.fit) {
-      expect(fitFrameToBackdrop(vector.frame, vector.backdrop, metrics), vector.name).toEqual(vector.expected);
+      expect(fitFrameToBackdrop(vector.frame, vector.backdrop, FIT_METRICS), vector.name).toEqual(vector.expected);
+      expect(fitStateFrame(vector.frame, vector.backdrop, FIT_METRICS), vector.name).toEqual(vector.expected);
+    }
+  });
+
+  it("fullscreen", () => {
+    for (const vector of vectors.fullscreen) {
+      expect(viewportRect(vector.backdrop, FIT_METRICS.taskbarHeight), vector.name).toEqual(vector.expected);
+      expect(fitStateFrame(VIEWPORT_FRAME, vector.backdrop, FIT_METRICS), vector.name).toEqual(vector.expected);
     }
   });
 

@@ -9,7 +9,7 @@ Icons as Windows 2000 drew them: 32 by 32 pixels, at most 48 colors, no partial 
   a white page, a blue screen (`#0a246a`, `#3a6ea5`, `#a6caf0`), gray metal and plastic (`#d4d0c8`, `#808080`,
   `#404040`).
 - **One familiar desktop object per app**: a folder for files, a speech balloon for chat, a command prompt
-  window for the terminal, a globe for the browser, a document with a star for getting started. The object
+  window for the terminal, a monitor for the Screen, a document with a star for getting started. The object
   fills roughly 26 to 30 pixels of the canvas, centred, with clear corners.
 - **Avoid** gradients smoother than the 48 colors allow, glow, text inside the icon, and modern flat design.
 

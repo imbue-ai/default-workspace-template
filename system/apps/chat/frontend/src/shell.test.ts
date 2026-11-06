@@ -20,6 +20,8 @@ vi.mock("./presence", () => ({
   reportFocusChange: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
+const ensureParticipants = vi.fn(() => Promise.resolve());
+vi.mock("./models/Participants", () => ({ ensureParticipants }));
 
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
@@ -207,11 +209,18 @@ describe("the embed API", () => {
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
     deliver({ type: SHELL_HANDSHAKE, clientId: "client-2" }, parent);
+    ensureParticipants.mockClear();
     embed.shown();
     embed.hidden();
 
     expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-2", "hidden"]]);
     expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"]]);
+    // Coming back into view reads the roster again, so whoever joined meanwhile is drawn right; so does coming
+    // into focus (the window keeps every earlier test's focus listener too, so only the growth is counted).
+    expect(ensureParticipants).toHaveBeenCalledTimes(1);
+    const readsBeforeFocus = ensureParticipants.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    expect(ensureParticipants.mock.calls.length).toBeGreaterThan(readsBeforeFocus);
   });
 
   it("is absent on a top-level visit, which no root drives", async () => {

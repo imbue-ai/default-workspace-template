@@ -30,7 +30,8 @@ _REQUEST_SCRIPT = (
     / ".agents"
     / "skills"
     / "connect-external-service"
-    / "scripts"
+    / "python"
+    / "connect_external_service_skill"
     / "request_secret.py"
 )
 _AGENT_ID = "agent-00000000000000000000000000000031"

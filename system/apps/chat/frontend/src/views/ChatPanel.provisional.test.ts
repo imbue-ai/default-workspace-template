@@ -49,6 +49,7 @@ vi.mock("../models/Chats", () => ({
   removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
+  isRoomChat: () => false,
 }));
 vi.mock("../models/Response", () => ({
   addMessageSentListener: () => undefined,

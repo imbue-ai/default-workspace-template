@@ -4,6 +4,7 @@ from typing import Any, Final, NoReturn
 
 import pytest
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
+from workspace_bare_scripts import user_packages
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
 # provisioned by env-converge before any agent starts. Playwright's browser-cache
@@ -13,6 +14,23 @@ from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_play
 # setup. The `chat` and `system_interface` apps are NOT under it: the root pytest
 # config ignores them and each runs from its own directory.
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+# A user package is a standalone project whose tests run from its own directory and
+# venv; collected here they would import packages the root venv does not have.
+_USER_PACKAGE_DIRECTORIES: Final[tuple[Path, ...]] = tuple(
+    (Path(__file__).parent / relative).resolve()
+    for relative in user_packages.user_packages(Path(__file__).parent)
+)
+
+
+def pytest_ignore_collect(collection_path: Path) -> bool | None:
+    resolved = collection_path.resolve()
+    if any(
+        resolved.is_relative_to(directory) for directory in _USER_PACKAGE_DIRECTORIES
+    ):
+        return True
+    return None
+
 
 # The phone the plan's e2e sizes name (an iPhone 15 in portrait), with touch.
 _PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}

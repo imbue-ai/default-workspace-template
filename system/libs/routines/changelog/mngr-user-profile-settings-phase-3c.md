@@ -1,0 +1,1 @@
+The feed notifier reads the latchkey gateway through the new `latchkey-access` library (`GatewayAccess`) instead of its own copy of the environment and header names; a missing address or password still skips the notification with a warning.

@@ -14,7 +14,7 @@ from the shared components and design tokens, and declares one part of its own, 
 (a Start tile's two-tone glyph), which a theme may recolor (`[theming]` in `app.toml`).
 
 It runs as the `getting-started` supervisord program (`system/supervisord.conf.d/getting-started.conf`)
-from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
+from the workspace venv (`.venv/bin/getting-started`), serving on
 `http://127.0.0.1:8030`:
 
 - `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; a
@@ -47,11 +47,11 @@ into `src/getting_started/static/` by `npm run build`; its tests run with `vites
 
 ```bash
 # Backend, from the repo root
-uv run getting-started
+.venv/bin/getting-started
 
 # Frontend
 cd system/apps/getting_started/frontend && npm run dev
 
 # Tests
-cd system/apps/getting_started && uv run pytest
+cd system/apps/getting_started && uv run --no-sync pytest
 ```

@@ -1,12 +1,7 @@
-"""Test helpers for the Datalib app: the launcher as an importable module, and a fake ``datalib-http``.
+"""Test helpers for the Datalib app: where the launcher is, and a fake ``datalib-http``."""
 
-The launcher is a flat script, not a package, so it is loaded from its file under a name of its
-own (the same way ``system/scripts/script_modules_testing.py`` loads the scripts beside it).
-"""
-
-import importlib.util
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 LAUNCHER_PATH: Final[Path] = Path(__file__).parent / "launch_datalib_http.py"
 
@@ -26,19 +21,6 @@ printf 'DATALIB_BIND=%s\\nDATALIB_TOKEN=%s\\n' "${{DATALIB_BIND:-}}" "${{DATALIB
 if [ -r /proc/self/oom_score_adj ]; then cat /proc/self/oom_score_adj > "${ENV_FAKE_DATALIB_HTTP_DIR}/oom_score_adj"; fi
 exit {FAKE_DATALIB_HTTP_EXIT_STATUS}
 """
-
-
-def _load_launcher() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "launch_datalib_http_for_tests", LAUNCHER_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-launcher = _load_launcher()
 
 
 def install_fake_datalib_http(directory: Path) -> tuple[Path, Path]:

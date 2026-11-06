@@ -27,6 +27,8 @@ from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 from loguru import logger
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -47,8 +49,6 @@ from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
@@ -85,12 +85,15 @@ def registry_row_toml(
     launcher_rank: int | None = None,
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
     # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
-    # that takes drafted text, ``launch_methods`` the method of each that is not a GET, and ``launch_presets``
-    # the presets of each that declares any.
+    # that takes drafted text, ``launch_mention_params`` the param of each that takes a mention of a person,
+    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app, ``launch_methods``
+    # the method of each that is not a GET, and ``launch_presets`` the presets of each that declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
     launch_draft_params: Mapping[str, str] | None = None,
+    launch_mention_params: Mapping[str, str] | None = None,
+    launch_app_params: Mapping[str, tuple[str, str]] | None = None,
     launch_methods: Mapping[str, str] | None = None,
     launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
@@ -151,6 +154,12 @@ def registry_row_toml(
         draft_param = (launch_draft_params or {}).get(launch_id)
         if draft_param is not None:
             lines.append(f'draft_param = "{draft_param}"')
+        mention_param = (launch_mention_params or {}).get(launch_id)
+        if mention_param is not None:
+            lines.append(f'mention_param = "{mention_param}"')
+        app_params = (launch_app_params or {}).get(launch_id)
+        if app_params is not None:
+            lines.append(f'app_params = {{ name = "{app_params[0]}", display_name = "{app_params[1]}" }}')
         method = (launch_methods or {}).get(launch_id)
         if method is not None:
             lines.append(f'method = "{method}"')
@@ -277,7 +286,7 @@ def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
 _RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
 _RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
 _RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
-    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
+    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows", "owner"}
 )
 
 

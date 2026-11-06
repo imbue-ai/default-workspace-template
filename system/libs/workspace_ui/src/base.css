@@ -45,7 +45,14 @@
      Warmth comes from the surface underneath, not the tint. */
   --c-fill-hover: rgb(0 0 0 / 0.07);
   --c-fill-active: rgb(0 0 0 / 0.11);
-  --c-bg-user-bubble: #ededed;
+  /* One step fainter than hover, for a hover that has to read lighter than a selection drawn with
+     --c-bubble-other (the chat list's rows). */
+  --c-fill-faint: rgb(0 0 0 / 0.03);
+  /* The viewer's own chat bubble: a green tint, so your own words read apart from everyone else's. */
+  --c-bg-user-bubble: rgb(20 174 92 / 0.11);
+  /* A bubble that is not yours (another person's or the agent's), and the chat list's selected row:
+     one grey for everything said by someone else and for where you are. */
+  --c-bubble-other: rgb(0 0 0 / 0.05);
   --c-bg-composer: #ffffff;
   --c-bg-chat: #ffffff;
   --c-bg-code: #f0f0f0;
@@ -152,13 +159,15 @@
   --color-composer: var(--c-bg-composer);
   --color-code: var(--c-bg-code);
   --color-user-bubble: var(--c-bg-user-bubble);
+  --color-bubble-other: var(--c-bubble-other);
   --color-surface: var(--c-surface);
   --color-surface-secondary: var(--c-surface-secondary);
   --color-inverse: var(--c-inverse-surface);
   --color-inverse-hover: var(--c-inverse-surface-hover);
-  /* fills: bg-fill-hover / bg-fill-active (control state tints) */
+  /* fills: bg-fill-hover / bg-fill-active / bg-fill-faint (control state tints) */
   --color-fill-hover: var(--c-fill-hover);
   --color-fill-active: var(--c-fill-active);
+  --color-fill-faint: var(--c-fill-faint);
   /* progress-timeline bullets: text-step-done / text-step-pending */
   --color-step-done: var(--c-step-done);
   --color-step-pending: var(--c-step-pending);

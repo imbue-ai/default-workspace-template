@@ -70,6 +70,16 @@ def test_a_folder_stamp_moves_when_something_is_added_to_it_and_not_when_a_file_
     assert stamps()["/fonts/"] != first["/fonts/"]
 
 
+def test_a_keybindings_read_with_an_unreadable_identity_header_is_refused(tmp_path: Path) -> None:
+    # A present header that does not parse is nobody's proxy's (the multiplayer spec, D10), so
+    # the read is refused rather than resolved as the owner's.
+    client = _app(None, tmp_path)
+    assert client.get("/__files/api/keybindings/me").status_code == 200
+    refused = client.get("/__files/api/keybindings/me", headers={"X-Imbue-Identity": "not json"})
+    assert refused.status_code == 400
+    assert "X-Imbue-Identity" in json_of(refused)["detail"]
+
+
 def test_a_folder_is_listed_with_its_entries_kinds_sizes_and_links(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
     root = tmp_path / "root"

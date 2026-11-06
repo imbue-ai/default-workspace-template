@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Final
 
-from datalib_launcher_testing import launcher
+import launch_datalib_http as launcher
 
 # system/apps/datalib/test_datalib_pin.py -> the repository root.
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
@@ -15,7 +15,7 @@ _INSTALL_SCRIPT: Final[Path] = (
 )
 _SKILL: Final[Path] = _REPO_ROOT / ".agents/skills/datalib/SKILL.md"
 _SYNC_REQUEST: Final[Path] = (
-    _REPO_ROOT / ".agents/skills/datalib/scripts/sync_request.py"
+    _REPO_ROOT / ".agents/skills/datalib/python/datalib_skill/sync_request.py"
 )
 _PROGRAM_CONF: Final[Path] = _REPO_ROOT / "system/apps/datalib/datalib.conf"
 _INSTALLED_PROGRAM: Final[str] = "system/supervisord.conf.d/datalib.conf"

@@ -39,6 +39,11 @@ def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | 
     }
 
 
+def mentions_updated_message() -> dict[str, Any]:
+    """The ``mentions_updated`` message: someone's pending mentions changed, so every page reads its own again."""
+    return {"type": "mentions_updated"}
+
+
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
     """Remove all pending items from ``client_queue`` so it ends up empty."""
     is_drained = False
@@ -133,6 +138,10 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""
         self.broadcast(provisional_chat_created_message(provisional))
+
+    def broadcast_mentions_updated(self) -> None:
+        """Broadcast a mentions_updated event: a person's pending mentions changed."""
+        self.broadcast(mentions_updated_message())
 
     def broadcast_accounts_updated(self) -> None:
         """Broadcast an accounts_updated event: the account list changed, so every page reads it again."""

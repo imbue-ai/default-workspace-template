@@ -199,8 +199,10 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "chip run at the event's transcript position (or a row of their own when " +
       "nothing chips beside them, as under a `/compact` bubble), and " +
       "follow the reply when the event landed after it. Either chip opens the tool " +
-      "chips' detail panel: why it ran and where to change that, then the summary in " +
-      "an output pane. While the agent is COMPACTING, the start chip alone stands " +
+      "chips' detail panel on why it ran and where to change that; under it, the " +
+      "start chip's shows the idle sweep's `/compact` paired with it (in place of a " +
+      "bubble) and the finish chip's the summary, each in an output pane. While the " +
+      "agent is COMPACTING, the start chip alone stands " +
       "where the pair will land (see compaction-chips.ts).",
   },
   [UserMessageKind.Notice]: {

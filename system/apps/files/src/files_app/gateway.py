@@ -1,6 +1,6 @@
 """The latchkey gateway, as Files reaches it: the user's devices, the file-sharing permissions this workspace holds on
 each, and the shared files themselves. Every supervised program inherits the gateway's address
-and credentials from its environment, as the chat app's latchkey endpoints do."""
+and credentials from its environment (the contract ``latchkey_access`` spells)."""
 
 import os
 import urllib.parse
@@ -9,13 +9,12 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from latchkey_access.gateway import ENV_GATEWAY
+from latchkey_access.gateway import ENV_GATEWAY_PASSWORD
+from latchkey_access.gateway import ENV_GATEWAY_PERMISSIONS_OVERRIDE
+from latchkey_access.gateway import HEADER_GATEWAY_PASSWORD
+from latchkey_access.gateway import HEADER_GATEWAY_PERMISSIONS_OVERRIDE
 
-_ENV_GATEWAY: Final[str] = "LATCHKEY_GATEWAY"
-_ENV_GATEWAY_PASSWORD: Final[str] = "LATCHKEY_GATEWAY_PASSWORD"
-# Only present on desktop-hosted gateways, which deny a request without it.
-_ENV_GATEWAY_PERMISSIONS_OVERRIDE: Final[str] = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
-_HEADER_PASSWORD: Final[str] = "X-Latchkey-Gateway-Password"
-_HEADER_PERMISSIONS_OVERRIDE: Final[str] = "X-Latchkey-Gateway-Permissions-Override"
 _HEADER_DEVICE: Final[str] = "X-Latchkey-Device"
 
 # A device answers through the user's computer, which may be asleep: a listing should give up rather than hang.
@@ -34,18 +33,18 @@ class Gateway:
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] = os.environ) -> "Gateway | None":
         """The gateway this process was given, or None when it was given none (a test, a machine with no app)."""
-        base_url = environ.get(_ENV_GATEWAY, "")
+        base_url = environ.get(ENV_GATEWAY, "")
         if base_url == "":
             return None
         client = httpx.Client(timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS, read=None))
         return cls(
-            base_url, environ.get(_ENV_GATEWAY_PASSWORD, ""), environ.get(_ENV_GATEWAY_PERMISSIONS_OVERRIDE), client
+            base_url, environ.get(ENV_GATEWAY_PASSWORD, ""), environ.get(ENV_GATEWAY_PERMISSIONS_OVERRIDE), client
         )
 
     def _headers(self, device: str | None, extra: Mapping[str, str] | None) -> dict[str, str]:
-        headers = {_HEADER_PASSWORD: self._password}
+        headers = {HEADER_GATEWAY_PASSWORD: self._password}
         if self._permissions_override:
-            headers[_HEADER_PERMISSIONS_OVERRIDE] = self._permissions_override
+            headers[HEADER_GATEWAY_PERMISSIONS_OVERRIDE] = self._permissions_override
         if device is not None:
             headers[_HEADER_DEVICE] = device
         headers.update(extra or {})

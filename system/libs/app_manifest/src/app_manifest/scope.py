@@ -39,9 +39,7 @@ from imbue.imbue_common.pure import pure
 # one per drop-in file, so a reader of the main config alone sees none of them.
 # ``system/test_supervisord_layout.py`` pins the directory as the one the glob names.
 _SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
-_SUPERVISORD_DROPIN_DIR: Final[RepoRelativePath] = RepoRelativePath(
-    "system/supervisord.conf.d"
-)
+_SUPERVISORD_DROPIN_DIR: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf.d")
 
 LOCKFILE: Final[RepoRelativePath] = RepoRelativePath("uv.lock")
 
@@ -238,19 +236,23 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     # standalone program (`share` for `share-gateway`), which is what keeps an unrelated
     # program from being claimed here.
     sidecar_prefix = f"program:{manifest.name}-"
-    declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
+    # A declared program may be a supervisord event listener (the Screen's watcher), whose block is an
+    # ``[eventlistener:...]`` section; either spelling of the name is the declaration's block.
+    declared_sections = [
+        section
+        for program in manifest.wiring.programs
+        for section in (f"program:{program}", f"eventlistener:{program}")
+    ]
 
     wiring, defined_sections = _owned_wiring_sections(
         repo_root,
-        lambda section: section == own_section
-        or section.startswith(sidecar_prefix)
-        or section in declared_sections,
+        lambda section: section == own_section or section.startswith(sidecar_prefix) or section in declared_sections,
     )
-    for declared_section in declared_sections:
-        if declared_section not in defined_sections:
+    for program in manifest.wiring.programs:
+        if f"program:{program}" not in defined_sections and f"eventlistener:{program}" not in defined_sections:
             raise ScopeComputationError(
-                f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
-                f"{repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
+                f"manifest {manifest.name} declares wiring program {program!r} (program:{program} or "
+                f"eventlistener:{program}), which {repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
             )
     return wiring
 
@@ -299,10 +301,7 @@ def _supervisord_conf_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
     dropins = sorted((repo_root / _SUPERVISORD_DROPIN_DIR).glob("*.conf"))
     return (
         _SUPERVISORD_CONF,
-        *(
-            RepoRelativePath(path.relative_to(repo_root).as_posix())
-            for path in dropins
-        ),
+        *(RepoRelativePath(path.relative_to(repo_root).as_posix()) for path in dropins),
     )
 
 
@@ -354,9 +353,7 @@ def match_referencing_manifests(
     return tuple(matches)
 
 
-def find_referencing_manifests(
-    repo_root: Path, target_path: RepoRelativePath
-) -> tuple[ManifestReferenceMatch, ...]:
+def find_referencing_manifests(repo_root: Path, target_path: RepoRelativePath) -> tuple[ManifestReferenceMatch, ...]:
     """Every app whose manifest declares ``target_path`` as its own, in manifest path order.
 
     Manifests that do not load are skipped, as ``load_app_manifests`` describes.
@@ -383,9 +380,7 @@ def _check_excludes_leave_the_footprint(
         else:
             files = [entry]
         if files and all(exclude_spec.match_file(file) for file in files):
-            raise ScopeComputationError(
-                f"the exclude globs cover {str(entry)!r}, which is part of the footprint"
-            )
+            raise ScopeComputationError(f"the exclude globs cover {str(entry)!r}, which is part of the footprint")
 
 
 def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifest) -> CreationScope:
@@ -405,9 +400,7 @@ def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifes
         for reference in manifest.references
     )
     exclude = _deduplicated(BUILT_IN_EXCLUDES + manifest.scope.exclude)
-    _check_excludes_leave_the_footprint(
-        repo_root, exclude, (*primary, *(reference.path for reference in references))
-    )
+    _check_excludes_leave_the_footprint(repo_root, exclude, (*primary, *(reference.path for reference in references)))
     return CreationScope(
         creation=CreationIdentity(
             type=CreationType.APP,
@@ -455,9 +448,7 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
         primary=(RepoRelativePath(primary_entry),),
         wiring=(),
         references=(),
-        context=tuple(
-            RepoRelativePath(directory) for directory in owning_directories if directory is not None
-        ),
+        context=tuple(RepoRelativePath(directory) for directory in owning_directories if directory is not None),
         conventions=SKILL_CONVENTIONS,
         exclude=BUILT_IN_EXCLUDES,
         diff=None,
@@ -579,12 +570,9 @@ class PassOwnChanges(FrozenModel):
 
     fork_point: NonEmptyStr = Field(description="Where the pass's branch forked from the lead")
     files: frozenset[RepoRelativePath] = Field(description="Every file the pass changed")
-    lockfile_base: NonEmptyStr = Field(
-        description="The commit before every change of the pass's to uv.lock"
-    )
+    lockfile_base: NonEmptyStr = Field(description="The commit before every change of the pass's to uv.lock")
     incoming_base: NonEmptyStr | None = Field(
-        description="Where the lead's commits the branch merged in after it departed begin; None when "
-        "it merged none"
+        description="Where the lead's commits the branch merged in after it departed begin; None when it merged none"
     )
     incoming_files: frozenset[RepoRelativePath] = Field(
         description="Every file those commits changed, up to the fork point"
@@ -601,9 +589,7 @@ def find_departure_point(repo_root: Path, lead_ref: str, ref: str) -> NonEmptySt
     for commit in _run_git(repo_root, ("rev-list", "--first-parent", ref_sha)).split():
         if commit in lead_line:
             return NonEmptyStr(commit)
-    raise ScopeComputationError(
-        f"{ref}'s first-parent line never reaches {lead_ref}'s, so it did not fork from it"
-    )
+    raise ScopeComputationError(f"{ref}'s first-parent line never reaches {lead_ref}'s, so it did not fork from it")
 
 
 def _list_first_parent_commits(
@@ -665,9 +651,7 @@ def find_pass_own_changes(
     before_fork = set(list_footprint_commit_files(repo_root, window_start, fork_point, creations))
     departure_point = find_departure_point(repo_root, lead_ref, diff_ref)
     branch_commits = _list_first_parent_commits(repo_root, departure_point, diff_ref)
-    after_fork = frozenset(
-        _run_git(repo_root, ("rev-list", "--first-parent", f"{fork_point}..{diff_ref}")).split()
-    )
+    after_fork = frozenset(_run_git(repo_root, ("rev-list", "--first-parent", f"{fork_point}..{diff_ref}")).split())
     for sha, changed in branch_commits:
         if sha not in after_fork:
             before_fork.update(changed)
@@ -693,9 +677,7 @@ def _find_incoming_base(
     """The newer of where the branch departed from the lead's line and where the window starts:
     the lead's commits after it and up to the fork point are in the window and reached the branch
     through its own merges. None when that is the fork point itself, so nothing did."""
-    is_departure_older = (
-        _run_git(repo_root, ("merge-base", departure_point, window_start)).strip() == departure_point
-    )
+    is_departure_older = _run_git(repo_root, ("merge-base", departure_point, window_start)).strip() == departure_point
     incoming_base = window_start if is_departure_older else departure_point
     return None if incoming_base == fork_point else NonEmptyStr(incoming_base)
 
@@ -744,8 +726,7 @@ def split_against_creations(
     """
     built_in_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, BUILT_IN_EXCLUDES)
     exclude_specs = [
-        (creation, pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, creation.exclude))
-        for creation in creations
+        (creation, pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, creation.exclude)) for creation in creations
     ]
     inside: list[RepoRelativePath] = []
     outside: list[RepoRelativePath] = []
@@ -791,18 +772,14 @@ def _summarize_diff(
         inside_footprint=inside_footprint,
         outside_footprint=tuple(path for path in outside_footprint if path in own_files),
         fork_point=own.fork_point,
-        others=tuple(
-            path for path in changed.files if path not in inside_files and path not in own_files
-        ),
+        others=tuple(path for path in changed.files if path not in inside_files and path not in own_files),
         lockfile_base=own.lockfile_base,
         incoming_base=own.incoming_base,
         incoming=tuple(path for path in changed.files if path in own.incoming_files),
     )
 
 
-def with_diff_against_base(
-    scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str
-) -> CreationScope:
+def with_diff_against_base(scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str) -> CreationScope:
     """The same scope with its diff filled in from the changed files between a base and a ref.
 
     A ref other than HEAD lets one tree answer for a range that does not end at it, such as
@@ -950,11 +927,7 @@ def compute_pass_scope(
     _refuse_repeated_creations(specs, creations)
     if diff_base is None:
         return PassScope(creations=creations, diff=None)
-    own = (
-        None
-        if lead_ref is None
-        else find_pass_own_changes(repo_root, diff_base, diff_ref, lead_ref, creations)
-    )
+    own = None if lead_ref is None else find_pass_own_changes(repo_root, diff_base, diff_ref, lead_ref, creations)
     return PassScope(
         creations=creations,
         diff=_summarize_diff(list_changed_files(repo_root, diff_base, diff_ref), creations, own),
@@ -975,9 +948,7 @@ def _refuse_repeated_creations(specs: Sequence[CreationSpec], creations: Sequenc
     both its registered name and its package directory."""
     specs_by_creation: dict[tuple[CreationType, tuple[RepoRelativePath, ...]], list[str]] = {}
     for spec, creation in zip(specs, creations, strict=True):
-        specs_by_creation.setdefault((creation.creation.type, creation.primary), []).append(
-            f"{spec.type}:{spec.name}"
-        )
+        specs_by_creation.setdefault((creation.creation.type, creation.primary), []).append(f"{spec.type}:{spec.name}")
     repeats: list[str] = []
     for named_as in specs_by_creation.values():
         if len(named_as) == 1:

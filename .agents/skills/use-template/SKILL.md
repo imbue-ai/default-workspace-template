@@ -121,6 +121,13 @@ git worktree add -q "$WT" HEAD
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
+- **An app from an older template** (one that is a root workspace member in the template's
+  layout, with no `uv.lock` of its own) needs converting to a standalone project with
+  `uv run --no-sync user-package-migration migrate`, once the root venv is synced
+  (`references/python-packaging-migration.md` in update-self, "A user app, service or
+  lib"); until then it fails to start. When resolving a conflict in the root
+  `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
+  globs.
 - **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
@@ -264,7 +271,7 @@ conversation:**
    work -- tell the user which package and why:
 
    - **it does not exist at this workspace's pinned timestamp** (the publisher
-     was on a different snapshot) -- offer `uv run env-converge upgrade`, which
+     was on a different snapshot) -- offer `uv run --no-sync env-converge upgrade`, which
      advances this workspace to its committed timestamp;
    - **cargo entries with rust absent** -- an upgrade will not help; rust has to
      be installed first.

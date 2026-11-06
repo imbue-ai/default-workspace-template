@@ -7,24 +7,30 @@ so in-container verification targets the local port directly.
 
 ## Quick verification with verify_app.py (Recommended)
 
-Use `system/scripts/verify_app.py` for instant verification (<0.1s for HTTP/marker checks,
+Use `system/scripts/workspace_scripts/verify_app.py` for instant verification (<0.1s for HTTP/marker checks,
 ~1.3s for browser rendering & screenshots). It resolves the port automatically from
 the app name, and it restarts and surfaces the app too, so one call covers the whole
 apply-check-show loop:
 
 ```bash
 # After a code change: restart (no 30 s wait), check, render, and open the window beside the chat:
-python3 system/scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png --open
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png --open
 
 # The same for an app already on the user's screen (reloads its windows instead):
-python3 system/scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --refresh
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --refresh
 
 # Fast HTTP readiness & content marker check only (<0.1s):
-python3 system/scripts/verify_app.py <name> --marker "<expected-heading-or-text>"
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --marker "<expected-heading-or-text>"
 
 # Full headless browser render + visual screenshot (~1.3s):
-python3 system/scripts/verify_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
+
+While the app is still a mock, it is shown only inside the mock frame, so the call
+drops `--open` / `--refresh` and ends with `&& uv run --no-sync
+.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name> --note
+"<what is not real yet>" --open` the first time and `mock_frame.py refresh --app
+<name>` after that; see SKILL.md Step 1.
 
 `--restart` asks supervisord to stop the program and start it again *without*
 waiting (the `supervisorctl restart` command would block for the program's
@@ -89,5 +95,5 @@ with sync_playwright() as p:
     browser.close()
 ```
 
-Run with `uv run python /tmp/verify_<name>.py`.
+Run with `uv run --no-sync python /tmp/verify_<name>.py`.
 

@@ -76,6 +76,8 @@ export interface ProviderAccount {
   label: string;
   /** The lane method "Sign in again" runs: a key account is given a key again, not a browser sign-in. */
   reauth_method: string;
+  /** When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept. */
+  signed_in_at: string | null;
 }
 
 interface FlowStart {
@@ -449,6 +451,7 @@ let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
 let chooserUnpickable: UnpickableAccount | null = null;
+let chooserOnRoomChosen: (() => void) | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -473,6 +476,9 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
+  /** Run when "Chat room (no provider)" is picked instead of an account: the chat awaiting its first send becomes a
+   *  room (the multiplayer spec, section 7.3). Its presence puts that row last, under the providers. */
+  onRoomChosen?: () => void;
   /** A signed-in account to list but refuse, and the reason its row reads. */
   unpickable?: UnpickableAccount;
 }
@@ -485,7 +491,23 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
+  chooserOnRoomChosen = intent.onRoomChosen ?? null;
   m.redraw();
+}
+
+/** Whether the chooser offers a room in place of a provider. */
+export function isRoomChoiceOffered(): boolean {
+  return chooserOnRoomChosen !== null;
+}
+
+/** Pick a room instead of a provider: what a finished sign-in does, with the room hook in place of the account's. */
+export function pickRoom(): void {
+  const run = chooserOnRoomChosen;
+  chooserOnSignedIn = null;
+  chooserOnDismissed = null;
+  chooserOnRoomChosen = null;
+  closeProviderChooser();
+  run?.();
 }
 
 /** Whether the chooser was opened to pick an account, so a signed-in one can be used as is. */
@@ -525,6 +547,7 @@ export function closeProviderChooser(): void {
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
   chooserUnpickable = null;
+  chooserOnRoomChosen = null;
   dismissed?.();
   m.redraw();
 }

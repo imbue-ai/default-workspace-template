@@ -5,6 +5,7 @@
  */
 
 import type { Entry } from "../models/server";
+import { matchesKeybinding } from "../models/keybindings";
 import { parentOf } from "../models/paths";
 import type { FilesController } from "./FilesController";
 
@@ -101,56 +102,55 @@ export function handleKeydown(app: FilesController, event: KeyboardEvent): void 
   const command = event.metaKey || event.ctrlKey;
   const handled = (): void => event.preventDefault();
 
-  if (command && event.key.toLowerCase() === "a") {
+  // The named actions run under whatever chords the keybindings resolved to; the arrows,
+  // the shift-extension, and the type-ahead below are navigation primitives and stay fixed.
+  if (matchesKeybinding(event, "select-all")) {
     handled();
     model.selectAll();
     return;
   }
-  if ((command || event.altKey) && event.key === "ArrowUp") {
+  if (matchesKeybinding(event, "go-up")) {
     handled();
     model.goUp();
     return;
   }
-  if ((command && event.key === "[") || (event.altKey && event.key === "ArrowLeft")) {
+  if (matchesKeybinding(event, "back")) {
     handled();
     if (model.canGoBack) window.history.back();
     return;
   }
-  if ((command && event.key === "]") || (event.altKey && event.key === "ArrowRight")) {
+  if (matchesKeybinding(event, "forward")) {
     handled();
     if (model.canGoForward) window.history.forward();
     return;
   }
-  if (command && event.shiftKey && event.key.toLowerCase() === "n") {
+  if (matchesKeybinding(event, "new-folder")) {
     handled();
     void model.createFolder();
     return;
   }
-  if (
-    (command && event.key === "ArrowDown") ||
-    (command && event.key.toLowerCase() === "o") ||
-    (event.key === "Enter" && !isPressable(event.target))
-  ) {
+  // A bare Enter belongs to a focused button rather than to the selection.
+  if (matchesKeybinding(event, "open") && !(event.key === "Enter" && isPressable(event.target))) {
     const selected = model.selectedEntries();
     if (selected.length !== 1) return;
     handled();
     model.open(selected[0]);
     return;
   }
-  if (event.key === "F2") {
+  if (matchesKeybinding(event, "rename")) {
     const selected = model.selection;
     if (selected.length !== 1) return;
     handled();
     model.startRename(selected[0]);
     return;
   }
-  if (event.key === "Delete" || (command && event.key === "Backspace")) {
+  if (matchesKeybinding(event, "delete")) {
     if (model.selection.length === 0) return;
     handled();
     void model.deleteEntries(model.selection);
     return;
   }
-  if (event.key === "Escape") {
+  if (matchesKeybinding(event, "clear-selection")) {
     model.clearSelection();
     return;
   }

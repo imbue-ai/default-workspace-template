@@ -144,7 +144,7 @@ reason to do the fix inline: commit, then dispatch. Healing always runs in the
 background worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$SLUG \
     --template worker \
     --runtime-dir data/.tasks/harden/heal-$SLUG/ \
@@ -152,7 +152,7 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 Then background-poll (`create_worker.py await --name heal-$SLUG --task-file ...
---timeout 90m`, started through `system/scripts/run_in_background.py`) and follow
+--timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py --waiter`) and follow
 `.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
@@ -178,8 +178,12 @@ next `done` comes back through these same checks.
 Then merge `mngr/heal-$SLUG`, destroy the worker per `lead-proxy.md`
 (`create_worker.py destroy --name heal-$SLUG`), and go live for each creation in
 the pass, by its type: a **skill** or **shared** creation needs nothing beyond
-the merge; an **app** wants a window refresh (`uv run --no-sync
-workspace-layout refresh --app <app-name>`); a background **service** has no
+the merge, except `uv sync --all-packages --frozen` when it has a `python/`
+project (the workspace venv then carries any dependency the merge added); an
+**app** wants a window refresh (`uv run --no-sync
+workspace-layout refresh --app <app-name>`; for an app `build-app` made, `uv run
+--no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which reloads its mock frame while
+one is up and its own windows otherwise); a background **service** has no
 window -- restart its programs (`supervisorctl restart <program>`) instead: the
 one named after the package (`host_backup` runs as `host-backup`) and any
 `<program>-<role>` ones (`oom_priority`'s are named otherwise: restart those of

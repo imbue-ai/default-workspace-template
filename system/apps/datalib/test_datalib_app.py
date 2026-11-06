@@ -1,5 +1,5 @@
-"""Integration: the launcher as a real process, registering through the real forward_port.py and
-becoming a fake datalib-http."""
+"""Integration: the launcher as a real process, registering through the real app_registration library
+and becoming a fake datalib-http."""
 
 import os
 import subprocess
@@ -8,13 +8,13 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
+import launch_datalib_http as launcher
 import pytest
 from datalib_launcher_testing import (
     ENV_FAKE_DATALIB_HTTP_DIR,
     FAKE_DATALIB_HTTP_EXIT_STATUS,
     LAUNCHER_PATH,
     install_fake_datalib_http,
-    launcher,
     read_fake_datalib_http_argv,
     read_fake_datalib_http_environment,
     read_fake_datalib_http_oom_score_adj,
@@ -24,7 +24,7 @@ from datalib_launcher_testing import (
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _PORT: Final[int] = 18731
 _PUBLISHED_TOKEN: Final[str] = "published-token.0123_abc~"
-# forward_port.py's override for where the registry lives.
+# The registration's override for where the registry lives.
 _ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 _RUN_TIMEOUT_SECONDS: Final[float] = 60.0
 # A host without it (macOS) cannot band a process, and the launcher only warns there.
@@ -52,8 +52,6 @@ def _run_launcher(
             str(datalib_http_path),
             "--state-directory",
             str(tmp_path / "state"),
-            "--forward-port",
-            str(_REPO_ROOT / launcher.FORWARD_PORT_PATH),
         ],
         env={
             **os.environ,

@@ -112,6 +112,13 @@
   max-width: calc(100% - var(--width-agent-gutter));
 }
 
+/* Inside a machine bubble the prose IS the bubble's content: the bubble already stops at its own
+   max-width, and the gutter cap would instead squeeze the text by the gutter width inside an
+   intrinsically sized bubble (every short bubble wraps). Same specificity, so order carries it. */
+.machine-bubble .message-content.markdown-content {
+  max-width: none;
+}
+
 .markdown-content {
   line-height: 1.4;
   font-size: var(--font-size-body);

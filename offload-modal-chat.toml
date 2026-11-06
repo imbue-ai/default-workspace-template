@@ -7,8 +7,8 @@ max_parallel = 20
 test_timeout_secs = 600
 sandbox_repo_root = "/home/user/workspace"
 sandbox_project_root = "/home/user/workspace/system/apps/chat"
-# First boot, then what a CI image needs on top of it (the browser stack and the
-# offload binary); once per checkpoint build.
+# First boot, then what a CI image needs on top of it (the Screen's stack, Fortress
+# included, and the offload binary); once per checkpoint build.
 sandbox_init_cmd = "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
 post_patch_cmd = "bash /home/user/workspace/system/scripts/offload_post_patch.sh"
 
@@ -42,17 +42,24 @@ build_inputs = [
     "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
     "system/scripts/_mngr_git_auth.sh",
+    # Run by install_dependencies.sh before its sync.
+    "system/scripts/workspace_bare_scripts/venv_links.py",
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",
-    "system/scripts/list_mngr_plugins.py",
-    # Read by those two to pick each tool's mngr plugins.
+    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
+    # Read by those two to pick the mngr tool's plugins.
     "system/config/mngr_plugins.toml",
-    "system/scripts/tool_env.py",
+    "system/scripts/workspace_bare_scripts/tool_env.py",
+    # Lists and syncs the user packages in build_workspace.sh.
+    "system/scripts/workspace_bare_scripts/user_packages.py",
+    # The code the install_mngr.py entry stub imports.
+    "system/scripts/workspace_bare_scripts/__init__.py",
+    "system/scripts/workspace_bare_scripts/install_mngr.py",
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.
-    "system/scripts/env.d/1000-playwright-fortress.sh",
+    "system/scripts/env.d/2000-screen.sh",
     "system/scripts/env.d/1300-mcpc-home-link.sh",
     "system/scripts/offload_sandbox_init.sh",
 ]
@@ -60,7 +67,7 @@ build_inputs = [
 [framework]
 type = "pytest"
 # Discovery starts at the repo root; execution starts in the app directory already.
-command = "bash -c '[ -d system/apps/chat ] && cd system/apps/chat; exec uv run pytest \"$@\"' --"
+command = "bash -c '[ -d system/apps/chat ] && cd system/apps/chat; exec uv run --no-sync pytest \"$@\"' --"
 # `-m ''` replaces the pyproject's default `-m "not browser and not real_claude"`, in discovery as
 # well as for the explicit test ids each batch runs: offload collects every group in one pass and
 # applies the groups' own filters to what that pass collected, so the pyproject's filter would drop

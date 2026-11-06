@@ -40,6 +40,7 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -554,11 +555,16 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
 
     _on_events: Callable[[str, list[dict[str, Any]]], None]
     _path_watcher: PathWatcher | None
+    _watch_observer: SharedWatchObserver | None
 
     def _init_store_watcher(self, agent_id: str, on_events: Callable[[str, list[dict[str, Any]]], None]) -> None:
         self._init_loader(agent_id)
         self._on_events = on_events
         self._path_watcher = None
+        self._watch_observer = None
+
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        self._watch_observer = watch_observer
 
     # -- per-harness hooks ----------------------------------------------------------------
 
@@ -586,7 +592,10 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
             return
         self._prime()
         self._path_watcher = PathWatcher.build(
-            self._watch_paths(), self._emit_cycle, min_cycle_interval_seconds=_MIN_EMIT_CYCLE_INTERVAL_SECONDS
+            self._watch_paths(),
+            self._emit_cycle,
+            min_cycle_interval_seconds=_MIN_EMIT_CYCLE_INTERVAL_SECONDS,
+            watch_observer=self._watch_observer,
         )
         self._path_watcher.start()
 

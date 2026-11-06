@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => {
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
     beginSwitchToAccountId: vi.fn(),
+    launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
@@ -75,6 +76,8 @@ const mocks = vi.hoisted(() => {
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
+    // Whether the agent's turn for a message has reached the transcript; none has, at rest.
+    hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
@@ -83,8 +86,10 @@ const mocks = vi.hoisted(() => {
     // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
     isChatRegistered: true,
     isLaunchInFlight: false,
+    // Whether the chat is a room (a message log among the people here), which offers no model and no agent.
+    isRoom: false,
     provisional: undefined as unknown,
-    launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
+    launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string, _kind?: string) => ({})),
     chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
     // Whether this page has read the account list; until it has, no account reads as missing.
@@ -96,6 +101,8 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../models/Response", () => ({
   getEventsForChat: () => [],
+  hasUserTurnLandedSince: mocks.hasUserTurnLandedSince,
+  sentUserTurnIds: () => new Set(["turn-before-the-send"]),
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
   interruptAgent: mocks.interruptAgent,
@@ -118,6 +125,7 @@ vi.mock("../models/PendingLane", async (importOriginal) => {
 vi.mock("./SwitchDialog", () => ({
   openSwitchDialog: mocks.openSwitchDialog,
   beginSwitchToAccountId: mocks.beginSwitchToAccountId,
+  launchAwaitingChatAsRoom: mocks.launchAwaitingChatAsRoom,
 }));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
@@ -146,6 +154,7 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
   describeRequestError: (e: unknown) => String(e),
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
+  isUnansweredRequest: (e: unknown) => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 0,
 }));
 vi.mock("../models/ModelSettings", () => ({
   addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
@@ -209,7 +218,9 @@ vi.mock("../models/Chats", async (importOriginal) => ({
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
   isLaunchInFlight: () => mocks.isLaunchInFlight,
-  launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
+  isRoomChat: () => mocks.isRoom,
+  launchChat: (chatId: string, accountId: string, message?: string, kind?: string) =>
+    mocks.launchChat(chatId, accountId, message, kind),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
   refuseSendToFailedChat: (chatId: string) => mocks.refuseSendToFailedChat(chatId),
 }));
@@ -226,8 +237,17 @@ vi.mock("../models/Providers", () => ({
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
-import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
+import {
+  MAX_TEXTAREA_HEIGHT_PX,
+  MessageInput,
+  prependToComposer,
+  raiseFailureNotice,
+  restoreComposerDraft,
+  setComposerHint,
+  takeComposerDraft,
+} from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -500,6 +520,21 @@ describe("MessageInput placeholder", () => {
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
+
+  it("tells a room's sender to tag the agent, until a switch off the room holds the message instead", () => {
+    mocks.isRoom = true;
+    try {
+      const room = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(room?.attrs?.placeholder).toBe("Message (tag @agent to ask the agent)");
+
+      mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+      const switching = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(switching?.attrs?.placeholder).toBe("Type a message; it is delivered once Codex is ready…");
+    } finally {
+      mocks.isRoom = false;
+      mocks.switching.handoff = null;
+    }
+  });
 });
 
 describe("MessageInput attachment chips", () => {
@@ -601,17 +636,38 @@ describe("MessageInput send button", () => {
   });
 });
 
+/** The composer's row as fitComposer touches it, holding its attributes in `attributes`. */
+function fakeComposerRow(attributes: Set<string>) {
+  return {
+    clientWidth: 600,
+    style: {},
+    getBoundingClientRect: () => ({ height: 36 }),
+    hasAttribute: (name: string) => attributes.has(name),
+    removeAttribute: (name: string) => attributes.delete(name),
+    toggleAttribute: (name: string, force: boolean) => {
+      if (force) attributes.add(name);
+      else attributes.delete(name);
+      return force;
+    },
+  };
+}
+
+/** Stand in for ResizeObserver, which jsdom lacks and the composer row constructs when it mounts. */
+function stubInertResizeObserver(): void {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+}
+
 describe("MessageInput layout with attachments", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
     localStorage.clear();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        disconnect(): void {}
-      },
-    );
+    stubInertResizeObserver();
   });
 
   afterEach(() => {
@@ -625,18 +681,7 @@ describe("MessageInput layout with attachments", () => {
     const rowVnode = findByClass(tree, "message-input-row");
     const attributes = new Set<string>();
     if (rowVnode?.attrs?.["data-attachments"] !== undefined) attributes.add("data-attachments");
-    const row = {
-      clientWidth: 600,
-      style: {},
-      getBoundingClientRect: () => ({ height: 36 }),
-      hasAttribute: (name: string) => attributes.has(name),
-      removeAttribute: (name: string) => attributes.delete(name),
-      toggleAttribute: (name: string, force: boolean) => {
-        if (force) attributes.add(name);
-        else attributes.delete(name);
-        return force;
-      },
-    };
+    const row = fakeComposerRow(attributes);
     const textarea = { style: {}, scrollHeight: 28, clientHeight: 28, focus: () => undefined };
     (rowVnode?.attrs?.oncreate as (vnode: unknown) => void)({ dom: row });
     (findByTag(tree, "textarea")?.attrs?.onupdate as (vnode: unknown) => void)({ dom: textarea });
@@ -652,6 +697,171 @@ describe("MessageInput layout with attachments", () => {
       { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
     ]);
     expect(stacksOneLineOfText()).toBe(true);
+  });
+});
+
+describe("MessageInput draft scroll position", () => {
+  const ONE_LINE_PX = 28;
+  const DRAFT_CONTENT_PX = 600;
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+    stubInertResizeObserver();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
+   *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The draft ends with
+   *  `draftSuffix`, and the caret sits at `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing
+   *  it to "auto" resets its scrollTop, as some browsers do. `scrollTopWriteCount` counts the writes to its
+   *  scrollTop. */
+  function makeOverflowingDraftTextarea({
+    caretPosition,
+    draftSuffix = "",
+    isScrollLostOnCollapse = false,
+  }: { caretPosition?: number; draftSuffix?: string; isScrollLostOnCollapse?: boolean } = {}) {
+    let storedScrollTopPx = 0;
+    let heightStyle = "";
+    const value = "a long draft ".repeat(40) + draftSuffix;
+    const caret = caretPosition ?? value.length;
+    return {
+      value,
+      selectionStart: caret,
+      selectionEnd: caret,
+      scrollTopWriteCount: 0,
+      style: {
+        overflowY: "",
+        get height(): string {
+          return heightStyle;
+        },
+        set height(next: string) {
+          heightStyle = next;
+          if (next === "auto" && isScrollLostOnCollapse) storedScrollTopPx = 0;
+        },
+      },
+      focus: () => undefined,
+      setSelectionRange(start: number, end: number): void {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+      },
+      get clientHeight(): number {
+        return this.style.height === "" || this.style.height === "auto" ? ONE_LINE_PX : parseFloat(this.style.height);
+      },
+      get scrollHeight(): number {
+        return Math.max(DRAFT_CONTENT_PX, this.clientHeight);
+      },
+      get scrollTop(): number {
+        return Math.min(storedScrollTopPx, this.scrollHeight - this.clientHeight);
+      },
+      set scrollTop(valuePx: number) {
+        this.scrollTopWriteCount += 1;
+        storedScrollTopPx = Math.max(0, Math.min(valuePx, this.scrollHeight - this.clientHeight));
+      },
+    };
+  }
+
+  /** Mount the composer around `textarea` and lay it out once; returns the textarea's input, key and redraw
+   *  hooks. */
+  function mountComposer(textarea: ReturnType<typeof makeOverflowingDraftTextarea>) {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    const textareaVnode = findByTag(tree, "textarea");
+    const onupdate = textareaVnode?.attrs?.onupdate as (vnode: unknown) => void;
+    const oninput = textareaVnode?.attrs?.oninput as (event: unknown) => void;
+    const onkeydown = textareaVnode?.attrs?.onkeydown as (event: unknown) => void;
+    (findByClass(tree, "message-input-row")?.attrs?.oncreate as (vnode: unknown) => void)({
+      dom: fakeComposerRow(new Set()),
+    });
+    onupdate({ dom: textarea });
+    return {
+      redraw: () => onupdate({ dom: textarea }),
+      type: () => oninput({ target: textarea }),
+      press: (key: string) => onkeydown({ key, preventDefault: () => undefined }),
+    };
+  }
+
+  it("leaves an overflowing draft where its reader scrolled it when the composer redraws", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    expect(textarea.clientHeight).toBe(MAX_TEXTAREA_HEIGHT_PX);
+    textarea.scrollTop = 40;
+    const writeCountBeforeRedraw = textarea.scrollTopWriteCount;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(40);
+    expect(textarea.scrollTopWriteCount).toBe(writeCountBeforeRedraw);
+  });
+
+  it("keeps an overflowing draft's scroll position across a redraw where collapsing it to measure loses it", () => {
+    const textarea = makeOverflowingDraftTextarea({ isScrollLostOnCollapse: true });
+    const composer = mountComposer(textarea);
+    textarea.scrollTop = 40;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("keeps a draft typed at its end scrolled down through the redraw after the browser reveals the caret", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    composer.type();
+    // After the input event the browser scrolls the caret into view, short of the padding under it.
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+    composer.redraw();
+
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    textarea.scrollTop = 40;
+    composer.redraw();
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("scrolls an overflowing draft all the way down while typing at its end", () => {
+    const textarea = makeOverflowingDraftTextarea();
+    const composer = mountComposer(textarea);
+    // The browser has revealed the caret line, but not the padding under it.
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+    composer.type();
+
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    const writeCountAtBottom = textarea.scrollTopWriteCount;
+    composer.type();
+    expect(textarea.scrollTopWriteCount).toBe(writeCountAtBottom);
+  });
+
+  it("keeps an overflowing draft's position while typing in its middle", () => {
+    const textarea = makeOverflowingDraftTextarea({ caretPosition: 5 });
+    const composer = mountComposer(textarea);
+    textarea.scrollTop = 40;
+
+    composer.type();
+
+    expect(textarea.scrollTop).toBe(40);
+  });
+
+  it("scrolls an overflowing draft all the way down after picking a mention at its end", () => {
+    mocks.isRoom = true;
+    setMentionsForTesting([{ handle: "alice", display_name: "Alice", kind: "invited", key: "alice", chat_id: null }]);
+    try {
+      const textarea = makeOverflowingDraftTextarea({ draftSuffix: "@al" });
+      const composer = mountComposer(textarea);
+      composer.type();
+      textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
+
+      composer.press("Enter");
+
+      expect(textarea.value.endsWith("@alice ")).toBe(true);
+      expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
+    } finally {
+      mocks.isRoom = false;
+      setMentionsForTesting([]);
+    }
   });
 });
 
@@ -850,7 +1060,7 @@ describe("MessageInput first send of a seeded chat", () => {
     await typeAndSend(MessageInput(), "agent-1", "Let's build something");
 
     expect(mocks.launchChat).toHaveBeenCalledTimes(1);
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "Let's build something");
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "Let's build something", "agent");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     expect(mocks.openProviderChooser).not.toHaveBeenCalled();
   });
@@ -867,7 +1077,22 @@ describe("MessageInput first send of a seeded chat", () => {
     intent.onSignedIn("acct-2");
     await sending;
 
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-2", "Let's build something");
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-2", "Let's build something", "agent");
+  });
+
+  it("launches the chat as a room, on no account, when the chooser's room row is picked instead", async () => {
+    mocks.accountsLoaded = false;
+    mocks.selectedAccount = null;
+
+    const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
+    await flushAsync();
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onRoomChosen: () => void };
+    intent.onRoomChosen();
+    await sending;
+
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "", "Let's build something", "room");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("puts the message back when the chooser is dismissed, launching nothing", async () => {
@@ -937,9 +1162,16 @@ describe("MessageInput first send of a chat with no seed", () => {
   it("launches the chat with nothing, then sends the message, which the chat holds where Stop can reach it", async () => {
     await typeAndSend(MessageInput(), "agent-1", "Plan my week");
 
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", undefined);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+
+  it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("withdrawn");
+    await typeAndSend(MessageInput(), "agent-1", "Taken back");
+
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain("Taken back");
   });
 });
 
@@ -1045,15 +1277,57 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("names the failed upload even over a send failure that landed during the upload wait", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.pdf", status: "error", error: "boom" },
+    ]);
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "not_ready" });
+    component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const after = await typeAndSend(component, "agent-1", "here you go");
+    mocks.getComposerAttachments.mockReturnValue([]);
+    expect(renderedText(after)).toContain("notes.pdf");
+    expect(renderedText(after)).not.toContain("isn't ready for messages yet");
+  });
+
   it("withholds Retry when the agent is unreachable, since it cannot help", async () => {
-    // A pane that is gone will not be there on the next attempt. Force restarts the agent, which
-    // is the only thing that can deliver the message, so it stays.
-    mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "pane is gone" });
+    // The chat app already tried the start once more, and Restart is the stronger way to bring it up.
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "start timed out" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
     expect(text).not.toContain("Retry");
-    expect(text).toContain("restarting it is the only way");
+    expect(text).toContain("Restart it to send your message");
+    expect(text).not.toContain("start timed out");
+  });
+
+  it("doesn't mention restarting on a notice that has no Restart button", async () => {
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "agent_unreachable" });
+    const text = renderedText(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("The agent isn't running and didn't start.");
+    expect(text).not.toContain("Restart");
+  });
+
+  it("says what a send failure means in its own words, not mngr's", async () => {
+    for (const [kind, sentence] of [
+      ["input_blocked", "waiting on something in its terminal"],
+      ["not_ready", "isn't ready for messages yet"],
+      ["state_unknown", "Couldn't reach the agent just now"],
+      ["agent_not_found", "Couldn't find the agent"],
+      ["not_submitted", "didn't take your message"],
+    ]) {
+      mocks.sendMessage.mockRejectedValueOnce({ kind, toString: () => "mngr does not recognise this" });
+      const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+      const text = renderedText(after);
+      expect(text).toContain(sentence);
+      expect(text).not.toContain("mngr");
+    }
+  });
+
+  it("keeps the reason for a failure nothing classified, the only account of what went wrong", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "unknown", toString: () => "the host hung up" });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).toContain("the host hung up");
   });
 
   it("keeps Retry for a blocked input, which a person can clear", async () => {
@@ -1061,7 +1335,209 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Retry");
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
+  });
+
+  it("shows no notice for a message the chat app delivered by sending it again", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("resent");
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).not.toContain("Couldn't confirm your message arrived");
+    expect(renderedText(after)).not.toContain("Couldn't send your message");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("asks the user to check the agent before sending an unconfirmed message again", async () => {
+    // The chat app has already sent it twice without confirmation, and the agent may have either
+    // copy: a plain Retry or a Restart (restart and resend) could deliver it a third time.
+    // mngr's reason is diagnostics, not copy.
+    mocks.sendMessage.mockRejectedValueOnce({
+      kind: "submission_unconfirmed",
+      toString: () => "Timeout waiting for message submission evidence: pane content: ❯ hello",
+    });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't confirm your message arrived");
+    expect(text).toContain("The agent may already have it, so check its terminal before you send it again.");
+    expect(text).not.toContain("Couldn't send your message");
+    expect(text).not.toContain("Timeout waiting");
+    expect(text).toContain("Cancel");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Retry")).toBeUndefined();
+    expect(findButton(after, "Restart")).toBeUndefined();
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+  });
+
+  it("sends an unconfirmed message again only when the user asks", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    await flushAsync();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+
+    (findButton(after, "Send again")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
+    const settled = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
+  });
+
+  it("says what a sibling's send failure means in its own words too", () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "mngr does not recognise this",
+      kind: "not_ready",
+      retry: vi.fn(async () => undefined),
+    });
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("isn't ready for messages yet");
+    expect(text).not.toContain("mngr");
+  });
+
+  it("shows the new failure when a sibling's Retry fails differently", async () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "first reason",
+      kind: "not_ready",
+      retry: vi.fn(async () => Promise.reject({ kind: "unknown", toString: () => "the host hung up" })),
+    });
+    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findButton(shown, "Retry")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("the host hung up");
+    expect(text).not.toContain("isn't ready for messages yet");
+  });
+
+  it("words a sibling's unconfirmed send the same way", () => {
+    const retry = vi.fn(async () => undefined);
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "unconfirmed",
+      kind: "submission_unconfirmed",
+      retry,
+    });
+    const tree = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const text = renderedText(tree);
+    expect(text).toContain("Couldn't confirm your message arrived");
+    expect(text).toContain("check its terminal before you send it again");
+    expect(findButton(tree, "Retry")).toBeUndefined();
+
+    (findButton(tree, "Send again")!.attrs!.onclick as () => void)();
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes an unconfirmed message out of the composer and closes its notice once its turn lands", async () => {
+    mocks.hasUserTurnLandedSince.mockClear();
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    expect(renderedText(after)).toContain("Couldn't confirm your message arrived");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    // Looked for among the turns that were not there before the send, by the text that was sent.
+    expect(mocks.hasUserTurnLandedSince).toHaveBeenLastCalledWith(
+      "agent-1",
+      "hello",
+      new Set(["turn-before-the-send"]),
+    );
+    expect(renderedText(landed)).not.toContain("Couldn't confirm your message arrived");
+    expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+  });
+
+  it("treats a send the chat app never answered as unconfirmed, and takes it out of the composer once its turn lands", async () => {
+    // The chat app may have delivered it before its answer was lost: Force's restart could lose it,
+    // and its repeat under the same id would be answered without sending it again.
+    mocks.sendMessage.mockRejectedValueOnce({ code: 0, response: null, toString: () => "no answer" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    expect(renderedText(after)).toContain("Couldn't confirm your message arrived");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Force")).toBeUndefined();
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(landed)).not.toContain("Couldn't confirm your message arrived");
+    expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    (findByClass(after, "notice-dismiss")!.attrs!.onclick as () => void)();
+    const dismissed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(dismissed, "textarea")?.attrs?.value).toBe("hello");
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("takes an unconfirmed message out of its chat's composer when its turn lands while another chat is shown", async () => {
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    mocks.sendMessage.mockImplementationOnce(async () => {
+      // The user moves to another chat while the send is out.
+      render("agent-2");
+      throw { kind: "submission_unconfirmed", toString: () => "unconfirmed" };
+    });
+    const oninput = findByTag(render("agent-1"), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "hello", style: {}, scrollHeight: 10 } });
+    await (findByAttr(render("agent-1"), "aria-label", "Send message")!.attrs!.onclick as () => Promise<void>)();
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    render("agent-2");
+    expect(findByTag(render("agent-1"), "textarea")?.attrs?.value).toBe("");
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+  });
+
+  it("still takes an unconfirmed message out of its chat's composer after another chat's send was unconfirmed too", async () => {
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    await typeAndSend(component, "agent-2", "goodbye");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+    expect(localStorage.getItem("message-text:agent-2")).toContain("goodbye");
+
+    mocks.hasUserTurnLandedSince.mockImplementation((chatId: string) => chatId === "agent-1");
+    try {
+      render("agent-2");
+    } finally {
+      mocks.hasUserTurnLandedSince.mockImplementation(() => false);
+    }
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+    expect(localStorage.getItem("message-text:agent-2")).toContain("goodbye");
+  });
+
+  it("shows no notice for an unconfirmed message whose turn landed before the failure came back", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).not.toContain("Couldn't confirm your message arrived");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("leaves any other failed send's copy in the composer, whatever reaches the transcript", async () => {
+    // Only an unconfirmed send is watched for its turn.
+    mocks.hasUserTurnLandedSince.mockClear();
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "hello");
+    const later = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(mocks.hasUserTurnLandedSince).not.toHaveBeenCalled();
+    expect(renderedText(later)).toContain("Couldn't send your message");
+    expect(findByTag(later, "textarea")?.attrs?.value).toBe("hello");
   });
 
   it.each([
@@ -1081,7 +1557,7 @@ describe("MessageInput send failure notice", () => {
       expect(text).toContain(detail);
       expect(text).not.toContain("Couldn't send your message");
       expect(text).not.toContain("Retry");
-      expect(text).not.toContain("Force");
+      expect(text).not.toContain("Restart");
       expect(text).not.toContain("terminal");
       expect(findByTag(after, "textarea")?.attrs?.value).toBe("/compact");
       expect(error).not.toHaveBeenCalled();
@@ -1112,8 +1588,8 @@ describe("MessageInput send failure notice", () => {
     expect(getOutgoingMessages("agent-delivered").map((outgoing) => outgoing.content)).toEqual(["/compact"]);
   });
 
-  it("removes the delivered message even when Force drained a queue block above it", async () => {
-    // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
+  it("removes the delivered message even when Restart drained a queue block above it", async () => {
+    // Restart prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
     // still in the box.
     mocks.sendMessage.mockRejectedValueOnce("nope");
@@ -1121,8 +1597,8 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(component, "agent-1", "my message");
     mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
 
     const composer = localStorage.getItem("message-text:agent-1") ?? "";
@@ -1148,13 +1624,13 @@ describe("MessageInput send failure notice", () => {
     expect(text).not.toContain("Retry");
   });
 
-  it("offers Cancel, Retry and Force for a failed send", async () => {
+  it("offers Cancel, Retry and Restart for a failed send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Cancel");
     expect(text).toContain("Retry");
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
   });
 
   it("puts the message back in the composer immediately, not only on Cancel", async () => {
@@ -1188,33 +1664,33 @@ describe("MessageInput send failure notice", () => {
     const retry = findButton(after, "Retry");
     (retry!.attrs!.onclick as () => void)();
     await flushAsync();
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("force restarts the agent before sending, in that order", async () => {
+  it("Restart restarts the agent before sending, in that order", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockClear();
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("does not send when the restart itself fails", async () => {
-    mocks.sendMessage.mockRejectedValueOnce("nope");
+  it("does not send when the restart itself fails, and shows the restart's error", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
@@ -1532,6 +2008,45 @@ describe("MessageInput switching harness", () => {
   });
 });
 
+describe("setComposerHint", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  it("shows the hint as the placeholder until a send, and an empty hint is nothing", async () => {
+    const component = MessageInput();
+    setComposerHint("agent-1", "How do you want to change Docs?");
+    expect(localStorage.getItem("composer-hint:agent-1")).toBe("How do you want to change Docs?");
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("How do you want to change Docs?");
+    // Another chat's composer keeps its own words.
+    const other = findByTag(component.view!({ attrs: { chatId: "agent-2" } } as never), "textarea");
+    expect(other?.attrs?.placeholder).toBe("Type a message...");
+    setComposerHint("agent-3", "");
+    expect(localStorage.getItem("composer-hint:agent-3")).toBeNull();
+    const unhinted = findByTag(component.view!({ attrs: { chatId: "agent-3" } } as never), "textarea");
+    expect(unhinted?.attrs?.placeholder).toBe("Type a message...");
+
+    // The send answers the hint's question: the placeholder goes back to the composer's own words, here and
+    // for a composer that mounts later.
+    const sent = await typeAndSend(component, "agent-1", "Make it blue");
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(findByTag(sent, "textarea")?.attrs?.placeholder).toBe("Type a message...");
+    expect(localStorage.getItem("composer-hint:agent-1")).toBeNull();
+  });
+
+  it("is taken up by a composer that mounts after the chat root persisted it", () => {
+    // The root's document sets the hint before the chat's page has loaded; the page's composer, a document of its
+    // own, finds it persisted when it first views the chat.
+    localStorage.setItem("composer-hint:agent-4", "How do you want to change Notes?");
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-4" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("How do you want to change Notes?");
+  });
+});
+
 describe("prependToComposer with an element reference", () => {
   const REFERENCE_ID = "REF-aaaaaaaaaaa";
   // The fields the chat reads off a reference; the rest of a real one locates nothing here.
@@ -1577,6 +2092,12 @@ describe("prependToComposer with an element reference", () => {
     prependToComposer("agent-1", BLOCK);
     expect(localStorage.getItem("message-text:agent-1")).toBe("my draft");
     expect(stagedFile().file.name).toBe(`${REFERENCE_ID}.json`);
+  });
+
+  it("prepends a block once and not again while it still leads the draft (the app-chat button pressed twice)", () => {
+    prependToComposer("agent-1", "Change something about the Docs app: ");
+    prependToComposer("agent-1", "Change something about the Docs app: ");
+    expect(localStorage.getItem("message-text:agent-1")).toBe("Change something about the Docs app: ");
   });
 });
 
@@ -1641,7 +2162,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     // The agent is up before anything is typed; the first send then carries the seeded conversation.
     expect(mocks.launchChat).toHaveBeenCalledTimes(2);
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "acct-9", undefined);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "acct-9", "", "agent");
   });
 
   it("launches nothing on sign-in once the chat is no longer awaiting its first send or is already listed", () => {
@@ -1667,6 +2188,18 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     mocks.isChatRegistered = true;
     intent.onSignedIn("acct-9");
     expect(mocks.launchChat).not.toHaveBeenCalled();
+  });
+
+  it("launches the chat as a room, with nothing said yet, when the notice's chooser picks the room row", async () => {
+    mocks.launchAwaitingChatAsRoom.mockClear();
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+    (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onRoomChosen: () => void };
+    intent.onRoomChosen();
+    await flushAsync();
+
+    expect(mocks.launchAwaitingChatAsRoom).toHaveBeenCalledExactlyOnceWith("agent-first-7731");
   });
 
   it("keeps the phone's leading settings button beside the notice", () => {
@@ -1800,7 +2333,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
-  it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
+  it("offers choosing a provider instead of Retry and Restart when a send is refused for a signed-out account", async () => {
     mocks.signedOutAccountIds.clear();
     mocks.sendMessage.mockRejectedValueOnce({
       response: { kind: "account_signed_out" },
@@ -1814,7 +2347,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("You signed out of the account this chat runs on.");
     expect(text).not.toContain("Retry");
-    expect(text).not.toContain("Force");
+    expect(text).not.toContain("Restart");
     expect(text).not.toContain("open the agent's terminal");
     (findButton(after, "Choose a provider")!.attrs!.onclick as () => void)();
     const dismissed = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);

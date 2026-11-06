@@ -1,11 +1,25 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/session_start_sync.sh\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_block_pipe_tail_head.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_block_foreground_sleep.sh\""
           },
           {
             "type": "command",

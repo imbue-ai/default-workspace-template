@@ -21,7 +21,7 @@ The shell supplies these animations; do not embed custom CSS (the one `<style>` 
 Once approved, register the file from the workspace root:
 
 ```bash
-uv run python -m imbue.system_interface.avatar.register_avatar \
+uv run --no-sync python -m imbue.system_interface.avatar.register_avatar \
   --source data/avatar-designs/my-design.svg --id my-design --label "My design"
 ```
 

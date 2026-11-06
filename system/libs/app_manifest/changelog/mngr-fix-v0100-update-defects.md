@@ -1,0 +1,1 @@
+- `register_app` writes the app's registry row through the `app_registration` library in-process instead of running `system/scripts/forward_port.py`. `app-manifest` now depends on `app-registration`, so a user package's lock goes stale with this update and the update relocks it (`user-package-migration relock`).

@@ -40,6 +40,10 @@ declare module "@minds/embed-contract" {
   export const OPEN_LINK: "minds:open-link";
   export const OPEN_EXTERNAL: "minds:open-external";
   export const MAX_OPEN_LINK_URL_LENGTH: number;
+  // The immersive-mode pair (contract v12, the Screen integration spec). Probed like the ones above.
+  export const IMMERSIVE_REQUEST: "minds:immersive-request";
+  export const IMMERSIVE_CHANGED: "minds:immersive-changed";
+  export const MAX_IMMERSIVE_ERROR_LENGTH: number;
   // The chrome ring a workspace's tour asks for (contract v9). Probed like the ones above.
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.

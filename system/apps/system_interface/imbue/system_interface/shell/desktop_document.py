@@ -26,6 +26,7 @@ from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPage
@@ -72,6 +73,15 @@ SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
 MAXIMIZED_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=1.0, height=1.0)
 
+
+class Viewport(FrozenModel):
+    """The whole viewport, the backdrop plus the taskbar's band below it: what a FULLSCREEN window renders at (the
+    Screen spec, section 12). No frame in fractions of the backdrop reaches past the backdrop, so the viewport is its
+    own value rather than a frame."""
+
+
+VIEWPORT: Final[Viewport] = Viewport()
+
 # How wide a window opened beside another is, and the width its anchor has to be under for the two to
 # fit side by side at all.
 PAIRED_WIDTH: Final[float] = 0.5
@@ -113,6 +123,9 @@ class FitMetrics(FrozenModel):
     window_min_height: float = Field(description="Pixels a window is never rendered shorter than")
     title_min_visible: float = Field(description="Pixels of the title bar that stay inside horizontally")
     title_bar_height: float = Field(description="Pixels; the whole title bar stays inside vertically")
+    taskbar_height: float = Field(
+        description="Pixels of the taskbar's band below the backdrop, which the viewport adds"
+    )
 
 
 class GridMetrics(FrozenModel):
@@ -163,8 +176,9 @@ def cascade_frame(placed_count: int) -> Frame:
 
 
 @pure
-def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
-    """The frame a window renders at: its own when normal, the fixed half or whole otherwise."""
+def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame | Viewport:
+    """The frame a window renders at: its own when normal, the fixed half or whole of the backdrop when snapped or
+    maximized, and the whole viewport when fullscreen."""
     match state:
         case WindowState.NORMAL:
             return placement_frame
@@ -174,8 +188,19 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
             return SNAPPED_RIGHT_FRAME
         case WindowState.MAXIMIZED:
             return MAXIMIZED_FRAME
+        case WindowState.FULLSCREEN:
+            return VIEWPORT
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def backdrop_frame_of(state_frame: Frame | Viewport) -> Frame:
+    """The part of the backdrop a rendered frame covers: a fullscreen window covers all of it (and the taskbar too,
+    which the backdrop's fractions cannot say); what a rule over backdrop frames, such as pairing, reads a window as."""
+    if isinstance(state_frame, Viewport):
+        return MAXIMIZED_FRAME
+    return state_frame
 
 
 @pure
@@ -230,6 +255,20 @@ def fit_frame_to_backdrop(frame: Frame, backdrop: BackdropSize, metrics: FitMetr
     # Vertically the whole title bar stays inside, and the top edge is never above the backdrop's.
     y = max(min(scaled_y, backdrop.height - metrics.title_bar_height), 0.0)
     return PixelRect(x=x, y=y, width=width, height=height)
+
+
+@pure
+def viewport_rect(backdrop: BackdropSize, taskbar_height: float) -> PixelRect:
+    """The viewport in backdrop pixels: the backdrop from its top-left corner, plus the taskbar's band below it."""
+    return PixelRect(x=0.0, y=0.0, width=backdrop.width, height=backdrop.height + taskbar_height)
+
+
+@pure
+def fit_state_frame(state_frame: Frame | Viewport, backdrop: BackdropSize, metrics: FitMetrics) -> PixelRect:
+    """The rectangle a rendered frame takes: the fit rule for a frame, the viewport as it is for the viewport."""
+    if isinstance(state_frame, Viewport):
+        return viewport_rect(backdrop, metrics.taskbar_height)
+    return fit_frame_to_backdrop(state_frame, backdrop, metrics)
 
 
 @pure
@@ -610,6 +649,8 @@ def desktop_seeded_from(
     # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
+    # Whose desktop it is: the visitor it is seeded for (the multiplayer spec, section 8.1).
+    owner: ParticipantKey | None,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
     plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
@@ -624,6 +665,7 @@ def desktop_seeded_from(
         glyph=glyph,
         wallpaper=source.wallpaper,
         shortcuts=source.shortcuts,
+        owner=owner,
         windows=tuple(
             Window(
                 id=window_id,
@@ -653,17 +695,23 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text(launch_path: RegistryLaunchPath) -> bool:
-    return launch_path.text_param is not None or launch_path.draft_param is not None
+def _takes_text_mention_or_app(launch_path: RegistryLaunchPath) -> bool:
+    """Whether the launch path needs something filled in: typed or drafted text, a mention of a person, or an app."""
+    return (
+        launch_path.text_param is not None
+        or launch_path.draft_param is not None
+        or launch_path.mention_param is not None
+        or launch_path.app_params is not None
+    )
 
 
 @pure
 def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
-    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
-    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app."""
+    first launch path that takes no typed or drafted text, no mention, and no app, or its first launch path when
+    every one takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none,
+    and neither does an internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
@@ -672,7 +720,7 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    first = next((path for path in offered if not _takes_text_mention_or_app(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
@@ -985,6 +1033,19 @@ def with_window_state(layout: DesktopLayout, window_id: WindowId, state: WindowS
             to_update(current.field_ref().state, state),
         ),
     )
+
+
+@pure
+def with_windows_side_by_side(layout: DesktopLayout, shown_id: WindowId, beside_id: WindowId) -> DesktopLayout:
+    """The two windows snapped to the backdrop's halves, the shown one on top (the multiplayer spec, section 9.2):
+    the shown window takes the half its frame's centre is already on (the right when it is minimized or has never
+    been placed), and the window it is laid out beside takes the other."""
+    is_placed = any(placement.window_id == shown_id for placement in layout.placements)
+    shown = placement_of(layout, shown_id)
+    is_shown_right = not is_placed or shown.is_minimized or shown.frame.x + shown.frame.width / 2 >= 0.5
+    shown_state = WindowState.SNAPPED_RIGHT if is_shown_right else WindowState.SNAPPED_LEFT
+    beside_state = WindowState.SNAPPED_LEFT if is_shown_right else WindowState.SNAPPED_RIGHT
+    return with_window_state(with_window_state(layout, beside_id, beside_state), shown_id, shown_state)
 
 
 @pure

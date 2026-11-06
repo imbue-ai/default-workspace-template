@@ -45,6 +45,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # scripts), and where a rollback launched from here writes what it printed.
 LAST_GOOD_RECORD_REL: Final[str] = "data/.state/update-apply/last-good.json"
 ROLLBACK_LOG_REL: Final[str] = "data/.state/update-apply/rollback-last.log"
+# own-process: outlives-caller -- a rollback restarts the shell that launches it
+# own-process: other-tree -- confirm-last must be the checkout's current update-self, and the shell restarts only when an apply touches it
 UPDATE_SELF_SCRIPT_REL: Final[str] = ".agents/skills/update-self/scripts/update_self.py"
 
 # A confirm deletes the kept copies, which can be a whole tool environment; generous, but bounded

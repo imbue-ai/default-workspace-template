@@ -37,7 +37,7 @@ Run from the workspace root (`/home/user/workspace`) -- the launcher resolves th
 workspace's mngr config and account defaults from there:
 
 ```bash
-uv run python .agents/skills/launch-custom-agent/scripts/launch_custom_agent.py \
+uv run --no-sync .agents/skills/launch-custom-agent/python/launch_custom_agent_skill/launch_custom_agent.py \
     --name <short-kebab-slug> \
     --path /home/user/projects/their-repo \
     --mode worktree \

@@ -37,8 +37,12 @@ Built-in apps:
   at the workspace folder. Its `files-app` entry point runs a small server that
   serves the files, and the files shared from the user's computers, with a
   frontend from that same npm workspace.
-- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
-  UI by its daemon (`browser-service`).
+- `screen/` - The Screen: the workspace's one streamed Linux desktop (Xorg, XFCE,
+  PulseAudio and neko) as a window, with the control lease the human and the
+  agents share, the `screen` command, and the browser (one Fortress Chromium on
+  the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
+  drive it through, `agentic-browser-fleet`). Served on port 8090 by the
+  `screen-service` package.
 - `routines/` - Routines: everything that runs on a schedule (the routines
   library, `system/libs/routines/`), each with its health, next run and history,
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
@@ -78,7 +82,7 @@ it uses; `[scope] exclude` lists gitignore-style globs that no review or test
 pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
 `**/node_modules/**`, `**/dist/**`, `**/.venv/**`); `[wiring] programs` names
 the supervisord programs the app owns beyond its own block and its
-`<name>-<role>` sidecars (the browser declares `xvfb`). A reference may not point
+`<name>-<role>` sidecars (the Screen declares the four programs of its stack and its watcher). A reference may not point
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together
@@ -88,19 +92,22 @@ scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration
 ignores both tables, so a stale reference can never stop the app.
 
-Every Python app with a manifest runs from its own uv tool environment,
-installed from its own `pyproject.toml` (`uv tool install -e
-system/apps/<package>`, done by `system/scripts/build_workspace.sh` at image
-build, by the build-app scaffold for a new app, and by the update-self apply
-when an app's directory changes), so its program line runs the tool's entry
-point rather than `uv run`. The root venv is for the background services,
-agents, skills, and scripts. The manifest is the discriminator: an app with
-no `app.toml` runs `uv run <name>` from the root venv, and both forms are
-supported (nothing converts an app from one form to the other without the
-user). Python packages here are picked up by the workspace's `system/apps/*`
-uv member glob, so one lockfile covers the whole tree and nothing in the root
-`pyproject.toml` needs editing for a new app; an app's own tool environment is
-what keeps it running while the root venv is rewritten.
+The built-in apps run from the workspace venv: each is named in the root
+`pyproject.toml`'s `[tool.uv.workspace] members` and is also a root dependency
+(so a sync without `--all-packages` keeps its entry point), shares the one
+`uv.lock`, and has its program line exec its entry point from `.venv/bin`.
+`uv sync --all-packages` (run by `system/scripts/build_workspace.sh`, and by the
+update-self apply when a built-in app's `pyproject.toml` or `uv.lock` changes)
+installs each here editable. Adding or removing a built-in app means editing
+both root entries.
+
+Every app the user's agents build here is instead a standalone uv project, not
+a root member: its own `pyproject.toml`, `uv.lock` and `.venv` (a link beside
+the uv cache), shared code through editable path sources, and a program line
+that syncs its own project with `--locked` before it execs from its own
+`.venv/bin`. A dependency it adds changes only its own lock, so it can never move
+the chat's or another app's versions. The build-app scaffold sets this up, and
+`.agents/shared/references/running-python.md` has the rules.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

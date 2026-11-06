@@ -31,6 +31,7 @@ function styleOf(tokens: Record<string, string>): { getPropertyValue: (name: str
 
 const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-title-bar-height": "36px",
+  "--desk-window-radius": "12px",
   "--desk-taskbar-height": "48px",
   "--desk-cell-width": "96px",
   "--desk-cell-height": "112px",
@@ -45,6 +46,9 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-floating-entry-size": "56px",
   "--desk-floating-entry-inset-x": "16px",
   "--desk-floating-entry-inset-y": "12px",
+  "--desk-overview-gap": "28px",
+  "--desk-overview-tile-title": "28px",
+  "--desk-overview-thumbnail-width": "200px",
 };
 
 describe("the theme file", () => {

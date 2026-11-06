@@ -13,9 +13,11 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
+  parseDesktops,
   parseInventory,
   parseLayout,
   parseMessageRelay,
+  parseOwnerLayout,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
@@ -32,7 +34,9 @@ import type {
   Inventory,
   Layout,
   MessageRelay,
+  OwnerLayout,
   Placement,
+  Viewport,
   Wallpaper,
   WallpaperListing,
   WindowRecord,
@@ -54,17 +58,23 @@ function desktopUrl(desktopId: string, suffix: string = ""): string {
   return apiUrl(`/api/desktops/${encodeURIComponent(desktopId)}${suffix}`);
 }
 
-export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name, color, glyph }));
+/** Create a desktop named ``name``, owned by this client's participant (the multiplayer spec, section 8.1); the
+ *  shell picks its colour and glyph, which nothing draws any more. */
+export async function createDesktop(name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name }));
 }
 
-export async function updateDesktopSettings(
-  desktopId: string,
-  name: string,
-  color: string,
-  glyph: number,
-): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph }));
+export async function renameDesktop(desktopId: string, name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name }));
+}
+
+/** Put this client's participant's own desktops in ``desktopIds``' order (every one of theirs, once each); the
+ *  others keep their places. Answers every desktop in the new order. */
+export async function reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]> {
+  const data = (await postJson<unknown>(apiUrl("/api/desktops/order"), { desktop_ids: desktopIds })) as {
+    desktops?: unknown;
+  };
+  return parseDesktops(data.desktops);
 }
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
@@ -89,6 +99,79 @@ export async function setAppTheming(app: string, isOn: boolean): Promise<void> {
 /** The workspace's default theme; null wears the standard one. */
 export async function setDefaultTheme(theme: string | null): Promise<void> {
   await postJson<unknown>(apiUrl("/api/themes/default"), { theme });
+}
+
+/** One action of the keybindings catalog, resolved for this requester. */
+export interface KeybindingActionView {
+  id: string;
+  label: string;
+  default_chords: string[];
+  chords: string[];
+  source: "default" | "account" | "unsent" | "workspace";
+}
+
+export interface KeybindingAppView {
+  app: string;
+  display_name: string;
+  actions: KeybindingActionView[];
+}
+
+export interface UnsentKeybindingView {
+  app: string;
+  action: string;
+  chords: string[];
+}
+
+/** Everything the Keyboard settings renders (user-profile-state spec, section 10.3). */
+export interface KeybindingsCatalog {
+  apps: KeybindingAppView[];
+  is_owner: boolean;
+  can_save_everywhere: boolean;
+  has_pending_permission: boolean;
+  unsent: UnsentKeybindingView[];
+}
+
+export interface KeybindingsDeliveryOutcome {
+  status: string;
+  detail: string;
+}
+
+export interface SavedKeybinding {
+  chords: string[];
+  delivery: KeybindingsDeliveryOutcome | null;
+}
+
+export async function fetchKeybindingsCatalog(): Promise<KeybindingsCatalog> {
+  return (await getJson(apiUrl("/api/keybindings/catalog"))) as KeybindingsCatalog;
+}
+
+/** Save one assignment: the requester's override here, or (the owner's "account" scope) everywhere. */
+export async function saveKeybinding(
+  app: string,
+  action: string,
+  chords: string[],
+  scope: "workspace" | "account",
+): Promise<SavedKeybinding> {
+  return (await postJson<unknown>(apiUrl("/api/keybindings"), { app, action, chords, scope })) as SavedKeybinding;
+}
+
+/** Drop one undelivered "everywhere" save (and its optimistic copy here). */
+export async function discardKeybinding(app: string, action: string): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/keybindings/discard"), { app, action });
+}
+
+/** Drop the requester's workspace override of one action, so the account value (or default) answers again. */
+export async function resetKeybinding(app: string, action: string): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/keybindings/reset"), { app, action });
+}
+
+/** Retry the undelivered "everywhere" saves, with the permission verdicts the page observed. */
+export async function deliverKeybindings(
+  resolutions: { request_id: string; resolution: "granted" | "denied" }[],
+): Promise<KeybindingsDeliveryOutcome> {
+  return (await postJson<unknown>(apiUrl("/api/keybindings/deliver"), {
+    resolutions,
+  })) as KeybindingsDeliveryOutcome;
 }
 
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */
@@ -183,6 +266,13 @@ export type LaunchTarget =
       readonly windowId: string;
       /** False for a text that is not about the window's page: the app is not told which page it shows. */
       readonly sendsWindowPath?: boolean;
+    }
+  | {
+      /** Wherever the ``show`` op's rule puts the page: a window already there raised, else the app's pinned window
+       *  navigated, else a new window; laid out beside ``besideWindowId`` when one is named (the multiplayer spec,
+       *  section 9.2). */
+      readonly kind: "show";
+      readonly besideWindowId?: string;
     };
 
 export interface LaunchRequest {
@@ -211,6 +301,9 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
   if (request.target.kind === "window") {
     target.window_id = request.target.windowId;
     if (request.target.sendsWindowPath === false) target.sends_window_path = false;
+  }
+  if (request.target.kind === "show" && request.target.besideWindowId !== undefined) {
+    target.beside = request.target.besideWindowId;
   }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,
@@ -248,6 +341,12 @@ export async function reportWindowLocation(
 export async function fetchPlacements(desktopId: string, clientId: string): Promise<Layout> {
   const query = `client=${encodeURIComponent(clientId)}`;
   return parseLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?${query}`)));
+}
+
+/** The desktop as its owner last arranged it (the multiplayer spec, section 8.3): what a window viewing a desktop
+ *  that is not the viewer's own shows in place of its own layout, with the backdrop size it was arranged at. */
+export async function fetchOwnerPlacements(desktopId: string): Promise<OwnerLayout> {
+  return parseOwnerLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?of=owner`)));
 }
 
 export interface PlacementsSaveRequest {
@@ -291,6 +390,17 @@ export async function fetchInventory(): Promise<Inventory> {
 export async function recordShown(clientId: string, windowId: string | null): Promise<ClientRecord> {
   return parseClientRecord(
     await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/shown`), { window_id: windowId }),
+  );
+}
+
+/** Tell the shell the backdrop size this client's desktop layout draws its frames in, so a window viewing one of
+ *  its desktops can draw the layout at that size; answers the client record. */
+export async function reportViewport(clientId: string, viewport: Viewport): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/viewport`), {
+      width: viewport.width,
+      height: viewport.height,
+    }),
   );
 }
 

@@ -7,13 +7,13 @@ GitHub repo and points `origin` at it.
 
 Once enabled, three pieces work together:
 
-1. **The service** (`uv run github-sync run`, supervised as
+1. **The service** (`github-sync run`, supervised as
    `[program:github-sync]`): a wiring + visibility watchdog. Every 60 seconds
    it re-applies the git wiring (self-healing a gateway URL whose
    reverse-tunneled port changed across restarts) and periodically re-verifies
    the sync repo is still **private**, mirroring the answer to a status file
    the post-commit hook consults.
-2. **The git wiring** (`uv run github-sync wire-git`): global git config that
+2. **The git wiring** (`uv run --no-sync github-sync wire-git`): global git config that
    rewrites `https://github.com/...` remotes to the latchkey gateway's git
    proxy and attaches the gateway auth headers, so a plain `git push` works
    for every checkout in the container (main repo and worker worktrees). The
@@ -60,9 +60,9 @@ back via a restic backup restore, not via GitHub.
 ## CLI
 
 ```
-uv run github-sync run               # the watchdog loop (used by supervisord)
-uv run github-sync wire-git          # install the gateway git wiring
-uv run github-sync unwire-git        # remove the wiring (disable path)
-uv run github-sync check-visibility  # print visibility; nonzero unless private
-uv run github-sync status            # config + latest service status as JSON
+.venv/bin/github-sync run                      # the watchdog loop (used by supervisord)
+uv run --no-sync github-sync wire-git          # install the gateway git wiring
+uv run --no-sync github-sync unwire-git        # remove the wiring (disable path)
+uv run --no-sync github-sync check-visibility  # print visibility; nonzero unless private
+uv run --no-sync github-sync status            # config + latest service status as JSON
 ```

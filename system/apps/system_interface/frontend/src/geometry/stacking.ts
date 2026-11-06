@@ -13,3 +13,9 @@ export function windowPageZIndex(stackIndex: number): string {
 export function windowChromeZIndex(stackIndex: number): string {
   return String(2 * stackIndex + 2);
 }
+
+/** The z-index of the overview's scrim: the sticky layer, over every window, under the menus and cards. */
+export const OVERVIEW_SCRIM_Z_INDEX = "var(--z-sticky)";
+
+/** The z-index of a live page laid over an overview tile: just above the scrim. */
+export const OVERVIEW_PAGE_Z_INDEX = `calc(${OVERVIEW_SCRIM_Z_INDEX} + 1)`;

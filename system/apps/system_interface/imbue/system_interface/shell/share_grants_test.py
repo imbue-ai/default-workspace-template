@@ -1,14 +1,12 @@
-"""Tests for the per-app share grants: the parser over the gateway's grants document, and the reader over the share
-materials the minds desktop writes."""
+"""Tests for the readers over the share materials the minds desktop writes."""
 
+import json
 import os
 from pathlib import Path
 
-import pytest
-
-from imbue.system_interface.shell.errors import ShareGrantsError
+from imbue.system_interface.shell.data_types import GrantedIdentity
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
-from imbue.system_interface.shell.share_grants import parse_granted_app_names
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 
 # The document as the minds desktop renders it: every scope carries all three lists.
 _GRANTS_WITH_A_PER_APP_GRANT = """\
@@ -27,50 +25,6 @@ users = []
 emails = []
 email_domains = []
 """
-
-
-def test_parse_granted_app_names_answers_the_apps_whose_table_names_anyone() -> None:
-    assert parse_granted_app_names(_GRANTS_WITH_A_PER_APP_GRANT) == {"docs"}
-
-
-@pytest.mark.parametrize(
-    "grants_text",
-    [
-        "",
-        '[workspace]\nusers = ["3f1c"]\nemails = ["friend@example.com"]\nemail_domains = ["example.org"]\n',
-        '[services.docs]\nusers = ["  ", ""]\n',
-        '[services."my-app"]\n',
-    ],
-)
-def test_parse_granted_app_names_grants_no_app_for_a_workspace_grant_alone_or_an_empty_table(
-    grants_text: str,
-) -> None:
-    assert parse_granted_app_names(grants_text) == set()
-
-
-def test_parse_granted_app_names_reads_a_quoted_table_key_and_each_of_the_three_lists() -> None:
-    text = '[services."my-app"]\nemail_domains = ["example.org"]\n\n[services.other]\nusers = ["3f1c"]\n'
-    assert parse_granted_app_names(text) == {"my-app", "other"}
-
-
-@pytest.mark.parametrize(
-    ("grants_text", "reason"),
-    [
-        ("[services\n", "not valid TOML"),
-        ("services = 1\n", "must be a table of per-app tables"),
-        ("[services]\ndocs = 1\n", "must be a table"),
-        ('[services.docs]\nusers = "3f1c"\n', "must be a list of strings"),
-        ("[services.docs]\nemails = [1]\n", "must be a list of strings"),
-        # Every list of a table is checked, not only the first that names someone.
-        ('[services.docs]\nusers = ["3f1c"]\nemails = 1\n', "scope 'services.docs': emails must be a list"),
-        # The workspace table is checked too: a malformed one makes the gateway admit nobody.
-        ('workspace = 1\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace' must be a table"),
-        ('[workspace]\nusers = "3f1c"\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace': users must be"),
-    ],
-)
-def test_parse_granted_app_names_refuses_what_the_gateway_refuses(grants_text: str, reason: str) -> None:
-    with pytest.raises(ShareGrantsError, match=reason):
-        parse_granted_app_names(grants_text)
 
 
 def _reader_over(tmp_path: Path) -> ShareGrantsReader:
@@ -122,3 +76,64 @@ def _bump_mtime(path: Path) -> None:
     version."""
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+
+def test_the_identities_reader_answers_what_the_desktop_recorded_and_nothing_while_the_file_is_absent(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    reader = ShareIdentitiesReader(share_identities_path=tmp_path / "share_identities.json")
+
+    assert reader.read_identities() == {}
+
+    reader.share_identities_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "identities": {
+                    "3f1c": {"email": "alice@example.com", "display_name": "Alice", "profile_picture_url": "x"},
+                    "9a7b": {"email": None, "display_name": None},
+                },
+            }
+        )
+    )
+    assert reader.read_identities() == {
+        "3f1c": GrantedIdentity(email="alice@example.com", display_name="Alice"),
+        "9a7b": GrantedIdentity(email=None, display_name=None),
+    }
+    assert [record for record in loguru_records if record.startswith("WARNING")] == []
+
+
+def test_the_identities_reader_warns_once_per_version_of_a_file_it_cannot_read(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    reader = ShareIdentitiesReader(share_identities_path=tmp_path / "share_identities.json")
+    reader.share_identities_path.write_text(json.dumps({"version": 1, "identities": {"3f1c": "alice"}}))
+
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    warnings = [record for record in loguru_records if record.startswith("WARNING")]
+    assert len(warnings) == 1
+    assert "share_identities.json" in warnings[0]
+
+    # A version this shell does not know is warned about once too; a good rewrite is read.
+    reader.share_identities_path.write_text(json.dumps({"version": 2, "identities": {}}))
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 2
+    reader.share_identities_path.write_text(json.dumps({"version": 1, "identities": {}}))
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 2
+
+    # So is one that is not JSON at all, or not a JSON object.
+    reader.share_identities_path.write_text("{not json")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 3
+    reader.share_identities_path.write_text("[]")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 4

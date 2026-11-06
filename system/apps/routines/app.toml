@@ -29,5 +29,6 @@ show = "/{routine_id}"
 # A preview serves the pages on a free port over the live state, read-only: it refuses to start runs or rewrite
 # definitions, which would reach the live workspace, and the library's state is nothing of this app's to copy.
 [preview]
+command = ["routines-app"]
 env = {ROUTINES_APP_PORT = "{port:main}", ROUTINES_APP_HOST = "{host}", ROUTINES_APP_PREVIEW = "1"}
 health_path = "/api/health"

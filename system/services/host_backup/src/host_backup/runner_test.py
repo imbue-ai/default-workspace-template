@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from env_converge.capture import CaptureCommandError
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
@@ -28,7 +29,6 @@ from host_backup.events import (
 )
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
-    ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
     SLOW_BACKUP_NOTICE_INTERVAL_SECONDS,
     _age_out_restore_markers,
     _check_secrets_present,
@@ -375,29 +375,24 @@ def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
-    calls: list[list[str]] = []
+    captures: list[None] = []
 
-    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append(argv)
-        assert kwargs["timeout"] == ENV_RECORD_CAPTURE_TIMEOUT_SECONDS
-        return subprocess.CompletedProcess(
-            args=argv, returncode=0, stdout="", stderr=""
-        )
+    _refresh_environment_record(state=state, capture_fn=lambda: captures.append(None))
 
-    _refresh_environment_record(state=state, run_fn=fake_run)
-
-    assert calls == [["uv", "run", "env-converge", "capture"]]
-    events = _read_events(state.events_dir)
-    capture_events = [e for e in events if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"]
+    assert len(captures) == 1
+    capture_events = [
+        e
+        for e in _read_events(state.events_dir)
+        if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"
+    ]
     assert len(capture_events) == 1
     assert capture_events[0]["tick_id"] == "tick-under-test"
     assert capture_events[0]["success"] is True
-    assert capture_events[0]["exit_code"] == 0
-    assert capture_events[0]["stderr"] == ""
+    assert capture_events[0]["error_message"] == ""
 
 
 def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> None:
-    """A failed capture emits success=False with the stderr tail and does not raise.
+    """A failed capture emits success=False with its reason and does not raise.
 
     The record refresh must never block the backup itself: a slightly stale
     record in the snapshot beats no snapshot.
@@ -406,14 +401,10 @@ def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> No
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
 
-    def failing_run(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=argv, returncode=3, stdout="", stderr="probe exploded"
-        )
+    def failing_capture() -> None:
+        raise CaptureCommandError("npm ls -g --json --depth=0", "probe exploded")
 
-    _refresh_environment_record(state=state, run_fn=failing_run)
+    _refresh_environment_record(state=state, capture_fn=failing_capture)
 
     capture_events = [
         e
@@ -422,28 +413,20 @@ def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> No
     ]
     assert len(capture_events) == 1
     assert capture_events[0]["success"] is False
-    assert capture_events[0]["exit_code"] == 3
-    assert capture_events[0]["stderr"] == "probe exploded"
+    assert "probe exploded" in str(capture_events[0]["error_message"])
 
 
-def test_refresh_environment_record_tolerates_unlaunchable_capture(
-    tmp_path: Path,
+def test_refresh_environment_record_without_a_record_dir_is_best_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A capture that cannot run at all (missing binary, timeout) still just events.
-
-    Covers pre-cutover workspaces where env-converge does not exist: the
-    backup must proceed and the event records exit_code=None.
-    """
+    """The real capture with no record dir to write to (``MNGR_HOST_DIR`` unset) still just
+    events, and the backup proceeds."""
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
 
-    def raising_run(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        raise FileNotFoundError("uv not found")
-
-    _refresh_environment_record(state=state, run_fn=raising_run)
+    _refresh_environment_record(state=state)
 
     capture_events = [
         e
@@ -452,8 +435,7 @@ def test_refresh_environment_record_tolerates_unlaunchable_capture(
     ]
     assert len(capture_events) == 1
     assert capture_events[0]["success"] is False
-    assert capture_events[0]["exit_code"] is None
-    assert "uv not found" in str(capture_events[0]["stderr"])
+    assert capture_events[0]["error_message"]
 
 
 def _direct_snapshot() -> SnapshotResult:

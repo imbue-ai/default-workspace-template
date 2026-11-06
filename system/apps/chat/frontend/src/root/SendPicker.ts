@@ -30,9 +30,10 @@ export interface SendPickerAttrs {
   onDismiss: () => void;
 }
 
-/** The rows a query keeps: the chats that are agents, whose title the query matches. */
+/** The rows a query keeps: the chats that can take a message (agent chats and rooms), whose title the query
+ *  matches. A chat that is not an agent yet cannot take one, so it is not offered. */
 export function pickableRows(rows: readonly ChatRow[], query: string): ChatRow[] {
-  return rows.filter((row) => !row.isProvisional && matchesQuery(query, row.title));
+  return rows.filter((row) => row.kind !== "provisional" && matchesQuery(query, row.title));
 }
 
 export function SendPicker(): m.Component<SendPickerAttrs> {

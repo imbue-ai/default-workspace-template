@@ -33,9 +33,9 @@ from app_schema.routes import error_response
 from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.models import LatchkeyPermissionInfo
 from imbue.chat.models import LatchkeyScopeInfo
 from imbue.chat.state import get_state
