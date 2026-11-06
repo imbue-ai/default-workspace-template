@@ -53,12 +53,13 @@ function isSameSpeaker(a: { key: string } | null, b: { key: string } | null): bo
 export function continuesSpeakerRun(event: UserMessageEvent, previousTurn: UserMessageEvent | null): boolean {
   return previousTurn !== null && isSameSpeaker(authorOfTurn(previousTurn), authorOfTurn(event));
 }
-/** Who a user turn was said by, for drawing: null for the viewer's own turn (right-aligned, no name), else the
- *  author's key and name. A turn with no author is the owner's -- and so is one annotated under either of the
- *  owner's keys (the multiplayer spec, section 11): the synthetic ``owner`` from before the workspace was shared,
- *  or the account the roster marks as the owner, which an owner page opened before the share still calls
- *  ``owner`` -- so it is the viewer's own when the viewer is the owner, and the owner's entry otherwise. Until the
- *  page knows who it is, every turn reads as the viewer's own. */
+
+/** Who a user turn was said by, for drawing: null for the viewer's own turn (right-aligned, under "You" when it
+ *  opens a run of theirs), else the author's key and name. A turn with no author is the owner's -- and so is one
+ *  annotated under either of the owner's keys (the multiplayer spec, section 11): the synthetic ``owner`` from
+ *  before the workspace was shared, or the account the roster marks as the owner, which an owner page opened before
+ *  the share still calls ``owner`` -- so it is the viewer's own when the viewer is the owner, and the owner's entry
+ *  otherwise. Until the page knows who it is, every turn reads as the viewer's own. */
 export function authorOfTurn(
   event: Pick<UserMessageEvent, "author" | "author_name">,
 ): { key: string; name: string } | null {
