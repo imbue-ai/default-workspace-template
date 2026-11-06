@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
@@ -33,6 +34,7 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -45,6 +47,7 @@ from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
+from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
@@ -188,7 +191,9 @@ from imbue.chat.models import IntakeApplyResponse
 from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import InterruptBusyResponse
 from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
@@ -1536,6 +1541,11 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     (ending any in-progress turn) and starts it fresh without sending a resume
     message. Returns 404 if the agent is unknown, 400 if the agent carries the
     ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
+    With ``only_if_idle`` a chat that has not ended its turn is left alone and
+    answered 409, its ``busy_with`` saying what it is doing. With ``keep_queue``
+    the messages queued for the agent are resent to it as one turn after the
+    restart, as the flush does, instead of dying with the process; a resend that
+    fails is a 500 too, though the restart has happened.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
@@ -1558,6 +1568,23 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             400,
         )
 
+    interrupt_request = _parse_interrupt_request()
+    if interrupt_request.only_if_idle:
+        busy_with = get_state().agent_manager.restart_busy_reason_for_chat(ChatId(chat_id))
+        if busy_with is not None:
+            return model_response(
+                InterruptBusyResponse(
+                    detail=f"Chat '{chat_id}' is {busy_with}; it was not restarted", busy_with=busy_with
+                ),
+                409,
+            )
+
+    if interrupt_request.keep_queue:
+        watcher, restart_process, _ = _interrupt_capabilities(agent_info)
+        return _restart_and_resend_queue(
+            chat_id, agent_info, watcher, restart_process, lambda: _settle_after_interrupt(agent_info)
+        )
+
     agent_name = agent_info.name
 
     with get_state().agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
@@ -1565,15 +1592,40 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     if not is_restarted:
         return error_response(f"Failed to interrupt agent '{agent_name}': {output}", 500)
 
-    # The restart abandons the session transcript mid-turn, so the
-    # transcript-derived activity state would stay pinned at THINKING /
-    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop. The
-    # restart also ended any compaction, which reports no completion.
-    get_state().agent_manager.reset_activity_state(agent_info.id)
-    get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
+    _settle_after_interrupt(agent_info)
 
     return model_response(InterruptAgentResponse(status="ok"))
+
+
+def _settle_after_interrupt(agent_info: AgentInfo) -> None:
+    """Settle an agent the interrupt route restarted.
+
+    The restart abandons the session transcript mid-turn, so the
+    transcript-derived activity state would stay pinned at THINKING /
+    TOOL_RUNNING until the user sends another message. Reset it to IDLE
+    now so the activity indicator clears immediately after the stop. The
+    restart also ended any compaction, which reports no completion.
+    """
+    agent_manager = get_state().agent_manager
+    agent_manager.reset_activity_state(agent_info.id)
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+
+
+def _parse_interrupt_request() -> InterruptAgentRequest:
+    """The interrupt's optional body: none, as the stop button posts, is the plain interrupt.
+
+    ``parse_request_body`` requires a body, so the view parses it here, the same way: as JSON
+    whatever its content type, and a body that is not the model's shape is a 400.
+    """
+    if not request.get_data():
+        return InterruptAgentRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return InterruptAgentRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
 def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
@@ -1616,8 +1668,9 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
 def _interrupt_capabilities(
     agent_info: AgentInfo,
 ) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities the restart-drain flush binds for one agent: the queue
-    mirror, a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+    """The harness-neutral capabilities the restart-drain (the flush, and the interrupt with
+    ``keep_queue``) binds for one agent: the queue mirror, a process restart
+    (``mngr start --restart --no-resume``), and an activity-settle.
 
     The stop button and the handoff's draining step bind theirs through
     ``ChatAppState.drain_to_composer`` instead, which dispatches to the harness's interrupt.
@@ -1656,6 +1709,17 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
     if not watcher.get_queued_block():
         return model_response(SendMessageResponse(status="ok"))
 
+    return _restart_and_resend_queue(chat_id, agent_info, watcher, restart_process, settle_activity)
+
+
+def _restart_and_resend_queue(
+    chat_id: str,
+    agent_info: AgentInfo,
+    watcher: AgentSessionWatcher,
+    restart_process: Callable[[], tuple[bool, str]],
+    settle_activity: Callable[[], None],
+) -> Response:
+    """Restart the agent, then resend whatever was queued as one turn: 500 if either fails, 200 otherwise."""
     agent_manager: AgentManager = get_state().agent_manager
     try:
         with agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
@@ -1669,7 +1733,7 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
-            logger.info("Flush of chat {}'s queue failed: {}", chat_id, resend.kind)
+            logger.info("Resending chat {}'s queue after its restart failed: {}", chat_id, resend.kind)
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
             agent_manager.note_resent_send(agent_info.id, block, sent_after)
@@ -3044,8 +3108,18 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(
-        response_model=InterruptAgentResponse, alternate_responses=(_CONVERGING,)
+        request_model=InterruptAgentRequest,
+        response_model=InterruptAgentResponse,
+        alternate_responses=(
+            _CONVERGING,
+            AlternateResponse(status=409, model=InterruptBusyResponse),
+            # ``keep_queue`` answers as the flush does.
+            AlternateResponse(status=200, model=SendMessageResponse),
+            AlternateResponse(status=500, model=SendFailureResponse),
+        ),
+        is_body_parsed_by_view=True,
     ),
     ("POST", "/api/chats/{chat_id}/flush-queue"): RouteModels(
         response_model=SendMessageResponse,

@@ -44,6 +44,7 @@ from imbue.chat.agent_manager import FirstMessage
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import ROOM_CREATE_SETTINGS
+from imbue.chat.agent_manager import UNREADABLE_CHAT_BUSY_REASON
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _AwaitedChat
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
@@ -61,6 +62,7 @@ from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import restart_busy_reason
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -7940,6 +7942,56 @@ def test_status_mapping_follows_the_chat_row(
     expected: ChatStatus,
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing) is expected
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_marker_present", "is_permission_pending", "is_connecting", "has_queued", "expected"),
+    [
+        ("WAITING", ActivityState.IDLE, False, False, False, False, None),
+        ("WAITING", None, False, False, False, False, None),
+        # The transcript reads idle between an assistant message and its next tool call.
+        ("RUNNING", ActivityState.IDLE, False, False, False, False, "working"),
+        # A turn the observe-reported lifecycle has not caught up with yet.
+        ("WAITING", ActivityState.IDLE, True, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, "working"),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, True, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, False, True, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, False, True, "holding queued messages"),
+    ],
+)
+def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued: bool,
+    expected: str | None,
+) -> None:
+    assert (
+        restart_busy_reason(lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued)
+        == expected
+    )
+
+
+def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_marker(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+    (state_dir / "active").touch()
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
+
+
+def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:
+    """An unattended restart needs positive evidence the turn has ended; not finding the chat is not that."""
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-unknown")) == UNREADABLE_CHAT_BUSY_REASON
 
 
 def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(

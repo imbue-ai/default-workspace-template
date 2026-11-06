@@ -11,6 +11,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
@@ -405,6 +406,69 @@ def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(
         interrupted_tasks=[],
         restarted_workers=[],
     )
+
+
+@pytest.mark.parametrize(
+    "landed_args, expected_restarts",
+    [
+        # Started again after the update landed, the paused chat and worker already run what it
+        # installed; the main chat was started again by the chat app before the apply.
+        (
+            ["--landed", "minds-v0.9.0"],
+            ["agent-idle", "agent-main-1"],
+        ),
+        # A resume before the apply (its exit 1) started them on the previous version.
+        (
+            [],
+            ["agent-busy", "agent-helper", "agent-idle", "agent-main-1"],
+        ),
+    ],
+)
+def test_restart_agents_leaves_out_what_the_resume_started_after_the_update_landed(
+    tmp_path: Path,
+    fake_agents: FakeAgents,
+    fake_chat_app: Any,
+    capsys: pytest.CaptureFixture[str],
+    landed_args: list[str],
+    expected_restarts: list[str],
+) -> None:
+    fake_agents.set_agents(
+        [
+            *_workspace_agents(),
+            chat("agent-main-2", "Main", "RUNNING", chat_id="agent-main-1"),
+        ]
+    )
+    MainChatStore(path=tmp_path / DEFAULT_CHAT_DATA_DIR / MAIN_CHAT_FILENAME).write(
+        ChatId("agent-main-1")
+    )
+    listed = [
+        ("agent-lead", _LEAD),
+        ("agent-busy", "Fix-the-login"),
+        ("agent-helper", "login-tests"),
+        ("agent-idle", "Plan-the-trip"),
+        ("agent-main-1", "Main"),
+    ]
+    fake_chat_app.answers = [
+        (
+            200,
+            {
+                "chats": [
+                    {"chat_id": chat_id, "title": name, "name": name, "status": "idle"}
+                    for chat_id, name in listed
+                ]
+            },
+        )
+    ]
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    assert _main(tmp_path, "run-status", "resume-chats", *landed_args) == 0
+    capsys.readouterr()
+
+    assert _main(tmp_path, "restart-agents") == 0
+
+    assert [chat_id for chat_id, _ in fake_chat_app.interrupts] == expected_restarts
+    report = json.loads(capsys.readouterr().out)
+    assert [entry["chat_id"] for entry in report["restarted"]] == expected_restarts
 
 
 def test_stop_chats_warns_when_it_cannot_read_which_chat_is_the_main_chat(
