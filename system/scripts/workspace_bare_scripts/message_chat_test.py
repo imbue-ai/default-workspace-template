@@ -848,19 +848,27 @@ def test_an_unreachable_chat_app_hands_the_restart_and_the_message_to_mngr(
     "chat_app_reachable, expected_rc",
     [(True, message_chat.EXIT_CHAT_GONE), (False, message_chat.EXIT_FAILED)],
 )
-def test_a_backoff_restart_that_matched_no_agent_sends_nothing(
+@pytest.mark.parametrize(
+    "mngr_stdout, expected_commands",
+    [("", ["start"]), (_START_RESULT_LINE, ["start", "message"])],
+    ids=["restart-matched-none", "message-matched-none"],
+)
+def test_a_backoff_that_matched_no_agent_is_a_gone_chat_only_if_the_chat_app_said_so(
     fake_chat_app: Any,
     fake_mngr: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     chat_app_reachable: bool,
     expected_rc: int,
+    mngr_stdout: str,
+    expected_commands: list[str],
 ) -> None:
-    """mngr exits 0 for a restart that matched nothing; that is a gone chat only when the chat
-    app, too, said it does not know it."""
+    """mngr exits 0 for a restart or a message that matched nothing; that is a gone chat only
+    when the chat app, too, said it does not know it."""
     fake_chat_app.answers = [(404, {"detail": "Chat 'x' not found"})]
     if not chat_app_reachable:
         _make_the_chat_app_unreachable(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_MNGR_STDOUT", mngr_stdout)
 
     rc, _ = _run(
         "--interrupt",
@@ -870,5 +878,4 @@ def test_a_backoff_restart_that_matched_no_agent_sends_nothing(
     )
 
     assert rc == expected_rc
-    [start_call] = _mngr_calls(fake_mngr)
-    assert start_call["argv"][0] == "start"
+    assert [call["argv"][0] for call in _mngr_calls(fake_mngr)] == expected_commands

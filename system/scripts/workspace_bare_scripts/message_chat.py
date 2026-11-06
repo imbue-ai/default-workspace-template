@@ -833,7 +833,7 @@ def _interrupt(
             returncode = _backoff_verdict(restart_through_mngr(chat_id), result.outcome)
             if returncode != EXIT_DELIVERED or not text:
                 return returncode
-            return send_through_mngr(chat_id, text)
+            return _backoff_verdict(send_through_mngr(chat_id, text), result.outcome)
         case _ as unreachable:
             assert_never(unreachable)
 
