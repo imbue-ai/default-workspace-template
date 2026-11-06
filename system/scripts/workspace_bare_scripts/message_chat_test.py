@@ -757,10 +757,17 @@ def test_an_interrupt_with_no_message_only_restarts_the_chat(
         # The chat mid-handoff: restarting its agent behind the chat app's back is the thing the
         # refusal exists to prevent.
         ((409, {"detail": "the chat is converging"}), "the chat is converging"),
-        # The restart happened, but the queue it was to resend landed behind a dialog.
+        # The restart happened, but the queue it was to resend did not land.
         (
-            (500, {"detail": "a dialog is open", "kind": "input_blocked"}),
-            "the chat was restarted, but resending what was queued for it failed: a dialog is open",
+            (
+                500,
+                {
+                    "detail": "the agent could not be reached",
+                    "kind": "agent_unreachable",
+                },
+            ),
+            "the chat was restarted, but resending what was queued for it failed: "
+            "the agent could not be reached",
         ),
     ],
     ids=["refused", "queue-resend-failed"],
@@ -779,6 +786,44 @@ def test_an_interrupt_the_chat_app_did_not_finish_sends_nothing_and_takes_no_bac
     assert rc == message_chat.EXIT_FAILED
     assert expected_complaint in capsys.readouterr().err
     assert len(fake_chat_app.posted) == 1
+    assert _mngr_calls(fake_mngr) == []
+
+
+@pytest.mark.parametrize(
+    "message_args, expected_rc, expected_paths",
+    [
+        ([], message_chat.EXIT_DELIVERED_BUT_BLOCKED, ["interrupt"]),
+        (["-m", "you are back"], message_chat.EXIT_DELIVERED, ["interrupt", "message"]),
+    ],
+    ids=["no-message", "message"],
+)
+def test_an_interrupt_whose_queue_landed_behind_a_dialog_is_a_blocked_send_not_a_failure(
+    fake_chat_app: Any,
+    fake_mngr: Path,
+    capsys: pytest.CaptureFixture[str],
+    message_args: list[str],
+    expected_rc: int,
+    expected_paths: list[str],
+) -> None:
+    """``input_blocked`` is a send that landed and then met a dialog, as a plain send reads it:
+    the queue is in the pane, so the message still follows it."""
+    fake_chat_app.answers = [
+        (500, {"detail": "a dialog is open", "kind": "input_blocked"}),
+        (200, {"status": "ok"}),
+    ]
+
+    rc = message_chat.main(
+        [_CHAT_ID, "--interrupt", *message_args],
+        stdin=_Tty(),
+        clock=_FakeClock(0.0),
+        sleep=lambda _: None,
+    )
+
+    assert rc == expected_rc
+    assert "its input is blocked: a dialog is open" in capsys.readouterr().err
+    assert [path for path, _body in fake_chat_app.posted] == [
+        f"/api/chats/{_CHAT_ID}/{route}" for route in expected_paths
+    ]
     assert _mngr_calls(fake_mngr) == []
 
 

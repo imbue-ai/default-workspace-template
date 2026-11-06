@@ -61,9 +61,12 @@ the chat app's copy by a test there.
 interrupt route (the process is replaced and resumes its own conversation, any
 turn in progress ends, and messages queued for it are resent as one turn), then
 sends the message, if one was given, the same way as any other. A refusal is
-final there too; only when the chat app cannot take the restart does
-``mngr start --restart --no-resume`` do it, and ``mngr message`` then carries
-the text. A restart with no message exits 0 once the agent is back.
+final there too, and so is a resend of the queue that failed after the restart
+(1, nothing sent); a resend that landed behind a dialog is a blocked send (7,
+and the message still follows it). Only when the chat app cannot take the
+restart does ``mngr start --restart --no-resume`` do it, and ``mngr message``
+then carries the text. A restart with no message exits 0 once the agent is
+back.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
@@ -407,8 +410,10 @@ def interrupt_through_chat_app(
         return answer
     if 200 <= answer.status < 300:
         return SendResult(Outcome.DELIVERED, "")
+    # Only the route's resend of the queue fails with a ``kind``, and it runs after the restart.
+    if answer.kind == INPUT_BLOCKED_KIND:
+        return SendResult(Outcome.BLOCKED, answer.detail)
     if answer.kind:
-        # Only the route's resend of the queue fails with a ``kind``, and it runs after the restart.
         return SendResult(
             Outcome.REFUSED,
             f"the chat was restarted, but resending what was queued for it failed: {answer.detail}",
@@ -802,7 +807,18 @@ def _interrupt(
             return (
                 send(chat_id, text, environ, clock, sleep) if text else EXIT_DELIVERED
             )
-        case Outcome.REFUSED | Outcome.BLOCKED:
+        case Outcome.BLOCKED:
+            print(
+                f"Restarted chat {chat_id} through the chat app and resent what was queued for it, "
+                f"but its input is blocked: {result.detail}",
+                file=sys.stderr,
+            )
+            return (
+                send(chat_id, text, environ, clock, sleep)
+                if text
+                else EXIT_DELIVERED_BUT_BLOCKED
+            )
+        case Outcome.REFUSED:
             print(
                 f"Restarting chat {chat_id} through the chat app did not finish: {result.detail}",
                 file=sys.stderr,
