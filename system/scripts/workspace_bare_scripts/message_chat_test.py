@@ -751,17 +751,33 @@ def test_an_interrupt_with_no_message_only_restarts_the_chat(
     ]
 
 
-def test_a_refused_interrupt_sends_nothing_and_takes_no_backoff(
-    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "answer, expected_complaint",
+    [
+        # The chat mid-handoff: restarting its agent behind the chat app's back is the thing the
+        # refusal exists to prevent.
+        ((409, {"detail": "the chat is converging"}), "the chat is converging"),
+        # The restart happened, but the queue it was to resend landed behind a dialog.
+        (
+            (500, {"detail": "a dialog is open", "kind": "input_blocked"}),
+            "the chat was restarted, but resending what was queued for it failed: a dialog is open",
+        ),
+    ],
+    ids=["refused", "queue-resend-failed"],
+)
+def test_an_interrupt_the_chat_app_did_not_finish_sends_nothing_and_takes_no_backoff(
+    fake_chat_app: Any,
+    fake_mngr: Path,
+    capsys: pytest.CaptureFixture[str],
+    answer: tuple[int, dict[str, str]],
+    expected_complaint: str,
 ) -> None:
-    """A 409 is the chat mid-handoff: restarting its agent behind the chat app's back is the
-    thing the refusal exists to prevent."""
-    fake_chat_app.answers = [(409, {"detail": "the chat is converging"})]
+    fake_chat_app.answers = [answer]
 
     rc, _ = _run("--interrupt", "-m", "you are back")
 
     assert rc == message_chat.EXIT_FAILED
-    assert "the chat is converging" in capsys.readouterr().err
+    assert expected_complaint in capsys.readouterr().err
     assert len(fake_chat_app.posted) == 1
     assert _mngr_calls(fake_mngr) == []
 

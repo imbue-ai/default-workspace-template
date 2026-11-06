@@ -407,6 +407,12 @@ def interrupt_through_chat_app(
         return answer
     if 200 <= answer.status < 300:
         return SendResult(Outcome.DELIVERED, "")
+    if answer.kind:
+        # Only the route's resend of the queue fails with a ``kind``, and it runs after the restart.
+        return SendResult(
+            Outcome.REFUSED,
+            f"the chat was restarted, but resending what was queued for it failed: {answer.detail}",
+        )
     return SendResult(Outcome.REFUSED, answer.detail)
 
 
@@ -798,7 +804,7 @@ def _interrupt(
             )
         case Outcome.REFUSED | Outcome.BLOCKED:
             print(
-                f"The chat app refused to restart chat {chat_id}: {result.detail}",
+                f"Restarting chat {chat_id} through the chat app did not finish: {result.detail}",
                 file=sys.stderr,
             )
             return EXIT_FAILED
