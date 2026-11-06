@@ -196,7 +196,7 @@ other user requests). Each report arrives in your chat as a message that starts
 your next turn; handle it then.
 
 ```bash
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \

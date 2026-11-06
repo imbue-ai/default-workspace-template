@@ -7,6 +7,7 @@ from pathlib import Path
 # Kept as a stub: every release's update-self flow runs this path from the target release's
 # staged copy with the system python3 and no venv, so the package beside scripts/ is put on
 # sys.path here.
+# import-path: no-venv -- update-self runs it from the target release's staged copy, whose package the venv does not install (it installs the live tree's)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from update_self_skill.run_in_background import main

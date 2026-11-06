@@ -830,8 +830,7 @@ python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
 ```
 
-The script is standard-library only and runs under a plain `python3`, so
-registration never depends on the root venv.
+The script is standard-library only and runs under a plain `python3`.
 
 Flags:
 

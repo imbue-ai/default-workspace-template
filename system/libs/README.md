@@ -8,6 +8,8 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_registration/` - Writes an app's row in the app registry: what
+  `system/scripts/forward_port.py` runs, stdlib-only.
 - `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
   API, built from its Flask routes and served at the path its manifest names
   in `api_schema_path`, and the assertion an app's tests make about it.

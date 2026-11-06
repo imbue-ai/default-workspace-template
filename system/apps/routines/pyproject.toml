@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.0",
     "routines",
     "werkzeug>=3.0",
+    # The fix route opens its chat through the workspace's chat client, message_chat.
+    "workspace-scripts",
 ]
 
 [dependency-groups]

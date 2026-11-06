@@ -7,6 +7,7 @@ dependencies = [
     # mock_frame frames a mock through the shared preview frame.
     "agents-shared",
     "app-manifest",
+    "app-registration",
     "tomlkit>=0.12",
     "workspace-layout",
     "workspace-scripts",

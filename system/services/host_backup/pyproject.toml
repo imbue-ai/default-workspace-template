@@ -8,6 +8,8 @@ dependencies = [
     "loguru>=0.7.0",
     "imbue-common",
     "click>=8.1",
+    # Each tick re-captures the environment record before its snapshot.
+    "env-converge",
 ]
 
 [project.scripts]
