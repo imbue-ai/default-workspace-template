@@ -795,6 +795,30 @@ describe("narration and close-time ejection", () => {
     expect(sections[2].live_step_id).toBe("s2");
   });
 
+  // Once the step the turn started has closed, the one it never took up is still not current
+  // after a chip: the agent's next words are the turn's reply, not that step's caption.
+  it("keeps a step the turn never took up from taking the agent's words after a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "sort the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      tkMsg("t6", 'tk close s2 "sorted"', "c2"),
+      result("t6", "c2", closeOut("s2", "Sort the photos", "sorted")),
+      notice("t7", "n1"),
+      assistantText("t8", "The photos are sorted.", "after"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections[2].live_step_id).toBeNull();
+    expect(stepItems(sections[2].items)).toHaveLength(0);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
+  });
+
   // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
   // by the work that follows.
   it("takes a carried-over step up again after a regular ticket transition", () => {

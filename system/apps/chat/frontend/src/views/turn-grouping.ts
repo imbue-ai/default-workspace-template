@@ -898,6 +898,9 @@ function continueCarryover(previous: SectionBuilder | null, next: SectionBuilder
     return;
   }
   next.untaken_carryover_ids = new Set(untakenCarryoverIds(previous));
+  if (next.current_step_id !== null && next.untaken_carryover_ids.has(next.current_step_id)) {
+    next.current_step_id = previous.current_step_id;
+  }
 }
 
 /** The steps in untaken_carryover_ids the agent has not taken up in the section so far. */
