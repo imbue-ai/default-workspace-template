@@ -48,6 +48,7 @@ def test_neko_yaml_round_trips_and_carries_the_session_rules_and_pipelines() -> 
     assert document["server"]["bind"] == "127.0.0.1:8091"
     assert document["webrtc"]["udpmux"] == 59000
     assert document["webrtc"]["tcpmux"] == 59000
+    assert document["webrtc"]["icelite"] is False
     assert document["desktop"]["display"] == ":99"
     assert document["desktop"]["screen"] == "1920x1080@60"
     assert document["capture"]["video"]["codec"] == "h264"
@@ -152,3 +153,9 @@ def test_the_viewer_polls_the_screencast_at_the_rate_neko_encodes_it() -> None:
     assert int(declared.group(1)) * int(seconds) == int(frames), (
         f"the viewer's SCREENCAST_FPS ({declared.group(1)}) has drifted from neko's rate ({SCREENCAST_RATE})"
     )
+
+
+def test_ice_lite_is_on_only_when_the_settings_ask_for_it() -> None:
+    lite = DisplaySettings(is_ice_lite=True)
+    assert neko_config_document(_SECRETS, lite)["webrtc"]["icelite"] is True
+    assert yaml.safe_load(render_neko_yaml(_SECRETS, lite))["webrtc"]["icelite"] is True

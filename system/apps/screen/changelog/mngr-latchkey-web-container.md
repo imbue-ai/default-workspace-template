@@ -10,4 +10,8 @@
 
 - `SCREEN_FIXED_SIZE=WxH` (a size a viewer's report could produce) keeps the display at one mode: the X server and neko start at it, and `POST /api/screen-size` answers `{"applied": false, "reason": "fixed size"}` without resizing, as `screen size WxH` then says, exiting 1. A value the service cannot use stops it at start.
 
+- `SCREEN_DESKTOP_PANEL=off` runs the desktop session without the XFCE panel (and Thunar's daemon): before each stack start the service writes the user's `xfce4-session` channel file naming a failsafe session of its own, `ScreenNoPanel` (`xfwm4`, `xfsettingsd`, `xfdesktop`), with `SaveOnExit` off, keeping the file's other properties. Unset or `on`, nothing is written.
+
+- `SCREEN_ICE_LITE=on` runs neko as an ICE lite agent (`webrtc.icelite`), for a Screen reached on one candidate it is told of. Unset or `off`, neko is unchanged. Both switches read `on` or `off` in any case and stop the service at start on anything else.
+
 - The Screen requires Werkzeug 3.1 or later, whose `set_cookie` takes the `partitioned` flag the gate sets.

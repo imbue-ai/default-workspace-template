@@ -1,6 +1,6 @@
 """The display settings a Screen reads from its environment at service start (docs/system/specs/screen/spec.md
-sections 7.2 and 8.1): the video codec, and a fixed display size. An auth sandbox sets both; a workspace sets
-neither."""
+sections 4.3, 5.3, 7.2 and 8.1): the video codec, a fixed display size, whether the desktop session runs its panel,
+and whether neko runs ICE lite. An auth sandbox sets all four; a workspace sets none."""
 
 from collections.abc import Mapping
 from typing import Final
@@ -16,6 +16,9 @@ from screen.sizing import quantize_screen_size
 
 ENV_VIDEO_CODEC: Final[str] = "SCREEN_VIDEO_CODEC"
 ENV_FIXED_SIZE: Final[str] = "SCREEN_FIXED_SIZE"
+ENV_DESKTOP_PANEL: Final[str] = "SCREEN_DESKTOP_PANEL"
+ENV_ICE_LITE: Final[str] = "SCREEN_ICE_LITE"
+_SWITCH_VALUES: Final[dict[str, bool]] = {"on": True, "off": False}
 
 
 @pure
@@ -49,8 +52,20 @@ def parse_fixed_size(value: str) -> ScreenSize | None:
 
 
 @pure
+def parse_switch(name: str, value: str, default: bool) -> bool:
+    """``on`` or ``off``, in any case; empty is ``default``."""
+    if not value:
+        return default
+    if value.lower() not in _SWITCH_VALUES:
+        raise ScreenConfigurationError(f"{name} names {value!r}, not on or off")
+    return _SWITCH_VALUES[value.lower()]
+
+
+@pure
 def display_settings_from_environ(environ: Mapping[str, str]) -> DisplaySettings:
     return DisplaySettings(
         video_codec=parse_video_codec(environ.get(ENV_VIDEO_CODEC, "").strip()),
         fixed_size=parse_fixed_size(environ.get(ENV_FIXED_SIZE, "").strip()),
+        is_desktop_panel_shown=parse_switch(ENV_DESKTOP_PANEL, environ.get(ENV_DESKTOP_PANEL, "").strip(), True),
+        is_ice_lite=parse_switch(ENV_ICE_LITE, environ.get(ENV_ICE_LITE, "").strip(), False),
     )

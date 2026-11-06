@@ -110,9 +110,9 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
 another address, which it refuses to do outside gate mode.
 
-Two more variables, read once at service start, change the picture; a workspace sets neither,
-and the auth sandbox sets both (`system/libs/auth_sandbox/README.md`). A value the service
-cannot use stops it at start.
+Four more variables, read once at service start, change the picture, the desktop and the
+stream; a workspace sets none of them, and the auth sandbox sets all four
+(`system/libs/auth_sandbox/README.md`). A value the service cannot use stops it at start.
 
 - `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
   profiles in (see "Profiles, visibility and audio").
@@ -120,6 +120,16 @@ cannot use stops it at start.
   produce (multiples of 16, or the cap, within 640x480 and 1920x1080). `xorg.conf` lists it
   first, so the X server starts at it, `neko.yaml` names it as neko's screen, and
   `POST /api/screen-size` no longer resizes; the viewer scales the picture to its frame.
+- `SCREEN_DESKTOP_PANEL`: `on` (the default) or `off`. Off, the desktop session runs without
+  `xfce4-panel` (and without Thunar's daemon): before each stack start the service writes the
+  user's `~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml` (`xfce_session_config.py`,
+  keeping the channel's other properties) to name a failsafe session of its own, `ScreenNoPanel`,
+  which runs `xfwm4`, `xfsettingsd` and `xfdesktop`, with `/general/SaveOnExit` false so no saved
+  session replaces it. xfconfd reads that file over the system one when the session starts.
+  On, nothing is written.
+- `SCREEN_ICE_LITE`: `off` (the default) or `on`. On, `neko.yaml` sets `webrtc.icelite`, so neko
+  answers the viewer's connectivity checks without gathering or checking candidates of its own:
+  the auth sandbox is reached on one candidate, its TCP tunnel, which the viewer names.
 
 ### Gate mode
 

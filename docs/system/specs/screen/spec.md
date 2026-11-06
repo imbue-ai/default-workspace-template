@@ -149,6 +149,7 @@ The viewer opens `wss://<origin>/neko/api/ws?token=<session token>` (section 6.3
 For every server candidate it receives, the viewer emits one rewritten copy per entry of `candidates` whose protocol matches, replacing the address and port, giving each copy a distinct foundation so the browser treats them as distinct candidates, and keeping everything else; it drops the original unless `candidates` is empty.
 Its own peer connection carries `ice_servers` from `connect-info` and `iceTransportPolicy: "all"`.
 A connection that does not reach `connected` within four seconds, or that fails later, refetches `connect-info?relay=1` and restarts ICE; the viewer records `needs-relay` per client in local storage and fetches with `relay=1` first next time.
+A Screen whose environment sets `SCREEN_ICE_LITE=on` (the auth sandbox, reached on one candidate, its TCP tunnel) runs neko with `webrtc.icelite: true`: neko answers the viewer's connectivity checks and runs none of its own.
 
 ### 5.4 Fallback without WebRTC
 
@@ -205,6 +206,8 @@ Screenshots come from `GET /api/screenshot`, which the service answers from neko
 
 Xorg with the dummy driver on `:99`, `xorg.conf` rendered by the service at stack start: `VideoRam` sized for the 1080p cap at 32 bpp with headroom, `Virtual 1920 1080`, a `Modes` list seeded with `1920x1080`, `1600x900`, `1280x720`, neko's `xf86-input-neko` touchscreen as the one configured input device (`Driver "neko"`, its socket under the stack's runtime dir, the layout's `CorePointer`; mouse and keyboard arrive over XTEST), and `-noreset -nolisten tcp`.
 XFCE as neko's image ships it: `startxfce4` with the panel, Thunar and xfwm4 compositing on, PulseAudio with a null sink as the default device.
+A Screen whose environment sets `SCREEN_DESKTOP_PANEL=off` (the auth sandbox, where the user signs in through one browser window) runs the session without the panel: before each stack start the service writes the user's `xfce4-session` channel file (`~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml`, its other properties kept) naming a failsafe session of its own, `ScreenNoPanel`, which runs `xfwm4`, `xfsettingsd` and `xfdesktop` (the system failsafe session less `xfce4-panel` and `Thunar --daemon`), with `/general/SaveOnExit` false so no saved session takes its place; xfconfd reads the user's file over the system one, and with no saved session `xfce4-session` starts the failsafe session that file names (verified with xfce4-session 4.20 on an Xvfb display).
+Unset or `on`, nothing is written.
 The session runs as the workspace user with `HOME` the workspace home, so XFCE and application state ride the persistent volume and the backup.
 
 ### 7.2 Sizing

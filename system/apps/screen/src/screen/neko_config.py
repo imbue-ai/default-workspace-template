@@ -1,5 +1,5 @@
 """The ``neko.yaml`` and the PulseAudio script the Screen's stack runs with (docs/system/specs/screen/spec.md
-sections 6.2, 6.3, 8.1 and 9.1), rendered at each stack start with that start's secrets."""
+sections 5.3, 6.2, 6.3, 8.1 and 9.1), rendered at each stack start with that start's secrets."""
 
 from typing import Any
 from typing import Final
@@ -195,6 +195,9 @@ def neko_config_document(secrets: NekoSecrets, settings: DisplaySettings) -> dic
             # The viewer rewrites candidates to the endpoints it is told (spec section 5.3), so neko never asks an
             # outside service what its address is.
             "ip_retrieval_url": "",
+            # ICE lite (an auth sandbox's): neko answers the viewer's connectivity checks and starts none of its own,
+            # which the one candidate it is reached on (a TCP tunnel) needs no more of.
+            "icelite": settings.is_ice_lite,
             "estimator": {"enabled": False},
         },
     }

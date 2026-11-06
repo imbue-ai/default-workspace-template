@@ -121,6 +121,11 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
     assert f'export SCREEN_FRAME_ANCESTORS="${CHROME_ORIGIN_ENV_VAR}"' in exports
     assert f'readonly CONNECT_INFO_PATH="{CONNECT_INFO_PATH}"' in text
     assert 'export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"' in exports
+    # The Screen's sign-in picture: every browser's codec, one display size, no panel, and neko as an ICE lite agent.
+    assert 'export SCREEN_VIDEO_CODEC="vp8"' in exports
+    assert 'export SCREEN_FIXED_SIZE="1360x864"' in exports
+    assert 'export SCREEN_DESKTOP_PANEL="off"' in exports
+    assert 'export SCREEN_ICE_LITE="on"' in exports
     # The connector may write the connect-info file before the script runs: the script never touches it.
     assert text.count("$CONNECT_INFO_PATH") == 1
     # owner-exec starts refusing everyone; the claim watcher installs the user's key.

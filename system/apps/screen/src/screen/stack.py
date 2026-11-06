@@ -41,6 +41,7 @@ from screen.primitives import STACK_PROGRAMS
 from screen.primitives import XORG_PROGRAM
 from screen.user_dirs import write_user_dirs
 from screen.xfce_helpers import write_browser_helper_files
+from screen.xfce_session_config import write_xfce_session_channel
 from screen.xfdesktop_config import write_xfdesktop_channel
 from screen.xorg_config import INPUT_SOCKET_PATH
 from screen.xorg_config import render_xorg_conf
@@ -139,7 +140,9 @@ class ScreenStack(MutableModel):
     download_dir: Path = Field(frozen=True, description="Chromium's download folder, named beside it")
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
     display_settings: DisplaySettings = Field(
-        default_factory=DisplaySettings, frozen=True, description="The codec and any fixed size the config renders"
+        default_factory=DisplaySettings,
+        frozen=True,
+        description="The codec, any fixed size, the panel and the ICE mode the config renders",
     )
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
     input_socket_path: Path = Field(
@@ -316,6 +319,8 @@ class ScreenStack(MutableModel):
         neko_yaml.write_text(render_neko_yaml(new_secrets, self.display_settings))
         write_browser_helper_files(self.home)
         write_xfdesktop_channel(self.home)
+        if not self.display_settings.is_desktop_panel_shown:
+            write_xfce_session_channel(self.home)
         write_user_dirs(self.home, self.desktop_dir, self.download_dir)
 
     def _wait_for_xorg(self, abort: threading.Event) -> None:

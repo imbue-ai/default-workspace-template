@@ -78,9 +78,15 @@ export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"
 # plugin), whatever browser the user signs in from.
 export SCREEN_VIDEO_CODEC="vp8"
 # One display size, whatever the viewer's frame: latchkey's login window is Playwright's 1280x720
-# viewport, about 1288x805 at (10, 37) under the XFCE panel, and would overflow a display a small
-# viewer shrank. The viewer scales the picture to its frame instead.
+# viewport, a window of about 1288x805, and would overflow a display a small viewer shrank. The viewer
+# scales the picture to its frame instead.
 export SCREEN_FIXED_SIZE="1360x864"
+# A desktop session without the XFCE panel: the user signs in through one browser window, and a panel
+# would offer only what the sandbox does not have.
+export SCREEN_DESKTOP_PANEL="off"
+# neko as an ICE lite agent: the one candidate it is reached on is the Modal TCP tunnel, so it answers
+# the viewer's checks and gathers nothing of its own.
+export SCREEN_ICE_LITE="on"
 
 mkdir -p /var/log/supervisor "$REPO_ROOT/data/.state"
 cd "$REPO_ROOT"
