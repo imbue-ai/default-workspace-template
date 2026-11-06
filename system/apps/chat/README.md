@@ -255,10 +255,10 @@ reply landing replaces it at once; an empty `text` clears it. It shows where the
 reply will land: while a step is open, as that step's caption (or at the end of
 its work, when the step is opened), and otherwise after the transcript. A step
 left open from an earlier turn takes it only once the agent works in it again
-in the new turn. A draft that matches a reply the transcript already holds is never sent. The
-terminal's rendering loses heading levels and code-fence languages, which the
-landed reply restores. Codex also writes an agent message to its
-rollout only once it is finished; its draft comes from the
+in the new turn. A draft that matches a reply the transcript already holds is
+never sent. The terminal's rendering loses heading levels and code-fence
+languages, which the landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
 rollout holds the message's id. Pi records an assistant message only on
