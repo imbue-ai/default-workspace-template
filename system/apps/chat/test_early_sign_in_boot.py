@@ -10,7 +10,8 @@ import pytest
 
 from imbue.chat.early_sign_in import STARTUP_LINE_PREFIX
 
-_LAUNCHER = Path(__file__).resolve().parents[2] / "scripts" / "start_early_sign_in.sh"
+_CHECKOUT = Path(__file__).resolve().parents[3]
+_LAUNCHER_PATH_IN_CHECKOUT = Path("system") / "scripts" / "start_early_sign_in.sh"
 
 
 @pytest.mark.timeout(60)
@@ -18,13 +19,18 @@ def test_the_program_names_its_port_serves_and_clears_its_staging_store_on_hang_
     home = tmp_path / "home"
     leftover = home / ".minds-early-sign-in" / ".minds" / "accounts" / "0f3c9a"
     leftover.mkdir(parents=True)
-    # Not marked as running under pytest: the launcher starts the program from the checkout's root, whose
-    # mngr settings a process under pytest may not load, as a workspace's own programs load them.
-    env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
+    # The launcher starts the program from the root of the checkout it sits in. A scratch one, holding only
+    # the launcher and this checkout's venv, keeps it from loading this checkout's mngr settings.
+    checkout = tmp_path / "checkout"
+    launcher = checkout / _LAUNCHER_PATH_IN_CHECKOUT
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(_CHECKOUT / _LAUNCHER_PATH_IN_CHECKOUT)
+    (checkout / ".venv").symlink_to(_CHECKOUT / ".venv")
+    env = dict(os.environ)
     env.update({"HOME": str(home), "MINDS_ACCOUNTS_ROOT": str(tmp_path / "live-accounts")})
 
     process = subprocess.Popen(
-        ["bash", str(_LAUNCHER)],
+        ["bash", str(launcher)],
         cwd=tmp_path,
         env=env,
         stdin=subprocess.PIPE,
