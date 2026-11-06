@@ -253,7 +253,7 @@ second, through mngr's `stream_snapshot` converter
 shows the draft while `after_event_id` is still the last event it holds, so the
 reply landing replaces it at once; an empty `text` clears it. It shows where the
 reply will land: while a step is open, as that step's caption (or at the end of
-its work, when the step is opened), and otherwise after the transcript. A step
+its work, when the step is expanded), and otherwise after the transcript. A step
 left open from an earlier turn takes it only once the agent works in it again
 in the new turn. A draft that matches a reply the transcript already holds is
 never sent. The terminal's rendering loses heading levels and code-fence
