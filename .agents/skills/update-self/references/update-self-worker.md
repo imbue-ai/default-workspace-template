@@ -483,9 +483,9 @@ harness version pin in `system/scripts/setup_system.sh`, an
 the Antigravity installer (`system/scripts/agy_install.sh`) pins (the apply's
 provisioner installs the new binary, but a running agent keeps executing the
 old one), and code a harness loads into its process at start
-(`.pi/extensions/**`). When
-`needed` is `true`, the verdict is `needed`, and its triggers are the
-evidence. When it is `false`, read the rest of the diff (`git diff
+(`.pi/extensions/**`). When `needed` is `true`, the verdict is `needed`, and
+its triggers are the evidence. When it is `false`, read the rest of the diff
+(`git diff
 --name-only "$(jq -r .update_base data/.tasks/update-self/footprint-ranges.json)"
 HEAD`) for what the command cannot see, which also makes a restart
 **needed**:
