@@ -18,7 +18,9 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,7 @@ from workspace_bare_scripts import forward_port
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
+from agents_shared.preview_wrapper_server import FrameKind
 
 _SCRIPT = Path(__file__).resolve().parent / "serve_isolated_instance.py"
 
@@ -46,6 +49,8 @@ class _RecordingRunner(mod.Runner):
     # Pids reported as still-alive by ``process_group_alive`` (default: none, so a
     # just-killed process reads as gone immediately -- the common refresh path).
     alive_pids: set[int] = field(default_factory=set)
+    # What ``process_start_time`` reports per pid (default: '', unknown, as on macOS).
+    start_times: dict[int, str] = field(default_factory=dict)
 
     def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
         self.killed_pgroups.append(pid)
@@ -59,6 +64,9 @@ class _RecordingRunner(mod.Runner):
 
     def process_group_alive(self, pid: int) -> bool:
         return pid in self.alive_pids
+
+    def process_start_time(self, pid: int) -> str:
+        return self.start_times.get(pid, "")
 
 
 @dataclass
@@ -1267,6 +1275,22 @@ def test_wrapper_page_escapes_the_title() -> None:
     assert "&lt;b&gt;x&lt;/b&gt;" in html
 
 
+def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
+    page = wrapper_mod.build_wrapper_html(
+        "inbox",
+        "Inbox",
+        kind=FrameKind.MOCK,
+        note="<b>Refresh</b> is not wired up",
+    )
+    preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
+
+    assert '<span class="tag">UI Sketch</span>' in page
+    assert "&lt;b&gt;Refresh&lt;/b&gt; is not wired up" in page
+    assert "<b>Refresh</b>" not in page
+    assert '<span class="tag">Preview</span>' in preview_page
+    assert 'class="preview-note"' not in preview_page
+
+
 def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1340,3 +1364,266 @@ def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_scrip
         "--port",
         "1",
     ]
+
+
+# frame only (a mock around an app something else runs)
+
+_FRAME_NAME = "inbox-sketch"
+
+
+def _frame(
+    tmp_path: Path,
+    *,
+    runner: _RecordingRunner | None = None,
+    registry: _RecordingRegistry | None = None,
+    http: _FakeHttp | None = None,
+    spawner: _FakeSpawner | None = None,
+    note: str | None = "Sample data; refresh does not work yet.",
+) -> int:
+    return mod.frame(
+        _FRAME_NAME,
+        tmp_path,
+        inner_service="inbox",
+        frame_service_name=_FRAME_NAME,
+        title="Inbox",
+        display_name="Inbox (UI sketch)",
+        kind=FrameKind.MOCK,
+        note=note,
+        runner=runner or _RecordingRunner(),
+        registry=registry or _RecordingRegistry(),
+        http=http or _FakeHttp(_all_healthy),
+        spawner=spawner or _FakeSpawner(),
+        sleeper=lambda _seconds: None,
+    )
+
+
+def _wrapper_arg(argv: list[str], flag: str) -> str:
+    return argv[argv.index(flag) + 1]
+
+
+def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
+    tmp_path: Path,
+) -> None:
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+
+    code = _frame(tmp_path, registry=registry, spawner=spawner)
+
+    assert code == 0
+    [wrapper_argv] = spawner.detached_spawns
+    assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
+    assert _wrapper_arg(wrapper_argv, "--inner-service") == "inbox"
+    assert _wrapper_arg(wrapper_argv, "--kind") == "mock"
+    assert (
+        _wrapper_arg(wrapper_argv, "--note")
+        == "Sample data; refresh does not work yet."
+    )
+    # The framed app's own registration is its program's business; only the frame is added.
+    assert registry.registered == [
+        _Registration(
+            _FRAME_NAME,
+            f"http://localhost:{_wrapper_arg(wrapper_argv, '--port')}",
+            internal=False,
+            display_name="Inbox (UI sketch)",
+        )
+    ]
+    state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
+    assert state["pids"] == spawner.detached_pids
+    assert state["services"] == [_FRAME_NAME]
+
+
+def test_reframing_reboots_the_wrapper_on_its_port_without_deregistering_it(
+    tmp_path: Path,
+) -> None:
+    """A changed note re-boots the wrapper, and an open mock window keeps working: the
+    frame's row is never removed (which would mint it a new origin), and it keeps
+    routing to the same port."""
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    first_pid = spawner.detached_pids[0]
+
+    code = _frame(
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        spawner=spawner,
+        note="Now reading your inbox live; sending is not wired up yet.",
+    )
+
+    assert code == 0
+    assert runner.killed_pgroup(first_pid)
+    first_argv, second_argv = spawner.detached_spawns
+    assert _wrapper_arg(second_argv, "--port") == _wrapper_arg(first_argv, "--port")
+    assert _wrapper_arg(second_argv, "--note") == (
+        "Now reading your inbox live; sending is not wired up yet."
+    )
+    assert registry.removed == []
+    state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
+    assert state["pids"] == [spawner.detached_pids[1]]
+
+
+def test_a_reframe_whose_port_another_server_took_moves_to_a_fresh_one(
+    tmp_path: Path,
+) -> None:
+    """After a reboot the dead wrapper's port can be another server's, which would answer
+    the health probe for a wrapper that could not bind it; the frame moves instead, its
+    row re-pointed rather than removed."""
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+    taken_port = int(_wrapper_arg(spawner.detached_spawns[0], "--port"))
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as squatter:
+        squatter.bind((mod.LOOPBACK_HOST, taken_port))
+        squatter.listen()
+        assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+
+    new_port = int(_wrapper_arg(spawner.detached_spawns[1], "--port"))
+    assert new_port != taken_port
+    assert registry.removed == []
+    assert registry.registered[-1].url == f"http://localhost:{new_port}"
+
+
+def test_a_frame_never_signals_a_pid_a_restart_handed_to_another_process(
+    tmp_path: Path,
+) -> None:
+    """After a reboot the recorded wrapper pid can lead an unrelated process group; the
+    re-frame and ``down`` signal only the wrapper whose start time they recorded."""
+    spawner = _FakeSpawner()
+    first_pid = spawner.detached_pid
+    second_pid = first_pid + 1
+    runner = _RecordingRunner(start_times={first_pid: "100"})
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    runner.start_times = {first_pid: "7", second_pid: "8"}
+
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+
+    assert not runner.killed_pgroup(first_pid)
+    assert runner.killed_pgroup(second_pid)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="start times are read from /proc")
+def test_a_real_process_start_time_holds_for_its_life_and_follows_its_parents(
+    tmp_path: Path,
+) -> None:
+    """The field ``process_start_time`` reads must be the kernel's start time: fixed while
+    the process runs (or a live wrapper would read as not ours), no earlier than the
+    parent that spawned it, and gone once the process is."""
+    runner = mod.Runner()
+    pid = mod.Spawner().spawn_detached(
+        ["sleep", "30"],
+        cwd=str(tmp_path),
+        env={"PATH": "/usr/bin:/bin"},
+        log_path=str(tmp_path / "sleep.log"),
+    )
+    try:
+        started = runner.process_start_time(pid)
+        assert started.isdigit()
+        assert int(runner.process_start_time(os.getpid())) <= int(started)
+        assert runner.process_start_time(pid) == started
+    finally:
+        runner.kill_process_group(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+
+    assert runner.process_start_time(pid) == ""
+
+
+def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry(
+    tmp_path: Path,
+) -> None:
+    """The row must not route to a dead port, but the record is all a caller that never
+    saw the note has to boot the frame again with, so it survives the failure."""
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+    recorded = mod.read_frame(_FRAME_NAME, tmp_path)
+    assert recorded is not None
+
+    code = _frame(
+        tmp_path,
+        registry=registry,
+        spawner=spawner,
+        http=_FakeHttp(lambda _url: None),
+    )
+
+    assert code == 1
+    assert registry.removed == [_FRAME_NAME]
+    assert mod.read_frame(_FRAME_NAME, tmp_path) == recorded
+
+    retry_spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=retry_spawner) == 0
+    [retry_argv] = retry_spawner.detached_spawns
+    # Registered afresh (the failure removed the row), and never removed again.
+    assert registry.removed == [_FRAME_NAME]
+    assert registry.registered[-1] == _Registration(
+        _FRAME_NAME,
+        f"http://localhost:{_wrapper_arg(retry_argv, '--port')}",
+        internal=False,
+        display_name="Inbox (UI sketch)",
+    )
+    assert _wrapper_arg(retry_argv, "--note") == recorded.note
+    assert (
+        mod.down(_FRAME_NAME, tmp_path, runner=_RecordingRunner(), registry=registry)
+        == 0
+    )
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+
+
+def test_a_first_frame_that_fails_leaves_no_record(tmp_path: Path) -> None:
+    """Nothing was framed, so nothing may read as a frame to boot again."""
+    registry = _RecordingRegistry()
+
+    code = _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None))
+
+    assert code == 1
+    assert registry.registered == []
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+    assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
+
+
+def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
+    tmp_path: Path,
+) -> None:
+    """What lets a caller that never saw the note re-frame the app exactly as it was."""
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, runner=runner, registry=registry) == 0
+
+    assert mod.read_frame(_FRAME_NAME, tmp_path) == mod.FrameRecord(
+        inner_service="inbox",
+        frame_service_name=_FRAME_NAME,
+        title="Inbox",
+        display_name="Inbox (UI sketch)",
+        kind=FrameKind.MOCK,
+        note="Sample data; refresh does not work yet.",
+        inner_path="/",
+    )
+    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+
+
+def test_reading_a_frame_from_a_state_that_records_none_is_an_error(
+    tmp_path: Path,
+) -> None:
+    assert _up_preview(tmp_path) == 0
+
+    with pytest.raises(mod.InstanceError, match="records no frame"):
+        mod.read_frame(_NAME, tmp_path)
+
+
+def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+
+    code = mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry)
+
+    assert code == 0
+    assert runner.killed_pgroup(spawner.detached_pids[0])
+    assert registry.removed == [_FRAME_NAME]
+    assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
