@@ -1,11 +1,21 @@
+import gzip
+import threading
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
+import pytest
+
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TYPE
+from imbue.system_interface.shell.client_activity import KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 
@@ -145,3 +155,137 @@ def test_unparsable_lines_are_skipped(tmp_path: Path) -> None:
     with log.events_path.open("a") as event_file:
         event_file.write("not json\n")
     assert len(log.read_events()) == 1
+
+
+_T0 = datetime(2026, 11, 5, 17, 22, 10, tzinfo=timezone.utc)
+
+
+def test_a_window_input_is_written_once_per_client_window_and_minute_whatever_its_kind(tmp_path: Path) -> None:
+    """Section 6.2 of the app-usage-signals spec: one line per client, window and minute; the first report of
+    the minute is what the line says, a later one in the same minute writes nothing, and another client's or
+    another window's report in that minute is its own line."""
+    log = _log(tmp_path)
+    assert log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.INPUT, _T0) is True
+    assert log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.INPUT, _T0) is False
+    assert (
+        log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.FOCUS, _T0 + timedelta(seconds=40))
+        is False
+    )
+    assert log.append_window_input("c2", "home", "worldbuilder", "w1", WindowInputKind.FOCUS, _T0) is True
+    assert log.append_window_input("c1", "home", "notes", "w2", WindowInputKind.INPUT, _T0) is True
+    assert (
+        log.append_window_input("c1", "home", "worldbuilder", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=1))
+        is True
+    )
+
+    events = log.read_events()
+    assert [(event["client_id"], event["window_id"], event["kind"], event["timestamp"]) for event in events] == [
+        ("c1", "w1", "input", "2026-11-05T17:22:10.000000000Z"),
+        ("c2", "w1", "focus", "2026-11-05T17:22:10.000000000Z"),
+        ("c1", "w2", "input", "2026-11-05T17:22:10.000000000Z"),
+        ("c1", "w1", "input", "2026-11-05T17:23:10.000000000Z"),
+    ]
+    assert events[0]["type"] == "window_input" and events[0]["source"] == "client_activity" and events[0]["event_id"]
+    assert events[0]["app"] == "worldbuilder" and events[0]["desktop_id"] == "home"
+    assert all("path" not in event and "title" not in event for event in events)
+
+
+def test_a_windows_minute_is_forgotten_once_it_is_old_enough_to_be_written_again(tmp_path: Path) -> None:
+    """The once-per-minute memory is pruned of minutes older than its window on every write, so a window reported
+    again later is written again and the memory holds only the windows in use."""
+    log = _log(tmp_path)
+    assert log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0) is True
+    assert (
+        log.append_window_input("c1", "home", "notes", "w2", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    )
+    assert log._last_input_minute_by_client_window.keys() == {("c1", "w2")}
+    assert (
+        log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0 + timedelta(minutes=3)) is True
+    )
+
+
+def test_a_window_input_that_could_not_be_written_is_tried_again_in_the_same_minute(tmp_path: Path) -> None:
+    """A failed write (here, a directory where the file goes) is not remembered as the window's minute, so the
+    next report inside the minute writes the line once the log can be written again."""
+    log = _log(tmp_path)
+    log.events_path.mkdir(parents=True)
+    with pytest.raises(OSError):
+        log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0)
+    assert log._last_input_minute_by_client_window == {}
+
+    log.events_path.rmdir()
+    assert log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0) is True
+    assert [event["window_id"] for event in log.read_events()] == ["w1"]
+
+
+def test_a_window_input_advances_last_seen_and_nothing_else(tmp_path: Path) -> None:
+    log = _log(tmp_path)
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "hello"))
+    log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, datetime.now(timezone.utc))
+    events = log.read_events()
+    (summary,) = summarize_client_activity(events, [])
+    assert summary.last_seen == events[1]["timestamp"] and summary.last_seen > events[0]["timestamp"]
+    assert summary.active_desktop == "home"
+    assert [message.text for message in summary.recent_messages] == ["hello"]
+    assert find_client_id_for_page(events, "notes", "w1") is None
+
+
+def test_an_oversized_log_is_archived_aside_and_the_readers_read_the_live_stream_alone(tmp_path: Path) -> None:
+    """Section 6.5 of the app-usage-signals spec: past the threshold the stream is staged aside before a write and
+    gzipped off-thread, the next line starts a fresh stream, ``read_events`` reads only that stream, and only the
+    newest archives are kept."""
+    events_path = tmp_path / "events" / "client_activity" / "events.jsonl"
+    log = ClientActivityLog(events_path=events_path, archive_threshold_bytes=600)
+    # Three lines of about 220 bytes: the stream crosses the threshold on the third, so the next write stages it.
+    for index in range(3):
+        log.append_desktop_switch("c1", f"desk-{index}", f"desk-{index + 1}")
+    assert 600 < events_path.stat().st_size < 1200
+    older = events_path.read_bytes()
+    # Archives from before, named so they sort before the one made now; only the newest survive the pruning.
+    earlier_archives = [events_path.with_name(f"events.jsonl.2020010{day}000000000000.gz") for day in (1, 2, 3)]
+    for earlier_archive in earlier_archives:
+        earlier_archive.write_bytes(gzip.compress(b"earlier"))
+
+    log.append_window_input("c1", "home", "notes", "w1", WindowInputKind.INPUT, _T0)
+
+    (event,) = log.read_events()
+    assert event["type"] == "window_input"
+    wait_for(
+        lambda: sorted(path.suffix for path in events_path.parent.iterdir())
+        == [".gz"] * KEPT_CLIENT_ACTIVITY_ARCHIVE_COUNT + [".jsonl"],
+        timeout=10.0,
+        error_message="the staged client-activity log was never compressed and the older archives pruned",
+    )
+    (archive,) = [
+        path for path in events_path.parent.iterdir() if path.suffix == ".gz" and path not in earlier_archives
+    ]
+    assert gzip.decompress(archive.read_bytes()) == older
+    assert [path.exists() for path in earlier_archives] == [False, False, True]
+
+
+def test_one_archive_thread_runs_at_a_time_and_a_later_append_finishes_what_it_missed(tmp_path: Path) -> None:
+    """Appends come from request threads: while an archive thread is alive, an append that finds a staged stream
+    starts no second one (two compressions of one staged file would write one archive over the other), and the
+    first append after it finishes compresses what is still staged."""
+    log = _log(tmp_path)
+    log.append_desktop_switch("c1", "desk-0", "desk-1")
+    staged = log.events_path.with_name("events.jsonl.20200101000000000000.archiving")
+    staged.write_bytes(b"older")
+    is_released = threading.Event()
+    archiving = threading.Thread(target=is_released.wait, daemon=True)
+    archiving.start()
+    log._archive_thread = archiving
+
+    log.append_desktop_switch("c1", "desk-1", "desk-2")
+    assert log._archive_thread is archiving and staged.exists()
+
+    is_released.set()
+    archiving.join(timeout=10.0)
+    log.append_desktop_switch("c1", "desk-2", "desk-3")
+    assert log._archive_thread is not archiving
+    wait_for(
+        lambda: not staged.exists() and staged.with_suffix(".gz").exists(),
+        timeout=10.0,
+        error_message="the staged client-activity log was never compressed",
+    )
+    assert gzip.decompress(staged.with_suffix(".gz").read_bytes()) == b"older"

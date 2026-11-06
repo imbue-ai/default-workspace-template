@@ -1,0 +1,1 @@
+- Before each snapshot, the tick runs env-converge's capture in-process instead of `uv run --no-sync env-converge capture`. Each probe the capture runs keeps its own timeout, and the overall 120 s ceiling is gone. The `env_record_capture_completed` event carries `error_message` in place of `exit_code` and `stderr`.

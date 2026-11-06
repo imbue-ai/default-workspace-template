@@ -311,6 +311,7 @@ export function rosterParticipantRecord(key: string, overrides: Partial<RosterPa
     is_connected: true,
     last_seen: null,
     last_input_at: null,
+    is_admitted_by_domain: false,
     ...overrides,
   };
 }

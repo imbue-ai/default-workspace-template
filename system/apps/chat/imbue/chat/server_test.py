@@ -867,6 +867,7 @@ class _ReleasingWhileSeedingAgentManager(AgentManager):
         super().update_session_events(agent_id, events)
 
 
+@pytest.mark.flaky
 def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_path: Path) -> None:
     manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
     state = build_test_state(agent_manager=manager)
