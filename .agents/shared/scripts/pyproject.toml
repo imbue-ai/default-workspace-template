@@ -7,6 +7,8 @@ dependencies = [
     "pyyaml>=6",
     # serve_isolated_instance registers its servers through forward_port.
     "workspace-scripts",
+    # serve_isolated_instance checks a --copy fits against what the disk can still take.
+    "disk-headroom",
 ]
 
 [build-system]
