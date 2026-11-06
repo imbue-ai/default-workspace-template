@@ -13,6 +13,13 @@
  * tray tells the viewer's own entries from the rest. The connected set itself arrives as
  * `presence_updated` over the shell's WebSocket, one entry per account, each with the name and
  * profile picture imbue_cloud holds for them.
+ *
+ * The heartbeat also carries which windows a person interacted with since the last answered
+ * heartbeat (`client_id` and `input_windows`, the app-usage-signals spec section 6.3): the page
+ * driver reports each `shell:input` with its window and app, and focus landing in a page that binds
+ * no contract, and the shell writes one `window_input` per client, window and minute. The set is
+ * cleared once a heartbeat is answered and kept across a failed send, so nothing is lost to an
+ * outage; input outranks focus for a window reported with both.
  */
 
 import m from "mithril";
@@ -31,6 +38,17 @@ export interface OwnIdentity {
   participant: string;
 }
 
+/** What a page's report says a person did in a window: the page's own input report, or focus landing in a page
+ *  that reports none (the app-usage-signals spec, section 6.4). */
+export type PageInputKind = "input" | "focus";
+
+/** One window the next heartbeat reports, as the shell reads it. */
+export interface WindowInputReport {
+  window_id: string;
+  app: string;
+  kind: PageInputKind;
+}
+
 /** The input events whose newest occurrence the heartbeat reports. */
 const INPUT_EVENT_TYPES: readonly string[] = ["pointerdown", "keydown"];
 
@@ -39,6 +57,9 @@ let ownIdentity: OwnIdentity | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let isStarted = false;
 let lastInputAt: Date | null = null;
+let clientId: string | null = null;
+/** The windows reported since the last answered heartbeat, by window id; input outranks focus. */
+let inputWindows = new Map<string, { app: string; kind: PageInputKind }>();
 const identityListeners = new Set<() => void>();
 
 /** Hear when a heartbeat changes who this page is (the first answer, or a new account): the viewing chrome and
@@ -66,9 +87,22 @@ function noteInput(): void {
 
 /** Count input a page of this client reported (``shell:input``): typing and clicking happen inside the app
  *  frames, whose events never bubble to this window, so the pages say so themselves (the multiplayer spec,
- *  section 4.3). */
-export function notePageInput(): void {
-  noteInput();
+ *  section 4.3), and remember the window for the next heartbeat (the app-usage-signals spec, section 6.3).
+ *  Focus landing in a page that reports none is remembered the same way but says nothing about the person
+ *  being active: the shell may have put the window on screen itself. */
+export function notePageInput(windowId: string, app: string, kind: PageInputKind): void {
+  if (kind === "input") noteInput();
+  rememberInputWindow(windowId, { app, kind });
+}
+
+function rememberInputWindow(windowId: string, report: { app: string; kind: PageInputKind }): void {
+  const known = inputWindows.get(windowId);
+  if (known === undefined || known.kind === "focus") inputWindows.set(windowId, report);
+}
+
+/** The windows the next heartbeat will report, in the order they were first noted. Test-only. */
+export function pendingInputReportsForTesting(): WindowInputReport[] {
+  return [...inputWindows].map(([window_id, { app, kind }]) => ({ window_id, app, kind }));
 }
 
 function parseOwnIdentity(body: unknown): OwnIdentity | null {
@@ -99,7 +133,15 @@ function inputAgeSeconds(): number | null {
 
 async function sendHeartbeat(): Promise<void> {
   let response: Response;
-  const body = { input_age_seconds: inputAgeSeconds() };
+  // The reports leave with this heartbeat and come back only if it fails: a report noted meanwhile is the next
+  // heartbeat's, and a window reported both times keeps the stronger kind.
+  const reported = inputWindows;
+  inputWindows = new Map();
+  const body = {
+    input_age_seconds: inputAgeSeconds(),
+    client_id: clientId,
+    input_windows: [...reported].map(([window_id, { app, kind }]) => ({ window_id, app, kind })),
+  };
   try {
     response = await fetch(apiUrl("/api/presence/heartbeat"), {
       method: "POST",
@@ -109,6 +151,7 @@ async function sendHeartbeat(): Promise<void> {
     });
   } catch (e) {
     console.warn("[si-presence] heartbeat failed", e);
+    keepReports(reported);
     return;
   }
   if (response.status === 204) {
@@ -117,6 +160,7 @@ async function sendHeartbeat(): Promise<void> {
   }
   if (!response.ok) {
     console.warn(`[si-presence] heartbeat answered HTTP ${response.status}`);
+    keepReports(reported);
     return;
   }
   const before = ownIdentity?.participant ?? null;
@@ -125,6 +169,11 @@ async function sendHeartbeat(): Promise<void> {
     for (const listener of identityListeners) listener();
   }
   m.redraw();
+}
+
+/** Put the reports of a heartbeat that did not get through back for the next one. */
+function keepReports(reported: ReadonlyMap<string, { app: string; kind: PageInputKind }>): void {
+  for (const [windowId, report] of reported) rememberInputWindow(windowId, report);
 }
 
 function startTimer(): void {
@@ -149,10 +198,11 @@ function handleVisibilityChange(): void {
   }
 }
 
-/** Start heartbeating for this page. Called once when the shell boots; safe to call again. */
-export function startPresenceHeartbeat(): void {
+/** Start heartbeating for this page as ``pageClientId``. Called once when the shell boots; safe to call again. */
+export function startPresenceHeartbeat(pageClientId: string): void {
   if (isStarted) return;
   isStarted = true;
+  clientId = pageClientId;
   document.addEventListener("visibilitychange", handleVisibilityChange);
   for (const type of INPUT_EVENT_TYPES) window.addEventListener(type, noteInput, { capture: true, passive: true });
   handleVisibilityChange();
@@ -174,5 +224,7 @@ export function resetPresenceForTesting(): void {
   ownIdentity = null;
   presentUsers = [];
   lastInputAt = null;
+  clientId = null;
+  inputWindows = new Map();
   identityListeners.clear();
 }

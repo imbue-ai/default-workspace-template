@@ -207,6 +207,16 @@ process restarts:
   With no window open yet, pass `--open` instead of `--refresh`: the call
   opens the window only after the checks pass, the order step 3 asks for.
 
+  While the app is still framed as a mock (`build-app` keeps a new app in a
+  labeled mock frame until it reads its real data, and `uv run --no-sync
+  workspace-layout list` then lists `<name>-sketch` in its place), end this
+  call, or the dependency change's below, with `&& uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <name>` in place of
+  `--refresh`: it re-frames the app with the frame's own note (keeping the
+  restarted app out of the launcher) and reloads the mock window. With no
+  window open yet, end it with `mock_frame.py up --app <name> --open`
+  instead. Once a framed app reads its real data, take the frame down as
+  `build-app` Step 2 says.
+
   A daemon with no port cannot use `verify_app.py` (it needs a port to
   check), so bounce it with supervisord directly; the call waits out the
   program's `startsecs`, which is 30 s only if its block sets `startsecs=30`:
@@ -263,6 +273,14 @@ to click Refresh:
 ```bash
 uv run --no-sync workspace-layout refresh --app <name>
 ```
+
+While the app is still framed as a mock (`workspace-layout list` lists
+`<name>-sketch`, as step 2 says), the user's window is the frame's: reload it
+with `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app
+<name>` instead, and never `open` the app itself. With no window open yet,
+surface the frame with `uv run --no-sync
+.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name>
+--open`, which keeps the frame's note.
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with

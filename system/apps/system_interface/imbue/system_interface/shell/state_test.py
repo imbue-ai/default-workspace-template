@@ -47,6 +47,7 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
+from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -305,7 +306,7 @@ def _launch_waking_manager(
         is_enabled=is_enabled,
         count_windows_by_app=lambda: {},
         granted_app_names=lambda: set(),
-        program_states=lambda: {"docs": "STOPPED"},
+        program_states=lambda: {"docs": SupervisorProgramState(statename="STOPPED", pid=0)},
         start_program=start_program,
         stop_program=lambda program: None,
         clock=clock,

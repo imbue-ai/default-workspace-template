@@ -78,7 +78,7 @@ import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 _logger = logging.getLogger(__name__)
 
@@ -1089,24 +1089,43 @@ def register(
         )
 
 
+class ManifestOverrides(TypedDict, total=False):
+    """The manifest-owned keys a registration may replace on an app's row."""
+
+    internal: bool
+    stop_when_no_windows: bool
+
+
 def register_manifest(
-    path: Path, manifest_path: Path, url: str, name_from_flag: str | None = None
-) -> None:
+    path: Path,
+    manifest_path: Path,
+    url: str,
+    *,
+    name_from_flag: str | None = None,
+    overrides: ManifestOverrides | None = None,
+) -> str:
     """Register the app ``manifest_path`` describes at ``url`` in the registry at ``path``, as
-    ``--manifest`` does (``name_from_flag``, ``--name``, must match the manifest's); raises
-    RegistrationError when the manifest or the registration is refused."""
+    ``--manifest`` does; return its name.
+
+    ``name_from_flag`` (``--name``) must match the manifest's name. ``overrides`` replaces the
+    manifest's values on the row for this registration only: the next registration from the
+    manifest alone (the app's own restart) writes the manifest's values back. Raises
+    RegistrationError when the manifest or the registration is refused.
+    """
     manifest_fields, icon_path, manifest_error = _read_manifest(
         manifest_path, name_from_flag
     )
     if manifest_error is not None:
         raise RegistrationError(manifest_error)
+    name = str(manifest_fields["name"])
     register(
         path,
-        str(manifest_fields["name"]),
+        name,
         url,
         icon_path=icon_path,
-        manifest_fields=manifest_fields,
+        manifest_fields={**manifest_fields, **(overrides or {})},
     )
+    return name
 
 
 def remove(path: Path, name: str) -> None:
