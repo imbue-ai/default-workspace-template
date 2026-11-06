@@ -389,10 +389,10 @@ command" below) once memory has settled. A real failure fails again.
 **A failing test you would change.** Before editing a test that failed, run
 it on the tree before your change: with everything committed, `git checkout
 --detach "$DIFF_BASE"`, run the `rerun these` command `run-tests` printed for
-its command, with `uv run --no-sync` in place of `uv run` (your branch's venv
-stays), then check your branch back out. Say in your report whether your change caused the failure or it
-was already there; a fix to a test that already failed is reported as a fix
-to a pre-existing failure, not as part of your gate.
+its command as it is (its `uv run --no-sync` keeps your branch's venv), then
+check your branch back out. Say in your report whether your change caused the
+failure or it was already there; a fix to a test that already failed is
+reported as a fix to a pre-existing failure, not as part of your gate.
 
 **A suite the selector left out.** The selector reads only declarations:
 `pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
