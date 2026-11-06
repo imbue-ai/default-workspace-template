@@ -224,7 +224,7 @@ def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_ro
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
-def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace: Path) -> None:
+def test_a_supervisord_block_runs_the_app_it_starts_and_the_wiring_checks(workspace: Path) -> None:
     write_supervisord_dropin(workspace, "notes", ("program:notes",))
     commit_everything(workspace, "wire notes")
 
@@ -239,8 +239,8 @@ def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace
     assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
 
 
-def test_a_supervisord_block_no_app_owns_runs_the_band_check(workspace: Path) -> None:
-    # A service's block: no manifest claims it, but it still has to name its OOM band.
+def test_a_supervisord_block_no_app_owns_runs_the_wiring_checks(workspace: Path) -> None:
+    # A service's block: no manifest claims it, but both checks that read every block still run.
     write_supervisord_dropin(workspace, "fetcher", ("program:fetcher",))
     commit_everything(workspace, "wire a service")
 
