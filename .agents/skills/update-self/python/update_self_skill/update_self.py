@@ -718,7 +718,6 @@ def _cmd_restart_self(args: argparse.Namespace) -> int:
         return 1
     note_path = start_self_restart(
         repo_root,
-        chat_id,
         compose_self_restart_note(
             args.reason, read_restart_report(Path(args.restart_report))
         ),

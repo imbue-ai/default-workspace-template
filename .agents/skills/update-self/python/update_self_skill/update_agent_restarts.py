@@ -302,12 +302,12 @@ def compose_self_restart_failure_note(problem: str) -> str:
 
 def start_self_restart(
     repo_root: Path,
-    chat_id: str,
     note: str,
     environ: Mapping[str, str],
     helper_argv: Sequence[str],
 ) -> Path:
-    """Write the note and detach the helper that restarts ``chat_id`` once its turn ends; the note's path.
+    """Write the note and detach the helper, run as ``helper_argv``, that restarts the chat it names
+    once its turn ends; the note's path.
 
     The helper leads a session of its own with no stdio shared with the caller, and has no
     agent id in its environment: the restart it performs kills every process carrying the
