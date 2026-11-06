@@ -791,13 +791,12 @@ export function buildSections(
       // with the raw ticket id. Any work batched with that command stays in
       // the step that was already open (or renders inline if none was).
       const stepTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
-      if (current.dormant_step_id !== null) {
-        if (parsed.render !== null && isWork(parsed.render)) {
-          current.current_step_id = current.dormant_step_id;
-          current.dormant_step_id = null;
-        } else if (stepTransitions.length > 0) {
-          current.dormant_step_id = null;
-        }
+      if (
+        current.dormant_step_id !== null &&
+        ((parsed.render !== null && isWork(parsed.render)) || stepTransitions.length > 0)
+      ) {
+        current.current_step_id = current.dormant_step_id;
+        current.dormant_step_id = null;
       }
       // Apply transitions in transcript order so each step node lands at its
       // real position -- a batched `tk close a && tk start b` must keep a's node

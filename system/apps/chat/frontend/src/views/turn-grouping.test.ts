@@ -667,6 +667,30 @@ describe("narration and close-time ejection", () => {
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
   });
 
+  // Closing another step left open earlier is the agent back on that request: the step still
+  // open is current again, so the work that follows joins it.
+  it("takes a carried-over step up again once the agent closes another one left open", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      tkMsg("t2", "tk start s2", "t2"),
+      result("t2", "t2", startOut("s2", "Clear the cache")),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk close s1", "c1"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Checked")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBe("s2");
+    expect(stepItems(sections[1].items).map((step) => [step.ticket_id, step.status])).toEqual([
+      ["s1", "done"],
+      ["s2", "active"],
+    ]);
+    expect(stepItems(sections[1].items)[1].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
   // Starting another step moves on without taking the carried-over one up, so the new turn draws
   // only the step it works in.
   it("draws only the new step when the agent starts another one in the next turn", () => {
