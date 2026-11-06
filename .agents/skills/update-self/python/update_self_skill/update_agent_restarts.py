@@ -44,9 +44,10 @@ SELF_RESTART_NOTE_NAME = "note.md"
 SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
 SELF_RESTART_LOG_NAME = "helper.log"
 
+# Cross-layer contract with the chat app (its chat list's ``ChatStatus``, and its interrupt route's
+# ``InterruptAgentRequest`` and 409 answers); ``system/apps/chat``'s server tests pin these four
+# against it.
 STOPPED_CHAT_STATUS = "stopped"
-# Cross-layer contract with the chat app's interrupt route (its ``InterruptAgentRequest`` and its
-# 409 answers); ``system/apps/chat``'s server tests pin these against it.
 INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}
 BUSY_WITH_FIELD = "busy_with"
 # What the chat app's 409 for a chat mid-handoff carries instead of ``BUSY_WITH_FIELD``.
