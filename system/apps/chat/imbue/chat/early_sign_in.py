@@ -96,10 +96,15 @@ class EarlySignIn(MutableModel):
         with self._lock:
             self._is_done = True
 
-    def status(self, auth_flows: AuthFlowService) -> EarlySignInStatus:
+    def status(self, is_flow_pending: bool) -> EarlySignInStatus:
+        """Where it stands, given whether the sign-in service has a flow under way.
+
+        Asked of the service by the caller, never under this lock: the service commits through
+        `commit_account` while holding its own lock, so taking the two the other way round deadlocks.
+        """
         with self._lock:
             return EarlySignInStatus(
-                is_flow_pending=auth_flows.is_flow_pending(),
+                is_flow_pending=is_flow_pending,
                 is_done=self._is_done,
                 account_ids=tuple(self._account_ids),
             )
@@ -127,7 +132,8 @@ def _asset(filename: str) -> Response:
 
 def _status() -> Response:
     early_sign_in: EarlySignIn = current_app.config[_EARLY_SIGN_IN_CONFIG_KEY]
-    return model_response(early_sign_in.status(current_app.config[_AUTH_FLOWS_CONFIG_KEY]))
+    auth_flows: AuthFlowService = current_app.config[_AUTH_FLOWS_CONFIG_KEY]
+    return model_response(early_sign_in.status(auth_flows.is_flow_pending()))
 
 
 def _done() -> Response:
