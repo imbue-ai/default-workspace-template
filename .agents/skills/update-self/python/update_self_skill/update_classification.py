@@ -427,10 +427,20 @@ HARNESS_VERSION_PIN_VARS = (
 )
 MNGR_SETTINGS_PATH = ".mngr/settings.toml"
 _PIN_DEFAULT_LINE = re.compile(r'^:\s*"\$\{(\w+):=([^}]*)\}"', re.MULTILINE)
-# Antigravity's only version authority is its versioned installer's name.
-_AGY_INSTALLER = re.compile(r"^system/scripts/agy_install-[^/]+\.sh$")
+# Antigravity's version authority is the ``AGY_VERSION`` its installer pins. The installer is
+# ``agy_install.sh``; a tree from before its rename carries ``agy_install-<version>.sh``.
+AGY_INSTALLER_NAME = re.compile(r"^system/scripts/agy_install(-[^/]+)?\.sh$")
+_AGY_VERSION_LINE = re.compile(r'^(AGY_VERSION)="([^"]*)"', re.MULTILINE)
 # Code a harness loads into its process when it starts.
 _HARNESS_EXTENSION_DIRS = (".pi/extensions/",)
+
+
+class HarnessPinFiles(NamedTuple):
+    """The files one tree pins its agent harnesses' versions in, as text (empty where absent)."""
+
+    setup_system: str
+    mngr_settings: str
+    agy_installer: str
 
 
 class AgentRestartVerdict(NamedTuple):
@@ -444,6 +454,11 @@ def harness_version_pins(setup_system_text: str) -> dict[str, str]:
     """The harness version defaults ``setup_system.sh`` sets, by variable."""
     pins = dict(_PIN_DEFAULT_LINE.findall(setup_system_text))
     return {var: pins[var] for var in HARNESS_VERSION_PIN_VARS if var in pins}
+
+
+def agy_installer_pin(agy_installer_text: str) -> dict[str, str]:
+    """The ``AGY_VERSION`` the Antigravity installer pins, by variable."""
+    return dict(_AGY_VERSION_LINE.findall(agy_installer_text))
 
 
 def agent_type_versions(mngr_settings_text: str) -> dict[str, str]:
@@ -468,32 +483,27 @@ def _changed_values(
 
 def agent_restart_verdict(
     changed_paths: Sequence[str],
-    setup_system_before: str,
-    setup_system_after: str,
-    mngr_settings_before: str,
-    mngr_settings_after: str,
+    before: HarnessPinFiles,
+    after: HarnessPinFiles,
 ) -> AgentRestartVerdict:
     """Whether an update changes what a running agent's harness loaded when it started.
 
-    Covers what can be read off the diff: a harness version pin, the Antigravity installer,
-    and a harness extension tree. Harness config whose loading the diff cannot place is the
-    worker guide's to judge.
+    Covers what can be read off the diff: a harness version pin (Antigravity's in its
+    installer) and a harness extension tree. Harness config whose loading the diff cannot
+    place is the worker guide's to judge.
     """
     triggers = [
         *_changed_values(
             "{}",
-            harness_version_pins(setup_system_before),
-            harness_version_pins(setup_system_after),
+            harness_version_pins(before.setup_system)
+            | agy_installer_pin(before.agy_installer),
+            harness_version_pins(after.setup_system)
+            | agy_installer_pin(after.agy_installer),
         ),
         *_changed_values(
             "agent_types.{}.version",
-            agent_type_versions(mngr_settings_before),
-            agent_type_versions(mngr_settings_after),
-        ),
-        *(
-            f"Antigravity installer: {path}"
-            for path in changed_paths
-            if _AGY_INSTALLER.match(path)
+            agent_type_versions(before.mngr_settings),
+            agent_type_versions(after.mngr_settings),
         ),
         *(
             f"harness extension: {path}"

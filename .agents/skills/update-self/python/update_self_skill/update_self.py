@@ -223,7 +223,9 @@ from update_self_skill.update_chat_pause import (
     stop_runner,
 )
 from update_self_skill.update_classification import (
+    AGY_INSTALLER_NAME,
     MNGR_SETTINGS_PATH,
+    HarnessPinFiles,
     agent_restart_verdict,
     classify_merge,
 )
@@ -437,14 +439,31 @@ def _file_at(ref: str, path: str, repo_root: Path) -> str:
     ).stdout
 
 
+def _harness_pin_files_at(ref: str, repo_root: Path) -> HarnessPinFiles:
+    """The files ``ref``'s tree pins its harnesses' versions in, whichever name its Antigravity
+    installer goes by there."""
+    agy_installers = [
+        path
+        for path in _list_names(
+            _git(["ls-tree", "--name-only", ref, "--", "system/scripts/"], repo_root)
+        )
+        if AGY_INSTALLER_NAME.match(path)
+    ]
+    return HarnessPinFiles(
+        setup_system=_file_at(ref, PROVISIONER_SCRIPT, repo_root),
+        mngr_settings=_file_at(ref, MNGR_SETTINGS_PATH, repo_root),
+        agy_installer=_file_at(ref, agy_installers[0], repo_root)
+        if agy_installers
+        else "",
+    )
+
+
 def _cmd_agent_restart_verdict(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     verdict = agent_restart_verdict(
         _list_names(_git(["diff", "--name-only", args.before, args.after], repo_root)),
-        _file_at(args.before, PROVISIONER_SCRIPT, repo_root),
-        _file_at(args.after, PROVISIONER_SCRIPT, repo_root),
-        _file_at(args.before, MNGR_SETTINGS_PATH, repo_root),
-        _file_at(args.after, MNGR_SETTINGS_PATH, repo_root),
+        _harness_pin_files_at(args.before, repo_root),
+        _harness_pin_files_at(args.after, repo_root),
     )
     print(
         json.dumps(
