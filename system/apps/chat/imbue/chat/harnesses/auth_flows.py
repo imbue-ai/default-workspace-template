@@ -285,6 +285,9 @@ class AuthFlowService:
     # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
     # with a 60s timeout each and this service holds one lock across every route.
     _restart_bound_agents: Callable[[str], None]
+    # Writes the index row that makes a signed-in folder an account: (account id, lane id, display).
+    # Injected so the early sign-in can move the account into the live store as it commits.
+    _commit_account: Callable[[str, str, str], accounts.Account]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -304,6 +307,7 @@ class AuthFlowService:
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
+        commit_account: Callable[[str, str, str], accounts.Account] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -323,6 +327,9 @@ class AuthFlowService:
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
         service._connect_login_client = login_client_connector or connect_login_client
+        service._commit_account = commit_account or (
+            lambda account_id, lane_id, display: accounts.commit_account(account_id, lane_id, display, home)
+        )
         return service
 
     # lifecycle
@@ -666,6 +673,16 @@ class AuthFlowService:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
 
+    def abandon(self) -> None:
+        """Abandon whatever flow is running, for a service that is shutting down."""
+        with self._lock:
+            self._drop_locked()
+
+    def is_flow_pending(self) -> bool:
+        """Whether a sign-in is under way: started, and neither done nor failed."""
+        with self._lock:
+            return self._session is not None and self._session.state is FlowState.PENDING
+
     def provider_name(self, flow_id: str) -> str:
         """The provider a live flow signs in to, as the chooser names it."""
         with self._lock:
@@ -839,7 +856,7 @@ class AuthFlowService:
         method = session.method
         if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
             _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
-        account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
+        account = self._commit_account(session.account_id, session.lane.id, display)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
         # daemon re-reading a swapped credential either. One rule for every harness rather than

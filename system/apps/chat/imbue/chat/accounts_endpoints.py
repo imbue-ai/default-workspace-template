@@ -3,9 +3,10 @@
 Kept out of server.py for the same reason the claude-auth handlers are: the modal's logic
 does not belong in the router.
 
-The `AuthFlowService` holds the live PTY, so it is created once in `main.build_production_state` and
-read back through `get_state()` here -- the subprocess has to survive between the POST that
-starts a flow and the polls that advance it.
+The `AuthFlowService` holds the live PTY, so it is created once and handed to `register_routes`,
+which keeps it on the app for these routes -- the subprocess has to survive between the POST that
+starts a flow and the polls that advance it. It is handed over rather than read off the chat's
+state because the early sign-in (`early_sign_in.py`) serves these routes with no chat around them.
 """
 
 from __future__ import annotations
@@ -21,11 +22,13 @@ from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
+from flask import current_app
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import StrictBool
 
 from imbue.chat import accounts
+from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowStart
@@ -46,10 +49,11 @@ from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import OkResponse
-from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
+
+_AUTH_FLOWS_CONFIG_KEY: Final = "imbue.chat.accounts_endpoints.auth_flows"
 
 # Long enough for "Anthropic personal (work laptop)", short enough that no row can be made to
 # push a flyout wider than the card it hangs off.
@@ -157,6 +161,11 @@ class UpdateAccountRequest(FrozenModel):
     is_default: StrictBool | None = Field(
         default=None, description="Whether to pin the account as the one a new chat launches on"
     )
+
+
+def _auth_flows() -> AuthFlowService:
+    """The sign-in service `register_routes` was given for the current app."""
+    return current_app.config[_AUTH_FLOWS_CONFIG_KEY]
 
 
 def _error_response(detail: str, status_code: int = 400) -> Response:
@@ -301,9 +310,7 @@ def start_flow() -> Response:
     """
     start_request = parse_request_body(StartFlowRequest)
     try:
-        started = get_state().auth_flows.start(
-            start_request.lane_id, start_request.method_id, start_request.account_id or None
-        )
+        started = _auth_flows().start(start_request.lane_id, start_request.method_id, start_request.account_id or None)
     except LaneNotFoundError as e:
         return _error_response(str(e), status_code=404)
     # A re-auth names an account, and `start` resolves it through the index rather than the
@@ -318,7 +325,7 @@ def start_flow() -> Response:
 def poll_flow(flow_id: str) -> Response:
     """Where a sign-in flow stands: pending, done with its account, or failed with the reason."""
     try:
-        return model_response(get_state().auth_flows.poll(flow_id))
+        return model_response(_auth_flows().poll(flow_id))
     except FlowError as e:
         return _error_response(str(e), status_code=404)
 
@@ -326,7 +333,7 @@ def poll_flow(flow_id: str) -> Response:
 def submit_flow(flow_id: str) -> Response:
     """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
     submit_request = parse_request_body(SubmitFlowRequest)
-    service = get_state().auth_flows
+    service = _auth_flows()
     try:
         if submit_request.code is not None:
             status = service.submit_code(flow_id, submit_request.code.strip())
@@ -354,7 +361,7 @@ def relay_flow_callback(flow_id: str) -> Response:
     if refusal is not None:
         return refusal
     callback = parse_request_body(RelayCallbackRequest)
-    service = get_state().auth_flows
+    service = _auth_flows()
     try:
         provider_name = service.provider_name(flow_id)
         status = service.relay_callback(flow_id, callback.path_and_query)
@@ -370,7 +377,7 @@ def abort_flow(flow_id: str) -> Response:
     # index. A 500 here reaches a UI that has already gone, and the user sees a failed request
     # for something they did not ask for.
     try:
-        get_state().auth_flows.abort(flow_id)
+        _auth_flows().abort(flow_id)
     except (accounts.AccountError, OSError) as e:
         logger.warning("Aborting sign-in flow {} did not unwind cleanly: {}", flow_id, e)
     return model_response(OkResponse())
@@ -425,12 +432,9 @@ ROUTE_TABLE: Final[RouteTable] = {
 }
 
 
-def register_routes(application: Flask) -> None:
-    """Wire the chooser's endpoints onto the Flask application.
-
-    `main.build_production_state` (or the test state builder) puts an `AuthFlowService` on the
-    app state before any of these serve a request.
-    """
+def register_routes(application: Flask, auth_flows: AuthFlowService) -> None:
+    """Wire the chooser's endpoints onto the Flask application, served by `auth_flows`."""
+    application.config[_AUTH_FLOWS_CONFIG_KEY] = auth_flows
     application.add_url_rule("/api/lanes", view_func=list_lanes, methods=["GET"])
     application.add_url_rule("/api/accounts", view_func=list_accounts, methods=["GET"])
     application.add_url_rule("/api/accounts", view_func=start_flow, methods=["POST"])
