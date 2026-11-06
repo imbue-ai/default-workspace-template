@@ -10,6 +10,7 @@ folder.
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
 import click
 from loguru import logger
@@ -33,7 +34,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
 # The exit status for an app the store cannot launch: supervisord's retries end in FATAL rather than looping.
-LAUNCH_FAILED_EXIT_CODE = 2
+LAUNCH_FAILED_EXIT_CODE: Final[int] = 2
 
 
 @pure

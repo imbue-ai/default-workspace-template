@@ -1,8 +1,10 @@
 /**
  * The questions the store asks before it changes anything: install this third-party app (what, from where, under
- * which license, at what cost, and that it is someone else's code), uninstall this one, keeping or deleting its
- * files, and add this app a chat worked out how to install from GitHub (the exact commands it will run). A refusal
- * from the store (it won't fit, it is busy) shows in the dialog that asked.
+ * which license, at what cost, and that it is someone else's code); uninstall this one, keeping or deleting its
+ * files; take an added app off the store; update an installed app; and add (or update to) an app a chat worked out
+ * how to install from GitHub (the exact commands it will run). A refusal from the store (it won't fit, it is busy)
+ * shows in the dialog that asked. Each opens with the focus on its way out (Cancel, or Not now), never on the button
+ * that changes something.
  */
 
 import m from "mithril";
@@ -10,25 +12,14 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import type { PendingRepoAdd, StoreApp, WorkspaceRoom } from "../models/Store";
-import { buildText, formatMb, memoryText } from "../room";
+import { buildNeeds, buildText, formatMb, memoryText } from "../room";
 import { BODY_SCROLL_CLASS, UNREVIEWED_WARNING } from "./AddAppDialog";
-import { verdictBadge } from "./AppParts";
+import { againstRoom, dialogCard, fact, focusOnCreate, refusal, verdictBadge, warningNote } from "./AppParts";
 
 const INSTALL_DIALOG_WIDTH = 480;
 export const THIRD_PARTY_WARNING =
   "This is third-party code from the open-source project above, not something this workspace wrote. It runs " +
   "inside your workspace and can read your files there.";
-
-function fact(label: string, value: m.Children): m.Vnode[] {
-  return [
-    m("dt", { class: "type-helper text-faint" }, label),
-    m("dd", { class: "m-0 type-body text-primary" }, value),
-  ];
-}
-
-function refusal(error: string | null): m.Vnode | null {
-  return error === null ? null : m("p", { class: "m-0 mb-4 type-helper text-danger", "data-refusal": "" }, error);
-}
 
 export interface InstallDialogAttrs {
   app: StoreApp;
@@ -44,16 +35,17 @@ export function InstallDialog(): m.Component<InstallDialogAttrs> {
   return {
     view(vnode) {
       const { app, room, error, isSubmitting, onCancel, onConfirm } = vnode.attrs;
+      const title = `Install ${app.title}?`;
       return m(
         Modal,
         {
-          title: `Install ${app.title}?`,
+          title,
           width: INSTALL_DIALOG_WIDTH,
           onDismiss: onCancel,
           onEscape: onCancel,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "install" },
+          card: dialogCard("install", title),
           actions: [
-            m(Button, { onclick: onCancel }, "Cancel"),
+            m(Button, { oncreate: focusOnCreate, onclick: onCancel }, "Cancel"),
             m(
               Button,
               {
@@ -87,24 +79,28 @@ export function InstallDialog(): m.Component<InstallDialogAttrs> {
               ),
             ),
             ...fact("License", app.license),
-            ...fact("Disk", [
-              app.disk_mb === null ? "unknown " : `about ${formatMb(app.disk_mb)} `,
-              m("span", { class: "type-helper text-faint" }, `(${formatMb(room.disk_free_mb)} free)`),
-            ]),
-            ...fact("Memory", [
-              app.memory_in_use_mb === null || app.memory_idle_mb === null
-                ? `${memoryText(app)} `
-                : `about ${formatMb(app.memory_in_use_mb)} in use, ${formatMb(app.memory_idle_mb)} idle `,
-              m("span", { class: "type-helper text-faint" }, `(${formatMb(room.memory_available_mb)} available)`),
-            ]),
+            ...fact(
+              "Disk",
+              againstRoom(
+                app.disk_mb === null ? "unknown" : `about ${formatMb(app.disk_mb)}`,
+                room.disk_free_mb,
+                "free",
+              ),
+            ),
+            ...fact(
+              "Memory",
+              againstRoom(
+                app.memory_in_use_mb === null || app.memory_idle_mb === null
+                  ? memoryText(app)
+                  : `about ${formatMb(app.memory_in_use_mb)} in use, ${formatMb(app.memory_idle_mb)} idle`,
+                room.memory_available_mb,
+                "available",
+              ),
+            ),
             ...(buildText(app) === "" ? [] : fact("Building", buildText(app))),
             ...fact("Room", verdictBadge(app.verdict)),
           ]),
-          m(
-            "p",
-            { class: "m-0 mb-4 rounded-lg bg-warning-surface px-3 py-2 type-helper text-primary", "data-warning": "" },
-            app.is_added ? UNREVIEWED_WARNING : THIRD_PARTY_WARNING,
-          ),
+          warningNote(app.is_added ? UNREVIEWED_WARNING : THIRD_PARTY_WARNING),
           refusal(error ?? (app.blocked_reason === "" ? null : app.blocked_reason)),
         ],
       );
@@ -126,15 +122,16 @@ export function UninstallDialog(): m.Component<UninstallDialogAttrs> {
     view(vnode) {
       const { app, error, isSubmitting, onCancel, onConfirm } = vnode.attrs;
       const freed = app.measured_disk_mb ?? app.disk_mb ?? 0;
+      const title = `Uninstall ${app.title}?`;
       return m(
         Modal,
         {
-          title: `Uninstall ${app.title}?`,
+          title,
           onDismiss: onCancel,
           onEscape: onCancel,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "uninstall" },
+          card: dialogCard("uninstall", title),
           actions: [
-            m(Button, { onclick: onCancel }, "Cancel"),
+            m(Button, { oncreate: focusOnCreate, onclick: onCancel }, "Cancel"),
             m(
               Button,
               {
@@ -190,15 +187,16 @@ export function RemoveDialog(): m.Component<RemoveDialogAttrs> {
   return {
     view(vnode) {
       const { app, error, isSubmitting, onCancel, onConfirm } = vnode.attrs;
+      const title = `Remove ${app.title} from the store?`;
       return m(
         Modal,
         {
-          title: `Remove ${app.title} from the store?`,
+          title,
           onDismiss: onCancel,
           onEscape: onCancel,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "remove" },
+          card: dialogCard("remove", title),
           actions: [
-            m(Button, { onclick: onCancel }, "Cancel"),
+            m(Button, { oncreate: focusOnCreate, onclick: onCancel }, "Cancel"),
             m(
               Button,
               {
@@ -254,27 +252,20 @@ export function RepoAddDialog(): m.Component<RepoAddDialogAttrs> {
   return {
     view(vnode) {
       const { pending, room, error, isSubmitting, onLater, onDiscard, onConfirm } = vnode.attrs;
-      const building =
-        pending.build_memory_mb === null && pending.build_disk_mb === null
-          ? null
-          : [
-              pending.build_memory_mb === null ? null : `${formatMb(pending.build_memory_mb)} of memory`,
-              pending.build_disk_mb === null ? null : `${formatMb(pending.build_disk_mb)} of disk`,
-            ]
-              .filter((part) => part !== null)
-              .join(" and ");
+      const building = buildNeeds(pending.build_memory_mb, pending.build_disk_mb);
       const isUpdate = pending.replaces !== "";
+      const title = isUpdate ? `Update ${pending.title} to ${pending.version}?` : `Add ${pending.title} to the store?`;
       return m(
         Modal,
         {
-          title: isUpdate ? `Update ${pending.title} to ${pending.version}?` : `Add ${pending.title} to the store?`,
+          title,
           width: INSTALL_DIALOG_WIDTH,
           onDismiss: onLater,
           onEscape: onLater,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "repo-add" },
+          card: dialogCard("repo-add", title),
           actions: [
             m(Button, { extra: "app-store-discard-repo-add", disabled: isSubmitting, onclick: onDiscard }, "Discard"),
-            m(Button, { onclick: onLater }, "Not now"),
+            m(Button, { oncreate: focusOnCreate, onclick: onLater }, "Not now"),
             m(
               Button,
               {
@@ -332,14 +323,22 @@ export function RepoAddDialog(): m.Component<RepoAddDialogAttrs> {
                 `${pending.repository} at ${pending.commit.slice(0, 12)}`,
               ),
             ]),
-            ...fact("Disk", [
-              pending.disk_mb === null ? "unknown " : `about ${formatMb(pending.disk_mb)} `,
-              m("span", { class: "type-helper text-faint" }, `(${formatMb(room.disk_free_mb)} free)`),
-            ]),
-            ...fact("Memory", [
-              pending.memory_in_use_mb === null ? "unknown " : `about ${formatMb(pending.memory_in_use_mb)} in use `,
-              m("span", { class: "type-helper text-faint" }, `(${formatMb(room.memory_available_mb)} available)`),
-            ]),
+            ...fact(
+              "Disk",
+              againstRoom(
+                pending.disk_mb === null ? "unknown" : `about ${formatMb(pending.disk_mb)}`,
+                room.disk_free_mb,
+                "free",
+              ),
+            ),
+            ...fact(
+              "Memory",
+              againstRoom(
+                pending.memory_in_use_mb === null ? "unknown" : `about ${formatMb(pending.memory_in_use_mb)} in use`,
+                room.memory_available_mb,
+                "available",
+              ),
+            ),
             ...(building === null ? [] : fact("Building", `needs about ${building} while it installs`)),
             ...fact("Room", verdictBadge(pending.verdict)),
           ]),
@@ -348,14 +347,7 @@ export function RepoAddDialog(): m.Component<RepoAddDialogAttrs> {
           m("p", { class: "m-0 mb-1 mt-3 type-helper text-secondary" }, "Then it starts with:"),
           commandBlock([pending.start_command], "data-start-command"),
           pending.basis === "" ? null : m("p", { class: "m-0 mt-3 type-helper text-faint" }, pending.basis),
-          m(
-            "p",
-            {
-              class: "m-0 my-4 rounded-lg bg-warning-surface px-3 py-2 type-helper text-primary",
-              "data-warning": "",
-            },
-            UNREVIEWED_WARNING,
-          ),
+          warningNote(UNREVIEWED_WARNING, "my-4"),
           refusal(error ?? (pending.blocked_reason === "" ? null : pending.blocked_reason)),
         ]),
       );
@@ -378,16 +370,17 @@ export function UpdateDialog(): m.Component<UpdateDialogAttrs> {
   return {
     view(vnode) {
       const { app, version, error, isSubmitting, onCancel, onConfirm } = vnode.attrs;
+      const title = `Update ${app.title} to ${version}?`;
       return m(
         Modal,
         {
-          title: `Update ${app.title} to ${version}?`,
+          title,
           width: INSTALL_DIALOG_WIDTH,
           onDismiss: onCancel,
           onEscape: onCancel,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "update" },
+          card: dialogCard("update", title),
           actions: [
-            m(Button, { onclick: onCancel }, "Cancel"),
+            m(Button, { oncreate: focusOnCreate, onclick: onCancel }, "Cancel"),
             m(
               Button,
               { variant: "primary", extra: "app-store-confirm-update", disabled: isSubmitting, onclick: onConfirm },
@@ -403,16 +396,7 @@ export function UpdateDialog(): m.Component<UpdateDialogAttrs> {
               "the new version installs, then starts again. Its files and settings are kept. If the new version " +
               "doesn't install or start, the version you have now is put back.",
           ),
-          app.is_added
-            ? m(
-                "p",
-                {
-                  class: "m-0 mb-4 rounded-lg bg-warning-surface px-3 py-2 type-helper text-primary",
-                  "data-warning": "",
-                },
-                UNREVIEWED_WARNING,
-              )
-            : null,
+          app.is_added ? warningNote(UNREVIEWED_WARNING) : null,
           refusal(error),
         ],
       );

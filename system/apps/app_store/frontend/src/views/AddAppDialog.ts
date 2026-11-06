@@ -33,19 +33,20 @@ import type {
   CheckResult,
   FindAnswer,
   FinderJob,
+  FinderStatus,
   PackageSource,
   SetupFile,
   WorkspaceRoom,
 } from "../models/Store";
 import { splitCommand } from "../models/Store";
 import { formatMb } from "../room";
-import { verdictBadge } from "./AppParts";
+import { againstRoom, dialogCard, fact, refusal, verdictBadge } from "./AppParts";
 
 const DIALOG_WIDTH = 560;
 // The window's height less the card's title, buttons and padding; the side padding keeps focus rings from clipping.
 export const BODY_SCROLL_CLASS = "-mx-1 mb-2 max-h-[calc(100dvh-12rem)] overflow-y-auto px-1";
-export const PYTHON_VERSIONS: readonly string[] = ["3.10", "3.11", "3.12", "3.13"];
-export const SAMPLE_PORT = "8090";
+const PYTHON_VERSIONS: readonly string[] = ["3.10", "3.11", "3.12", "3.13"];
+const SAMPLE_PORT = "8090";
 export const UNREVIEWED_WARNING =
   "Nobody has reviewed this code. It will run with the same access as your other apps: it can read and change the " +
   "files in your workspace and reach the internet.";
@@ -53,16 +54,16 @@ const COMMAND_EXAMPLES: Record<PackageSource, string> = {
   pypi: "streamlit hello --server.port {port} --server.address 127.0.0.1 --server.headless true",
   npm: "http-server {data_dir} -p {port} -a 127.0.0.1",
 };
-export const COMMAND_PLACEHOLDER = "Leave empty to have it worked out for you";
+const COMMAND_PLACEHOLDER = "Leave empty to have it worked out for you";
 
 export const FIND_POLL_MS = 1500;
-export const FIND_ENDED_HEADINGS: Record<string, string> = {
+const FIND_ENDED_HEADINGS: Partial<Record<FinderStatus, string>> = {
   NOT_AN_APP: "This isn't an app with a window",
   NEEDS_SETUP: "This app needs setting up first",
   FAILED: "Couldn't get this app to start",
 };
 
-export type AddAppStage =
+type AddAppStage =
   | { kind: "editing"; refusal: string | null }
   | { kind: "finding"; job: FinderJob | null }
   | { kind: "found"; job: FinderJob }
@@ -82,9 +83,9 @@ export interface FinderClient {
 }
 
 /** Where an app is added from: a GitHub repository (through a chat), or a package registry. */
-export type AddOrigin = "github" | PackageSource;
+type AddOrigin = "github" | PackageSource;
 
-export const GITHUB_COMMAND = "/add-repo-to-store";
+const GITHUB_COMMAND = "/add-repo-to-store";
 // A link to a GitHub repository, as the chat's look-up reads it: the repository, or a branch, tag, release or commit.
 const GITHUB_LINK_PATTERN =
   /^(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?(?:\.git)?(?:\/(?:tree|commit|releases\/tag)\/[^\s?#]+?)?\/?(?:[?#]\S*)?$/;
@@ -123,13 +124,6 @@ export function previewSlug(displayName: string): string {
     .slice(0, 31);
 }
 
-function fact(label: string, value: m.Children, hook?: string): m.Vnode[] {
-  return [
-    m("dt", { class: "type-helper text-faint" }, label),
-    m("dd", { class: "m-0 type-body text-primary", ...(hook === undefined ? {} : { [`data-${hook}`]: "" }) }, value),
-  ];
-}
-
 function quoted(words: readonly string[]): string {
   return words
     .map((word) => (/^[A-Za-z0-9_@%+=:,./{}-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`))
@@ -150,6 +144,9 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
   let origin: AddOrigin = "github";
   let githubLink = "";
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  // Which search is the current one: Stop (or closing) ends it, and an answer about an ended search -- its start, or
+  // a poll still out -- is dropped (a start that arrives after Stop is cancelled too) rather than shown.
+  let search = 0;
 
   function isBusy(): boolean {
     return stage.kind === "checking" || stage.kind === "finding";
@@ -168,8 +165,14 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
   }
 
   async function find(attrs: AddAppDialogAttrs): Promise<void> {
+    search += 1;
+    const thisSearch = search;
     stage = { kind: "finding", job: null };
     const answer = await attrs.finder.start({ ...request });
+    if (thisSearch !== search) {
+      if (answer.kind === "started") void attrs.finder.cancel(answer.job.job_id);
+      return;
+    }
     if (answer.kind === "refused") {
       stage = { kind: "editing", refusal: answer.reason };
     } else {
@@ -183,13 +186,7 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
     switch (job.status) {
       case "WORKING":
         stage = { kind: "finding", job };
-        stopPolling();
-        pollTimer = setTimeout(() => {
-          void attrs.finder.poll(job.job_id).then((next) => {
-            followJob(attrs, next ?? job);
-            m.redraw();
-          });
-        }, FIND_POLL_MS);
+        pollLater(attrs, job);
         return;
       case "FOUND":
         stage = { kind: "found", job };
@@ -202,8 +199,22 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
     }
   }
 
+  /** Ask again in a moment where ``job`` stands, unless its search has ended by the time the answer comes. */
+  function pollLater(attrs: AddAppDialogAttrs, job: FinderJob): void {
+    const thisSearch = search;
+    stopPolling();
+    pollTimer = setTimeout(() => {
+      void attrs.finder.poll(job.job_id).then((next) => {
+        if (thisSearch !== search) return;
+        followJob(attrs, next ?? job);
+        m.redraw();
+      });
+    }, FIND_POLL_MS);
+  }
+
   function cancelFind(attrs: AddAppDialogAttrs): void {
     if (stage.kind === "finding" && stage.job !== null) void attrs.finder.cancel(stage.job.job_id);
+    search += 1;
     stopPolling();
     stage = { kind: "editing", refusal: null };
   }
@@ -517,10 +528,7 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
           "Disk",
           result.disk_mb === null
             ? "unknown"
-            : [
-                `about ${formatMb(result.disk_mb)} `,
-                m("span", { class: "type-helper text-faint" }, `(${formatMb(room.disk_free_mb)} free)`),
-              ],
+            : againstRoom(`about ${formatMb(result.disk_mb)}`, room.disk_free_mb, "free"),
           "disk",
         ),
         ...fact("Memory", "unknown until it runs", "memory"),
@@ -597,12 +605,7 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
           case "editing":
           case "checking": {
             const isFinding = stage.kind === "editing" && request.command.trim() === "";
-            body = [
-              form(),
-              stage.kind === "editing" && stage.refusal !== null
-                ? m("p", { class: "m-0 mb-4 type-helper text-danger", "data-refusal": "" }, stage.refusal)
-                : null,
-            ];
+            body = [form(), refusal(stage.kind === "editing" ? stage.refusal : null)];
             actions = [
               m(Button, { onclick: attrs.onClose }, "Cancel"),
               isFinding
@@ -694,9 +697,7 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
             body = [
               checkedPanel(confirming.result, attrs.room),
               confirmation(confirming.result),
-              confirming.refusal === null
-                ? null
-                : m("p", { class: "m-0 mb-4 type-helper text-danger", "data-refusal": "" }, confirming.refusal),
+              refusal(confirming.refusal),
             ];
             actions = [
               m(Button, { onclick: () => (stage = { kind: "checked", result: confirming.result }) }, "Back"),
@@ -721,7 +722,11 @@ export function AddAppDialog(): m.Component<AddAppDialogAttrs> {
           width: DIALOG_WIDTH,
           onDismiss: attrs.onClose,
           onEscape: attrs.onClose,
-          card: { role: "dialog", "aria-modal": "true", "data-dialog": "add-app", "data-stage": stage.kind },
+          card: dialogCard("add-app", "Add an app", {
+            "data-stage": stage.kind,
+            // Open on the first field to fill in.
+            oncreate: ({ dom }: m.VnodeDOM) => dom.querySelector<HTMLInputElement>("input")?.focus(),
+          }),
           actions,
         },
         // The body scrolls on its own, so the buttons below it stay on screen however tall it grows.

@@ -3,8 +3,9 @@
 The page is shot inside a frame on a page of another site, the way the workspace shows every app. That page is served
 here, on 127.0.0.1 at a port of its own -- another site to the browser, on an ordinary http address. (A blank page will
 not do: a browser treats it as no site at all and refuses even an app that allows any site to frame it. Nor will a
-made-up public address: a browser refuses to let a public page frame a local one.) When the browser refuses to show the app in the frame, the
-script writes why to ``<png>.blocked`` beside the picture, so the store treats the app's window as blank.
+made-up public address: a browser refuses to let a public page frame a local one.) When the browser refuses to show
+the app in the frame, the script writes why to ``<png>.blocked`` beside the picture, so the store treats the app's
+window as blank.
 
 Run by the store with the workspace's own Python environment (where Playwright is installed), not the store's, so the
 store needs no browser of its own. Exits non-zero, with the reason on stderr, when the page cannot be shot.
@@ -70,6 +71,7 @@ def main(url: str, target: str) -> None:
         raise SystemExit(f"could not take the screenshot: {e}") from e
     finally:
         server.shutdown()
+        server.server_close()
     if is_blocked:
         reason = "\n".join(console) or "the browser would not show the page in a frame"
         Path(target + BLOCKED_SUFFIX).write_text(reason, encoding="utf-8")

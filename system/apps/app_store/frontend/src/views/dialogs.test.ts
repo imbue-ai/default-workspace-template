@@ -52,6 +52,12 @@ describe("InstallDialog", () => {
     expect(attrs.onConfirm).toHaveBeenCalledTimes(1);
   });
 
+  it("is named by its title and opens with the focus on Cancel, not on Install", () => {
+    mountInstall({});
+    expect(root.querySelector("[data-dialog=install]")!.getAttribute("aria-label")).toBe("Install Datasette?");
+    expect(document.activeElement?.textContent).toBe("Cancel");
+  });
+
   it("shows the store's refusal and blocks an app that won't fit", () => {
     mountInstall({
       app: storeAppRecord("nodered", { verdict: "WONT_FIT", blocked_reason: "Not enough memory." }),
@@ -127,6 +133,11 @@ describe("RepoAddDialog", () => {
     expect(attrs.onConfirm).toHaveBeenCalledOnce();
     root.querySelector<HTMLElement>(".app-store-discard-repo-add")!.click();
     expect(attrs.onDiscard).toHaveBeenCalledOnce();
+  });
+
+  it("opens with the focus on Not now", () => {
+    mountRepoAdd({});
+    expect(document.activeElement?.textContent).toBe("Not now");
   });
 
   it("names what a build needs, and cannot be added when it will not fit", () => {

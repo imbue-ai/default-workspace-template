@@ -1,5 +1,6 @@
-"""The routes: the page, the API document, the store's state, install and uninstall, icons and logs, the template
-catalog and sizes, and the contract module."""
+"""The routes: the page, the API document, the store's state, install and uninstall, icons and logs, adding an app,
+the template catalog and sizes, and the contract module. The finder's, update and GitHub routes are tested beside
+the code they drive (command_finder_test, update_test, repo_adds_test)."""
 
 from pathlib import Path
 
@@ -73,7 +74,13 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     (tmp_path / "static" / "assets" / "index.js").write_text("console.log(1)")
     assert client.get("/").get_data(as_text=True) == "<!doctype html><title>App Store</title>"
     assert client.get("/assets/index.js").status_code == 200
-    assert client.get("/assets/missing.js").status_code == 404
+    missing = client.get("/assets/missing.js")
+    assert missing.status_code == 404
+    assert "missing.js" in missing.get_json()["detail"]
+    # The bundle is served from its own folder only.
+    (tmp_path / "static" / "secret.txt").write_text("not part of the bundle")
+    assert client.get("/assets/../secret.txt").status_code == 404
+    assert client.get("/assets/%2e%2e/secret.txt").status_code == 404
     assert client.get("/api/health").get_json()["is_frontend_built"] is True
     # Template drawings come from the catalog's origin.
     assert "https://example.test" in response.headers["Content-Security-Policy"]
@@ -146,6 +153,8 @@ def test_install_queues_the_app_and_a_refusal_answers_why(tmp_path: Path) -> Non
     log = client.get("/api/apps/datasette/log")
     assert log.mimetype == "text/plain"
     assert "installed; it takes" in log.get_data(as_text=True)
+    # A log holds what the app printed: the browser must never take it for a page.
+    assert log.headers["X-Content-Type-Options"] == "nosniff"
 
 
 def test_uninstall_reads_whether_to_delete_the_apps_data(tmp_path: Path) -> None:

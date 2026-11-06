@@ -4,6 +4,7 @@ shows it, and the command line."""
 import json
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -93,6 +94,28 @@ def test_a_guarded_command_logs_what_it_ran_and_how_it_ended(tmp_path: Path) -> 
     assert "hello" in run.output_tail
     assert "hello" in log.read_text()
     assert "[trial] exit status 0" in log.read_text()
+
+
+def _is_running(pid: int) -> bool:
+    """Whether ``pid`` is a live process (an unreaped zombie is not)."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")
+
+
+def test_what_a_command_left_running_in_the_background_is_stopped_with_it(tmp_path: Path) -> None:
+    pid_file = tmp_path / "background.pid"
+    script = f"import subprocess; open({str(pid_file)!r}, 'w').write(str(subprocess.Popen(['sleep', '60']).pid))"
+    run = run_guarded([sys.executable, "-c", script], None, None, tmp_path / "log", 30, _guard())
+    assert run.exit_status == 0
+    background = int(pid_file.read_text())
+    pause = threading.Event()
+    deadline = time.monotonic() + 5
+    while _is_running(background) and time.monotonic() < deadline:
+        pause.wait(0.05)
+    assert not _is_running(background)
 
 
 def test_the_guard_stops_a_command_when_memory_runs_low(tmp_path: Path) -> None:

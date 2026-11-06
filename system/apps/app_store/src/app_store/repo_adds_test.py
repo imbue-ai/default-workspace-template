@@ -16,9 +16,11 @@ from app_store.catalog import PythonGitRecipe
 from app_store.engine import InstallEngine
 from app_store.errors import AddAppRefusedError
 from app_store.errors import InstallRefusedError
+from app_store.errors import StoreStateError
 from app_store.pages import build_pages_blueprint
 from app_store.records import InstallStatus
 from app_store.repo_adds import MAX_PENDING
+from app_store.repo_adds import PendingRepoAdd
 from app_store.repo_adds import PendingRepoAddStore
 from app_store.repo_adds import RepoAddSubmission
 from app_store.repo_adds import RepoAdds
@@ -331,3 +333,17 @@ def test_the_oldest_pending_adds_screenshots_go_with_them(tmp_path: Path) -> Non
         repo_adds.submit(RepoAddSubmission(install_file=_install_file()))
     assert repo_adds.pending.find(first.id) is None
     assert not repo_adds.pending.screenshot_path(first.id).exists()
+
+
+def test_a_pending_add_that_cannot_be_saved_leaves_no_screenshot_behind(tmp_path: Path) -> None:
+    path = tmp_path / "pending-repo-adds.json"
+    # A folder where the file should be: the atomic rename onto it fails.
+    path.mkdir()
+    store = PendingRepoAddStore(path=path)
+    pending = PendingRepoAdd(
+        id="abc123", slug="datasettelatest", install_file=_install_file(), chat_id="", submitted_at="2026-11-06"
+    )
+    with pytest.raises(StoreStateError, match="cannot save the pending adds"):
+        store.add(pending, _PNG)
+    assert not store.screenshot_path("abc123").exists()
+    assert store.read() == ()

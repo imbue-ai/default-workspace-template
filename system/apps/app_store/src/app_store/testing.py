@@ -1,6 +1,7 @@
-"""Test doubles for the App Store: a runner, an installer, supervisord, the registry, a port probe and a resource
-reader that record what they are asked and answer from fields; a fetcher of template sizes; and an engine over a
-temporary workspace."""
+"""Test doubles for the App Store: a runner, an installer, supervisord, the registry, the desktops' shortcuts, a port
+probe, a resource reader and a memory reader that record what they are asked and answer from fields; a fetcher of
+template sizes; package registries, a resolver, an AI command writer and a trial runner for adding apps; and an
+engine, an adder and a command finder over a temporary workspace."""
 
 import threading
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from pydantic import Field
 from app_manifest.registry import RegistryRow
 from app_store.added_apps import AddedAppStore
 from app_store.adding import AppAdder
+from app_store.catalog import AnyRecipe
 from app_store.catalog import AppCatalog
 from app_store.catalog import GithubBuildRecipe
 from app_store.catalog import ImageSiteRecipe
@@ -27,9 +29,13 @@ from app_store.command_finder import PackageContext
 from app_store.command_finder import Proposal
 from app_store.command_finder import TrialOutcome
 from app_store.command_finder import TrialRunnerInterface
+from app_store.desktop_shortcuts import AppShortcuts
+from app_store.desktop_shortcuts import DesktopShortcut
+from app_store.desktop_shortcuts import DesktopShortcutsInterface
 from app_store.engine import InstallEngine
 from app_store.errors import InstallError
 from app_store.errors import PackageLookupError
+from app_store.errors import StoreStateError
 from app_store.layout import StoreLayout
 from app_store.package_check import LookupCache
 from app_store.package_check import PackageChecker
@@ -39,7 +45,6 @@ from app_store.process_memory import ProcessMemoryReaderInterface
 from app_store.records import RecordStore
 from app_store.room import ResourceReaderInterface
 from app_store.room import WorkspaceRoom
-from app_store.system import AnyRecipe
 from app_store.system import CommandRunnerInterface
 from app_store.system import PackageInstallerInterface
 from app_store.system import PortProbeInterface
@@ -109,7 +114,7 @@ class FakePackageInstaller(PackageInstallerInterface):
                 else recipe.repository.rsplit("/", 1)[-1]
             )
             bin_dir = env_dir / "bin"
-            (bin_dir).mkdir(parents=True, exist_ok=True)
+            bin_dir.mkdir(parents=True, exist_ok=True)
             (bin_dir / "python").write_text("")
         else:
             name = (
@@ -155,6 +160,39 @@ class FakeRegistrar(RegistrarInterface):
 
     def unregister(self, name: str) -> None:
         self.unregistered.append(name)
+
+
+def _one_empty_desktop() -> dict[str, tuple[DesktopShortcut, ...]]:
+    return {"home": ()}
+
+
+class FakeDesktopShortcuts(DesktopShortcutsInterface):
+    """Desktops held in memory; ``is_reachable`` False makes every call fail as if the shell were down."""
+
+    desktops: dict[str, tuple[DesktopShortcut, ...]] = Field(
+        default_factory=_one_empty_desktop, description="Each desktop's shortcuts"
+    )
+    is_reachable: bool = Field(default=True, description="Whether the shell answers")
+
+    def read(self) -> dict[str, tuple[DesktopShortcut, ...]]:
+        self._check()
+        return dict(self.desktops)
+
+    def remove(self, shortcut: DesktopShortcut) -> None:
+        self._check()
+        self.desktops[shortcut.desktop_id] = tuple(
+            held
+            for held in self.desktops[shortcut.desktop_id]
+            if not (held.app == shortcut.app and held.launch == shortcut.launch)
+        )
+
+    def add(self, shortcut: DesktopShortcut) -> None:
+        self._check()
+        self.desktops[shortcut.desktop_id] = (*self.desktops[shortcut.desktop_id], shortcut)
+
+    def _check(self) -> None:
+        if not self.is_reachable:
+            raise StoreStateError("The desktop could not be reached")
 
 
 class FakePortProbe(PortProbeInterface):
@@ -225,6 +263,7 @@ def build_test_engine(
         runner=FakeCommandRunner(),
         supervisor=FakeSupervisor(dropin_dir=layout.dropin_dir),
         registrar=FakeRegistrar(),
+        shortcuts=AppShortcuts(desktops=FakeDesktopShortcuts(), path=layout.kept_shortcuts_path),
         probe=FakePortProbe(),
         resources=FakeResourceReader(),
         read_registry_rows=lambda: rows,

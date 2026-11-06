@@ -14,6 +14,7 @@ from app_store.engine import InstallEngine
 from app_store.engine import UPDATE_INTERRUPTED_REASON
 from app_store.errors import InstallRefusedError
 from app_store.layout import NO_BACKUP_MARKER
+from app_store.layout import render_manifest
 from app_store.pages import build_pages_blueprint
 from app_store.records import InstallStatus
 from app_store.records import JobKind
@@ -102,17 +103,23 @@ def test_an_update_that_fails_to_install_puts_the_old_version_back(tmp_path: Pat
     assert "was put back" in engine.layout.log_path("jupyterlab").read_text()
 
 
-def test_an_update_that_never_answers_puts_the_old_version_back(tmp_path: Path) -> None:
+def test_an_update_that_never_answers_puts_the_old_version_and_its_files_back(tmp_path: Path) -> None:
     engine = _installed(tmp_path)
-    (engine.layout.env_dir("jupyterlab") / "old-version.txt").write_text("old")
-    engine.request_update("jupyterlab", _newer(engine))
+    layout = engine.layout
+    (layout.env_dir("jupyterlab") / "old-version.txt").write_text("old")
+    manifest, icon = layout.manifest_path("jupyterlab").read_text(), layout.icon_path("jupyterlab").read_bytes()
+    # The new version brings its own icon, written before it is started.
+    newer = _newer(engine).model_copy(update={"icon": "marimo.svg"})
+    engine.request_update("jupyterlab", newer)
     assert isinstance(engine.probe, FakePortProbe)
     engine.probe.is_answering = False
     engine.run_next_job()
     record = engine.records.read().find("jupyterlab")
     assert record is not None and record.status is InstallStatus.INSTALLED
-    assert "didn't start answering" in record.failure_reason
-    assert (engine.layout.env_dir("jupyterlab") / "old-version.txt").read_text() == "old"
+    assert "JupyterLab 9.9.9 didn't start answering on its port" in record.failure_reason
+    assert (layout.env_dir("jupyterlab") / "old-version.txt").read_text() == "old"
+    assert layout.manifest_path("jupyterlab").read_text() == manifest
+    assert layout.icon_path("jupyterlab").read_bytes() == icon
 
 
 def test_an_update_is_refused_when_it_cannot_run(tmp_path: Path) -> None:
@@ -140,11 +147,16 @@ def test_a_restart_during_an_update_puts_the_old_version_back(tmp_path: Path) ->
     engine = _installed(tmp_path)
     env, previous = engine.layout.env_dir("jupyterlab"), engine.layout.previous_env_dir("jupyterlab")
     (env / "old-version.txt").write_text("old")
-    engine.request_update("jupyterlab", _newer(engine))
-    # As if the store stopped mid-install: the old environment set aside, half a new one in its place.
+    current = engine.catalog.find("jupyterlab")
+    assert current is not None
+    newer = _newer(engine)
+    engine.request_update("jupyterlab", newer)
+    # As if the store stopped mid-configure: the old environment set aside, half a new one in its place, and the new
+    # version's manifest written but not yet its drop-in.
     env.rename(previous)
     env.mkdir()
-    engine.records.update("jupyterlab", status=InstallStatus.DOWNLOADING)
+    engine.layout.manifest_path("jupyterlab").write_text(render_manifest(newer))
+    engine.records.update("jupyterlab", status=InstallStatus.CONFIGURING)
 
     engine.reconcile()
     record = engine.records.read().find("jupyterlab")
@@ -157,6 +169,7 @@ def test_a_restart_during_an_update_puts_the_old_version_back(tmp_path: Path) ->
     assert (env / "old-version.txt").read_text() == "old"
     assert not previous.exists()
     assert engine.records.read().queue == ()
+    assert engine.layout.manifest_path("jupyterlab").read_text() == render_manifest(current)
 
 
 _DEMO_COMMAND = "demo --port {port} --host 127.0.0.1"

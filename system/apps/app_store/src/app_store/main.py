@@ -1,3 +1,7 @@
+"""The ``app-store`` entry point: builds the install engine, the app adder and the page app over the workspace, then
+(for the workspace's own store, not a preview) reconciles the installs, starts the install worker and registers the
+app, and serves the page until it is told to stop."""
+
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +29,8 @@ from app_store.command_finder import CommandFinder
 from app_store.command_finder import ProcessTrialRunner
 from app_store.config import Config
 from app_store.config import load_config
+from app_store.desktop_shortcuts import AppShortcuts
+from app_store.desktop_shortcuts import ShellDesktopShortcuts
 from app_store.engine import InstallEngine
 from app_store.layout import StoreLayout
 from app_store.package_check import CommandResolver
@@ -93,6 +99,7 @@ def build_engine(arguments: AppStoreArguments, registry_reader: Callable[[], lis
         runner=runner,
         supervisor=SupervisorctlSupervisor(),
         registrar=ForwardPortRegistrar(),
+        shortcuts=AppShortcuts(desktops=ShellDesktopShortcuts(), path=layout.kept_shortcuts_path),
         probe=HttpPortProbe(),
         resources=SystemResourceReader(disk_path=layout.data_dir),
         read_registry_rows=registry_reader,

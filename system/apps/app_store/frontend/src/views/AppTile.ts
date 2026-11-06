@@ -6,6 +6,7 @@
  */
 
 import m from "mithril";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { StoreApp, WorkspaceApp } from "../models/Store";
 import { iconDataUrl, installLogUrl, isWorking } from "../models/Store";
@@ -17,7 +18,7 @@ const WORKSPACE_ICON_SIZE = 32;
 const TILE_CLASS =
   "app-store-tile group flex flex-col gap-3 rounded-xl border border-default bg-surface p-4 text-left " +
   "transition-[scale,box-shadow] duration-300 ease-out";
-export const ADDED_LABEL = "Added by you";
+const ADDED_LABEL = "Added by you";
 const ORIGIN_LABELS = { BUILT_IN: "Built in", MADE_HERE: "Made in this workspace", STORE: "App Store" } as const;
 
 export interface AppActions {
@@ -31,6 +32,21 @@ function stop(handler: () => void): (event: Event) => void {
   return (event) => {
     event.stopPropagation();
     handler();
+  };
+}
+
+/** What makes a whole tile a button that opens the app's page: a click, or Enter or Space while the tile itself has
+ *  the focus (not a button inside it, whose own Enter would otherwise open the page as well). */
+function pickAttrs(onPick: () => void): Record<string, unknown> {
+  return {
+    role: "button",
+    tabindex: 0,
+    onclick: onPick,
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      onPick();
+    },
   };
 }
 
@@ -53,7 +69,7 @@ function description(text: string): m.Vnode {
 }
 
 /** Disk and memory, the measured disk once installed, and the room badge while it can still be installed. */
-export function costLine(app: StoreApp, isShowingVerdict: boolean): m.Vnode {
+function costLine(app: StoreApp, isShowingVerdict: boolean): m.Vnode {
   return m(
     "div",
     { class: "flex flex-wrap items-center gap-x-4 gap-y-1 type-helper text-secondary", "data-cost": "" },
@@ -130,16 +146,11 @@ export function StoreAppTile(): m.Component<StoreAppTileAttrs> {
         "div",
         {
           "data-app": app.slug,
-          role: "button",
-          tabindex: 0,
           class: `${TILE_CLASS} cursor-pointer hover:shadow-overlay`,
-          onclick: () => vnode.attrs.onPick(app),
-          onkeydown: (event: KeyboardEvent) => {
-            if (event.key === "Enter") vnode.attrs.onPick(app);
-          },
+          ...pickAttrs(() => vnode.attrs.onPick(app)),
         },
         [
-          tileHeading(app.icon_url, app.title, app.is_added ? ADDED_LABEL : `${app.author} · ${app.license}`),
+          tileHeading(apiUrl(app.icon_url), app.title, app.is_added ? ADDED_LABEL : `${app.author} · ${app.license}`),
           description(app.description),
           costLine(app, app.status === null || app.status === "FAILED"),
           m("div", { class: "mt-auto" }, storeFooter(vnode.attrs)),
@@ -150,7 +161,7 @@ export function StoreAppTile(): m.Component<StoreAppTileAttrs> {
 }
 
 /** An installed store app's line: where it came from and what it is using right now. */
-export function storeAppSubtitle(app: StoreApp): string {
+function storeAppSubtitle(app: StoreApp): string {
   const usage = app.memory_now_mb === null ? "not running" : `using ${formatMb(app.memory_now_mb)}`;
   return `${app.is_added ? ADDED_LABEL : ORIGIN_LABELS.STORE} · ${usage}`;
 }
@@ -174,7 +185,7 @@ export function WorkspaceAppTile(): m.Component<WorkspaceAppTileAttrs> {
           class:
             "app-store-workspace-tile group flex items-center gap-3 rounded-xl border border-default bg-surface px-3 py-2.5 " +
             `transition-[scale,box-shadow] duration-300 ease-out ${storeApp === null ? "" : "cursor-pointer hover:shadow-overlay"}`,
-          onclick: storeApp === null ? undefined : () => onPick(storeApp),
+          ...(storeApp === null ? {} : pickAttrs(() => onPick(storeApp))),
         },
         [
           appIcon(app.icon_svg === "" ? "" : iconDataUrl(app.icon_svg), WORKSPACE_ICON_SIZE),

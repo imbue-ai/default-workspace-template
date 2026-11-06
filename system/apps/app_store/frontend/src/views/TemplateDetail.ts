@@ -13,9 +13,9 @@ import { writeUpParagraphs } from "getting-started-frontend/src/models/TemplateC
 import { adoptTemplateMessage, templateRequirements } from "getting-started-frontend/src/views/TemplateDetail";
 import { TemplateArt } from "getting-started-frontend/src/views/TemplateArt";
 import { formatMb } from "../room";
+import { backButton, externalLink } from "./AppParts";
 
 const SMALL_GLYPH_SIZE = 14;
-const BACK_GLYPH_SIZE = 16;
 const ART_FALLBACK_GLYPH_SIZE = 32;
 const KB_PER_MB = 1024;
 
@@ -47,10 +47,7 @@ export function StoreTemplateDetail(): m.Component<StoreTemplateDetailAttrs> {
       const paragraphs = writeUpParagraphs(template.what_it_is);
       const requirements = templateRequirements(template);
       return m("section", { class: "app-store-template-detail", "data-template-detail": template.slug }, [
-        m(Button, { variant: "ghost", sm: true, "aria-label": "Back", extra: "app-store-back", onclick: onBack }, [
-          m.trust(icon("chevron-left", { size: BACK_GLYPH_SIZE })),
-          m("span", "Back"),
-        ]),
+        backButton(onBack),
         m("div", { class: "mt-4 flex items-start gap-6 max-md:flex-col" }, [
           m(
             "div",
@@ -98,16 +95,7 @@ export function StoreTemplateDetail(): m.Component<StoreTemplateDetailAttrs> {
                 m("dd", { class: "m-0 type-body text-secondary" }, "Not known until it's set up"),
               ]),
             ]),
-            m(
-              "a",
-              {
-                class: "mt-5 inline-flex items-center gap-1.5 type-helper text-secondary hover:text-primary",
-                href: template.repository_url,
-                target: "_blank",
-                rel: "noopener noreferrer",
-              },
-              [m("span", "View the repository"), m.trust(icon("external-link", { size: SMALL_GLYPH_SIZE }))],
-            ),
+            externalLink(template.repository_url, "View the repository", "mt-5"),
             m("div", { class: "mt-6 flex flex-wrap items-center gap-3" }, [
               m(
                 Button,

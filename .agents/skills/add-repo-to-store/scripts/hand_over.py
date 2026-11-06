@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 from typing import Final
 
-import click
 import httpx
 from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import read_registry
@@ -31,8 +30,13 @@ STORE_APP_NAME: Final[str] = "app-store"
 TIMEOUT_SECONDS: Final[float] = 30.0
 
 
+def _answer(answer: dict[str, object]) -> None:
+    """Print the one JSON answer the chat reads."""
+    sys.stdout.write(json.dumps(answer, indent=2) + "\n")
+
+
 def _refuse(reason: str) -> int:
-    click.echo(json.dumps({"is_handed_over": False, "what_happened": reason}, indent=2))
+    _answer({"is_handed_over": False, "what_happened": reason})
     return 1
 
 
@@ -102,11 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     chat_id = os.environ.get("MINDS_CHAT_ID") or os.environ.get("MNGR_AGENT_ID") or ""
     # The trial's picture of the app running, which the confirmation shows the person.
     screenshot = arguments.trial / "screenshot.png"
-    screenshot_png_base64 = (
-        base64.b64encode(screenshot.read_bytes()).decode("ascii")
-        if screenshot.is_file()
-        else ""
-    )
+    try:
+        screenshot_png_base64 = (
+            base64.b64encode(screenshot.read_bytes()).decode("ascii")
+            if screenshot.is_file()
+            else ""
+        )
+    except OSError as e:
+        return _refuse(f"The trial's screenshot couldn't be read: {e}")
     try:
         response = httpx.post(
             f"{url}/api/repo-adds",
@@ -132,9 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                 or f"The App Store answered {response.status_code}."
             )
         )
-    click.echo(
-        json.dumps({"is_handed_over": True, "pending": answer["pending"]}, indent=2)
-    )
+    _answer({"is_handed_over": True, "pending": answer["pending"]})
     return 0
 
 

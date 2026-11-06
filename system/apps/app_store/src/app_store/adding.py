@@ -4,21 +4,26 @@ Check runs every rule that needs no network (``added_apps.check_request``), pins
 and estimates the disk (``package_check``) -- installing nothing. Add runs the same check again (the lookups are
 cached), keeps the app in ``added-apps.json``, and queues its install through the engine like any other app's. Remove
 takes an app out of the store again, once it is not installed; it deletes whatever the app left behind (its install
-log, and any files kept from an uninstall).
+log, and any files kept from an uninstall). For an app added from PyPI or npm it also finds the newest version and
+builds the entry an update to it will have: the same command and settings files at the new pin.
 
 An added app's supervisord drop-in is generated like a curated one's, but its name is the user's, so it cannot be
 listed in the tracked .gitignore: the store lists it in the repository's local ``info/exclude`` instead, in a block it
 owns and rewrites from the added apps.
 """
 
+import os
 import shlex
 import shutil
 import subprocess
+import threading
+import uuid
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
 from pydantic import Field
+from pydantic import PrivateAttr
 
 from app_store.added_apps import ADDED_APP_ICON
 from app_store.added_apps import AddAppRequest
@@ -98,6 +103,10 @@ class AppAdder(MutableModel):
     checker: PackageChecker = Field(frozen=True, description="Pins and estimates packages")
     exclude_path: Path | None = Field(frozen=True, description="The repository's local info/exclude; None for none")
 
+    # Held while an app is added or removed, so two adds can never take the same name and the excludes block is
+    # rewritten by one caller at a time.
+    _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
+
     def check(self, request: AddAppRequest) -> CheckResult:
         """What adding ``request`` would install and cost; raises AddAppRefusedError in plain words."""
         checked = self._checked(request)
@@ -148,15 +157,22 @@ class AppAdder(MutableModel):
 
     def add_entry(self, added: AddedApp) -> InstallRecord:
         """Keep ``added`` in the store and queue its install; when the install is refused (InstallRefusedError),
-        nothing was installed, so it is taken out of the store again."""
-        self.engine.added.add(added)
-        self.sync_excludes()
-        try:
-            return self.engine.request_install(added.app.slug)
-        except InstallRefusedError:
-            self.engine.added.remove(added.app.slug)
+        nothing was installed, so it is taken out of the store again. Raises AddAppRefusedError when something took
+        its name since it was checked (another add that was confirmed at the same time)."""
+        slug = added.app.slug
+        with self._lock:
+            if slug in self.taken_names():
+                raise AddAppRefusedError(
+                    f"Something already has the name {slug!r} inside the workspace; {added.app.title} wasn't added."
+                )
+            self.engine.added.add(added)
             self.sync_excludes()
-            raise
+            try:
+                return self.engine.request_install(slug)
+            except InstallRefusedError:
+                self.engine.added.remove(slug)
+                self.sync_excludes()
+                raise
 
     def taken_names(self) -> set[str]:
         """Every name an added app may not take now."""
@@ -168,6 +184,10 @@ class AppAdder(MutableModel):
 
     def remove(self, slug: str) -> None:
         """Take an added app out of the store; refused while it is installed or being worked on."""
+        with self._lock:
+            self._remove(slug)
+
+    def _remove(self, slug: str) -> None:
         if self.engine.added.find(slug) is None:
             raise AddAppRefusedError(f"There is no added app called {slug!r}.")
         if any(app.slug == slug for app in self.engine.curated.apps):
@@ -182,28 +202,30 @@ class AppAdder(MutableModel):
         if record is not None:
             self.engine.records.remove(slug)
         shutil.rmtree(self.engine.layout.app_dir(slug), ignore_errors=True)
+        self.engine.shortcuts.forget(slug)
         self.engine.added.remove(slug)
         self.sync_excludes()
         logger.info("Removed added app {} from the store", slug)
 
     def sync_excludes(self) -> None:
-        """Rewrite the store's block of the repository's local excludes to list every added app's drop-in."""
+        """Rewrite the store's block of the repository's local excludes to list every added app's drop-in. The file
+        is replaced in one step, so the person's own lines in it are never lost to a half-written file."""
         if self.exclude_path is None:
             return
-        try:
-            existing = self.exclude_path.read_text(encoding="utf-8") if self.exclude_path.exists() else ""
-        except OSError as e:
-            logger.warning("Could not read {}: {}", self.exclude_path, e)
-            return
-        lines = [f"/system/supervisord.conf.d/{entry.app.slug}.conf" for entry in self.engine.added.read()]
-        text = replace_exclude_block(existing, lines)
-        if text == existing:
-            return
-        try:
-            self.exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            self.exclude_path.write_text(text, encoding="utf-8")
-        except OSError as e:
-            logger.warning("Could not write {}: {}", self.exclude_path, e)
+        with self._lock:
+            try:
+                existing = self.exclude_path.read_text(encoding="utf-8") if self.exclude_path.exists() else ""
+            except OSError as e:
+                logger.warning("Could not read {}: {}", self.exclude_path, e)
+                return
+            lines = [f"/system/supervisord.conf.d/{entry.app.slug}.conf" for entry in self.engine.added.read()]
+            text = replace_exclude_block(existing, lines)
+            if text == existing:
+                return
+            try:
+                write_text_atomic(self.exclude_path, text)
+            except OSError as e:
+                logger.warning("Could not write {}: {}", self.exclude_path, e)
 
     def newest_version(self, slug: str) -> str:
         """The newest version of an app the user added from PyPI or npm, as its registry has it; raises
@@ -299,7 +321,7 @@ def recipe_for(request: CheckedRequest, version: str) -> PythonRecipe | NodeReci
     """The install recipe of an added package at its pinned version."""
     if request.source == "pypi":
         return PythonRecipe(
-            kind="python", requirement=f"{request.package}=={version}", python=request.python or "3.12"
+            kind="python", requirement=f"{request.package}=={version}", python=request.python or DEFAULT_PYTHON
         )
     return NodeRecipe(kind="node", package=f"{request.package}@{version}")
 
@@ -320,6 +342,17 @@ def replace_exclude_block(text: str, lines: list[str]) -> str:
     if lines:
         kept.extend([EXCLUDE_BLOCK_START, *lines, EXCLUDE_BLOCK_END])
     return "\n".join(kept) + ("\n" if kept else "")
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write ``text`` through a same-folder temp file and a rename, so a reader never sees a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    try:
+        temp_path.write_text(text, encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def local_exclude_path(repo_root: Path) -> Path | None:

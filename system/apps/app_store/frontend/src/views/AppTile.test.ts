@@ -76,6 +76,27 @@ describe("StoreAppTile", () => {
     expect(root.querySelector(".app-store-install")).toBeNull();
   });
 
+  it("opens its page from the keyboard, but only the button's own action from a button inside it", () => {
+    const attrs = mountStoreTile({});
+    const tile = root.querySelector<HTMLElement>("[data-app=datasette]")!;
+    tile.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(attrs.onPick).toHaveBeenCalledTimes(1);
+    tile.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(attrs.onPick).toHaveBeenCalledTimes(2);
+    root
+      .querySelector<HTMLElement>(".app-store-install")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(attrs.onPick).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens only the log from a running install's log link, not the app's page", () => {
+    const attrs = mountStoreTile({ app: storeAppRecord("datasette", { status: "DOWNLOADING", has_log: true }) });
+    const link = root.querySelector<HTMLAnchorElement>("[data-install-stage] a")!;
+    link.addEventListener("click", (event) => event.preventDefault());
+    link.click();
+    expect(attrs.onPick).not.toHaveBeenCalled();
+  });
+
   it("shows why an install failed, its log, and Try again", () => {
     const attrs = mountStoreTile({
       app: storeAppRecord("datasette", { status: "FAILED", failure_reason: "It didn't start.", has_log: true }),
@@ -116,6 +137,18 @@ describe("WorkspaceAppTile", () => {
     expect(attrs.onPick).not.toHaveBeenCalled();
     root.querySelector<HTMLElement>("[data-workspace-app=datasette]")!.click();
     expect(attrs.onPick).toHaveBeenCalledWith(storeApp);
+  });
+
+  it("is a button that opens the page of an app the store installed, and only of one", () => {
+    const storeApp = storeAppRecord("datasette", { status: "INSTALLED" });
+    const attrs = mountWorkspaceTile({ app: workspaceAppRecord("datasette", { origin: "STORE" }), storeApp });
+    const tile = root.querySelector<HTMLElement>("[data-workspace-app=datasette]")!;
+    expect(tile.getAttribute("role")).toBe("button");
+    tile.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(attrs.onPick).toHaveBeenCalledWith(storeApp);
+
+    mountWorkspaceTile({});
+    expect(root.querySelector("[data-workspace-app=files]")!.hasAttribute("role")).toBe(false);
   });
 
   it("shows an app being uninstalled without its buttons", () => {

@@ -1,8 +1,8 @@
 # App Store
 
-The App Store app: one-click installs of a curated catalog of open-source web apps, the apps this workspace
-already has, and the published template catalog. Served on port 8060 by the `app-store` package
-(`app-store` program, `system/supervisord.conf.d/app-store.conf`).
+The App Store app: one-click installs of a curated catalog of open-source web apps, apps the person adds from
+PyPI, npm or GitHub, the apps this workspace already has, and the published template catalog. Served on port 8060
+by the `app-store` package (`app-store` program, `system/supervisord.conf.d/app-store.conf`).
 
 ## What it shows
 
@@ -14,7 +14,9 @@ already has, and the published template catalog. Served on port 8060 by the `app
   a Fits / Tight / Won't fit verdict. Memory is estimated twice -- idle, and while one person uses the app the
   ordinary way -- and the verdict checks the in-use figure. An app that won't fit cannot be installed, and the
   page says why. Filters above the lists ("All apps", then the catalog's categories) narrow both lists; the
-  built-in apps carry no categories, so they show under "All apps" only.
+  built-in apps and added apps carry no categories, so they show under "All apps" only. **Add app** (in the
+  header) adds an app that is not in the catalog (below), and an app a chat worked out how to install from GitHub
+  waits in a dialog for the person to confirm it. An installed app's page shows its version and how to update it.
 - **Templates.** Getting Started's shelves of the published catalog (`catalog/README.md`). A template's page
   shows what it needs, its download size (its GitHub repository's size, cached), and that its memory is not
   known. Install sends `/use-template <repository>` through the shell's `startWithText`, so the adopt flow's
@@ -27,9 +29,9 @@ already has, and the published template catalog. Served on port 8060 by the `app
 in the user's workspace, so it is reviewed and versioned with the workspace. `catalog.py` validates it when the
 store starts:
 
-- a recipe is a discriminated union on `kind`: `python` (a pinned `name==version` requirement installed by
-  `uv` into the app's own venv) or `node` (a pinned `name@x.y.z` package installed by `npm --prefix`). Add a
-  kind by adding a model to the union and its commands to `system.install_commands`.
+- a recipe is a discriminated union on `kind` (`InstallRecipe`): `python` (a pinned `name==version` requirement
+  installed by `uv` into the app's own venv) or `node` (a pinned `name@x.y.z` package installed by `npm --prefix`),
+  plus the kinds below. Add a kind by adding a model to the union and its commands to `system.install_commands`.
 - a third kind, `github_build`, builds a reviewed app from one exact commit of its GitHub repository: pinned npm
   tools (the build tool and the server) go into the app's environment, the commit is fetched by its hash, the
   build steps (argv lists, only `{env_dir}` substituted) run in the checkout, and only the built site is kept, as
@@ -44,8 +46,10 @@ store starts:
   image, read the new manifest's layers and pin the one whose files sit under `usr/share/nginx/html`.
 - the launch command is an argv list, never a shell string; its only placeholders are `{port}`, `{data_dir}`,
   `{env_dir}` and, at launch only, `{origin_label}` (the app's own random hostname label, which lets an app such as
-  JupyterLab accept writes from its own address and refuse other sites' without a cookie), it must run a program from `{env_dir}`, pass `{port}`, and bind `127.0.0.1`. An optional
-  `init_argv` runs once before the first start; `env` adds environment variables (placeholders allowed).
+  JupyterLab accept writes from its own address and refuse other sites' without a cookie), it must run a program
+  from `{env_dir}`, pass `{port}`, and bind `127.0.0.1`. An optional `init_argv` runs once before the first start;
+  `env` adds environment variables (placeholders allowed); `setup_files` (at most `MAX_SETUP_FILES`) are short
+  settings files written into the data folder before the first start.
 - `[[categories]]` (a key and a title, in display order) are the page's filters; every app's `tags` name one or
   more of them, and every category must hold an app.
 - `resources` carries `disk_mb`, `memory_idle_mb` and `memory_in_use_mb` (at least the idle figure).
@@ -70,21 +74,24 @@ comes from, then adds the app and queues its install.
   its program a bare name found in the app's own environment, its only placeholders `{port}` (required) and
   `{data_dir}`, and it must listen on 127.0.0.1; a name of its own, from the display name by the catalog's slug rules
   -- and `added-apps.json` in the store's data folder (a format number, atomic writes; a malformed entry is skipped
-  with a warning). Nothing is written to the shipped catalog or any tracked file.
+  with a warning). Nothing is written to the shipped catalog or any tracked file. An npm name may not start with
+  `-`, so it can never read as an option.
 - `package_check.py` pins and estimates: Python resolves with `uv pip compile` for the target Python on this
   machine and sums the file uv would choose for each package from the PyPI JSON API, times 3.3 (compressed
   downloads against installed size, measured on the curated installs); npm resolves with
   `npm install --package-lock-only` and sums each package's `dist.unpackedSize`. Lookups are cached
   (`data/.state/app-store/package_lookups.json`) and time-limited; a failure leaves the size unknown, with why.
-- `adding.py` checks, adds and removes. An added app becomes an ordinary `CatalogApp` (the generic `added.svg`
-  icon, no categories), so the engine installs, repairs, uninstalls and rolls it back exactly like a curated one, and
-  its pin never changes. Its drop-in's name is the user's, so it is listed in the repository's local
-  `info/exclude` (a block the store owns) rather than the tracked .gitignore. "Remove from store" works once the
-  app is not installed, and deletes whatever it left behind.
+- `adding.py` checks, adds, updates and removes. An added app becomes an ordinary `CatalogApp` (the generic
+  `added.svg` icon, no categories), so the engine installs, repairs, uninstalls and rolls it back exactly like a
+  curated one. Repairs and reinstalls keep its pin; only an update the person confirms moves it (see "Updating an
+  installed app"). Its drop-in's name is the user's, so it is listed in the repository's local `info/exclude` (a
+  block the store owns, rewritten atomically) rather than the tracked .gitignore. "Remove from store" works once
+  the app is not installed, and deletes whatever it left behind.
 - The start command may be left empty: "Work it out for me" runs a job in `command_finder.py` that pins the package,
   installs it into a scratch folder (`.command-trials/<job>/` in the store's data folder, always deleted), lists the
   programs it installed (none: not an app), reads each one's `--help` and the package's registry description, and
-  asks Claude (`claude -p` through the copied `claude_p.py`, model `FIND_MODEL`) for JSON saying `web_app` with a
+  asks Claude (`claude -p` through `claude_p.py`'s `claude_p_completion`, the store's trimmed copy of the
+  use-ai-integration skill's helper; model `FIND_MODEL`) for JSON saying `web_app` with a
   command, `not_an_app`, or `needs_setup`, with a plain explanation. A command is held to the same rules as a typed
   one, then test-launched on a free port until `/` answers. A page that forbids being framed (X-Frame-Options,
   or a frame-ancestors policy without `*`) is a failed try: the workspace shows every app framed, so its window would
@@ -108,8 +115,7 @@ comes from, then adds the app and queues its install.
 
 ## Adding an app from a GitHub repository
 
-Planned in full in `data/plans/app-store-add-from-github.md`. **Add app** opens on its first choice, **GitHub**: the
-person pastes a link (checked to be a GitHub repository link), and **Work it out in a chat** opens a chat with
+**Add app** opens on its first choice, **GitHub**: the person pastes a link (checked to be a GitHub repository link), and **Work it out in a chat** opens a chat with
 `/add-repo-to-store <link>` through the shell's start-with-text, as a template's Install does. That chat follows the
 `add-repo-to-store` skill (`.agents/skills/add-repo-to-store/`): it pins the link to a commit, works out an install
 file, tries it out, and hands it to the store. The store's half:
@@ -120,7 +126,9 @@ file, tries it out, and hands it to the store. The store's half:
   Two recipe kinds exist for it besides `github_build` (whose `ref` may now be empty for an unreleased commit) and
   `image_site`: `python_git` (`uv pip install git+<repository>@<commit>[#subdirectory=...]`, or
   `<package_name>[<extras>] @ git+...` when it asks for optional extras) and `node_git` (`npm install
-  git+<repository>.git#<commit>`); an app from a commit is versioned by its first 12 hash characters.
+  git+<repository>.git#<commit>`); an app from a commit is versioned by its first 12 hash characters. A file may also
+  use a registry recipe (`python`, `node`) for a release the project publishes there, its `commit` naming that
+  release's commit.
 - `POST /api/repo-adds` (`{"install_file": {...}, "chat_id": "...", "replaces": ""}`) checks it (400 for a rule a
   field breaks, 422 when its name is taken) and holds it as a **pending add** in `pending-repo-adds.json` (at most 20,
   oldest dropped). Nothing is installed. The trial's screenshot comes with it (`screenshot_png_base64`, a PNG of at
@@ -188,6 +196,13 @@ on the next visit.
 Uninstall stops the program, removes its drop-in and its registry row (`forward_port.py --remove`), deletes the
 environment, and deletes the app's data only when the user ticks that box.
 
+The shell offers an app's desktop shortcut once, when it first registers, and never takes one away: a shortcut whose
+app is gone stays as a plain window icon with the app's internal name. So uninstalling (and undoing a failed install)
+also takes the app's shortcuts off every desktop through the shell's desktop routes (`desktop_shortcuts.py`), keeping
+them in `desktop-shortcuts.json` in the store's data folder; installing the app again puts them back in their old cells (or the first free cell
+when that one was taken), and removing an added app from the store forgets them. A shell that can't be reached
+leaves the shortcuts as they are and never fails the install or uninstall.
+
 Every install keeps its raw log at `<slug>/install.log`, served at `/api/apps/<slug>/log` and linked from the
 page.
 
@@ -208,17 +223,24 @@ app is refused.
 
 ## Layout
 
-- `catalog.py`, `catalog/` -- the catalog and its schema.
-- `engine.py` -- the queue, install, uninstall and reconcile.
+- `catalog.py`, `catalog/` -- the catalog and its schema (every recipe kind).
+- `engine.py` -- the queue, install, update, uninstall and reconcile.
 - `layout.py` -- where an installed app's files go, and the manifest and drop-in it generates.
 - `system.py` -- the small interfaces over the command runner, the package installers, supervisord, the
   registry and the port probe (fakes in `testing.py`).
 - `process_memory.py` -- what an installed app's process tree uses right now (`supervisorctl pid`, then `/proc`).
 - `room.py` -- free disk and available memory (`oom_priority.meminfo.read_meminfo`, as System Monitor reads it)
   and the verdict.
+- `added_apps.py`, `package_check.py`, `adding.py` -- an app added from PyPI or npm: its rules and stored entries,
+  pinning and sizing it, and adding, updating and removing it.
+- `command_finder.py`, `claude_p.py`, `screenshot_page.py` -- working out an added app's start command with Claude,
+  and the framed screenshot of a try.
 - `repo_install_file.py`, `repo_adds.py`, `try_install.py` -- an app from GitHub: the install file a chat hands
   over, holding it for confirmation, and trying it out first.
-- `ports.py`, `records.py`, `template_sizes.py`, `views.py`, `pages.py` (routes), `main.py`, `launch.py`.
+- `fetch_image_layer.py` -- downloading an `image_site` app's one image layer.
+- `desktop_shortcuts.py` -- taking an app's desktop shortcuts off on uninstall and putting them back on a reinstall.
+- `ports.py`, `records.py`, `template_sizes.py`, `views.py`, `pages.py` (routes), `config.py`, `errors.py`,
+  `main.py`, `launch.py`.
 - The template catalog store, the state-file helpers and the page server are Getting Started's
   (`getting_started.template_catalog`, `.state_files`, `.serving`), and the Templates section draws
   Getting Started's own shelves (`getting-started-frontend` in the npm workspace).
@@ -226,8 +248,13 @@ app is refused.
 
 ## Data
 
-- `data/.apps/app-store/` -- the install records and one folder per installed app.
-- `data/.state/app-store/` -- the template catalog's last good copy and the cached template sizes.
+- `data/.apps/app-store/` -- the install records (`installs.json`), the added apps (`added-apps.json`), the apps
+  from GitHub waiting for confirmation (`pending-repo-adds.json`, `pending-repo-add-screenshots/`), the desktop
+  shortcuts set aside (`desktop-shortcuts.json`), the start-command searches' scratch folders and logs
+  (`.command-trials/`), and one folder per installed app.
+- `data/.state/app-store/` -- the template catalog's last good copy, the cached template sizes and the cached
+  package look-ups.
+- `data/.tasks/repo-trials/` -- each trial of an app from GitHub (log, screenshot, file and result).
 
 ## Tests
 

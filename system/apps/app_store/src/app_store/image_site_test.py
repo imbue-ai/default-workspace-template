@@ -6,6 +6,7 @@ import hashlib
 import io
 import sys
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -133,6 +134,35 @@ def test_only_the_named_folder_is_unpacked_as_the_site(tmp_path: Path) -> None:
     assert (site / "index.html").read_bytes() == b"<!doctype html>"
     assert (site / "assets" / "app.js").read_bytes() == b"draw()"
     assert sorted(path.name for path in site.parent.iterdir()) == ["site"]
+
+
+def test_an_absolute_folder_is_still_unpacked_from_inside_the_layer_never_from_this_machine(tmp_path: Path) -> None:
+    archive = tmp_path / "layer.tar.gz"
+    archive.write_bytes(_layer_archive({"usr/share/nginx/html/index.html": b"from the layer"}))
+    site = tmp_path / "env" / "site"
+    site.parent.mkdir()
+    unpack_folder(archive, "/usr/share/nginx/html", site)
+    assert (site / "index.html").read_bytes() == b"from the layer"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        lambda request: httpx.Response(200, content=b"not json"),
+        lambda request: httpx.Response(200, json={"access": "no token here"}),
+        lambda request: httpx.Response(200, json=["t"]),
+        lambda request: httpx.Response(200, json={"token": ""}),
+    ],
+    ids=["not-json", "no-token", "not-an-object", "empty-token"],
+)
+def test_a_token_answer_without_a_token_is_a_fetch_error(
+    tmp_path: Path, answer: Callable[[httpx.Request], httpx.Response]
+) -> None:
+    with (
+        httpx.Client(transport=httpx.MockTransport(answer)) as client,
+        pytest.raises(LayerFetchError, match="token"),
+    ):
+        download_layer(client, "excalidraw/excalidraw", _LAYER, tmp_path / "layer")
 
 
 def test_a_layer_without_the_site_fails(tmp_path: Path) -> None:

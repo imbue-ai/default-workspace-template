@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { storeAppRecord } from "./testing/records";
-import { VERDICT_LABELS, buildText, diskText, formatMb, memoryText } from "./room";
+import { VERDICT_LABELS, buildNeeds, buildText, diskText, formatMb, memoryText } from "./room";
 
 describe("formatMb", () => {
   it("writes KB under a megabyte, MB below a gigabyte, and GB from there", () => {
@@ -28,6 +28,14 @@ describe("diskText and memoryText", () => {
     expect(memoryText(storeAppRecord("a"))).toBe("50 MB in use");
     expect(memoryText(storeAppRecord("a", { memory_in_use_mb: null }))).toBe("unknown until it runs");
     expect(memoryText(storeAppRecord("a", { memory_in_use_mb: null, peak_memory_mb: 312 }))).toBe("312 MB measured");
+  });
+});
+
+describe("buildNeeds", () => {
+  it("names what a build needs of each, and nothing when it is not built", () => {
+    expect(buildNeeds(3000, null)).toBe("2.9 GB of memory");
+    expect(buildNeeds(null, 500)).toBe("500 MB of disk");
+    expect(buildNeeds(null, null)).toBeNull();
   });
 });
 

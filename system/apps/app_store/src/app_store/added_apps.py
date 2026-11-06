@@ -1,12 +1,13 @@
-"""Apps the user added to the store from a package registry: what they asked for, how it is checked, and where the
-added apps are kept.
+"""Apps the user added to the store, from a package registry or a GitHub repository: what a registry request asks for,
+how it is checked, and where the added apps are kept.
 
 An added app is an ordinary catalog entry (``CatalogApp``) built from the user's request, so it goes through exactly
 the install, repair, uninstall and roll-back paths a curated app does. What makes it different is where it is kept --
 ``added-apps.json`` in the store's own data folder, never the shipped catalog or any tracked file -- and that nobody
 reviewed it.
 
-The rules a request is held to, each refused in plain words:
+The rules a registry request is held to, each refused in plain words (an app from GitHub is held to the catalog's own
+rules instead, through its install file, ``repo_install_file.py``):
 
 - only a plain registry package: a PEP 508 project name on PyPI or a valid npm package name (scoped allowed), at one
   exact version (looked up and pinned when left empty); never a URL, a ``git+`` link, a file path, a package file, an
@@ -16,7 +17,7 @@ The rules a request is held to, each refused in plain words:
 - a name of its own: the app's internal name comes from its display name by the curated catalog's slug rules, and may
   not be one the store, the workspace's apps, its programs or the reserved names already use.
 
-Once added, an app's version never changes: a repair or reinstall installs the same pin.
+A repair or reinstall installs the same pin; only an update the person confirms moves an added app to another one.
 """
 
 import re
@@ -86,8 +87,8 @@ _URL_MARKERS: Final[tuple[str, ...]] = ("://", "git+", "git:", "github:", "gitla
 _PACKAGE_FILE_SUFFIXES: Final[tuple[str, ...]] = (".tar.gz", ".tgz", ".zip", ".whl", ".tar.bz2", ".tar")
 _VERSION_RANGE_CHARACTERS: Final[frozenset[str]] = frozenset("<>~^*!|, ")
 _LINK_REFUSAL: Final[str] = (
-    "Links aren't supported here: enter a package name from {registry}. (Installing from GitHub will be its own "
-    "option.)"
+    "Links aren't supported here: enter a package name from {registry}. (For an app from GitHub, choose GitHub "
+    "instead.)"
 )
 
 
@@ -217,6 +218,9 @@ def _check_npm_name(name: str) -> str:
         raise _refuse("That looks like a package file. Enter the package's name on npm instead.")
     if name.startswith((".", "/", "~", "\\")):
         raise _refuse("That looks like a file path. Enter the package's name on npm instead.")
+    if name.startswith("-"):
+        # npm would read it as one of its own options, not a package.
+        raise _refuse(f"{name!r} can't be installed: a package name may not start with a dash.")
     if "@" in name[1:]:
         raise _refuse("Enter just the package's name here, and an exact version in the version field.")
     if len(name) > _NPM_NAME_MAX_LENGTH or _NPM_NAME_PATTERN.match(name) is None:
@@ -235,7 +239,8 @@ def _check_npm_version(version: str) -> str:
     return text
 
 
-def _split_command(command: str) -> tuple[str, tuple[str, ...]]:
+def check_command(command: str) -> tuple[str, tuple[str, ...]]:
+    """A start command split into its program and arguments, or AddAppRefusedError saying which rule it breaks."""
     try:
         words = shlex.split(command, posix=True)
     except ValueError as e:
@@ -272,16 +277,11 @@ def _split_command(command: str) -> tuple[str, tuple[str, ...]]:
     return program, arguments
 
 
-def check_command(command: str) -> tuple[str, tuple[str, ...]]:
-    """A start command split into its program and arguments, or AddAppRefusedError saying which rule it breaks."""
-    return _split_command(command)
-
-
 def check_request(request: AddAppRequest, taken_names: set[str]) -> CheckedRequest:
     """``request`` normalized, or AddAppRefusedError saying which rule it breaks. ``taken_names`` holds every name an
     added app may not take."""
     package_only = check_package_request(request, taken_names)
-    program, arguments = _split_command(request.command)
+    program, arguments = check_command(request.command)
     setup_files = check_setup_files(request.setup_files)
     return package_only.model_copy(update={"program": program, "arguments": arguments, "setup_files": setup_files})
 

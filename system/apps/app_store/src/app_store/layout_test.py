@@ -58,3 +58,4 @@ def test_an_apps_files_sit_in_one_folder_and_its_dropin_beside_the_others(tmp_pa
     assert layout.log_path("x") == tmp_path / "data" / "x" / "install.log"
     assert layout.dropin_path("x") == tmp_path / "system" / "supervisord.conf.d" / "x.conf"
     assert layout.records_path == tmp_path / "data" / "installs.json"
+    assert layout.registry_path == tmp_path / "data" / ".state" / "apps.toml"

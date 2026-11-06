@@ -21,14 +21,20 @@ export function formatMb(mb: number): string {
   return `${Math.round(mb * 10) / 10} MB`;
 }
 
+/** What a build needs, as "3.0 GB of memory and 900 MB of disk"; null for an app that is not built. */
+export function buildNeeds(buildMemoryMb: number | null, buildDiskMb: number | null): string | null {
+  const needs = [
+    buildMemoryMb === null ? null : `${formatMb(buildMemoryMb)} of memory`,
+    buildDiskMb === null ? null : `${formatMb(buildDiskMb)} of disk`,
+  ].filter((part) => part !== null);
+  return needs.length === 0 ? null : needs.join(" and ");
+}
+
 /** What building an app needs, in one sentence; empty for an app that is not built. */
 export function buildText(app: StoreApp): string {
-  if (app.build_memory_mb === null && app.build_disk_mb === null) return "";
-  const needs = [
-    app.build_memory_mb === null ? null : `${formatMb(app.build_memory_mb)} of memory`,
-    app.build_disk_mb === null ? null : `${formatMb(app.build_disk_mb)} of disk`,
-  ].filter((part) => part !== null);
-  return `Installing builds it from its source first, which needs about ${needs.join(" and ")} for a minute or so. The fit counts that too.`;
+  const needs = buildNeeds(app.build_memory_mb, app.build_disk_mb);
+  if (needs === null) return "";
+  return `Installing builds it from its source first, which needs about ${needs} for a minute or so. The fit counts that too.`;
 }
 
 /** The disk line for an app: the measured figure once installed, else the estimate, else that it is unknown. */

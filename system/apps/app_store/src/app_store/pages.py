@@ -1,5 +1,7 @@
-"""The app's routes on its own origin: the page, the store's state, install and uninstall, each app's icon and raw
-install log, the template catalog and a template's size, the health probe, and the contract module.
+"""The app's routes on its own origin: the page, the store's state, install, uninstall and update, each app's icon and
+raw install log, adding apps from PyPI or npm (checked, added, removed, and the job that works out a start command),
+apps from GitHub waiting for confirmation, the template catalog and a template's size, the health probe, and the
+contract module.
 
 The page is the frontend's built document (``static/index.html``); its bundle is served under ``/assets``. Opening
 an installed app and adopting a template both happen in the page, through the shell connection.
@@ -75,6 +77,9 @@ HTTP_NOT_FOUND: Final[int] = 404
 HTTP_CONFLICT: Final[int] = 409
 HTTP_UNPROCESSABLE: Final[int] = 422
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
+
+# Raw logs and screenshots hold what an app printed or drew, so the browser must take them as what they say they are.
+_RAW_FILE_HEADERS: Final[dict[str, str]] = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
 _NOT_BUILT_PAGE: Final[str] = (
     '<!doctype html><html><head><meta charset="utf-8"><title>App Store</title></head>'
@@ -239,7 +244,9 @@ def build_pages_blueprint(
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
             return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
-        return Response(document.read_text(), mimetype="text/html", headers={"Cache-Control": "no-store"})
+        return Response(
+            document.read_text(encoding="utf-8"), mimetype="text/html", headers={"Cache-Control": "no-store"}
+        )
 
     @blueprint.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
@@ -247,7 +254,7 @@ def build_pages_blueprint(
         try:
             return send_from_directory((static_directory / "assets").absolute(), filename)
         except NotFound:
-            return Response(status=HTTP_NOT_FOUND)
+            return error_response(f"no asset {filename!r}", HTTP_NOT_FOUND)
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
@@ -299,7 +306,7 @@ def build_pages_blueprint(
         try:
             record = engine.request_install(slug)
         except InstallRefusedError as e:
-            return error_response(str(e), HTTP_NOT_FOUND if engine.catalog.find(slug) is None else HTTP_CONFLICT)
+            return error_response(str(e), _refusal_status(engine, slug))
         return model_response(InstallRecordResponse(record=record), HTTP_ACCEPTED)
 
     @blueprint.post("/api/apps/<slug>/uninstall")
@@ -309,7 +316,7 @@ def build_pages_blueprint(
         try:
             record = engine.request_uninstall(slug, request_body.is_deleting_data)
         except InstallRefusedError as e:
-            return error_response(str(e), HTTP_NOT_FOUND if engine.catalog.find(slug) is None else HTTP_CONFLICT)
+            return error_response(str(e), _refusal_status(engine, slug))
         return model_response(InstallRecordResponse(record=record), HTTP_ACCEPTED)
 
     @blueprint.get("/api/apps/<slug>/newest-version")
@@ -353,9 +360,9 @@ def build_pages_blueprint(
         for the newest). 409 when it cannot be updated now; 422 for an app added from GitHub, which a chat updates."""
         request_body = parse_request_body(UpdateRequest)
         added = engine.added.find(slug)
+        if added is not None and added.source == "github":
+            return error_response("A chat updates GitHub apps: check for a newer version.", HTTP_UNPROCESSABLE)
         try:
-            if added is not None and added.source == "github":
-                return error_response("A chat updates GitHub apps: check for a newer version.", HTTP_UNPROCESSABLE)
             if added is None:
                 target = engine.catalog.find(slug)
                 if target is None:
@@ -435,7 +442,7 @@ def build_pages_blueprint(
         image = finder.screenshot(job_id)
         if image is None:
             return error_response(f"no screenshot for {job_id!r}", HTTP_NOT_FOUND)
-        return Response(image, mimetype="image/png", headers={"Cache-Control": "no-store"})
+        return _png(image)
 
     @blueprint.get(FIND_COMMAND_PATH + "/<job_id>/log")
     def find_command_log(job_id: str) -> ResponseReturnValue:
@@ -443,11 +450,7 @@ def build_pages_blueprint(
         log_path = finder.log_path(job_id)
         if finder.get(job_id) is None or not log_path.is_file():
             return error_response(f"no log for {job_id!r}", HTTP_NOT_FOUND)
-        return Response(
-            log_path.read_text(encoding="utf-8", errors="replace"),
-            mimetype="text/plain",
-            headers={"Cache-Control": "no-store"},
-        )
+        return _plain_text(log_path)
 
     @blueprint.post(REPO_ADDS_PATH)
     def submit_repo_add() -> ResponseReturnValue:
@@ -488,7 +491,7 @@ def build_pages_blueprint(
         image = repo_adds.pending.screenshot(pending_id)
         if image is None:
             return error_response(f"no screenshot for {pending_id!r}", HTTP_NOT_FOUND)
-        return Response(image, mimetype="image/png", headers={"Cache-Control": "no-store"})
+        return _png(image)
 
     @blueprint.delete(REPO_ADDS_PATH + "/<pending_id>")
     def discard_repo_add(pending_id: str) -> ResponseReturnValue:
@@ -515,11 +518,7 @@ def build_pages_blueprint(
         log_path = engine.layout.log_path(slug)
         if not log_path.is_file():
             return error_response(f"no install log for {slug}", HTTP_NOT_FOUND)
-        return Response(
-            log_path.read_text(encoding="utf-8", errors="replace"),
-            mimetype="text/plain",
-            headers={"Cache-Control": "no-store"},
-        )
+        return _plain_text(log_path)
 
     @blueprint.get(TEMPLATES_CATALOG_PATH)
     def templates_catalog() -> ResponseReturnValue:
@@ -562,3 +561,20 @@ def build_pages_blueprint(
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 
     return blueprint
+
+
+def _refusal_status(engine: InstallEngine, slug: str) -> int:
+    """404 for an app the store does not have; 409 for one it has that cannot take the job now."""
+    return HTTP_NOT_FOUND if engine.catalog.find(slug) is None else HTTP_CONFLICT
+
+
+def _plain_text(path: Path) -> Response:
+    """A raw log, as written."""
+    return Response(
+        path.read_text(encoding="utf-8", errors="replace"), mimetype="text/plain", headers=_RAW_FILE_HEADERS
+    )
+
+
+def _png(image: bytes) -> Response:
+    """A screenshot, as taken."""
+    return Response(image, mimetype="image/png", headers=_RAW_FILE_HEADERS)

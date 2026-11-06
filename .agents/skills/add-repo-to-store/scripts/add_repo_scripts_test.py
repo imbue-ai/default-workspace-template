@@ -84,6 +84,14 @@ def test_the_license_comes_from_the_package_file_when_github_cannot_tell() -> No
     assert look_up_repo.license_from_files({"package.json": "not json"}) == "Unknown"
 
 
+def test_look_ups_are_kept_in_the_workspace_the_skill_lives_in() -> None:
+    workspace = look_up_repo.RECORDS_DIRECTORY.parents[2]
+    assert (
+        workspace / ".agents" / "skills" / "add-repo-to-store" / "SKILL.md"
+    ).is_file()
+    assert look_up_repo.RECORDS_DIRECTORY == workspace / "data" / ".tasks" / "repo-adds"
+
+
 def _file(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
         "format": 1,

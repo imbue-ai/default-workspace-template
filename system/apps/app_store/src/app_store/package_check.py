@@ -24,6 +24,7 @@ import threading
 import time
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from app_store.added_apps import CheckedRequest
-from app_store.added_apps import SOURCE_NAMES
+from app_store.added_apps import DEFAULT_PYTHON
 from app_store.errors import AddAppRefusedError
 from app_store.errors import PackageLookupError
 from getting_started.errors import StateFileError
@@ -283,7 +284,7 @@ class LookupCache(MutableModel):
             entry = self._loaded().get(key)
         if not isinstance(entry, dict) or "value" not in entry:
             return None
-        if max_age_seconds is not None and time.time() - float(entry.get("at", 0)) > max_age_seconds:
+        if max_age_seconds is not None and time.time() - _entry_time(entry) > max_age_seconds:
             return None
         return entry["value"]
 
@@ -337,9 +338,12 @@ class PackageChecker(MutableModel):
             raise AddAppRefusedError(f"There's no package called {name!r} on PyPI.")
         info = project.get("info", {}) or {}
         releases = project.get("releases", {}) or {}
-        latest = str(info.get("version", ""))
+        latest = str(info.get("version") or "")
         pinned = version or latest
-        if pinned not in releases and Version(pinned) not in {_safe_version(known) for known in releases}:
+        if pinned == "":
+            raise AddAppRefusedError(f"{name} has no release on PyPI to pin; enter an exact version.")
+        parsed = _safe_version(pinned)
+        if pinned not in releases and (parsed is None or parsed not in {_safe_version(known) for known in releases}):
             raise AddAppRefusedError(f"{name} has no version {pinned} on PyPI. Its latest is {latest}.")
         if version and version != latest:
             release = self.registry.get_json(f"{PYPI_ROOT}/pypi/{name}/{pinned}/json") or {}
@@ -369,9 +373,11 @@ class PackageChecker(MutableModel):
         packument = self.registry.get_json(f"{NPM_REGISTRY_ROOT}/{name}")
         if packument is None:
             raise AddAppRefusedError(f"There's no package called {name!r} on npm.")
-        latest = str((packument.get("dist-tags") or {}).get("latest", ""))
+        latest = str((packument.get("dist-tags") or {}).get("latest") or "")
         versions = packument.get("versions") or {}
         pinned = version or latest
+        if pinned == "":
+            raise AddAppRefusedError(f"{name} has no release on npm to pin; enter an exact version.")
         if pinned not in versions:
             raise AddAppRefusedError(f"{name} has no version {pinned} on npm. Its latest is {latest}.")
         manifest = versions[pinned] or {}
@@ -395,7 +401,7 @@ class PackageChecker(MutableModel):
         deadline = time.monotonic() + self.budget_seconds
         try:
             if request.source == "pypi":
-                return self._estimate_pypi(request.package, version, request.python or "3.12", deadline)
+                return self._estimate_pypi(request.package, version, request.python or DEFAULT_PYTHON, deadline)
             return self._estimate_npm(request.package, version, deadline)
         except PackageLookupError as e:
             logger.info("Could not estimate {}: {}", request.package, e)
@@ -403,15 +409,14 @@ class PackageChecker(MutableModel):
 
     def _estimate_pypi(self, name: str, version: str, python: str, deadline: float) -> DiskEstimate:
         requirement = f"{name}=={version}"
-        resolved = self._resolved(f"pypi-resolve:{requirement}:{python}:{python_platform()}", deadline)
+        key = f"pypi-resolve:{requirement}:{python}:{python_platform()}"
+        resolved = self._resolved(key, deadline)
         if resolved is None:
             resolved = self.resolver.resolve_python(requirement, python)
-            self.cache.put(f"pypi-resolve:{requirement}:{python}:{python_platform()}", resolved)
+            self.cache.put(key, resolved)
         tags = target_tags(python)
         sizes = self._lookup_all(
-            [(package, pinned) for package, pinned in resolved],
-            lambda package, pinned: self._pypi_file_size(package, pinned, python, tags),
-            deadline,
+            resolved, lambda package, pinned: self._pypi_file_size(package, pinned, python, tags), deadline
         )
         known = [size for size in sizes if size is not None]
         missing = len(sizes) - len(known)
@@ -430,10 +435,11 @@ class PackageChecker(MutableModel):
 
     def _estimate_npm(self, name: str, version: str, deadline: float) -> DiskEstimate:
         spec = f"{name}@{version}"
-        resolved = self._resolved(f"npm-resolve:{spec}", deadline)
+        key = f"npm-resolve:{spec}"
+        resolved = self._resolved(key, deadline)
         if resolved is None:
             resolved = self.resolver.resolve_npm(spec)
-            self.cache.put(f"npm-resolve:{spec}", resolved)
+            self.cache.put(key, resolved)
         sizes = self._lookup_all(resolved, self._npm_unpacked_size, deadline)
         known = [size for size in sizes if size is not None]
         missing = len(sizes) - len(known)
@@ -454,19 +460,25 @@ class PackageChecker(MutableModel):
             return None
         return [(str(name), str(version)) for name, version in cached]
 
-    def _lookup_all(self, packages: list[tuple[str, str]], lookup: Any, deadline: float) -> list[int | None]:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+    def _lookup_all(
+        self, packages: list[tuple[str, str]], lookup: Callable[[str, str], int | None], deadline: float
+    ) -> list[int | None]:
+        """Each package's size, looked up in parallel; PackageLookupError once ``deadline`` passes."""
+        if deadline - time.monotonic() <= 0:
             raise PackageLookupError("the lookups took too long")
-        with ThreadPoolExecutor(max_workers=LOOKUP_WORKERS) as pool:
+        pool = ThreadPoolExecutor(max_workers=LOOKUP_WORKERS)
+        try:
             futures = [pool.submit(lookup, name, version) for name, version in packages]
             results: list[int | None] = []
             for future in futures:
-                timeout = deadline - time.monotonic()
-                if timeout <= 0:
-                    raise PackageLookupError("the size lookups took too long")
-                results.append(future.result(timeout=timeout))
-        return results
+                try:
+                    results.append(future.result(timeout=max(0.0, deadline - time.monotonic())))
+                except TimeoutError as e:
+                    raise PackageLookupError("the size lookups took too long") from e
+            return results
+        finally:
+            # Not waited for: a lookup still running ends on its own time limit, and the check answers on time.
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _pypi_file_size(self, name: str, version: str, python: str, tags: list[Tag]) -> int | None:
         key = f"pypi-file:{canonicalize_name(name)}=={version}:{python}:{python_platform()}"
@@ -487,8 +499,9 @@ class PackageChecker(MutableModel):
         cached = self.cache.get(key)
         if isinstance(cached, int):
             return cached
-        manifest = self.registry.get_json(f"{NPM_REGISTRY_ROOT}/{name}/{version}")
-        size = (manifest or {}).get("dist", {}).get("unpackedSize")
+        manifest = self.registry.get_json(f"{NPM_REGISTRY_ROOT}/{name}/{version}") or {}
+        dist = manifest.get("dist")
+        size = dist.get("unpackedSize") if isinstance(dist, dict) else None
         if isinstance(size, int):
             self.cache.put(key, size)
             return size
@@ -513,7 +526,3 @@ def _safe_version(text: str) -> Version | None:
         return Version(text)
     except InvalidVersion:
         return None
-
-
-def registry_name(source: str) -> str:
-    return SOURCE_NAMES.get(source, source)

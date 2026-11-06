@@ -282,6 +282,23 @@ describe("apps a chat worked out how to install from GitHub", () => {
     expect(root.querySelector("[data-dialog=repo-add]")!.textContent).toContain("Add Other App to the store?");
   });
 
+  it("keeps the store's refusal with the add it was about, and asks no more about one it dropped", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Its name is taken." }), { status: 422 }))
+      .mockResolvedValue(new Response("{}", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    mountPage({ store: WAITING });
+    root.querySelector<HTMLElement>(".app-store-confirm-repo-add")!.click();
+    await settle();
+    expect(root.querySelector("[data-dialog=repo-add] [data-refusal]")!.textContent).toBe("Its name is taken.");
+    root.querySelector<HTMLElement>(".app-store-discard-repo-add")!.click();
+    await settle();
+    // The first is gone at once, though the poll that drops it has not changed the page; the next has no refusal.
+    expect(root.querySelector("[data-dialog=repo-add]")!.textContent).toContain("Add Other App to the store?");
+    expect(root.querySelector("[data-dialog=repo-add] [data-refusal]")).toBeNull();
+  });
+
   it("confirms it with the store", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 202 }));
     vi.stubGlobal("fetch", fetchMock);

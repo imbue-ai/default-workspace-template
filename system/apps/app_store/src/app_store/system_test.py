@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 
 from app_manifest.registry import FORWARD_PORT_SCRIPT
+from app_store.catalog import AnyRecipe
 from app_store.catalog import NodeRecipe
 from app_store.catalog import PythonRecipe
 from app_store.errors import InstallError
-from app_store.system import AnyRecipe
 from app_store.system import CommandPackageInstaller
 from app_store.system import ForwardPortRegistrar
 from app_store.system import HttpPortProbe

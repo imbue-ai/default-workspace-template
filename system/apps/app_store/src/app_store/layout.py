@@ -5,14 +5,16 @@ Each installed app has one folder under the store's data folder::
 
     data/.apps/app-store/<slug>/
         env/           its environment (rebuildable, so kept out of the backup)
+        env.previous/  during an update, the running version's environment, set aside until the new one starts
         data/          its own data: notebooks, databases, flows, settings
         app.toml       its generated manifest, naming icon.svg beside it
         icon.svg       its icon, copied from the catalog
-        install.log    the raw log of the last install, repair or uninstall
+        install.log    the raw log of the last install or repair, and of every update and uninstall since
 
 and one supervisord drop-in, ``system/supervisord.conf.d/<slug>.conf``, which runs ``app-store-launch <slug>``. The
-drop-ins are gitignored (the catalog's slugs are listed in .gitignore) and re-created from the install records when
-the store starts, so an install survives a rebuild of the workspace's code.
+drop-ins are never committed (a shipped app's is listed in .gitignore, an added app's in the repository's local
+excludes) and are re-created from the install records when the store starts, so an install survives a rebuild of the
+workspace's code.
 """
 
 import json
@@ -21,6 +23,7 @@ from typing import Final
 
 from pydantic import Field
 
+from app_manifest.registry_location import DEFAULT_APPS_FILE
 from app_store.catalog import CatalogApp
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -60,6 +63,10 @@ class StoreLayout(FrozenModel):
         return self.data_dir / "added-apps.json"
 
     @property
+    def kept_shortcuts_path(self) -> Path:
+        return self.data_dir / "desktop-shortcuts.json"
+
+    @property
     def pending_repo_adds_path(self) -> Path:
         return self.data_dir / "pending-repo-adds.json"
 
@@ -70,6 +77,11 @@ class StoreLayout(FrozenModel):
     @property
     def supervisord_conf(self) -> Path:
         return self.repo_root / "system" / "supervisord.conf"
+
+    @property
+    def registry_path(self) -> Path:
+        """The app registry, where forward_port.py keeps it under the repo root."""
+        return self.repo_root / DEFAULT_APPS_FILE
 
     def app_dir(self, slug: str) -> Path:
         return self.data_dir / slug

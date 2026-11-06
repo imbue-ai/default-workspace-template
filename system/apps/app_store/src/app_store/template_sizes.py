@@ -68,10 +68,15 @@ class GithubRepositorySizeFetcher(RepositorySizeFetcherInterface):
             logger.warning("Looking up {} answered {}", api_url, response.status_code)
             return None
         try:
-            size = response.json().get("size")
-        except ValueError:
+            document = response.json()
+        except ValueError as e:
+            logger.warning("Looking up {} answered no JSON: {}", api_url, e)
             return None
-        return size if isinstance(size, int) and size >= 0 else None
+        size = document.get("size") if isinstance(document, dict) else None
+        if not isinstance(size, int) or size < 0:
+            logger.warning("Looking up {} answered no size", api_url)
+            return None
+        return size
 
 
 class CachedSize(FrozenModel):
@@ -82,6 +87,8 @@ class CachedSize(FrozenModel):
 
 
 class SizeCacheDocument(FrozenModel):
+    """The cache file: every lookup made."""
+
     sizes: dict[str, CachedSize] = Field(default_factory=dict, description="Lookups by repository URL")
 
 

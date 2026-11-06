@@ -27,8 +27,6 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
-RECORDS_FILENAME: Final[str] = "installs.json"
-
 
 class InstallStatus(UpperCaseStrEnum):
     """Where an app is in its life in the store."""

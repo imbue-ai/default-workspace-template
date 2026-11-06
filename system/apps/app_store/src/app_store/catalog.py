@@ -7,9 +7,12 @@ a catalog that does not validate stops the store rather than offering a half-che
 
 An install recipe is a discriminated union on ``kind`` -- a Python package into its own uv-made environment, an
 npm package into its own prefix, either of those straight from a pinned GitHub commit, a site built from a pinned
-GitHub commit, or a ready-made site taken from one pinned
-Docker Hub image layer -- and never a shell string. The launch command is an argv list whose only
-substitutions are the placeholders below; it must run something from the app's own environment and bind loopback.
+GitHub commit, or a ready-made site taken from one pinned Docker Hub image layer -- and never a shell string. The
+launch command is an argv list whose only substitutions are the placeholders below; it must run something from the
+app's own environment and bind loopback.
+
+The same models carry the apps a user adds (``added_apps.py``), which are held to every rule here except the shipped
+catalog's own extras: a category and measured resource figures.
 """
 
 import re
@@ -62,6 +65,25 @@ _PYTHON_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^3\.\d{1,2}$")
 _URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^https://[^\s]+$")
 
 
+def _check_python_version(value: str) -> str:
+    if _PYTHON_VERSION_PATTERN.match(value) is None:
+        raise CatalogEntryError(f"python {value!r} must be a 3.x version")
+    return value
+
+
+def _check_pinned_node_tools(value: tuple[str, ...]) -> tuple[str, ...]:
+    for package in value:
+        if _NPM_PACKAGE_PATTERN.match(package) is None:
+            raise CatalogEntryError(f"node tool {package!r} must pin one exact version, as name@x.y.z")
+    return value
+
+
+@pure
+def _is_plain_relative_path(value: str) -> bool:
+    """Whether ``value`` is a relative path of plain names that cannot climb out of where it is joined."""
+    return _RELATIVE_PATH_PATTERN.match(value) is not None and ".." not in value.split("/")
+
+
 class PythonRecipe(FrozenModel):
     """A Python package, pinned, installed into the app's own environment by ``uv``."""
 
@@ -79,9 +101,7 @@ class PythonRecipe(FrozenModel):
     @field_validator("python")
     @classmethod
     def _python_is_a_version(cls, value: str) -> str:
-        if _PYTHON_VERSION_PATTERN.match(value) is None:
-            raise CatalogEntryError(f"python {value!r} must be a 3.x version")
-        return value
+        return _check_python_version(value)
 
     @property
     def pinned_version(self) -> str:
@@ -196,15 +216,12 @@ class GithubBuildRecipe(FrozenModel):
     @field_validator("node_tools")
     @classmethod
     def _tools_are_pinned(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        for package in value:
-            if _NPM_PACKAGE_PATTERN.match(package) is None:
-                raise CatalogEntryError(f"node tool {package!r} must pin one exact version, as name@x.y.z")
-        return value
+        return _check_pinned_node_tools(value)
 
     @field_validator("output")
     @classmethod
     def _output_is_inside_the_checkout(cls, value: str) -> str:
-        if _RELATIVE_PATH_PATTERN.match(value) is None or ".." in value.split("/"):
+        if not _is_plain_relative_path(value):
             raise CatalogEntryError(f"output {value!r} must be a plain path inside the checkout")
         return value
 
@@ -249,16 +266,14 @@ class PythonGitRecipe(FrozenModel):
     @field_validator("subdirectory")
     @classmethod
     def _subdirectory_is_inside(cls, value: str) -> str:
-        if value != "" and (_RELATIVE_PATH_PATTERN.match(value) is None or ".." in value.split("/")):
+        if value != "" and not _is_plain_relative_path(value):
             raise CatalogEntryError(f"subdirectory {value!r} must be a plain path inside the repository")
         return value
 
     @field_validator("python")
     @classmethod
     def _python_is_a_version(cls, value: str) -> str:
-        if _PYTHON_VERSION_PATTERN.match(value) is None:
-            raise CatalogEntryError(f"python {value!r} must be a 3.x version")
-        return value
+        return _check_python_version(value)
 
     @field_validator("extras")
     @classmethod
@@ -369,17 +384,14 @@ class ImageSiteRecipe(FrozenModel):
     @field_validator("path")
     @classmethod
     def _path_is_relative(cls, value: str) -> str:
-        if _RELATIVE_PATH_PATTERN.match(value) is None or ".." in value.split("/"):
+        if not _is_plain_relative_path(value):
             raise CatalogEntryError(f"path {value!r} must be a plain relative path inside the layer")
         return value
 
     @field_validator("node_tools")
     @classmethod
     def _tools_are_pinned(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        for package in value:
-            if _NPM_PACKAGE_PATTERN.match(package) is None:
-                raise CatalogEntryError(f"node tool {package!r} must pin one exact version, as name@x.y.z")
-        return value
+        return _check_pinned_node_tools(value)
 
     @property
     def pinned_version(self) -> str:
@@ -394,10 +406,8 @@ class ImageSiteRecipe(FrozenModel):
         return f"{self.image} {self.published} ({self.layer.removeprefix('sha256:')[:12]})"
 
 
-InstallRecipe = Annotated[
-    PythonRecipe | NodeRecipe | PythonGitRecipe | NodeGitRecipe | GithubBuildRecipe | ImageSiteRecipe,
-    Field(discriminator="kind"),
-]
+AnyRecipe = PythonRecipe | NodeRecipe | PythonGitRecipe | NodeGitRecipe | GithubBuildRecipe | ImageSiteRecipe
+InstallRecipe = Annotated[AnyRecipe, Field(discriminator="kind")]
 # The kinds that install from one commit of a GitHub repository.
 GitRecipe = PythonGitRecipe | NodeGitRecipe | GithubBuildRecipe
 
@@ -489,10 +499,13 @@ class SetupFile(FrozenModel):
 class LaunchCommand(FrozenModel):
     """How the installed app is started: an optional one-time init, then the long-running server."""
 
-    argv: tuple[str, ...] = Field(description="The server's argv; placeholders {port}, {data_dir}, {env_dir}")
+    argv: tuple[str, ...] = Field(
+        description="The server's argv; placeholders {port}, {data_dir}, {env_dir} and {origin_label}"
+    )
     init_argv: tuple[str, ...] = Field(
         default=(),
-        description="Run once while configuring, before the first start, when the app needs its data folder set up",
+        description="Run once while configuring, before the first start, when the app needs its data folder set up; "
+        "placeholders {port}, {data_dir} and {env_dir}",
     )
     env: dict[str, str] = Field(default_factory=dict, description="Extra environment variables, placeholders allowed")
     setup_files: tuple[SetupFile, ...] = Field(

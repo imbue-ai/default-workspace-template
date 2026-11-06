@@ -231,4 +231,27 @@ describe("the requests", () => {
     await pollOnce();
     expect(getStoreState()).toEqual({ kind: "loaded", snapshot });
   });
+
+  it("keeps the newest of two overlapping polls, and one poll scheduled after them", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const older = snapshotRecord({ busy_with: "older" });
+      const newer = snapshotRecord({ busy_with: "newer" });
+      let answerOlder: (response: Response) => void = () => {};
+      const fetchMock = vi
+        .fn()
+        .mockReturnValueOnce(new Promise<Response>((resolve) => (answerOlder = resolve)))
+        .mockResolvedValueOnce(answer(200, newer));
+      vi.stubGlobal("fetch", fetchMock);
+      const first = pollOnce();
+      // A queued job polls at once, while the first poll is still out.
+      await pollOnce();
+      answerOlder(answer(200, older));
+      await first;
+      expect(getStoreState()).toEqual({ kind: "loaded", snapshot: newer });
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -18,20 +18,30 @@ from typing import Final
 import httpx
 from loguru import logger
 
+from app_store.errors import AppStoreError
+
 TOKEN_URL: Final[str] = "https://auth.docker.io/token"
 REGISTRY_ROOT: Final[str] = "https://registry-1.docker.io/v2"
 DOWNLOAD_TIMEOUT_SECONDS: Final[float] = 120.0
 CHUNK_BYTES: Final[int] = 1024 * 1024
 
 
-class LayerFetchError(Exception):
+class LayerFetchError(AppStoreError):
     """The layer could not be fetched, did not match its digest, or did not hold the folder."""
 
 
 def anonymous_pull_token(client: httpx.Client, image: str) -> str:
+    """Docker Hub's token for pulling public ``image`` without an account; raises LayerFetchError without one."""
     response = client.get(TOKEN_URL, params={"service": "registry.docker.io", "scope": f"repository:{image}:pull"})
     response.raise_for_status()
-    return str(response.json()["token"])
+    try:
+        document = response.json()
+    except ValueError as e:
+        raise LayerFetchError("Docker Hub's token answer is not JSON") from e
+    token = document.get("token") if isinstance(document, dict) else None
+    if not isinstance(token, str) or token == "":
+        raise LayerFetchError("Docker Hub gave no pull token")
+    return token
 
 
 def download_layer(client: httpx.Client, image: str, layer: str, destination: Path) -> None:
@@ -53,12 +63,14 @@ def download_layer(client: httpx.Client, image: str, layer: str, destination: Pa
 
 def unpack_folder(archive: Path, path: str, site: Path) -> None:
     """Unpack the ``path`` folder of the layer ``archive`` as ``site``; raises LayerFetchError when it has none."""
-    prefix = path.strip("/") + "/"
+    folder = path.strip("/")
+    prefix = folder + "/"
     with tempfile.TemporaryDirectory(dir=site.parent) as scratch:
         with tarfile.open(archive, "r:*") as tar:
             members = [member for member in tar.getmembers() if member.name.lstrip("./").startswith(prefix)]
             tar.extractall(scratch, members=members, filter="data")
-        unpacked = Path(scratch) / path
+        # The folder as the layer names it, always inside the scratch folder (never an absolute path of this machine).
+        unpacked = Path(scratch) / folder
         if not (unpacked / "index.html").is_file():
             raise LayerFetchError(f"the layer has no site at {path}")
         _refuse_links_out_of(unpacked)

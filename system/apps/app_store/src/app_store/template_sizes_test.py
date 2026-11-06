@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import httpx
 import pytest
 
+from app_store import template_sizes
+from app_store.template_sizes import GithubRepositorySizeFetcher
 from app_store.template_sizes import TemplateSizeStore
 from app_store.template_sizes import github_api_url
 from app_store.testing import FakeRepositorySizeFetcher
@@ -47,3 +50,30 @@ def test_an_unreadable_cache_is_ignored(tmp_path: Path) -> None:
     cache.write_text('{"sizes": {"x": {"size_kb": "big"}}}')
     fetcher = FakeRepositorySizeFetcher(size_by_url={_API: 7})
     assert TemplateSizeStore(cache_path=cache, fetcher=fetcher).size_kb("https://github.com/someone/thing") == 7
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (httpx.Response(200, json={"size": 2048, "name": "thing"}), 2048),
+        (httpx.Response(200, json=[{"size": 2048}]), None),
+        (httpx.Response(200, json={"size": "big"}), None),
+        (httpx.Response(200, text="<html>rate limited</html>"), None),
+        (httpx.Response(403, json={"message": "API rate limit exceeded"}), None),
+    ],
+    ids=["size", "not-an-object", "not-a-number", "not-json", "refused"],
+)
+def test_the_github_fetcher_reads_the_size_and_anything_else_is_not_estimated(
+    monkeypatch: pytest.MonkeyPatch, answer: httpx.Response, expected: int | None
+) -> None:
+    answer.request = httpx.Request("GET", _API)
+    monkeypatch.setattr(template_sizes.httpx, "get", lambda url, **kwargs: answer)
+    assert GithubRepositorySizeFetcher().fetch_size_kb(_API) == expected
+
+
+def test_the_github_fetcher_reads_no_network_as_not_estimated(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _unreachable(url: str, **kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(template_sizes.httpx, "get", _unreachable)
+    assert GithubRepositorySizeFetcher().fetch_size_kb(_API) is None

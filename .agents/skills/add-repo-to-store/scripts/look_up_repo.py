@@ -4,10 +4,9 @@
 Takes any link a person might paste -- the repository, a branch or tag (``/tree/<ref>``), a release
 (``/releases/tag/<tag>``), a commit (``/commit/<sha>``), with or without ``.git`` -- and pins it to one full commit
 hash. Then it reads what working out an install needs, at that commit: the repository's description, license, size
-and whether it is private or archived; its top-level files; and the text of the files that say how it installs and
-runs (``.imbue-store.toml``, ``pyproject.toml``, ``package.json``, ``Dockerfile``, ``docker-compose.yml``, the
-README). Everything is printed as one JSON object and kept, raw, under ``data/.tasks/repo-adds/<owner>-<name>-<commit>/``
-in the workspace.
+and whether it is archived; its newest stable release; its top-level files; and the text of the files that say how it
+installs and runs (``KEY_FILES`` and the README). Everything is printed as one JSON object and kept, raw, under
+``data/.tasks/repo-adds/<owner>-<name>-<commit>/`` in the workspace.
 
 Uses GitHub's public API without a sign-in (60 requests an hour is plenty: a look-up takes about ten). A private or
 missing repository answers 404, reported as ``"is_reachable": false``. Standard library only.
@@ -38,7 +37,10 @@ KEY_FILES: Final[tuple[str, ...]] = (
 )
 MAX_FILE_CHARACTERS: Final[int] = 20_000
 MAX_README_CHARACTERS: Final[int] = 12_000
-RECORDS_DIRECTORY: Final[Path] = Path("/home/user/workspace/data/.tasks/repo-adds")
+# The workspace this skill lives in: .agents/skills/add-repo-to-store/scripts/ is four levels below it.
+RECORDS_DIRECTORY: Final[Path] = (
+    Path(__file__).absolute().parents[4] / "data" / ".tasks" / "repo-adds"
+)
 
 _LINK_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/(?P<owner>[A-Za-z0-9_.-]+)/(?P<name>[A-Za-z0-9_.-]+?)(?:\.git)?"
@@ -84,6 +86,7 @@ def get_json(url: str) -> object | None:
 
 
 def get_text(url: str, limit: int) -> str | None:
+    """The text at ``url``, cut to ``limit`` characters; None for a 404."""
     request = urllib.request.Request(url, headers={"User-Agent": "app-store"})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:

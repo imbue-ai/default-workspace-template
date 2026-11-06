@@ -75,7 +75,7 @@ def test_quotes_group_words_and_nothing_else_is_special() -> None:
 @pytest.mark.parametrize(
     ("package", "complaint"),
     [
-        ("git+https://github.com/excalidraw/excalidraw", "Links aren't supported"),
+        ("git+https://github.com/excalidraw/excalidraw", "choose GitHub instead"),
         ("https://example.com/pkg.tar.gz", "Links aren't supported"),
         ("file:../thing", "Links aren't supported"),
         ("./local/thing", "file path"),
@@ -116,6 +116,7 @@ def test_a_python_version_that_is_not_an_exact_release_is_refused(version: str, 
         ("http-server@14.1.1", "version field"),
         ("Http-Server", "isn't a valid npm package name"),
         ("_private", "isn't a valid npm package name"),
+        ("-g", "may not start with a dash"),
     ],
 )
 def test_only_a_plain_npm_name_is_accepted(package: str, complaint: str) -> None:

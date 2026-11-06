@@ -3,9 +3,11 @@ queue, and the startup reconcile."""
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from pydantic import Field
 
 from app_manifest.manifest import load_manifest
 from app_store.engine import INTERRUPTED_REASON
@@ -16,11 +18,13 @@ from app_store.layout import NO_BACKUP_MARKER
 from app_store.records import InstallRecord
 from app_store.records import InstallStatus
 from app_store.records import JobKind
+from app_store.records import RecordStore
 from app_store.records import now_iso
 from app_store.room import WorkspaceRoom
 from app_store.testing import FakeCommandRunner
 from app_store.testing import FakePackageInstaller
 from app_store.testing import FakePortProbe
+from app_store.testing import FakeProcessMemoryReader
 from app_store.testing import FakeRegistrar
 from app_store.testing import FakeResourceReader
 from app_store.testing import FakeSupervisor
@@ -360,3 +364,60 @@ def test_the_worker_thread_runs_queued_jobs_and_stops(tmp_path: Path) -> None:
     finally:
         engine.stop()
     assert json.loads(engine.layout.records_path.read_text())["queue"] == []
+
+
+class _RecordsWithAHookOnInstalled(RecordStore):
+    """Runs ``on_installed`` once, right after a record is marked INSTALLED: the moment between a job's last record
+    change and the worker taking it off the queue."""
+
+    on_installed: Callable[[], object] | None = Field(default=None, description="What runs at that moment")
+
+    def update(self, slug: str, **changes: object) -> InstallRecord:
+        record = super().update(slug, **changes)
+        if changes.get("status") is InstallStatus.INSTALLED and self.on_installed is not None:
+            hook, self.on_installed = self.on_installed, None
+            hook()
+        return record
+
+
+def test_a_request_landing_as_a_job_finishes_is_still_run(tmp_path: Path) -> None:
+    base = build_test_engine(tmp_path)
+    records = _RecordsWithAHookOnInstalled(path=base.layout.records_path)
+    engine = base.model_copy(update={"records": records})
+    records.on_installed = lambda: engine.request_uninstall("datasette", is_deleting_data=False)
+
+    engine.request_install("datasette")
+    assert engine.run_next_job()
+
+    assert engine.records.read().queue == ("datasette",)
+    assert _status(engine, "datasette").job is JobKind.UNINSTALL
+    assert engine.run_next_job()
+    assert engine.records.read().find("datasette") is None
+    assert engine.records.read().queue == ()
+
+
+class _MemoryReaderThatUninstalls(FakeProcessMemoryReader):
+    """Removes ``uninstalled``'s record while its memory is read, as an uninstall finishing on the worker would."""
+
+    records: RecordStore = Field(description="The records the uninstall changes")
+    uninstalled: str = Field(description="The app uninstalled mid-sample")
+
+    def pid_memory_mb(self, pid: int) -> int:
+        if pid == self.program_pid(self.uninstalled):
+            self.records.remove(self.uninstalled)
+        return super().pid_memory_mb(pid)
+
+
+def test_the_memory_sampler_carries_on_past_an_app_uninstalled_while_it_was_read(tmp_path: Path) -> None:
+    base = build_test_engine(tmp_path)
+    reader = _MemoryReaderThatUninstalls(
+        records=base.records, uninstalled="datasette", memory_by_program={"datasette": 90, "radicale": 40}
+    )
+    engine = base.model_copy(update={"memory_reader": reader})
+    _install(engine, "datasette")
+    _install(engine, "radicale")
+
+    engine.sample_memory_once(0.0)
+
+    assert engine.records.read().find("datasette") is None
+    assert _status(engine, "radicale").peak_memory_mb == 40

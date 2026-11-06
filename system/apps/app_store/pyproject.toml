@@ -23,6 +23,8 @@ dependencies = [
     "packaging>=24",
     # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
     "workspace-themes",
+    # The shell's address and desktop routes, for taking an uninstalled app's shortcuts off the desktops.
+    "workspace-layout",
 ]
 
 [dependency-groups]

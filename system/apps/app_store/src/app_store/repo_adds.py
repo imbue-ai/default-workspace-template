@@ -29,6 +29,7 @@ from app_store.adding import SAMPLE_PORT
 from app_store.catalog import CatalogApp
 from app_store.catalog import render_argv
 from app_store.errors import AddAppRefusedError
+from app_store.errors import StoreStateError
 from app_store.records import InstallRecord
 from app_store.records import InstallStatus
 from app_store.records import now_iso
@@ -127,14 +128,16 @@ class PendingRepoAddStore(MutableModel):
         return next((pending for pending in self.read() if pending.id == pending_id), None)
 
     def add(self, pending: PendingRepoAdd, screenshot: bytes | None = None) -> None:
+        """Keep ``pending`` (and its screenshot), dropping the oldest past ``MAX_PENDING``; raises StoreStateError
+        when the file cannot be written, leaving nothing behind."""
         with self._lock:
+            entries = [*self._load(), pending]
+            self._save(entries[-MAX_PENDING:])
+            for dropped in entries[:-MAX_PENDING]:
+                self.screenshot_path(dropped.id).unlink(missing_ok=True)
             if screenshot is not None:
                 self.screenshots_dir.mkdir(parents=True, exist_ok=True)
                 self.screenshot_path(pending.id).write_bytes(screenshot)
-            entries = [*self._load(), pending]
-            for dropped in entries[:-MAX_PENDING]:
-                self.screenshot_path(dropped.id).unlink(missing_ok=True)
-            self._save(entries[-MAX_PENDING:])
 
     def remove(self, pending_id: str) -> None:
         with self._lock:
@@ -158,11 +161,7 @@ class PendingRepoAddStore(MutableModel):
             return None
 
     def _load(self) -> list[PendingRepoAdd]:
-        try:
-            raw = read_json_object(self.path)
-        except StateFileError as e:
-            logger.warning("Ignored the pending adds in {}: {}", self.path, e)
-            return []
+        raw = read_json_object(self.path)
         if raw is None:
             return []
         try:
@@ -187,10 +186,14 @@ class PendingRepoAddStore(MutableModel):
         return entries
 
     def _save(self, entries: list[PendingRepoAdd]) -> None:
-        write_json_atomic(
-            self.path,
-            {"format": PENDING_REPO_ADDS_FORMAT, "pending": [entry.model_dump(mode="json") for entry in entries]},
-        )
+        document = {
+            "format": PENDING_REPO_ADDS_FORMAT,
+            "pending": [entry.model_dump(mode="json") for entry in entries],
+        }
+        try:
+            write_json_atomic(self.path, document)
+        except StateFileError as e:
+            raise StoreStateError(f"cannot save the pending adds: {e}") from e
 
 
 def decode_screenshot(encoded: str) -> bytes | None:
@@ -247,7 +250,7 @@ class RepoAdds(MutableModel):
         """Hold ``submission`` for confirmation; raises AddAppRefusedError in plain words when it cannot be added
         (its name is taken, or the store already offers that name)."""
         slug = (
-            self._updatable_slug(submission.replaces, submission.install_file)
+            self._updatable_entry(submission.replaces, submission.install_file).app.slug
             if submission.replaces
             else self._free_slug(submission.install_file.title)
         )
@@ -337,9 +340,8 @@ class RepoAdds(MutableModel):
     def _confirm_update(self, pending: PendingRepoAdd) -> InstallRecord:
         """Queue the update a pending add stands for: the app keeps its name, data and port; its entry becomes the new
         version's once the update succeeds."""
-        slug = self._updatable_slug(pending.replaces, pending.install_file)
-        current = self.adder.engine.added.find(slug)
-        assert current is not None, "checked by _updatable_slug"
+        current = self._updatable_entry(pending.replaces, pending.install_file)
+        slug = current.app.slug
         install_file = pending.install_file
         entry = current.model_copy(
             update={
@@ -355,8 +357,9 @@ class RepoAdds(MutableModel):
         self.pending.remove(pending.id)
         return record
 
-    def _updatable_slug(self, slug: str, install_file: RepoInstallFile) -> str:
-        """``slug`` when it is an installed app added from the same GitHub repository; AddAppRefusedError otherwise."""
+    def _updatable_entry(self, slug: str, install_file: RepoInstallFile) -> AddedApp:
+        """The added entry of ``slug`` when it is an installed app added from the same GitHub repository at another
+        commit; AddAppRefusedError otherwise."""
         engine = self.adder.engine
         current = engine.added.find(slug)
         if current is None or current.source != "github" or current.repo_file is None:
@@ -370,7 +373,7 @@ class RepoAdds(MutableModel):
         record = engine.records.read().find(slug)
         if record is None or record.status is not InstallStatus.INSTALLED:
             raise AddAppRefusedError(f"{current.app.title} isn't installed, so there is nothing to update.")
-        return slug
+        return current
 
     def _installed_version(self, slug: str) -> str:
         if not slug:

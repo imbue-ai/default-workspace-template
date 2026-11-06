@@ -16,6 +16,8 @@ from app_store.adding import EXCLUDE_BLOCK_END
 from app_store.adding import EXCLUDE_BLOCK_START
 from app_store.adding import local_exclude_path
 from app_store.adding import replace_exclude_block
+from app_store.desktop_shortcuts import DesktopShortcut
+from app_store.desktop_shortcuts import GridCell
 from app_store.engine import InstallEngine
 from app_store.errors import AddAppRefusedError
 from app_store.errors import InstallRefusedError
@@ -24,6 +26,7 @@ from app_store.package_check import PYTHON_UNPACKED_FACTOR
 from app_store.records import InstallStatus
 from app_store.records import JobKind
 from app_store.room import WorkspaceRoom
+from app_store.testing import FakeDesktopShortcuts
 from app_store.testing import FakePackageInstaller
 from app_store.testing import FakePortProbe
 from app_store.testing import FakeProcessMemoryReader
@@ -227,6 +230,39 @@ def test_an_added_npm_app_installs_its_pinned_package(tmp_path: Path) -> None:
     assert _installed(engine) == ["demo-server@2.0.0"]
 
 
+def test_an_entry_whose_name_was_taken_after_its_check_is_refused_and_leaves_the_first_alone(
+    tmp_path: Path,
+) -> None:
+    # Two adds checked at the same moment both found the name free; only the first may keep it.
+    engine, adder = _setup(tmp_path)
+    adder.add(_demo())
+    first = engine.added.find("demo")
+    assert first is not None
+    with pytest.raises(AddAppRefusedError, match="already has the name 'demo'"):
+        adder.add_entry(first.model_copy(update={"package": "other"}))
+    kept = engine.added.find("demo")
+    assert kept is not None and kept.package == "demo"
+    record = engine.records.read().find("demo")
+    assert record is not None and record.status is InstallStatus.QUEUED
+
+
+def test_the_excludes_file_keeps_the_persons_own_lines_and_leaves_no_temporary_file(tmp_path: Path) -> None:
+    engine, adder = _setup(tmp_path)
+    exclude = tmp_path / "info" / "exclude"
+    exclude.parent.mkdir(parents=True)
+    exclude.write_text("# mine\n*.swp\n")
+    adder.add(_demo())
+    assert exclude.read_text() == (
+        f"# mine\n*.swp\n{EXCLUDE_BLOCK_START}\n/system/supervisord.conf.d/demo.conf\n{EXCLUDE_BLOCK_END}\n"
+    )
+    engine.run_next_job()
+    engine.request_uninstall("demo", is_deleting_data=False)
+    engine.run_next_job()
+    adder.remove("demo")
+    assert exclude.read_text() == "# mine\n*.swp\n"
+    assert [path.name for path in exclude.parent.iterdir()] == ["exclude"]
+
+
 def test_remove_refuses_an_app_that_is_not_added(tmp_path: Path) -> None:
     _engine, adder = _setup(tmp_path)
     with pytest.raises(AddAppRefusedError, match="no added app called 'jupyterlab'"):
@@ -377,3 +413,26 @@ def test_a_check_shows_the_settings_files_it_will_write(tmp_path: Path) -> None:
     config = SetupFileText(path="settings.toml", content="a = 1\n")
     result = adder.check(_demo().model_copy(update={"setup_files": (config,)}))
     assert [(file.path, file.content) for file in result.setup_files] == [("settings.toml", "a = 1\n")]
+
+
+def test_removing_an_uninstalled_added_app_forgets_the_desktop_shortcuts_kept_for_it(tmp_path: Path) -> None:
+    engine, adder = _setup(tmp_path)
+    adder.add(_demo())
+    engine.run_next_job()
+    desktops = engine.shortcuts.desktops
+    assert isinstance(desktops, FakeDesktopShortcuts)
+    desktops.desktops = {
+        "home": (
+            DesktopShortcut(
+                desktop_id="home", app="demo", launch="open", mode="focus", cell=GridCell(column=1, row=0)
+            ),
+        )
+    }
+    engine.request_uninstall("demo", is_deleting_data=False)
+    engine.run_next_job()
+    assert desktops.desktops == {"home": ()}
+    assert '"demo"' in engine.shortcuts.path.read_text()
+
+    adder.remove("demo")
+
+    assert '"demo"' not in engine.shortcuts.path.read_text()

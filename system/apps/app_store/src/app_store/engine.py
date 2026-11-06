@@ -2,9 +2,14 @@
 
 An install moves QUEUED -> DOWNLOADING (its environment is made from the recipe) -> CONFIGURING (port, data folder,
 manifest, icon, one-time init, drop-in) -> STARTING (supervisord picks the program up and the store waits for the
-port to answer) -> INSTALLED, with the measured disk recorded. Any step that fails undoes what the install made (but
-the log) and leaves the record FAILED with a plain reason. An uninstall stops the program, removes its drop-in and
-its registry row, deletes the environment, and deletes the app's data only when asked to.
+port to answer) -> INSTALLED, with the measured disk recorded and the desktop shortcuts an earlier uninstall took
+off put back (``desktop_shortcuts.py``). Any step that fails undoes what the install made (but the log) and leaves the
+record FAILED with a plain reason. A repair is the same install over an app whose environment went missing, keeping
+its data and port. An update stops the running version, sets its environment aside, and installs, configures and
+starts the new one on the same port and data folder; if any of that fails, the old environment and the store's files
+for it are put back and started again, and the record stays INSTALLED at the old version with the reason. An
+uninstall stops the program, removes its drop-in, its registry row and its desktop shortcuts, deletes the
+environment, and deletes the app's data only when asked to.
 
 The apps it works on are the shipped catalog followed by the apps the user added (``added_apps.py``): one list, so
 an added app takes exactly the same install, repair, uninstall and roll-back paths. After the package is installed,
@@ -16,8 +21,9 @@ While an installed app runs, a sampler records the most memory its process tree 
 each run (``peak_memory_mb``), which the page shows as measured.
 
 At startup ``reconcile`` makes the world match the records: an install a restart interrupted is undone and marked
-failed, an interrupted uninstall is finished, an installed app whose drop-in went missing (a rebuild) gets it back,
-and one whose environment went missing (a restore that skips rebuildable folders) is queued for a repair.
+failed, an interrupted update puts the old version back, an interrupted uninstall or repair is run again, an
+installed app whose drop-in went missing (a rebuild) gets it back, and one whose environment went missing (a restore
+that skips rebuildable folders) is queued for a repair.
 """
 
 import shutil
@@ -42,9 +48,11 @@ from app_store.catalog import CatalogApp
 from app_store.catalog import ICONS_DIRECTORY
 from app_store.catalog import render_argv
 from app_store.catalog import render_setup_content
+from app_store.desktop_shortcuts import AppShortcuts
 from app_store.errors import InstallError
 from app_store.errors import InstallRefusedError
 from app_store.errors import PortError
+from app_store.errors import StoreStateError
 from app_store.layout import INITIALIZED_MARKER
 from app_store.layout import NO_BACKUP_MARKER
 from app_store.layout import StoreLayout
@@ -85,24 +93,9 @@ MEMORY_SAMPLE_INTERVAL_SECONDS: Final[float] = 5.0
 # How much of a failed app's own output is copied into its install log.
 PROGRAM_LOG_TAIL_LINES: Final[int] = 40
 PROGRAM_LOG_DIRECTORY: Final[Path] = Path("/var/log/supervisor")
-# Files an environment's bin folder holds that are not the package's programs.
-_ENVIRONMENT_FILES: Final[frozenset[str]] = frozenset(
-    {
-        "activate",
-        "activate.bat",
-        "activate.csh",
-        "activate.fish",
-        "activate.nu",
-        "activate.ps1",
-        "activate_this.py",
-        "deactivate.bat",
-        "pydoc.bat",
-        "python",
-        "python3",
-        "pip",
-        "pip3",
-    }
-)
+# Files an environment's bin folder holds that are not the package's programs, beyond the interpreters and activate
+# scripts every name starting "python" or "activate" covers.
+_ENVIRONMENT_FILES: Final[frozenset[str]] = frozenset({"deactivate.bat", "pydoc.bat", "pip", "pip3"})
 
 # What a step can fail with; anything else is a bug and propagates.
 _STEP_ERRORS: Final[tuple[type[Exception], ...]] = (InstallError, OSError, PortError, ManifestLoadError)
@@ -133,6 +126,7 @@ class InstallEngine(MutableModel):
     runner: CommandRunnerInterface = Field(frozen=True, description="Runs an app's one-time init")
     supervisor: SupervisorInterface = Field(frozen=True, description="Adds, removes and stops programs")
     registrar: RegistrarInterface = Field(frozen=True, description="Removes registry rows")
+    shortcuts: AppShortcuts = Field(frozen=True, description="Takes an app's desktop shortcuts off and puts them back")
     probe: PortProbeInterface = Field(frozen=True, description="Waits for an app to answer")
     resources: ResourceReaderInterface = Field(frozen=True, description="Reads the room the workspace has")
     read_registry_rows: RegistryReader = Field(frozen=True, description="The app registry's rows")
@@ -199,8 +193,18 @@ class InstallEngine(MutableModel):
                 self._run_update(app, record)
             case JobKind.UNINSTALL:
                 self._run_uninstall(app, record.is_deleting_data)
-        self.records.dequeue(slug)
+        self._finish_job(slug)
         return True
+
+    def _finish_job(self, slug: str) -> None:
+        """Take the finished job's slug off the queue. A request can land between a job's last record change and
+        this (its ``enqueue`` then finds the slug still queued and adds nothing), so a record that holds a job again
+        is put back on the queue, at its end, rather than left with a job nothing will run."""
+        with self._request_lock:
+            self.records.dequeue(slug)
+            record = self.records.read().find(slug)
+            if record is not None and record.job is not None:
+                self.records.enqueue(slug)
 
     # What the page asks for
 
@@ -293,34 +297,25 @@ class InstallEngine(MutableModel):
     def _run_install(self, app: CatalogApp, job: JobKind) -> None:
         slug = app.slug
         log_path = self.layout.log_path(slug)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            f"[app-store] {job.value.lower()} {app.title} {app.version} ({app.recipe.package_spec}) at {now_iso()}\n"
-        )
         try:
+            # A fresh log for each install or repair; an update appends to the one its install left.
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                f"[app-store] {job.value.lower()} {app.title} {app.version} ({app.recipe.package_spec}) at {now_iso()}\n"
+            )
             self._set_status(slug, InstallStatus.DOWNLOADING)
             env_dir = self.layout.env_dir(slug)
             shutil.rmtree(env_dir, ignore_errors=True)
-            self.installer.install(app.recipe, env_dir, log_path)
-            (env_dir / NO_BACKUP_MARKER).write_text("")
-            self._check_program(app)
+            self._install_environment(app, env_dir, log_path)
 
             self._set_status(slug, InstallStatus.CONFIGURING)
             port = self._port_for(slug)
             self.records.update(slug, port=port)
-            self._write_app_files(app)
-            self._write_setup_files(app, port, log_path)
-            self._run_init_once(app, port, log_path)
-            self._write_dropin(app)
+            self._configure(app, port, log_path)
 
             self._set_status(slug, InstallStatus.STARTING)
             self.supervisor.apply_program_change(slug)
-            if not self.probe.wait_until_answering(port, self.start_timeout_seconds):
-                self._copy_program_output(slug, log_path)
-                raise InstallError(
-                    f"{app.title} didn't start answering on its port within {self.start_timeout_seconds:.0f} "
-                    "seconds. Its own output is at the end of the install log."
-                )
+            self._wait_until_answering(app.title, slug, port, log_path)
         except _STEP_ERRORS as e:
             reason = str(e) if isinstance(e, InstallError) else f"Something went wrong while installing: {e}"
             self._append_log(log_path, f"[app-store] failed: {reason}")
@@ -330,6 +325,7 @@ class InstallEngine(MutableModel):
                 slug, status=InstallStatus.FAILED, job=None, failure_reason=reason, measured_disk_mb=None
             )
             return
+        self.shortcuts.put_back(slug)
         measured = measure_directory_mb(self.layout.app_dir(slug))
         self._append_log(log_path, f"[app-store] installed; it takes {measured} MB")
         self.records.update(
@@ -351,41 +347,29 @@ class InstallEngine(MutableModel):
             f"({target.recipe.package_spec}) at {now_iso()}",
         )
         env_dir, previous = self.layout.env_dir(slug), self.layout.previous_env_dir(slug)
-        dropin, manifest = self.layout.dropin_path(slug), self.layout.manifest_path(slug)
-        saved_dropin = dropin.read_text(encoding="utf-8") if dropin.exists() else None
-        saved_manifest = manifest.read_text(encoding="utf-8") if manifest.exists() else None
+        saved_files = self._read_generated_files(slug)
         try:
             self._set_status(slug, InstallStatus.DOWNLOADING)
             self.supervisor.stop(slug)
             shutil.rmtree(previous, ignore_errors=True)
             if env_dir.exists():
                 env_dir.rename(previous)
-            self.installer.install(target.recipe, env_dir, log_path)
-            (env_dir / NO_BACKUP_MARKER).write_text("")
-            self._check_program(target)
+            self._install_environment(target, env_dir, log_path)
 
             self._set_status(slug, InstallStatus.CONFIGURING)
             port = record.port if record.port is not None else self._port_for(slug)
             self.records.update(slug, port=port)
-            self._write_app_files(target)
-            self._write_setup_files(target, port, log_path)
-            self._run_init_once(target, port, log_path)
-            self._write_dropin(target)
+            self._configure(target, port, log_path)
 
             self._set_status(slug, InstallStatus.STARTING)
             self.supervisor.apply_program_change(slug)
             self.supervisor.start(slug)
-            if not self.probe.wait_until_answering(port, self.start_timeout_seconds):
-                self._copy_program_output(slug, log_path)
-                raise InstallError(
-                    f"{target.title} {target.version} didn't start answering within "
-                    f"{self.start_timeout_seconds:.0f} seconds. Its own output is at the end of the install log."
-                )
+            self._wait_until_answering(f"{target.title} {target.version}", slug, port, log_path)
         except _STEP_ERRORS as e:
             reason = str(e) if isinstance(e, InstallError) else f"Something went wrong while updating: {e}"
             self._append_log(log_path, f"[app-store] update failed: {reason}")
             logger.warning("Update of {} failed: {}", slug, reason)
-            self._put_previous_back(slug, saved_dropin, saved_manifest, log_path)
+            self._put_previous_back(slug, saved_files, log_path)
             self.records.update(
                 slug,
                 status=InstallStatus.INSTALLED,
@@ -411,26 +395,54 @@ class InstallEngine(MutableModel):
             measured_disk_mb=measured,
         )
 
-    def _put_previous_back(
-        self, slug: str, saved_dropin: str | None, saved_manifest: str | None, log_path: Path
-    ) -> None:
-        """Undo a failed update: the version that was running, its drop-in and manifest, running again."""
+    def _read_generated_files(self, slug: str) -> dict[Path, bytes]:
+        """The files the store generated for ``slug`` (its drop-in, manifest and icon) as they are now, so a failed
+        update can put them back."""
+        paths = (self.layout.dropin_path(slug), self.layout.manifest_path(slug), self.layout.icon_path(slug))
+        return {path: path.read_bytes() for path in paths if path.is_file()}
+
+    def _put_previous_back(self, slug: str, saved_files: dict[Path, bytes], log_path: Path) -> None:
+        """Undo a failed update: the version that was running, with its drop-in, manifest and icon, running again."""
         env_dir, previous = self.layout.env_dir(slug), self.layout.previous_env_dir(slug)
         try:
             self.supervisor.stop(slug)
             if previous.exists():
                 shutil.rmtree(env_dir, ignore_errors=True)
                 previous.rename(env_dir)
-            if saved_manifest is not None:
-                self.layout.manifest_path(slug).write_text(saved_manifest, encoding="utf-8")
-            if saved_dropin is not None:
-                self.layout.dropin_path(slug).write_text(saved_dropin, encoding="utf-8")
+            for path, content in saved_files.items():
+                path.write_bytes(content)
             self.supervisor.apply_program_change(slug)
             self.supervisor.start(slug)
             self._append_log(log_path, "[app-store] the version that was running was put back")
         except _STEP_ERRORS as e:
             logger.warning("Could not put {} back after a failed update: {}", slug, e)
             self._append_log(log_path, f"[app-store] putting the previous version back failed too: {e}")
+
+    def _install_environment(self, app: CatalogApp, env_dir: Path, log_path: Path) -> None:
+        """Install the app's recipe into ``env_dir``, mark it as kept out of the backup, and check it holds the
+        launch command's program."""
+        self.installer.install(app.recipe, env_dir, log_path)
+        (env_dir / NO_BACKUP_MARKER).write_text("")
+        self._check_program(app)
+
+    def _configure(self, app: CatalogApp, port: int, log_path: Path) -> None:
+        """Everything between the environment and the first start: the app's files, its settings files, its one-time
+        init, and its drop-in."""
+        self._write_app_files(app)
+        self._write_setup_files(app, port, log_path)
+        self._run_init_once(app, port, log_path)
+        self._write_dropin(app)
+
+    def _wait_until_answering(self, name: str, slug: str, port: int, log_path: Path) -> None:
+        """Raise InstallError, with the program's own output copied into the install log, when the app (``name`` as
+        the reason names it) does not answer on ``port`` in time."""
+        if self.probe.wait_until_answering(port, self.start_timeout_seconds):
+            return
+        self._copy_program_output(slug, log_path)
+        raise InstallError(
+            f"{name} didn't start answering on its port within {self.start_timeout_seconds:.0f} seconds. Its own "
+            "output is at the end of the install log."
+        )
 
     def _check_program(self, app: CatalogApp) -> None:
         """The launch command's program must be in the environment the install made; if not, name what is."""
@@ -461,9 +473,7 @@ class InstallEngine(MutableModel):
         if record is not None and record.port is not None and not self.is_bound(record.port):
             return record.port
         held = [other.port for other in self.records.read().records if other.slug != slug and other.port is not None]
-        return pick_free_port(
-            self.layout.supervisord_conf, self.layout.repo_root / "data" / ".state" / "apps.toml", held, self.is_bound
-        )
+        return pick_free_port(self.layout.supervisord_conf, self.layout.registry_path, held, self.is_bound)
 
     def _write_app_files(self, app: CatalogApp) -> None:
         self.layout.app_data_dir(app.slug).mkdir(parents=True, exist_ok=True)
@@ -505,6 +515,10 @@ class InstallEngine(MutableModel):
         """Remove what a failed install made, keeping the app's data folder (it may predate this install) and the
         log."""
         self._remove_program(slug)
+        self._remove_environment_and_app_files(slug)
+
+    def _remove_environment_and_app_files(self, slug: str) -> None:
+        """Delete the app's environment, manifest and icon; its data folder and install log stay."""
         shutil.rmtree(self.layout.env_dir(slug), ignore_errors=True)
         for path in (self.layout.manifest_path(slug), self.layout.icon_path(slug)):
             path.unlink(missing_ok=True)
@@ -520,6 +534,7 @@ class InstallEngine(MutableModel):
             except InstallError as e:
                 logger.warning("supervisord kept {} after its drop-in was removed: {}", slug, e)
         self.registrar.unregister(slug)
+        self.shortcuts.take_off(slug)
 
     # Uninstall
 
@@ -532,9 +547,7 @@ class InstallEngine(MutableModel):
         if is_deleting_data:
             shutil.rmtree(app_dir, ignore_errors=True)
         else:
-            shutil.rmtree(self.layout.env_dir(slug), ignore_errors=True)
-            for path in (self.layout.manifest_path(slug), self.layout.icon_path(slug)):
-                path.unlink(missing_ok=True)
+            self._remove_environment_and_app_files(slug)
         self.records.remove(slug)
         logger.info("Uninstalled {} ({} its data)", slug, "with" if is_deleting_data else "keeping")
 
@@ -561,7 +574,12 @@ class InstallEngine(MutableModel):
                 continue
             memory = self.memory_reader.pid_memory_mb(pid)
             if memory > 0 and (record.peak_memory_mb is None or memory > record.peak_memory_mb):
-                self.records.update(record.slug, peak_memory_mb=memory)
+                try:
+                    self.records.update(record.slug, peak_memory_mb=memory)
+                except StoreStateError as e:
+                    # Uninstalled since the records were read, or the records could not be written: either way the
+                    # sampler carries on with the next app rather than ending.
+                    logger.warning("Could not record {}'s memory: {}", record.slug, e)
 
     # Startup
 
@@ -611,8 +629,8 @@ class InstallEngine(MutableModel):
                 failure_reason=UPDATE_INTERRUPTED_REASON,
             )
             self.records.dequeue(app.slug)
-            # Its drop-in may already name the new version's command: make it the entry's again.
-            self._reconcile_installed(app)
+            # Its drop-in, manifest and icon may already be the new version's: make them the entry's again.
+            self._reconcile_installed(app, is_rewriting=True)
         else:
             logger.info("Undoing the install of {} that a restart interrupted", app.slug)
             self._append_log(self.layout.log_path(app.slug), f"[app-store] {INTERRUPTED_REASON}")
@@ -620,7 +638,9 @@ class InstallEngine(MutableModel):
             self.records.update(app.slug, status=InstallStatus.FAILED, job=None, failure_reason=INTERRUPTED_REASON)
             self.records.dequeue(app.slug)
 
-    def _reconcile_installed(self, app: CatalogApp) -> None:
+    def _reconcile_installed(self, app: CatalogApp, is_rewriting: bool = False) -> None:
+        """Queue a repair when the environment is gone; otherwise re-create the app's files and drop-in when the
+        drop-in is missing or out of date (or always, when ``is_rewriting``)."""
         if not (self.layout.env_dir(app.slug) / NO_BACKUP_MARKER).exists():
             logger.info("The environment of {} is missing; queueing a repair", app.slug)
             self.records.update(app.slug, status=InstallStatus.QUEUED, job=JobKind.REPAIR)
@@ -628,7 +648,7 @@ class InstallEngine(MutableModel):
             return
         dropin = self.layout.dropin_path(app.slug)
         expected = render_dropin(app, self.layout.repo_root)
-        if dropin.exists() and dropin.read_text(encoding="utf-8") == expected:
+        if not is_rewriting and dropin.exists() and dropin.read_text(encoding="utf-8") == expected:
             return
         if dropin.exists() and not is_store_dropin(dropin):
             logger.warning("A program called {} that the store did not write is in the way; left as it is", app.slug)

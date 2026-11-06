@@ -11,11 +11,12 @@ class CatalogEntryError(AppStoreError, ValueError):
 
 
 class InstallError(AppStoreError):
-    """An install, repair or uninstall step failed; the message says which and why, in plain words."""
+    """An install, repair, update or uninstall step failed; the message says which and why, in plain words."""
 
 
 class InstallRefusedError(AppStoreError):
-    """An install or uninstall was asked for that the store will not start (unknown app, won't fit, busy, ...)."""
+    """An install, update or uninstall was asked for that the store will not start (unknown app, won't fit, busy,
+    ...)."""
 
 
 class AddAppRefusedError(AppStoreError):

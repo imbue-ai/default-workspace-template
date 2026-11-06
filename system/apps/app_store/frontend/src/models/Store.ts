@@ -146,12 +146,12 @@ export interface StoreSnapshot {
 
 export type StoreState = { kind: "loading" } | { kind: "loaded"; snapshot: StoreSnapshot } | { kind: "failed" };
 
-export const STORE_PATH = "/api/store";
+const STORE_PATH = "/api/store";
 const BUSY_POLL_MS = 1500;
 const IDLE_POLL_MS = 8000;
 
 /** The statuses in which a job is queued or running for an app. */
-export const WORKING_STATUSES: readonly InstallStatus[] = [
+const WORKING_STATUSES: readonly InstallStatus[] = [
   "QUEUED",
   "DOWNLOADING",
   "CONFIGURING",
@@ -207,6 +207,9 @@ export function isBusy(snapshot: StoreSnapshot): boolean {
 
 let state: StoreState = { kind: "loading" };
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+// Each poll's number: a request that queues a job polls at once, so polls can overlap, and only the newest one's
+// answer is kept and schedules the next (an older answer arriving later would undo what the newer one showed).
+let latestPoll = 0;
 
 export function getStoreState(): StoreState {
   return state;
@@ -221,7 +224,12 @@ export function startStorePolling(): void {
 /** Fetch now, then keep polling at the pace the state calls for. */
 export async function pollOnce(): Promise<void> {
   if (pollTimer !== null) clearTimeout(pollTimer);
-  state = await fetchStore();
+  pollTimer = null;
+  latestPoll += 1;
+  const thisPoll = latestPoll;
+  const fetched = await fetchStore();
+  if (thisPoll !== latestPoll) return;
+  state = fetched;
   m.redraw();
   const delay = state.kind === "loaded" && isBusy(state.snapshot) ? BUSY_POLL_MS : IDLE_POLL_MS;
   pollTimer = setTimeout(() => void pollOnce(), delay);
@@ -241,32 +249,45 @@ async function fetchStore(): Promise<StoreState> {
   }
 }
 
-/** POST a job; resolves to null when it was queued, else the plain reason it was refused. */
-async function postJob(path: string, body: unknown): Promise<string | null> {
+// the requests
+
+const UNREACHABLE = "The App Store could not be reached. Try again in a moment.";
+
+async function requestJson(path: string, method: string, body: unknown): Promise<Response> {
+  return fetch(apiUrl(path), {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function refusalOf(response: Response): Promise<string> {
+  const answer = (await response.json().catch(() => ({}))) as { detail?: string };
+  return answer.detail ?? `The store answered ${response.status}.`;
+}
+
+/** Send a request that changes the store (queues a job, adds or drops an entry); resolves to null when it was
+ *  accepted, and polls at once so the page shows the change, else to the plain reason it was refused. */
+async function sendChange(path: string, method: "POST" | "DELETE", body: unknown): Promise<string | null> {
   try {
-    const response = await fetch(apiUrl(path), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const response = await requestJson(path, method, body);
     if (response.ok) {
       void pollOnce();
       return null;
     }
-    const answer = (await response.json().catch(() => ({}))) as { detail?: string };
-    return answer.detail ?? `The store answered ${response.status}.`;
+    return await refusalOf(response);
   } catch {
-    return "The App Store could not be reached. Try again in a moment.";
+    return UNREACHABLE;
   }
 }
 
 export function requestInstall(slug: string): Promise<string | null> {
-  return postJob(`/api/apps/${encodeURIComponent(slug)}/install`, undefined);
+  return sendChange(`/api/apps/${encodeURIComponent(slug)}/install`, "POST", undefined);
 }
 
 /** Queue an update to ``version`` (empty for the newest); null when queued, else why not. */
 export function requestUpdate(slug: string, version: string): Promise<string | null> {
-  return postJob(`/api/apps/${encodeURIComponent(slug)}/update`, { version });
+  return sendChange(`/api/apps/${encodeURIComponent(slug)}/update`, "POST", { version });
 }
 
 export type NewestVersionAnswer =
@@ -291,7 +312,7 @@ export async function fetchNewestVersion(slug: string): Promise<NewestVersionAns
       isNewer: answer.is_newer === true,
     };
   } catch {
-    return { kind: "refused", reason: "The App Store could not be reached. Try again in a moment." };
+    return { kind: "refused", reason: UNREACHABLE };
   }
 }
 
@@ -301,7 +322,7 @@ export function githubUpdateMessage(app: StoreApp): string {
 }
 
 export function requestUninstall(slug: string, isDeletingData: boolean): Promise<string | null> {
-  return postJob(`/api/apps/${encodeURIComponent(slug)}/uninstall`, { is_deleting_data: isDeletingData });
+  return sendChange(`/api/apps/${encodeURIComponent(slug)}/uninstall`, "POST", { is_deleting_data: isDeletingData });
 }
 
 export function installLogUrl(slug: string): string {
@@ -352,25 +373,10 @@ export interface CheckResult {
 
 export type CheckAnswer = { kind: "checked"; result: CheckResult } | { kind: "refused"; reason: string };
 
-async function postJson(path: string, method: string, body: unknown): Promise<Response> {
-  return fetch(apiUrl(path), {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-}
-
-async function refusalOf(response: Response): Promise<string> {
-  const answer = (await response.json().catch(() => ({}))) as { detail?: string };
-  return answer.detail ?? `The store answered ${response.status}.`;
-}
-
-const UNREACHABLE = "The App Store could not be reached. Try again in a moment.";
-
 /** Check an app to add, installing nothing. */
 export async function checkAddedApp(request: AddAppRequest): Promise<CheckAnswer> {
   try {
-    const response = await postJson("/api/added-apps/check", "POST", request);
+    const response = await requestJson("/api/added-apps/check", "POST", request);
     if (response.ok) return { kind: "checked", result: (await response.json()) as CheckResult };
     return { kind: "refused", reason: await refusalOf(response) };
   } catch {
@@ -379,17 +385,8 @@ export async function checkAddedApp(request: AddAppRequest): Promise<CheckAnswer
 }
 
 /** Add the app and queue its install; null when queued, else why not. */
-export async function addApp(request: AddAppRequest): Promise<string | null> {
-  try {
-    const response = await postJson("/api/added-apps", "POST", request);
-    if (response.ok) {
-      void pollOnce();
-      return null;
-    }
-    return await refusalOf(response);
-  } catch {
-    return UNREACHABLE;
-  }
+export function addApp(request: AddAppRequest): Promise<string | null> {
+  return sendChange("/api/added-apps", "POST", request);
 }
 
 export type FinderStatus = "WORKING" | "FOUND" | "NOT_AN_APP" | "NEEDS_SETUP" | "FAILED" | "CANCELLED";
@@ -421,12 +418,12 @@ export interface FinderJob {
 
 export type FindAnswer = { kind: "started"; job: FinderJob } | { kind: "refused"; reason: string };
 
-export const FIND_COMMAND_PATH = "/api/added-apps/find-command";
+const FIND_COMMAND_PATH = "/api/added-apps/find-command";
 
 /** Start working out a request's start command (its command field is ignored). */
 export async function startFindCommand(request: AddAppRequest): Promise<FindAnswer> {
   try {
-    const response = await postJson(FIND_COMMAND_PATH, "POST", { ...request, command: "", setup_files: [] });
+    const response = await requestJson(FIND_COMMAND_PATH, "POST", { ...request, command: "", setup_files: [] });
     if (response.ok) return { kind: "started", job: ((await response.json()) as { job: FinderJob }).job };
     return { kind: "refused", reason: await refusalOf(response) };
   } catch {
@@ -448,7 +445,7 @@ export async function fetchFinderJob(jobId: string): Promise<FinderJob | null> {
 /** Stop a job; it cleans up what it downloaded. */
 export async function cancelFindCommand(jobId: string): Promise<void> {
   try {
-    await postJson(`${FIND_COMMAND_PATH}/${encodeURIComponent(jobId)}/cancel`, "POST", undefined);
+    await requestJson(`${FIND_COMMAND_PATH}/${encodeURIComponent(jobId)}/cancel`, "POST", undefined);
   } catch {
     // A cancel that does not arrive leaves the job to finish on its own; it still cleans up after itself.
   }
@@ -462,48 +459,21 @@ export function finderLogUrl(jobId: string): string {
   return apiUrl(`${FIND_COMMAND_PATH}/${encodeURIComponent(jobId)}/log`);
 }
 
-export const REPO_ADDS_PATH = "/api/repo-adds";
+const REPO_ADDS_PATH = "/api/repo-adds";
 
 /** Add an app from GitHub the person confirmed, and queue its install; null when queued, else why not. */
-export async function confirmRepoAdd(pendingId: string): Promise<string | null> {
-  try {
-    const response = await postJson(`${REPO_ADDS_PATH}/${encodeURIComponent(pendingId)}/confirm`, "POST", undefined);
-    if (response.ok) {
-      void pollOnce();
-      return null;
-    }
-    return await refusalOf(response);
-  } catch {
-    return UNREACHABLE;
-  }
+export function confirmRepoAdd(pendingId: string): Promise<string | null> {
+  return sendChange(`${REPO_ADDS_PATH}/${encodeURIComponent(pendingId)}/confirm`, "POST", undefined);
 }
 
 /** Drop an app from GitHub that was waiting for confirmation; null when done, else why not. */
-export async function discardRepoAdd(pendingId: string): Promise<string | null> {
-  try {
-    const response = await postJson(`${REPO_ADDS_PATH}/${encodeURIComponent(pendingId)}`, "DELETE", undefined);
-    if (response.ok) {
-      void pollOnce();
-      return null;
-    }
-    return await refusalOf(response);
-  } catch {
-    return UNREACHABLE;
-  }
+export function discardRepoAdd(pendingId: string): Promise<string | null> {
+  return sendChange(`${REPO_ADDS_PATH}/${encodeURIComponent(pendingId)}`, "DELETE", undefined);
 }
 
 /** Take an added app out of the store; null when done, else why not. */
-export async function removeAddedApp(slug: string): Promise<string | null> {
-  try {
-    const response = await postJson(`/api/added-apps/${encodeURIComponent(slug)}`, "DELETE", undefined);
-    if (response.ok) {
-      void pollOnce();
-      return null;
-    }
-    return await refusalOf(response);
-  } catch {
-    return UNREACHABLE;
-  }
+export function removeAddedApp(slug: string): Promise<string | null> {
+  return sendChange(`/api/added-apps/${encodeURIComponent(slug)}`, "DELETE", undefined);
 }
 
 /** Whether an added app can be taken out of the store now: it is not installed or being worked on. */
@@ -570,5 +540,6 @@ export async function fetchTemplateSizeKb(slug: string): Promise<number | null> 
 export function resetStoreStateForTests(): void {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = null;
+  latestPoll += 1;
   state = { kind: "loading" };
 }

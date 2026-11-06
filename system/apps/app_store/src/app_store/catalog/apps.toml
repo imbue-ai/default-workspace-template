@@ -216,8 +216,7 @@ icon = "excalidraw.svg"
 # 2026-05-06, built from their main branch): the one layer that holds the built site is fetched by its digest and only
 # that folder is kept, then served by a pinned http-server. Building from source instead needed about 3 GB of memory,
 # more than many workspaces have. Installed through the store on 2026-11-05: a 22 MB download, 8 seconds, about 60 MB
-# of memory, and 47 MB kept (the 44 MB site and its server); its server holds about
-# 160 MB.
+# of memory, and 47 MB kept (the 44 MB site and its server); its server holds about 160 MB.
 recipe = { kind = "image_site", image = "excalidraw/excalidraw", published = "2026-05-06", layer = "sha256:8a4eeabc2c25585b772281b723d6f3d6b65ccdcb4090bbc8a64e275772fe5ed2", path = "usr/share/nginx/html", node_tools = ["http-server@14.1.1"] }
 resources = { disk_mb = 50, memory_idle_mb = 160, memory_in_use_mb = 170 }
 

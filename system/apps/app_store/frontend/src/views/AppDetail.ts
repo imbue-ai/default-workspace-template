@@ -5,17 +5,15 @@
  */
 
 import m from "mithril";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { AddedWith, NewestVersionAnswer, StoreApp, WorkspaceRoom } from "../models/Store";
 import { fetchNewestVersion, githubUpdateMessage, installLogUrl, isRemovable, isWorking } from "../models/Store";
 import { VERDICT_NOTES, buildText, formatMb } from "../room";
 import type { AppActions } from "./AppTile";
-import { appIcon, installProgress, roomMeter, verdictBadge } from "./AppParts";
+import { appIcon, backButton, externalLink, fact, installProgress, roomMeter, verdictBadge } from "./AppParts";
 
 const DETAIL_ICON_SIZE = 128;
-const SMALL_GLYPH_SIZE = 14;
-const BACK_GLYPH_SIZE = 16;
 
 export interface AppDetailAttrs extends AppActions {
   app: StoreApp;
@@ -102,26 +100,6 @@ function addedWithSection(added: AddedWith): m.Vnode {
   ]);
 }
 
-function fact(label: string, value: m.Children): m.Vnode[] {
-  return [
-    m("dt", { class: "type-helper text-faint" }, label),
-    m("dd", { class: "m-0 type-body text-primary" }, value),
-  ];
-}
-
-function link(href: string, label: string): m.Vnode {
-  return m(
-    "a",
-    {
-      class: "inline-flex items-center gap-1.5 type-helper text-secondary hover:text-primary",
-      href,
-      target: "_blank",
-      rel: "noopener noreferrer",
-    },
-    [m("span", label), m.trust(icon("external-link", { size: SMALL_GLYPH_SIZE }))],
-  );
-}
-
 function actions(attrs: AppDetailAttrs): m.Children {
   const { app } = attrs;
   if (isWorking(app) && app.status !== null) {
@@ -160,7 +138,7 @@ function actions(attrs: AppDetailAttrs): m.Children {
 }
 
 /** What an installed app takes on disk, and what it is using right now. */
-export function installedNote(app: StoreApp): string {
+function installedNote(app: StoreApp): string {
   const disk =
     app.measured_disk_mb === null ? "Installed" : `Installed, it takes ${formatMb(app.measured_disk_mb)} of disk`;
   const memory =
@@ -259,10 +237,7 @@ export function AppDetail(): m.Component<AppDetailAttrs> {
       };
       const { app, room, onBack } = vnode.attrs;
       return m("section", { class: "app-store-detail", "data-app-detail": app.slug }, [
-        m(Button, { variant: "ghost", sm: true, "aria-label": "Back", extra: "app-store-back", onclick: onBack }, [
-          m.trust(icon("chevron-left", { size: BACK_GLYPH_SIZE })),
-          m("span", "Back"),
-        ]),
+        backButton(onBack),
         m("div", { class: "mt-4 flex items-start gap-6 max-md:flex-col" }, [
           m(
             "div",
@@ -271,7 +246,7 @@ export function AppDetail(): m.Component<AppDetailAttrs> {
               class: "shrink-0",
               "data-detail-icon": "",
             },
-            appIcon(app.icon_url, DETAIL_ICON_SIZE),
+            appIcon(apiUrl(app.icon_url), DETAIL_ICON_SIZE),
           ),
           m("div", { class: "min-w-0 flex-1" }, [
             m("h2", { class: "type-heading m-0 text-primary" }, app.title),
@@ -335,9 +310,9 @@ export function AppDetail(): m.Component<AppDetailAttrs> {
               ]),
             ]),
             m("div", { class: "mt-5 flex flex-wrap gap-x-5 gap-y-2" }, [
-              link(app.homepage_url, "Project home page"),
-              link(app.source_url, "View the source"),
-              app.has_log ? link(installLogUrl(app.slug), "Install log") : null,
+              externalLink(app.homepage_url, "Project home page"),
+              externalLink(app.source_url, "View the source"),
+              app.has_log ? externalLink(installLogUrl(app.slug), "Install log") : null,
             ]),
             m("div", { class: "mt-6 flex flex-wrap items-center gap-2" }, actions(vnode.attrs)),
             app.is_added ? removeControl(app, vnode.attrs.onRemove) : null,

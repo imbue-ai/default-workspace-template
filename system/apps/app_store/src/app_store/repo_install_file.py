@@ -1,5 +1,5 @@
 """The install file for an app from a GitHub repository: what a chat hands the store once it has worked out how to
-install and start the repository, and (later) what a repository can ship itself.
+install and start the repository, and what the store keeps with an app added from one.
 
 It carries the same fields a store entry does -- how to install it (``recipe``), how to start it (``launch``), and
 what it costs (``resources``) -- plus the repository and the one commit everything was tried at. It is held to exactly
@@ -8,7 +8,6 @@ from the app's own environment, ``{port}`` passed, 127.0.0.1 bound), and a recip
 must install that same commit.
 """
 
-from typing import Final
 from typing import Literal
 
 from pydantic import Field
@@ -24,8 +23,6 @@ from app_store.catalog import ResourceEstimate
 from app_store.catalog import short_commit
 from app_store.errors import CatalogEntryError
 from imbue.imbue_common.frozen_model import FrozenModel
-
-REPO_INSTALL_FILE_FORMAT: Final[int] = 1
 
 
 class RepoInstallFile(FrozenModel):

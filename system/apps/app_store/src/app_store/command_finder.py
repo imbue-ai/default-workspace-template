@@ -28,6 +28,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -86,6 +87,8 @@ MAX_ATTEMPTS: Final[int] = 3
 # How long one answer may take before the AI counts as unreachable, so a stuck call never leaves the dialog waiting.
 FIND_TIMEOUT_SECONDS: Final[float] = 300.0
 TRIALS_DIRNAME: Final[str] = ".command-trials"
+# A test launch's own output, kept beside the job's log while it runs.
+TRIAL_OUTPUT_SUFFIX: Final[str] = ".out"
 # How many jobs are kept, in memory and as logs on disk; older ones are dropped as new ones start.
 MAX_KEPT_JOBS: Final[int] = 20
 # How long a test launch has to answer with a page.
@@ -304,7 +307,7 @@ class ProcessTrialRunner(TrialRunnerInterface):
 
     def run(self, argv: list[str], cwd: Path, port: int, log_path: Path, cancelled: threading.Event) -> TrialOutcome:
         cwd.mkdir(parents=True, exist_ok=True)
-        output_path = log_path.with_suffix(f".try-{port}.out")
+        output_path = log_path.with_suffix(f".try-{port}{TRIAL_OUTPUT_SUFFIX}")
         _append(log_path, f"$ {shlex.join(argv)}")
         with output_path.open("w", encoding="utf-8") as output:
             try:
@@ -401,29 +404,27 @@ def take_screenshot(repo_root: Path, port: int) -> Screenshot:
     python = repo_root / ".venv" / "bin" / "python"
     if not python.is_file():
         return Screenshot(image=None, blocked_reason=None)
-    target = repo_root / "data" / ".state" / "app-store" / f"screenshot-{port}.png"
-    blocked = target.with_name(target.name + ".blocked")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        completed = subprocess.run(
-            [str(python), "-I", str(SCREENSHOT_SCRIPT), f"http://127.0.0.1:{port}/", str(target)],
-            capture_output=True,
-            text=True,
-            timeout=SCREENSHOT_TIMEOUT_SECONDS,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
+    # A scratch folder of its own, so screenshots taken at the same moment never meet and nothing is left behind.
+    with tempfile.TemporaryDirectory(prefix="app-store-screenshot-") as scratch:
+        target = Path(scratch) / "screenshot.png"
+        blocked = target.with_name(target.name + ".blocked")
+        try:
+            completed = subprocess.run(
+                [str(python), "-I", str(SCREENSHOT_SCRIPT), f"http://127.0.0.1:{port}/", str(target)],
+                capture_output=True,
+                text=True,
+                timeout=SCREENSHOT_TIMEOUT_SECONDS,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning("No screenshot of port {}: {}", port, e)
+            return Screenshot(image=None, blocked_reason=None)
         if completed.returncode != 0 or not target.is_file():
             logger.warning("No screenshot of port {}: {}", port, completed.stderr.strip()[-500:])
             return Screenshot(image=None, blocked_reason=None)
         reason = blocked.read_text(encoding="utf-8").strip() if blocked.is_file() else None
         return Screenshot(image=target.read_bytes(), blocked_reason=reason)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        logger.warning("No screenshot of port {}: {}", port, e)
-        return Screenshot(image=None, blocked_reason=None)
-    finally:
-        target.unlink(missing_ok=True)
-        blocked.unlink(missing_ok=True)
 
 
 def read_help(program_path: Path, cwd: Path) -> str:
@@ -475,7 +476,8 @@ def curated_app_for(apps: tuple[CatalogApp, ...], source: str, package: str) -> 
 
 
 class CommandFinder(MutableModel):
-    """Runs the jobs that work out start commands: one at a time, kept in memory, each logged to disk."""
+    """Runs the jobs that work out start commands, kept in memory and each logged to disk. Starting a job cancels the
+    one before it, which stops at its next step."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -533,14 +535,13 @@ class CommandFinder(MutableModel):
                 event.set()
             self._jobs[job_id] = job
             self._cancels[job_id] = cancel
-            known = set(self._jobs)
             for old_id in list(self._jobs)[:-MAX_KEPT_JOBS]:
                 if old_id not in self._cancels:
                     self._jobs.pop(old_id)
                     self._screenshots.pop(old_id, None)
         self.trials_dir.mkdir(parents=True, exist_ok=True)
         _append(self.log_path(job_id), f"[app-store] working out how to start {normalized.package} at {now_iso()}")
-        self._prune_trials(known)
+        self._prune_trials()
         if is_threaded:
             threading.Thread(
                 target=self._run, args=(job_id, normalized, cancel), name=f"app-store-find-{job_id}", daemon=True
@@ -564,17 +565,23 @@ class CommandFinder(MutableModel):
             event.set()
         return self.get(job_id)
 
-    def _prune_trials(self, known: set[str]) -> None:
-        """Delete the scratch folders no job of this run owns (left by a restart mid-job), and all but the newest
-        logs."""
+    def _prune_trials(self) -> None:
+        """Delete the scratch folders and trial output no job of this run owns (left by a restart mid-job), and all
+        but the newest logs."""
         try:
             entries = list(self.trials_dir.iterdir())
         except OSError as e:
             logger.warning("Could not read {}: {}", self.trials_dir, e)
             return
+        # Read after the listing: a job is registered before its thread makes its folder, so every folder listed
+        # belongs to a job read here, even one another request started meanwhile.
+        with self._lock:
+            known = set(self._jobs)
         for entry in entries:
             if entry.is_dir() and entry.name not in known:
                 shutil.rmtree(entry, ignore_errors=True)
+            elif entry.suffix == TRIAL_OUTPUT_SUFFIX and entry.name.split(".", 1)[0] not in known:
+                entry.unlink(missing_ok=True)
         logs = sorted((entry for entry in entries if entry.suffix == ".log"), key=_modified_at, reverse=True)
         for log in logs[MAX_KEPT_JOBS:]:
             log.unlink(missing_ok=True)
@@ -603,6 +610,11 @@ class CommandFinder(MutableModel):
             self._finish(job_id, FinderStatus.FAILED, f"Something went wrong while trying the app out: {e}")
         finally:
             shutil.rmtree(trial_dir, ignore_errors=True)
+            with self._lock:
+                is_unfinished = job_id in self._cancels
+            # An error nothing above expects still ends the thread, but the dialog polling the job is told.
+            if is_unfinished:
+                self._finish(job_id, FinderStatus.FAILED, "Something went wrong while trying the app out.")
 
     def _work(self, job_id: str, request: CheckedRequest, cancel: threading.Event, trial_dir: Path) -> None:
         log_path = self.log_path(job_id)
@@ -764,9 +776,7 @@ class CommandFinder(MutableModel):
     def _free_port(self) -> int:
         layout = self.engine.layout
         held = [record.port for record in self.engine.records.read().records if record.port is not None]
-        return pick_free_port(
-            layout.supervisord_conf, layout.repo_root / "data" / ".state" / "apps.toml", held, self.engine.is_bound
-        )
+        return pick_free_port(layout.supervisord_conf, layout.registry_path, held, self.engine.is_bound)
 
     def _is_cancelled(self, job_id: str, cancel: threading.Event) -> bool:
         if not cancel.is_set():
@@ -776,9 +786,9 @@ class CommandFinder(MutableModel):
 
 
 def _stop_group(process: subprocess.Popen[bytes]) -> None:
-    """Stop the process and everything it started."""
-    if process.poll() is not None:
-        return
+    """Stop the process and everything it started. The whole group is signalled even when the process itself has
+    already exited, since a launcher that starts its server and exits leaves the server running in the group; what
+    is left once the process has stopped, or its grace period has run out, is killed."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(process.pid, sig)
@@ -786,7 +796,6 @@ def _stop_group(process: subprocess.Popen[bytes]) -> None:
             return
         try:
             process.wait(timeout=TRIAL_STOP_GRACE_SECONDS)
-            return
         except subprocess.TimeoutExpired:
             continue
 

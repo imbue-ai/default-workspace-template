@@ -453,6 +453,51 @@ describe("AddAppDialog", () => {
       expect(attrs.onCheck).toHaveBeenCalledWith(expect.objectContaining({ setup_files: [] }));
     });
 
+    it("cancels a job whose start arrives after Stop, and never shows it", async () => {
+      const started = deferred<FindAnswer>();
+      const finder = fakeFinder([job()]);
+      finder.start = vi.fn(() => started.promise);
+      mountDialog({ finder });
+      type("package", "copyparty");
+      click(".app-store-find");
+      m.redraw.sync();
+      click(".app-store-stop-find");
+      m.redraw.sync();
+      started.resolve({ kind: "started", job: job() });
+      await flush();
+      expect(finder.cancel).toHaveBeenCalledWith("job1");
+      expect(stage()).toBe("editing");
+      await poll();
+      expect(finder.poll).not.toHaveBeenCalled();
+    });
+
+    it("ignores what a stopped job's last poll answers once another search runs", async () => {
+      const stalePoll = deferred<FinderJob | null>();
+      const finder = fakeFinder([]);
+      finder.start = vi
+        .fn()
+        .mockResolvedValueOnce({ kind: "started", job: job() })
+        .mockResolvedValueOnce({ kind: "started", job: job({ job_id: "job2" }) });
+      finder.poll = vi
+        .fn()
+        .mockReturnValueOnce(stalePoll.promise)
+        .mockResolvedValue(job({ job_id: "job2" }));
+      mountDialog({ finder });
+      type("package", "copyparty");
+      click(".app-store-find");
+      await flush();
+      await vi.advanceTimersByTimeAsync(FIND_POLL_MS);
+      click(".app-store-stop-find");
+      m.redraw.sync();
+      click(".app-store-find");
+      await flush();
+      stalePoll.resolve(job({ status: "CANCELLED" }));
+      await flush();
+      expect(stage()).toBe("finding");
+      await poll();
+      expect(finder.poll).toHaveBeenLastCalledWith("job2");
+    });
+
     it("stops the job when asked, and when the dialog closes mid-way", async () => {
       const finder = fakeFinder([job(), job()]);
       mountDialog({ finder });

@@ -1,10 +1,15 @@
 """Pinning and estimating packages against faked registries and resolvers."""
 
 import json
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from packaging.tags import Tag
+from pydantic import Field
+from pydantic import PrivateAttr
 
 from app_store.added_apps import CheckedRequest
 from app_store.errors import AddAppRefusedError
@@ -13,6 +18,7 @@ from app_store.package_check import CommandResolver
 from app_store.package_check import LookupCache
 from app_store.package_check import PYTHON_UNPACKED_FACTOR
 from app_store.package_check import PackageChecker
+from app_store.package_check import RegistryClientInterface
 from app_store.package_check import choose_distribution
 from app_store.package_check import packages_phrase
 from app_store.package_check import parse_compiled_requirements
@@ -122,6 +128,51 @@ def test_running_out_of_time_leaves_the_size_unknown(tmp_path: Path) -> None:
     estimate = slow.estimate(_request(), "1.1")
     assert estimate.disk_mb is None
     assert "took too long" in estimate.basis
+
+
+class _HangingRegistry(RegistryClientInterface):
+    """Answers like ``inner``, except that a URL in ``hanging`` waits until the test lets it go."""
+
+    inner: FakeRegistryClient = Field(description="The registry it answers like")
+    hanging: set[str] = Field(description="URLs that do not answer until released")
+
+    _released: threading.Event = PrivateAttr(default_factory=threading.Event)
+
+    def get_json(self, url: str) -> dict[str, Any] | None:
+        if url in self.hanging:
+            self._released.wait(30)
+        return self.inner.get_json(url)
+
+    def release(self) -> None:
+        self._released.set()
+
+
+def test_a_size_lookup_that_hangs_leaves_the_size_unknown_on_time(tmp_path: Path) -> None:
+    checker = demo_checker(tmp_path)
+    registry = _HangingRegistry(inner=_registry(checker), hanging={"https://pypi.org/pypi/helper/2.0/json"})
+    hanging = PackageChecker(registry=registry, resolver=checker.resolver, cache=checker.cache, budget_seconds=0.5)
+    started = time.monotonic()
+    try:
+        estimate = hanging.estimate(_request(), "1.1")
+    finally:
+        registry.release()
+    assert time.monotonic() - started < 5
+    assert (estimate.disk_mb, estimate.package_count) == (None, None)
+    assert estimate.basis == "Size unknown: the size lookups took too long."
+
+
+def test_a_package_with_no_release_to_pin_is_refused_and_a_missing_size_is_not_counted(tmp_path: Path) -> None:
+    checker = demo_checker(tmp_path)
+    registry = _registry(checker)
+    registry.documents["https://registry.npmjs.org/unreleased"] = {"dist-tags": {}, "versions": {}}
+    with pytest.raises(AddAppRefusedError, match="unreleased has no release on npm to pin"):
+        checker.pin(_request("npm", "unreleased"))
+    registry.documents["https://pypi.org/pypi/unreleased/json"] = {"info": {"version": None}, "releases": {}}
+    with pytest.raises(AddAppRefusedError, match="unreleased has no release on PyPI to pin"):
+        checker.pin(_request(package="unreleased"))
+    registry.documents["https://registry.npmjs.org/mime/1.6.0"] = {"dist": None}
+    estimate = checker.estimate(_request("npm", "demo-server"), "2.0.0")
+    assert (estimate.package_count, estimate.disk_mb) == (2, 5)
 
 
 def test_the_file_uv_would_choose_is_the_best_matching_wheel_else_the_source_archive() -> None:

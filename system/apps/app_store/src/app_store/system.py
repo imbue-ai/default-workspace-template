@@ -1,5 +1,6 @@
 """The store's reach into the workspace, each behind a small interface so tests can use fakes: running a command into
-an install log, installing a package recipe, supervisord, the app registry, and probing a port."""
+an install log, installing a recipe (a package, a build from a pinned GitHub commit, or a ready-made site from a
+Docker Hub image layer), supervisord, the app registry, and probing a port."""
 
 import os
 import shutil
@@ -19,6 +20,7 @@ from loguru import logger
 from pydantic import Field
 
 from app_manifest.registry import FORWARD_PORT_SCRIPT
+from app_store.catalog import AnyRecipe
 from app_store.catalog import GithubBuildRecipe
 from app_store.catalog import ImageSiteRecipe
 from app_store.catalog import NodeGitRecipe
@@ -89,9 +91,6 @@ class SubprocessCommandRunner(CommandRunnerInterface):
             return completed.returncode
 
 
-AnyRecipe = PythonRecipe | NodeRecipe | PythonGitRecipe | NodeGitRecipe | GithubBuildRecipe | ImageSiteRecipe
-
-
 class PackageInstallerInterface(MutableModel, ABC):
     """Installs a recipe into an app's environment folder."""
 
@@ -128,6 +127,11 @@ class CommandPackageInstaller(PackageInstallerInterface):
             keep_built_site(recipe, env_dir)
 
 
+def _npm_install(env_dir: Path, packages: tuple[str, ...]) -> InstallStep:
+    """Install ``packages`` into ``env_dir`` as its npm prefix (their programs land in ``node_modules/.bin``)."""
+    return InstallStep(argv=("npm", "install", "--prefix", str(env_dir), "--no-audit", "--no-fund", *packages))
+
+
 def install_steps(recipe: AnyRecipe, env_dir: Path) -> list[InstallStep]:
     """The commands that install ``recipe`` into ``env_dir``, in order."""
     match recipe:
@@ -139,17 +143,11 @@ def install_steps(recipe: AnyRecipe, env_dir: Path) -> list[InstallStep]:
                 ),
             ]
         case NodeRecipe() | NodeGitRecipe():
-            return [
-                InstallStep(
-                    argv=("npm", "install", "--prefix", str(env_dir), "--no-audit", "--no-fund", recipe.package)
-                )
-            ]
+            return [_npm_install(env_dir, (recipe.package,))]
         case GithubBuildRecipe():
             source = env_dir / SOURCE_DIRNAME
             steps = [
-                InstallStep(
-                    argv=("npm", "install", "--prefix", str(env_dir), "--no-audit", "--no-fund", *recipe.node_tools)
-                ),
+                _npm_install(env_dir, recipe.node_tools),
                 InstallStep(argv=("git", "init", "--quiet", str(source))),
                 # Fetched by its hash: what is built is exactly the commit that was reviewed, whatever the tag says now.
                 InstallStep(
@@ -193,9 +191,7 @@ def install_steps(recipe: AnyRecipe, env_dir: Path) -> list[InstallStep]:
             return steps
         case ImageSiteRecipe():
             return [
-                InstallStep(
-                    argv=("npm", "install", "--prefix", str(env_dir), "--no-audit", "--no-fund", *recipe.node_tools)
-                ),
+                _npm_install(env_dir, recipe.node_tools),
                 # The store's own Python runs the download, so it needs nothing the app's environment lacks.
                 InstallStep(
                     argv=(

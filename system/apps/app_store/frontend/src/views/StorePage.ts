@@ -28,13 +28,13 @@ import {
   fetchFinderJob,
   finderLogUrl,
   finderScreenshotUrl,
-  startFindCommand,
   fetchTemplateSizeKb,
   isInCategory,
   removeAddedApp,
   requestInstall,
   requestUninstall,
   requestUpdate,
+  startFindCommand,
   storeAppFor,
   titleOf,
   uninstallingApps,
@@ -48,7 +48,9 @@ import { InstallDialog, RemoveDialog, RepoAddDialog, UninstallDialog, UpdateDial
 import type { TemplateSize } from "./TemplateDetail";
 import { StoreTemplateDetail } from "./TemplateDetail";
 
-export type Section = "apps" | "templates";
+type Section = "apps" | "templates";
+/** The dialogs that ask about one store app. */
+type AppDialogKind = "install" | "uninstall" | "remove" | "update";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";
 const FIELD_GLYPH_SIZE = 14;
@@ -69,11 +71,11 @@ function stat(value: string, label: string, hook: string): m.Vnode {
   ]);
 }
 
-export function matchesStoreApp(app: StoreApp, query: string): boolean {
+function matchesStoreApp(app: StoreApp, query: string): boolean {
   return matchesQuery(query, app.title, app.description, app.author);
 }
 
-export function matchesWorkspaceApp(app: WorkspaceApp, query: string): boolean {
+function matchesWorkspaceApp(app: WorkspaceApp, query: string): boolean {
   return matchesQuery(query, app.display_name, app.description);
 }
 
@@ -85,16 +87,18 @@ export function StorePage(): m.Component<StorePageAttrs> {
   let detailSlug: string | null = null;
   let detailTemplate: CatalogTemplate | null = null;
   let templateSize: TemplateSize = { kind: "loading" };
-  let dialog: { kind: "install" | "uninstall" | "remove" | "update"; slug: string; version?: string } | null = null;
+  let dialog: { kind: AppDialogKind; slug: string; version?: string } | null = null;
   let isAdding = false;
   let dialogError: string | null = null;
   let isSubmitting = false;
-  // Apps from GitHub put off with "Not now" in this visit; they stay waiting in the store.
-  const laterRepoAdds = new Set<string>();
-  let repoAddError: string | null = null;
+  // Apps from GitHub not to ask about again in this visit: put off with "Not now" (they stay waiting in the store), or
+  // just confirmed or discarded (the next poll drops them; until then their buttons must not be pressed twice).
+  const settledRepoAdds = new Set<string>();
+  // Why the store refused the last answer about a pending add, and which one it was about.
+  let repoAddError: { id: string; reason: string } | null = null;
   let isSubmittingRepoAdd = false;
 
-  function openDialog(kind: "install" | "uninstall" | "remove" | "update", app: StoreApp, version?: string): void {
+  function openDialog(kind: AppDialogKind, app: StoreApp, version?: string): void {
     dialog = { kind, slug: app.slug, version };
     dialogError = null;
     isSubmitting = false;
@@ -322,30 +326,37 @@ export function StorePage(): m.Component<StorePageAttrs> {
     ];
   }
 
-  async function submitRepoAdd(job: () => Promise<string | null>): Promise<void> {
+  async function submitRepoAdd(pendingId: string, job: (id: string) => Promise<string | null>): Promise<void> {
     isSubmittingRepoAdd = true;
-    repoAddError = await job();
+    const reason = await job(pendingId);
     isSubmittingRepoAdd = false;
+    if (reason === null) settledRepoAdds.add(pendingId);
+    repoAddError = reason === null ? null : { id: pendingId, reason };
     m.redraw();
   }
 
   /** The oldest app from GitHub waiting for confirmation, unless another dialog is up or it was put off. */
   function repoAddView(snapshot: StoreSnapshot): m.Children {
     if (dialog !== null || isAdding) return null;
-    const pending = snapshot.pending_repo_adds.find((candidate) => !laterRepoAdds.has(candidate.id));
+    const pending = snapshot.pending_repo_adds.find((candidate) => !settledRepoAdds.has(candidate.id));
     if (pending === undefined) return null;
-    return m(RepoAddDialog, {
-      pending,
-      room: snapshot.room,
-      error: repoAddError,
-      isSubmitting: isSubmittingRepoAdd,
-      onLater: () => {
-        laterRepoAdds.add(pending.id);
-        repoAddError = null;
-      },
-      onDiscard: () => void submitRepoAdd(() => discardRepoAdd(pending.id)),
-      onConfirm: () => void submitRepoAdd(() => confirmRepoAdd(pending.id)),
-    });
+    // Keyed (in a fragment of its own), so each pending add gets a dialog of its own, opening with the focus on its
+    // way out.
+    return [
+      m(RepoAddDialog, {
+        key: pending.id,
+        pending,
+        room: snapshot.room,
+        error: repoAddError?.id === pending.id ? repoAddError.reason : null,
+        isSubmitting: isSubmittingRepoAdd,
+        onLater: () => {
+          settledRepoAdds.add(pending.id);
+          repoAddError = null;
+        },
+        onDiscard: () => void submitRepoAdd(pending.id, discardRepoAdd),
+        onConfirm: () => void submitRepoAdd(pending.id, confirmRepoAdd),
+      }),
+    ];
   }
 
   function dialogView(snapshot: StoreSnapshot): m.Children {

@@ -15,7 +15,7 @@ Built-in apps:
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
   8010, and owns the provider accounts. Its frontend, the shell's, the
-  Getting Started app's, the App Store's and Files' are builds of one npm workspace (`system/package.json`)
+  Getting Started app's, the App Store's, Files' and Routines' are builds of one npm workspace (`system/package.json`)
   sharing the `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
@@ -27,9 +27,12 @@ Built-in apps:
   `getting-started` package.
 - `app_store/` - The App Store: one-click installs of a curated catalog of
   open-source apps (JupyterLab, marimo, Datasette, Node-RED, TiddlyWiki,
-  Radicale), shipped and reviewed inside the package as typed install recipes,
-  each shown with its disk and memory cost against what the workspace has free;
-  the apps this workspace already has, with their icons; and the published
+  Radicale, Excalidraw), shipped and reviewed inside the package as typed
+  install recipes, each shown with its disk and memory cost against what the
+  workspace has free; apps the person adds from PyPI or npm, or from GitHub
+  through a chat (the `add-repo-to-store` skill) that tries the app out first,
+  each confirmed in the store as code nobody reviewed; updates of installed
+  apps; the apps this workspace already has, with their icons; and the published
   template catalog (shared with Getting Started), whose Install starts the same
   `/use-template` chat. An installed app gets its own folder under
   `data/.apps/app-store/<slug>/` and a generated, gitignored

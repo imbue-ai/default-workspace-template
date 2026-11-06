@@ -18,8 +18,7 @@ install or confirm routes, and never edit the store's data: the store checks you
 built-in apps, and only the person's confirmation adds it. Repair and reinstall later follow the saved file, so
 get it right once.
 
-The whole plan behind this is `data/plans/app-store-add-from-github.md`; the store's side is in
-`system/apps/app_store/README.md` ("Adding an app from a GitHub repository").
+The store's side is in `system/apps/app_store/README.md` ("Adding an app from a GitHub repository").
 
 ## What the person sees
 

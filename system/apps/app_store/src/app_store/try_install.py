@@ -7,7 +7,7 @@ must answer, it must not refuse to be framed (by its headers, and in a framed sc
 measured. Then it is stopped and the scratch folder deleted, whatever happened.
 
 A memory guard watches every command: when the memory the workspace has left falls below ``--memory-floor-mb``, the
-command's whole process group is stopped and the trial ends with ``out_of_memory`` instead of the workspace running
+command's whole process group is stopped and the trial ends with ``OUT_OF_MEMORY`` instead of the workspace running
 out. The workspace cannot cap a process's memory, so this is watch-and-stop, checked every half second.
 
 What it found is printed as one JSON object (``TrialResult``) and kept, with the full log, the screenshot and the
@@ -182,21 +182,25 @@ class MemoryGuard(FrozenModel):
     )
 
 
+def _signal_group(process: subprocess.Popen[bytes], signal_number: int) -> None:
+    try:
+        os.killpg(process.pid, signal_number)
+    except (ProcessLookupError, PermissionError):
+        # The group is gone (or its number now belongs to someone else's process): nothing of it is left to stop.
+        pass
+
+
 def _stop_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(STOP_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
+    """Stop ``process`` and everything it started (its own session's process group), politely first. What it left
+    running after it exited itself -- a server it started in the background -- is stopped too."""
+    if process.poll() is None:
+        _signal_group(process, signal.SIGTERM)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        process.wait()
+            process.wait(STOP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+    _signal_group(process, signal.SIGKILL)
+    process.wait()
 
 
 def _append(log_path: Path, text: str) -> None:
@@ -404,11 +408,8 @@ class Trial(FrozenModel):
                 )
             if run.exit_status != 0:
                 why = "ran out of time" if run.is_timed_out else f"failed (exit status {run.exit_status})"
-                return self._result(
-                    TrialOutcome.INSTALL_FAILED,
-                    f"The install command `{shlex.join(step.argv[:3])} ...` {why}.",
-                    figures,
-                )
+                shown = shlex.join(step.argv[:3]) + (" ..." if len(step.argv) > 3 else "")
+                return self._result(TrialOutcome.INSTALL_FAILED, f"The install command `{shown}` {why}.", figures)
         if isinstance(recipe, GithubBuildRecipe):
             try:
                 keep_built_site(recipe, self.env_dir)
@@ -547,7 +548,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--memory-floor-mb", type=int, default=None, help="Stop when less is left (default: 15%% of the memory)"
     )
-    parser.add_argument("--start-timeout", type=float, default=DEFAULT_START_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--start-timeout",
+        type=float,
+        default=DEFAULT_START_TIMEOUT_SECONDS,
+        help="Seconds the started app may take to answer",
+    )
     arguments = parser.parse_args(argv)
     try:
         install_file = RepoInstallFile.model_validate(json.loads(arguments.install_file.read_text(encoding="utf-8")))

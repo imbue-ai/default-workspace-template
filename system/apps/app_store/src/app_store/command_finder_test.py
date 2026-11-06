@@ -4,6 +4,7 @@ test-launch of a process."""
 
 import json
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ from app_store import command_finder
 from app_store.added_apps import AddAppRequest
 from app_store.command_finder import ClaudeCommandWriter
 from app_store.command_finder import CommandFinder
+from app_store.command_finder import FailedTry
 from app_store.command_finder import FinderError
 from app_store.command_finder import FinderJob
 from app_store.command_finder import FinderStatus
@@ -217,12 +219,49 @@ def test_an_unreadable_answer_is_asked_again(tmp_path: Path) -> None:
     assert job.attempts[0].outcome == "The AI's answer couldn't be read."
 
 
-def test_an_ai_that_cannot_be_reached_ends_the_job(tmp_path: Path) -> None:
-    finder = build_test_finder(build_test_engine(tmp_path), tmp_path, proposals=[])
-    job = finder.get(_run(finder))
+_UNREACHABLE = "The AI that works out start commands couldn't be reached. Try again in a moment."
+
+
+class _UnreachableWriter(FakeCommandWriter):
+    """Fails every try the way the production writer does when ``claude -p`` cannot be run."""
+
+    def propose(self, context: PackageContext, failed: list[FailedTry], log_path: Path) -> Proposal:
+        self.contexts.append(context)
+        raise FinderError(_UNREACHABLE)
+
+
+def test_an_ai_that_cannot_be_reached_ends_the_job_without_another_try(tmp_path: Path) -> None:
+    finder = build_test_finder(build_test_engine(tmp_path), tmp_path).model_copy(
+        update={"writer": _UnreachableWriter()}
+    )
+    job_id = _run(finder)
+    job = finder.get(job_id)
 
     assert job is not None and job.status is FinderStatus.FAILED
-    assert job.explanation == "The AI's answer couldn't be read."
+    assert job.explanation == _UNREACHABLE
+    assert len(_writer(finder).contexts) == 1
+    assert _runner(finder).launched == []
+    assert not (finder.trials_dir / job_id).exists()
+
+
+class _BrokenWriter(FakeCommandWriter):
+    """Fails with an error nothing in the job expects."""
+
+    def propose(self, context: PackageContext, failed: list[FailedTry], log_path: Path) -> Proposal:
+        raise ValueError("an unexpected bug")
+
+
+def test_an_unexpected_error_still_ends_the_job_so_the_dialog_is_not_left_waiting(tmp_path: Path) -> None:
+    finder = build_test_finder(build_test_engine(tmp_path), tmp_path).model_copy(update={"writer": _BrokenWriter()})
+    with pytest.raises(ValueError, match="an unexpected bug"):
+        finder.start(_request(), is_threaded=False)
+    (job_id,) = [path.stem for path in finder.trials_dir.glob("*.log")]
+    job = finder.get(job_id)
+
+    assert job is not None and job.status is FinderStatus.FAILED
+    assert job.explanation == "Something went wrong while trying the app out."
+    assert job.progress == ""
+    assert not (finder.trials_dir / job_id).exists()
 
 
 def test_a_package_the_store_already_offers_is_pointed_at_instead(tmp_path: Path) -> None:
@@ -284,6 +323,48 @@ def test_the_prompt_carries_the_package_its_programs_help_readme_and_failed_trie
     assert "--- demo --help ---" in prompt
 
 
+# Starts a server, waits until it is listening (so the trial has a real server to stop), then exits.
+_LAUNCHER_THAT_LEAVES_ITS_SERVER = """
+import socket, subprocess, sys, threading
+subprocess.Popen([sys.executable, "-m", "http.server", sys.argv[1], "--bind", "127.0.0.1"])
+for _ in range(200):
+    try:
+        socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.1).close()
+        break
+    except OSError:
+        threading.Event().wait(0.05)
+"""
+
+
+def test_a_server_left_running_by_a_launcher_that_exits_is_stopped_too(tmp_path: Path) -> None:
+    runner = ProcessTrialRunner(repo_root=tmp_path, start_timeout_seconds=15)
+    port = next(port for port in range(18600, 18700) if not is_port_bound(port))
+    outcome = runner.run(
+        [sys.executable, "-c", _LAUNCHER_THAT_LEAVES_ITS_SERVER, str(port)],
+        tmp_path / "served",
+        port,
+        tmp_path / "trial.log",
+        threading.Event(),
+    )
+    # Whether the trial saw the server answer or the launcher exit first is a race; either way the trial is over.
+    assert outcome.is_answering or outcome.what_happened == "It stopped right away (exit status 0)."
+    # The server the launcher started is gone with it: nothing listens on its port any more. (A bind test would be
+    # fooled by the closed connections the trial's own checks leave waiting on the port.)
+    assert _stops_listening_soon(port)
+
+
+def _stops_listening_soon(port: int) -> bool:
+    """Whether connecting to ``port`` is refused, now or within a couple of seconds."""
+    pause = threading.Event()
+    for _ in range(40):
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+        except OSError:
+            return True
+        pause.wait(0.05)
+    return False
+
+
 def test_a_real_launch_that_answers_and_one_that_exits(tmp_path: Path) -> None:
     runner = ProcessTrialRunner(repo_root=tmp_path, start_timeout_seconds=15)
     port = next(port for port in range(18700, 18800) if not is_port_bound(port))
@@ -335,8 +416,12 @@ def test_the_routes_start_poll_and_serve_the_screenshot_and_log(tmp_path: Path) 
     job_id = started.get_json()["job"]["job_id"]
     polled = client.get(f"/api/added-apps/find-command/{job_id}").get_json()["job"]
     assert polled["status"] == "FOUND" and polled["command"] == _GOOD
-    assert client.get(f"/api/added-apps/find-command/{job_id}/screenshot.png").data == b"\x89PNG"
-    assert "finished: FOUND" in client.get(f"/api/added-apps/find-command/{job_id}/log").get_data(as_text=True)
+    screenshot = client.get(f"/api/added-apps/find-command/{job_id}/screenshot.png")
+    assert (screenshot.data, screenshot.mimetype) == (b"\x89PNG", "image/png")
+    assert screenshot.headers["X-Content-Type-Options"] == "nosniff"
+    log = client.get(f"/api/added-apps/find-command/{job_id}/log")
+    assert "finished: FOUND" in log.get_data(as_text=True)
+    assert (log.mimetype, log.headers["X-Content-Type-Options"]) == ("text/plain", "nosniff")
     assert client.post(f"/api/added-apps/find-command/{job_id}/cancel").status_code == 200
 
     assert client.get("/api/added-apps/find-command/nope").status_code == 404
@@ -423,6 +508,8 @@ def test_scratch_left_by_a_restart_and_all_but_the_newest_logs_are_deleted(tmp_p
     finder = build_test_finder(engine, tmp_path, proposals=[_web_app()], outcomes=[_ANSWERED])
     leftover = finder.trials_dir / "0123456789ab" / "env" / "bin"
     leftover.mkdir(parents=True)
+    leftover_output = finder.trials_dir / "0123456789ab.try-8123.out"
+    leftover_output.write_text("a test launch's output")
     old_logs = []
     for number in range(MAX_KEPT_JOBS + 5):
         log = finder.trials_dir / f"old{number:02d}.log"
@@ -433,6 +520,7 @@ def test_scratch_left_by_a_restart_and_all_but_the_newest_logs_are_deleted(tmp_p
     job_id = _run(finder)
 
     assert not (finder.trials_dir / "0123456789ab").exists()
+    assert not leftover_output.exists()
     logs = sorted(path.name for path in finder.trials_dir.glob("*.log"))
     assert len(logs) == MAX_KEPT_JOBS
     # The newest are kept: this job's log and the most recent earlier ones.
