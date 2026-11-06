@@ -43,11 +43,11 @@
  * background task, a bash-mode command and its output) breaks the timeline the
  * same way, though it is not a turn the user took: it lands between two of the
  * agent's requests, so whatever the agent does next happens after it. The
- * section closes there, any open step carries over (a step the new turn's prose
- * was kept out of stays out), and the chip heads the next section. The reply
- * the agent gave before it stays above it, and the work it does after renders
- * below it. The one exception is a chip landing inside an open handoff node,
- * which stays in the handoff's turn.
+ * section closes there, any open step carries over (a step the turn before it
+ * never took up stays out of it and off its timeline), and the chip heads the
+ * next section. The reply the agent gave before it stays above it, and the work
+ * it does after renders below it. The one exception is a chip landing inside an
+ * open handoff node, which stays in the handoff's turn.
  *
  * One message is never grouped under a step: an agent permission request, or a
  * secret request (the same shape, answered on the card itself). It
@@ -486,9 +486,10 @@ interface SectionBuilder {
    *  agent), which the agent has not taken up again in it: nothing the agent says joins it until
    *  the agent works while it is open or moves a step. */
   dormant_step_id: string | null;
-  /** Whether this section's carryover entered dormant: a carried-over step the agent never takes
-   *  up in it is left off its timeline (it still shows, frozen, in the turn it came from). */
-  has_dormant_carryover: boolean;
+  /** Carried-over steps left off this section's timeline unless the agent takes them up in it
+   *  (they still show, frozen, in the turn they came from): all of them in a turn the user started,
+   *  and after a chip those the turn before it never took up. */
+  untaken_carryover_ids: Set<string>;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -503,7 +504,7 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     entries: [],
     current_step_id: null,
     dormant_step_id: null,
-    has_dormant_carryover: false,
+    untaken_carryover_ids: new Set(),
     open_handoff: null,
   };
 }
@@ -765,6 +766,7 @@ export function buildSections(
       // headed by the message.
       lastSwitched = null;
       const wasDormant = current !== null && current.dormant_step_id !== null;
+      const untakenBefore = current === null ? [] : untakenCarryoverIds(current);
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
       if (isGenuineUserTurn(e) || wasDormant) {
@@ -772,6 +774,8 @@ export function buildSections(
         // answer to this one does not join it unless the agent takes the step up again. A chip
         // does not change which request the agent is answering, so a dormant step stays so.
         setCarryoverDormant(current);
+      } else {
+        current.untaken_carryover_ids = new Set(untakenBefore);
       }
       continue;
     }
@@ -885,7 +889,20 @@ function openStep(section: SectionBuilder, id: string, is_carryover: boolean): v
 function setCarryoverDormant(section: SectionBuilder): void {
   section.dormant_step_id = section.current_step_id;
   section.current_step_id = null;
-  section.has_dormant_carryover = true;
+  section.untaken_carryover_ids = new Set(section.step_order);
+}
+
+/** The steps in untaken_carryover_ids the agent has not taken up in the section so far. */
+function untakenCarryoverIds(section: SectionBuilder): string[] {
+  return section.step_order.filter((id) => {
+    const node = section.steps.get(id)!;
+    return (
+      section.untaken_carryover_ids.has(id) &&
+      node.status === "active" &&
+      node.events.length === 0 &&
+      id !== section.current_step_id
+    );
+  });
 }
 
 function applyTransition(section: SectionBuilder, t: { id: string; status: "in_progress" | "closed" }): void {
@@ -983,20 +1000,11 @@ function finalizeSection(
 
   // A step left open by an earlier request that the agent never took up in this turn is not part
   // of it: showing it again here would read as the agent going back to it.
-  if (section.has_dormant_carryover) {
-    const untakenIds = new Set(
-      section.step_order.filter((id) => {
-        const node = section.steps.get(id)!;
-        return (
-          node.is_carryover && node.status === "active" && node.events.length === 0 && id !== section.current_step_id
-        );
-      }),
-    );
-    if (untakenIds.size > 0) {
-      section.entries = section.entries.filter((entry) => entry.kind !== "step" || !untakenIds.has(entry.id));
-      section.step_order = section.step_order.filter((id) => !untakenIds.has(id));
-      for (const id of untakenIds) section.steps.delete(id);
-    }
+  const untakenIds = new Set(untakenCarryoverIds(section));
+  if (untakenIds.size > 0) {
+    section.entries = section.entries.filter((entry) => entry.kind !== "step" || !untakenIds.has(entry.id));
+    section.step_order = section.step_order.filter((id) => !untakenIds.has(id));
+    for (const id of untakenIds) section.steps.delete(id);
   }
 
   // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT

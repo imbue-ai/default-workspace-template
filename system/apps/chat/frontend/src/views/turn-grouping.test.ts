@@ -772,6 +772,29 @@ describe("narration and close-time ejection", () => {
     expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
   });
 
+  // A step the turn moved past without taking it up stays off the timeline after a chip too.
+  it("keeps a step the turn moved past off the timeline across a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "do the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      notice("t6", "n1"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], ["s2"], ["s2"]]);
+    expect(sections[2].live_step_id).toBe("s2");
+  });
+
   // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
   // by the work that follows.
   it("takes a carried-over step up again after a regular ticket transition", () => {
