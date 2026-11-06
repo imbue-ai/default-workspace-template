@@ -44,8 +44,8 @@ dev = [
 # sandbox image installs this library. The mngr packages are held to the root's pin
 # (set_mngr_pin.py moves both), and the workspace's test plugins come from their directories.
 [tool.uv.sources]
-imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/imbue_common" }
-imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "713d10cdce66d320786f4e4041c2b7fcf31c9956", subdirectory = "libs/mngr_latchkey" }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "2d209bddd0e71fc5a816d6282190eee47ced00cf", subdirectory = "libs/imbue_common" }
+imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "2d209bddd0e71fc5a816d6282190eee47ced00cf", subdirectory = "libs/mngr_latchkey" }
 pytest-workspace-env = { path = "../pytest_workspace_env", editable = true }
 pytest-executable-tmp = { path = "../pytest_executable_tmp", editable = true }
 

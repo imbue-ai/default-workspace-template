@@ -69,6 +69,7 @@ USER_TIMEZONE_FILE = STATE_DIR / "user_timezone"
 # the container volume, so an apply the previous container run left mid-motion
 # is visible here at the next boot.
 UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
+# own-process: other-tier -- an interrupted update is recovered with no venv, which may be what it broke
 UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
 # The fixed workspace root every supervised service assumes. Needed in absolute
 # form only for the recovery cron line below, which runs with cron's cwd rather
@@ -525,6 +526,7 @@ def _migrate_cron_entries_to_routines() -> None:
     on the next boot. Best-effort: the boot must reach supervisord either way.
     """
     try:
+        # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
         completed = subprocess.run(
             ["uv", "run", "--no-sync", "routines", "migrate-cron"],
             cwd=WORKSPACE_ROOT_DIR if WORKSPACE_ROOT_DIR.is_dir() else None,
@@ -772,6 +774,7 @@ def _run_env_converge_fast_phase() -> None:
     pre-supervisord. Best-effort: a failure must not block boot (the slow-phase
     one-shot logs the environment's real problems).
     """
+    # own-process: other-tree -- the boot re-syncs the venv after this process started, so an import would load the venv as it was at start
     result = subprocess.run(
         ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"],
         capture_output=True,

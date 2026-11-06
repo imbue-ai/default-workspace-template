@@ -129,15 +129,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956" },
-    { name = "imbue-mngr-latchkey", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_latchkey&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf" },
+    { name = "imbue-mngr-latchkey", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_latchkey&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956" },
+    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf" },
     { name = "pytest-executable-tmp", editable = "../pytest_executable_tmp" },
     { name = "pytest-timeout", specifier = ">=2.0" },
     { name = "pytest-workspace-env", editable = "../pytest_workspace_env" },
@@ -384,7 +384,7 @@ wheels = [
 [[package]]
 name = "concurrency-group"
 version = "0.1.22"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
@@ -829,7 +829,7 @@ wheels = [
 [[package]]
 name = "imbue-common"
 version = "0.1.22"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "boto3" },
@@ -855,7 +855,7 @@ testing = [
 [[package]]
 name = "imbue-mngr"
 version = "0.3.1"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "cel-python" },
     { name = "click" },
@@ -888,7 +888,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-forward"
 version = "0.2.1"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_forward&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_forward&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "click" },
     { name = "click-option-group" },
@@ -912,7 +912,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-latchkey"
 version = "0.2.1"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_latchkey&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_latchkey&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "click" },
     { name = "concurrency-group" },
@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "imbue-overlay"
 version = "0.1.0"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 
 [[package]]
 name = "import-linter"
@@ -1430,13 +1430,13 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = "==0.0.85" }]
+dev = [{ name = "ty", specifier = "==0.0.87" }]
 
 [[package]]
 name = "pytest-timeout"
@@ -1462,7 +1462,7 @@ dependencies = [
 requires-dist = [{ name = "pytest", specifier = ">=8.0" }]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = "==0.0.85" }]
+dev = [{ name = "ty", specifier = "==0.0.87" }]
 
 [[package]]
 name = "python-dateutil"
@@ -1546,7 +1546,7 @@ wheels = [
 [[package]]
 name = "resource-guards"
 version = "0.1.9"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956#713d10cdce66d320786f4e4041c2b7fcf31c9956" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=2d209bddd0e71fc5a816d6282190eee47ced00cf#2d209bddd0e71fc5a816d6282190eee47ced00cf" }
 dependencies = [
     { name = "pluggy" },
     { name = "pytest" },

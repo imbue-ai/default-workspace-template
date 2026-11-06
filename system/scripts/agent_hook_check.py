@@ -14,6 +14,7 @@ because this file's directory is first on sys.path, so run it as ``python3 <path
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- beyond the standard library it imports only `workspace_bare_scripts` and, through its checks, the stdlib-only `tk_command_parsing`
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "libs" / "tk_command_parsing" / "src")
 )

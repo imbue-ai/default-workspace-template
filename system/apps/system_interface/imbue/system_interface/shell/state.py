@@ -87,6 +87,7 @@ from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
+from imbue.system_interface.shell.data_types import WindowInputReport
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_view
@@ -132,6 +133,7 @@ from imbue.system_interface.shell.ownership import desktop_owner_of
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
@@ -729,6 +731,52 @@ class ShellState(MutableModel):
             )
         except OSError as e:
             logger.opt(exception=e).warning("Failed to record the open of window {} of {}", window.id, window.app)
+
+    def record_window_input(self, client_id: ClientId, reports: Sequence[WindowInputReport]) -> None:
+        """Record a heartbeat's input reports in the client-activity log as ``window_input`` events (the
+        app-usage-signals spec, section 6.2). A window still on a desktop is recorded with that desktop's app and
+        desktop, whatever the page said; one that is gone with the reported app, which must be registered, and the
+        client's active desktop. Input reports go first, so a window reported with both kinds in one heartbeat is
+        written as input. A heartbeat reporting no window reads nothing, and a desktops record the shell cannot bring
+        up to date drops the reports with a warning, never the heartbeat."""
+        if not reports:
+            return
+        now = datetime.now(timezone.utc)
+        try:
+            desktops = self.list_desktops()
+        except ShellStateError as e:
+            logger.opt(exception=e).warning(
+                "Dropped {} input reports of client {}: the desktops cannot be read", len(reports), client_id
+            )
+            return
+        window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
+        active_desktop_id = ""
+        if any(report.window_id not in window_by_id for report in reports):
+            active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
+            active_desktop_id = "" if active_desktop is None else str(active_desktop)
+        for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
+            found = window_by_id.get(report.window_id)
+            if found is not None:
+                desktop, window = found
+                desktop_id, app = str(desktop.id), str(window.app)
+            elif self.inventory.entry(str(report.app)) is None:
+                logger.warning(
+                    "Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app
+                )
+                continue
+            else:
+                desktop_id, app = active_desktop_id, str(report.app)
+            try:
+                self.activity.append_window_input(
+                    client_id=str(client_id),
+                    desktop_id=desktop_id,
+                    app=app,
+                    window_id=str(report.window_id),
+                    kind=report.kind,
+                    now=now,
+                )
+            except OSError as e:
+                logger.opt(exception=e).warning("Failed to record input in window {} of {}", report.window_id, app)
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
         """Mint a window and write it onto the desktop."""

@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.0",
     "routines",
     "werkzeug>=3.0",
+    # The fix route opens its chat through the workspace's chat client, message_chat.
+    "workspace-scripts",
 ]
 
 [dependency-groups]
@@ -23,7 +25,7 @@ dev = [
     "inline-snapshot>=0.13",
     "ruff~=0.12.8",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]

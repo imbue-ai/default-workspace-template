@@ -28,6 +28,8 @@ from auth_sandbox.primitives import (
 )
 
 # The commands owner-exec runs on the chrome's behalf, linked onto PATH from this library's environment.
+# own-process: other-tree -- they live in /opt/auth-sandbox/venv, this library's own environment outside the
+# workspace venv, and owner-exec runs them for the chrome, so nothing in the workspace could import them instead
 COMMAND_NAMES: Final[tuple[str, ...]] = (
     "auth-sandbox-prepare",
     "auth-sandbox-sign-in",
