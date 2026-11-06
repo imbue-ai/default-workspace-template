@@ -151,6 +151,11 @@ def test_a_quick_change_to_unfinished_work_does_not_route() -> None:
     assert decide_routing(_answer(0.9, 0.8), 0.9, 0.8) is RoutingDecision.PENDING_WORK
 
 
+def test_a_quick_change_that_may_be_blocked_does_not_route() -> None:
+    # Below an even chance of being blocked, but above the stricter cutoff for unfinished work.
+    assert decide_routing(_answer(0.9, 0.45), 0.9, 0.45) is RoutingDecision.PENDING_WORK
+
+
 def test_a_likely_no_does_not_route() -> None:
     assert decide_routing(_answer(0.2), 0.2, 0.1) is RoutingDecision.NOT_ROUTED
 
