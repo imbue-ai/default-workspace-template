@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import sys
 import time
@@ -25,6 +24,7 @@ from update_self_skill import (
     update_runtime,
     update_self,
 )
+from update_self_skill.messenger_testing import RecordingMessengers
 
 _OWN_CHAT = "agent-00000000000000000000000000000001"
 _UPDATE_SELF_SCRIPT = update_self.ENTRY_STUB_PATH
@@ -40,30 +40,6 @@ def _chat(chat_id: str, title: str, status: str, name: str = "") -> dict[str, An
         "name": name or title.lower().replace(" ", "-"),
         "status": status,
     }
-
-
-def _install_message_chat_recorder(workspace: Path) -> Path:
-    """A ``message_chat.py`` that records its argv, the note it was given, and whether it ran
-    with an agent id."""
-    record = workspace / "message-chat-calls.jsonl"
-    script = workspace / "system" / "scripts" / "message_chat.py"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
-        "argv = sys.argv[1:]\n"
-        "note = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
-        f"with open({str(record)!r}, 'a') as handle:\n"
-        "    handle.write(json.dumps({'argv': argv, 'note': note, 'agent_id': os.environ.get('MNGR_AGENT_ID')}) + '\\n')\n"
-    )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    return record
-
-
-def _calls(record: Path) -> list[dict[str, Any]]:
-    if not record.exists():
-        return []
-    return [json.loads(line) for line in record.read_text().splitlines()]
 
 
 def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_answer_reported(
@@ -318,12 +294,12 @@ def test_the_note_names_every_chat_not_restarted_or_that_none_were(
 
 
 def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
-    fake_chat_app: Any,
+    fake_chat_app: Any, recording_messengers: RecordingMessengers
 ) -> None:
     """The helper is detached and carries no agent id, so the stop half of the restart, which
     kills every process carrying the chat's agent id, leaves it alive to send the note."""
     workspace = fake_chat_app.workspace
-    record = _install_message_chat_recorder(workspace)
+    recording_messengers.install_message_chat(workspace)
     report_path = workspace / "agent-restarts.json"
     report_path.write_text(
         json.dumps(
@@ -364,24 +340,25 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
     assert started.returncode == 0, started.stderr
 
     deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
-    while not _calls(record):
+    while not recording_messengers.calls():
         assert time.monotonic() < deadline, "the helper never sent the note"
         time.sleep(0.1)
     assert fake_chat_app.interrupts == [(_OWN_CHAT, _ONLY_IF_IDLE)]
-    [note_call] = _calls(record)
+    [note_call] = recording_messengers.calls()
+    assert note_call["messenger"] == "message_chat.py"
     assert note_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
     assert note_call["agent_id"] is None
-    assert "Claude Code 2.1.300" in note_call["note"]
-    assert '"Research" (agent-working)' in note_call["note"]
+    assert "Claude Code 2.1.300" in note_call["text"]
+    assert '"Research" (agent-working)' in note_call["text"]
 
 
 def test_a_self_restart_that_never_happens_tells_the_chat_so(
-    fake_chat_app: Any,
+    fake_chat_app: Any, recording_messengers: RecordingMessengers
 ) -> None:
     """The results message has told the user this chat restarts; when it does not, the chat
     is told so instead of the success note."""
     workspace = fake_chat_app.workspace
-    record = _install_message_chat_recorder(workspace)
+    recording_messengers.install_message_chat(workspace)
     fake_chat_app.interrupt_answers = {
         _OWN_CHAT: [(500, {"detail": "mngr start failed"})]
     }
@@ -396,6 +373,7 @@ def test_a_self_restart_that_never_happens_tells_the_chat_so(
     )
 
     assert rc == 1
-    [failure_call] = _calls(record)
+    [failure_call] = recording_messengers.calls()
+    assert failure_call["messenger"] == "message_chat.py"
     assert failure_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
-    assert "the restart kept failing (mngr start failed)" in failure_call["note"]
+    assert "the restart kept failing (mngr start failed)" in failure_call["text"]
