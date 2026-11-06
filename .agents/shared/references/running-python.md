@@ -47,7 +47,7 @@ always runs those in their own environment.
 
 ## When the instruction says `python3`
 
-Some scripts must run with the system `python3` and no venv at all -- hook
+Some scripts run with the system `python3` and no venv at all -- hook
 scripts, the bug-report collector, steps that run before the venv exists, and
 scripts that other programs call by path. Where a doc, a config file or a
 skill tells you to run something with `python3`, do exactly that. Everywhere
@@ -78,28 +78,35 @@ or `PYTHONSAFEPATH` set.
 The code runs under one of two interpreters, and what it imports decides which:
 
 - **Bare tier**: code whose imports are all standard library -- the bare
-  packages (`workspace_bare_scripts`, update-self's) count as standard library
-  here -- runs under the system `python3` with no venv. It pays nothing for an
-  environment it does not use. Bare code includes the agent hooks, the
-  bug-report collector, the pre-sync build steps, the scripts the
-  Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
-  (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...), and
-  stdlib-only modules of other packages such as `notify_user.py` and
-  `request_secret.py`.
+  packages (`workspace_bare_scripts`, update-self's) and the stdlib-only
+  libraries on the bare search paths (`BARE_SEARCH_PATHS` in
+  `system/entry_points_testing.py`) count as standard library here -- runs
+  under the system `python3` with no venv. It gains nothing from the venv and
+  would pay for it on every start: from the venv, `notify_user.py` took 120 ms
+  against 61 ms under `python3`. That matters most for what runs often, such
+  as the agent hooks on every tool call. Some code must run with no venv
+  whatever it imports, so it stays in this tier. The cases are below, each
+  with one example; the code itself says which case it is in (in its
+  docstring, or in the `no-venv` marker on its import-path edit), and that,
+  not this list, is where to look:
+  - no venv exists yet where it runs, such as the build steps before
+    `uv sync`;
+  - the venv may be broken or mid-change, such as update-self;
+  - the venv installs another copy of it, such as update-self's staged copy of
+    the target release;
+  - something outside this release runs it as `python3 <path>`, such as
+    Imbue Studio running `background_tasks.py`.
 - **Venv tier**: code that imports a third-party package, or a venv-tier
   package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
   declares.
 
-Only some bare code has to be bare: code that must work when the venv is
-missing or broken, that something outside this release calls by path, or that
-sits in a long-running program's launch chain. Whatever that code needs is made
-bare too, which is why the agent hooks' `tk_command_parsing` is on the bare
-search path. Other stdlib-only code is bare only because that is lighter to
-run. It may import what bare code already can (the standard library, the bare
-packages and the libraries on the bare search path), but it never widens that
-set: once it needs anything else, it moves to the venv tier and its callers
-switch to `uv run --no-sync`. It does not get a new bare search path, and it
+Code that must run with no venv has everything it imports made bare too.
+Other stdlib-only code is bare only because that is lighter to run. It may import
+what bare code already can (the standard library, the bare packages and the
+libraries on the bare search paths), but it never widens that set: once it needs
+anything else, it moves to the venv tier and its callers switch to
+`uv run --no-sync`. It does not get a new bare search path, and it
 does not hold another package's module to the standard library.
 
 A bare module that imports a bare package it does not sit beside puts that
@@ -132,7 +139,7 @@ check reads.
 Start a process only when the call needs one of its own:
 
 - the code is the other tier's: bare code calling venv-tier code, or a step
-  that must still run when the venv is missing or broken;
+  that must still run when an update may have broken the venv;
 - the work must outlive its caller (a detached run, a rollback that restarts
   the caller), or be cut off at a deadline without taking the caller with it;
 - the code to run is another tree's: the target release's staged copy, or the
@@ -141,8 +148,63 @@ Start a process only when the call needs one of its own:
 - the process is the point: a wrapper that execs the command it is given, or
   a server.
 
-A test counts the places that name one of the workspace's own programs to
-run, and the count only goes down.
+A deadline is a reason only for work that can hang where no timeout reaches.
+Work made of network or subprocess calls that each carry a timeout of their own
+takes the deadline as an argument and checks it between calls.
+
+A test fails on any place that names one of the workspace's own programs to
+run, and another on any edit to the import path (`sys.path`, `PYTHONPATH` in
+Python or a shell script, a pytest `pythonpath` setting), unless a marker
+below keeps it. Both are in `system/test_python_launch_rules.py`.
+
+## When a launch or an import-path edit has to stay
+
+A site that one of the reasons above really applies to keeps its process with
+a marker among the comment lines directly above its statement, naming the
+reason:
+
+```python
+# own-process: wrapper -- hands the pairing link to node without Python reading it
+command = ["python3", WITH_SECRETS, SECRETS_FILE, "--", "node", str(SCRIPT)]
+```
+
+| Reason | The bullet above it stands for |
+|---|---|
+| `other-tier` | the code is the other tier's |
+| `outlives-caller` | the work must outlive its caller |
+| `deadline` | the work must be cut off at a deadline, and can hang where no timeout reaches |
+| `other-tree` | the code to run is another tree's |
+| `wrapper` | a wrapper that execs the command it is given |
+| `server` | a server |
+
+An import-path edit that has to stay takes `# import-path: <reason> -- <why>`
+the same way, with `no-venv` (the code runs with no venv to install what it
+imports: the bare tier, or `uv run --no-project`) or `other-tree` (it loads
+code from a tree known only at run time).
+
+The why answers what a reviewer of this one site asks: why it cannot be an
+import, or why this code runs with no venv. For a process, or an
+`other-tree` edit, the why says what an import would break or could not do
+(`the boot re-syncs the venv after this process started, so an import
+would load the venv as it was at start`). For bare code, no venv is the tier
+rule, so the why names the stdlib-only packages it imports beyond the
+standard library (`its only import beyond the standard library is the
+stdlib-only oom_priority`); who runs it as `python3 <path>` follows from its
+tier and is no reason. Code that must run with no venv whatever it imports
+names what runs it and why no venv is usable there (`update-self and Imbue
+Studio's update dispatcher run it, in place and from the staged copy, and an
+update must run when the venv is what it broke`). A why that only restates
+the reason -- `the system python3 runs this with no venv` -- says nothing
+`no-venv` does not.
+
+A marked site passes, and a marked `sys.path` edit may add a directory
+outside the bare search paths, except in code the system `python3` runs, where
+only an `other-tree` edit may. A marker with another reason, with no why, or
+with no site of its kind below it fails the test. Each marker is a claim
+someone will check, so an agent that adds one names it in its report; and a
+marker is never the way past the test when the site can become an import --
+restructuring the caller and the code it reaches for is the expected fix, even
+when they are not the code the agent came to change.
 
 ## Long-running processes: sync, then `exec` the entry point
 

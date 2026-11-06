@@ -25,9 +25,9 @@ from app_manifest.primitives import (
 )
 from build_app_skill import scaffold_flask_lib
 
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "forward_port.py"
+_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "forward_port.py"
 
 # ``<name>-<8 lowercase base36 chars>``, with the name's underscores hyphenated:
 # a label is a strict hostname label.
@@ -590,7 +590,7 @@ def test_a_bad_icon_file_does_not_brick_an_existing_apps_restart(
         apps_file,
     )
     assert result.returncode == 0, result.stderr
-    assert "warning" in result.stderr
+    assert "warning" in result.stderr.lower()
     rows = _read_apps(apps_file)
     assert rows[0]["url"] == "http://localhost:8001"
     assert rows[0]["icon"] == _ICON
@@ -1292,7 +1292,7 @@ def test_a_manifest_missing_its_icon_file_does_not_brick_an_existing_apps_restar
     )
 
     assert result.returncode == 0, result.stderr
-    assert "warning" in result.stderr
+    assert "warning" in result.stderr.lower()
     row = _read_apps(apps_file)[0]
     assert row["url"] == "http://localhost:8301"
     assert row["icon"] == _ICON
@@ -1346,7 +1346,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
     tmp_path: Path,
 ) -> None:
     real_icon = (
-        (Path(__file__).resolve().parents[3] / "system" / "apps" / "files" / "icon.svg")
+        (Path(__file__).resolve().parents[4] / "apps" / "files" / "icon.svg")
         .read_text()
         .strip()
     )
@@ -1490,7 +1490,7 @@ def test_the_script_imports_under_an_isolated_stdlib_only_interpreter() -> None:
             "-I",
             "-S",
             "-c",
-            f"import sys; sys.path.insert(0, {str(_SCRIPT.parent)!r}); from workspace_bare_scripts import forward_port; print(forward_port.DEFAULT_APPS_FILE)",
+            f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r}); from app_registration import forward_port; print(forward_port.DEFAULT_APPS_FILE)",
         ],
         capture_output=True,
         text=True,

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
 from build_app_skill import mock_frame, scaffold_flask_lib
 
