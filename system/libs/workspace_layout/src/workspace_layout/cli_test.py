@@ -622,6 +622,32 @@ def test_desktops_lists_no_popped_out_windows_for_a_shell_older_than_the_popped_
     assert [client["popped_out"] for client in json.loads(capsys.readouterr().out)["clients"]] == [[]]
 
 
+def test_list_reads_the_one_default_shortcut_of_a_shell_older_than_the_shortcut_list(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inventory = InventoryDocument(
+        is_preview=False,
+        workspace_name="workspace",
+        desktops=(),
+        apps=(fake_app("files"), fake_app("notes")),
+        clients=(),
+    ).model_dump(mode="json")
+    files, notes = inventory["apps"]
+    del files["default_shortcuts"], notes["default_shortcuts"]
+    files["default_shortcut"] = {"launch": "new", "mode": "focus"}
+    notes["default_shortcut"] = None
+    loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory)
+
+    assert run_layout_cli(["list", "--json"], layout_context) == EXIT_OK
+
+    listing = json.loads(capsys.readouterr().out)
+    assert [(app["name"], app["default_shortcuts"]) for app in listing["apps"]] == [
+        ("files", [{"launch": "new", "mode": "focus"}]),
+        ("notes", []),
+    ]
+    assert all("default_shortcut" not in app for app in listing["apps"])
+
+
 # shortcuts and the wallpaper
 
 
