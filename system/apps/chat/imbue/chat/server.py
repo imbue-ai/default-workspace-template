@@ -1580,13 +1580,10 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             )
 
     if interrupt_request.keep_queue:
-        watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-
-        def settle_after_interrupt() -> None:
-            settle_activity()
-            get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
-
-        return _restart_and_resend_queue(chat_id, agent_info, watcher, restart_process, settle_after_interrupt)
+        watcher, restart_process, _ = _interrupt_capabilities(agent_info)
+        return _restart_and_resend_queue(
+            chat_id, agent_info, watcher, restart_process, lambda: _settle_after_interrupt(agent_info)
+        )
 
     agent_name = agent_info.name
 
@@ -1595,15 +1592,23 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     if not is_restarted:
         return error_response(f"Failed to interrupt agent '{agent_name}': {output}", 500)
 
-    # The restart abandons the session transcript mid-turn, so the
-    # transcript-derived activity state would stay pinned at THINKING /
-    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop. The
-    # restart also ended any compaction, which reports no completion.
-    get_state().agent_manager.reset_activity_state(agent_info.id)
-    get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
+    _settle_after_interrupt(agent_info)
 
     return model_response(InterruptAgentResponse(status="ok"))
+
+
+def _settle_after_interrupt(agent_info: AgentInfo) -> None:
+    """Settle an agent the interrupt route restarted.
+
+    The restart abandons the session transcript mid-turn, so the
+    transcript-derived activity state would stay pinned at THINKING /
+    TOOL_RUNNING until the user sends another message. Reset it to IDLE
+    now so the activity indicator clears immediately after the stop. The
+    restart also ended any compaction, which reports no completion.
+    """
+    agent_manager = get_state().agent_manager
+    agent_manager.reset_activity_state(agent_info.id)
+    agent_manager.clear_compaction_after_interrupt(agent_info)
 
 
 def _parse_interrupt_request() -> InterruptAgentRequest:
