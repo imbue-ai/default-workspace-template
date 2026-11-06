@@ -759,13 +759,16 @@ Verification and gotchas references apply identically to this path.
 
 A wrapped tool's pages do not carry the shell page script, so a plain click
 on one of their links to a local service or another app navigates the tool's
-own window. If the tool can serve one more static file from its own origin
-and add a script to its pages (Jupyter's custom JS, a dev server's plugin
-hook), give it the contract: serve
+own window, and the workspace records only that somebody clicked into the
+app's window, never that they kept using it (the shell's `window_input`
+log, desktop contracts.md section 6). If the tool can serve one more static
+file from its own origin and add a script to its pages (Jupyter's custom JS,
+a dev server's plugin hook), give it the contract: serve
 `system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
 at `/_static/app_contract.js` and add
 `<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
-to its pages. If it can do neither, leave it as it is.
+to its pages, which also makes them report their input like a scaffolded
+app's. If it can do neither, leave it as it is.
 
 ## `forward_port.py` CLI reference
 

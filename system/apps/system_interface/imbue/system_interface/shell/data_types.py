@@ -46,6 +46,7 @@ from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
+from imbue.system_interface.shell.primitives import WindowInputKind
 
 
 class ClientShownRequest(FrozenModel):
@@ -258,6 +259,17 @@ class PlacementsSaveRequest(FrozenModel):
         description="The updated_at of the layout the window last fetched or saved; None for one only seen empty",
     )
     placements: tuple[WindowPlacement, ...] = Field(description="The whole layout, back to front")
+
+
+class WindowInputReport(FrozenModel):
+    """One window a shell page's heartbeat reports a person's input in (the app-usage-signals spec, section 6.3)."""
+
+    window_id: WindowId = Field(description="The window whose page reported")
+    app: AppName = Field(description="The window's app as the page knows it; the desktop's record wins when it exists")
+    kind: WindowInputKind = Field(
+        default=WindowInputKind.INPUT,
+        description="The page's own report, or focus landing in a page that reports none",
+    )
 
 
 class WindowOpenRequest(FrozenModel):
