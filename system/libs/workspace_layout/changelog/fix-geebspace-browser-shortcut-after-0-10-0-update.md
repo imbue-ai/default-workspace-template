@@ -1,1 +1,1 @@
-`InventoryApp.default_shortcuts` (a list) replaces `default_shortcut`, and `workspace-layout apps` lists `default_shortcuts` (reading a shell that still answers one `default_shortcut` as a list of one).
+`InventoryApp.default_shortcuts` (a list) replaces `default_shortcut`, and `workspace-layout list` lists each app's `default_shortcuts` (reading a shell that still answers one `default_shortcut` as a list of one).
