@@ -16,9 +16,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from app_registration import forward_port
 from oom_priority.supervisord_testing import supervisord_commands
 
-from workspace_bare_scripts import forward_port, wait_for_critical_path
+from workspace_bare_scripts import wait_for_critical_path
 
 _STUB = Path(__file__).resolve().parents[1] / "wait_for_critical_path.py"
 _SUPERVISORD_CONF = Path(__file__).resolve().parents[2] / "supervisord.conf"

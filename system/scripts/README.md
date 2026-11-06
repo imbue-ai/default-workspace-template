@@ -70,8 +70,8 @@ needs a directory put on `sys.path`, and each stub says which. See
   `wait_for_critical_path.py` (the command prefix of the supervisord programs
   nobody waits on at boot: it execs its command once the system interface and
   the chat app accept connections, or after 30 seconds, so their cold starts do
-  not compete with those two; a stub because its module imports
-  `workspace_bare_scripts`),
+  not compete with those two; a stub because it puts the stdlib-only
+  `app_registration` library on `sys.path`),
   `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which

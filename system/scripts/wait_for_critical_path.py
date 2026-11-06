@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """Entry point for :mod:`workspace_bare_scripts.wait_for_critical_path`.
 
-Kept as a stub: supervisord runs it under the system python3, which finds
-workspace_bare_scripts only because this file's directory is first on sys.path, so run it as
-``python3 <path>``, never with -I, -P or PYTHONSAFEPATH set.
+Kept as a stub: supervisord runs it under the system python3, and it puts app_registration's
+source on sys.path, which only an entry file may do.
+
+The system python3 finds workspace_bare_scripts only because this file's directory is first
+on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPATH set.
 """
+
+import sys
+from pathlib import Path
+
+# import-path: no-venv -- beyond the standard library it imports only `workspace_bare_scripts` and, through it, the stdlib-only `app_registration`
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[1] / "libs" / "app_registration" / "src")
+)
 
 from workspace_bare_scripts.wait_for_critical_path import main
 

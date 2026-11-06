@@ -28,7 +28,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from workspace_bare_scripts.forward_port import (
+from app_registration.forward_port import (
     MalformedRegistryError,
     apps_file,
     load_apps,
