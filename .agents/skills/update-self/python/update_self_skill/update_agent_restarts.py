@@ -20,25 +20,21 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from update_self_skill.run_in_background import wrap_background_task_report
+from update_self_skill.run_in_background import (
+    messenger_argv,
+    wrap_background_task_report,
+)
 from update_self_skill.update_probes import registry_app_url
 from update_self_skill.update_runtime import HttpClient, Runner
 
 CHAT_APP_NAME = "chat"
 CHATS_PATH = "/api/chats"
-MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
-# The staged copy of the flow the pass ran from, which it leaves in place.
-STAGED_UPDATE_SELF_SCRIPT_REL = Path(
-    "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
-)
-
 # The flow's worker, which the pass stops itself once it has consumed the worker's report.
 UPDATE_WORKER_NAME = "update-self"
 
@@ -265,7 +261,8 @@ def compose_self_restart_note(
         lines.append(
             "Restarting the workspace's other chats did not run, so they may all still be on the "
             "previous version. Tell the user, and offer to restart the idle ones now (`python3 "
-            f"{STAGED_UPDATE_SELF_SCRIPT_REL} restart-agents`); do not run it without a yes."
+            "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py "
+            "restart-agents`, the staged copy the pass ran from); do not run it without a yes."
         )
     else:
         not_restarted = [
@@ -334,24 +331,13 @@ def start_self_restart(
     return note_path
 
 
-def send_note_argv(repo_root: Path, chat_id: str, note_path: Path) -> list[str]:
-    """The ``message_chat.py`` call that sends a chat the note at ``note_path``."""
-    return [
-        sys.executable,
-        str(repo_root / MESSAGE_CHAT_REL),
-        chat_id,
-        "--message-file",
-        str(note_path),
-    ]
-
-
 def _send_note(
     repo_root: Path, chat_id: str, note_path: Path, runner: Runner
 ) -> str | None:
-    """Send one note through ``message_chat.py``; None when it was sent, else what went wrong."""
+    """Send one note through the chat messenger; None when it was sent, else what went wrong."""
     try:
         result = runner.run(
-            send_note_argv(repo_root, chat_id, note_path),
+            messenger_argv(repo_root, chat_id, note_path),
             cwd=str(repo_root),
             stdin=subprocess.DEVNULL,
             capture_output=True,

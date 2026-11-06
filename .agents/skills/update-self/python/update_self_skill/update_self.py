@@ -255,6 +255,7 @@ from update_self_skill.update_target import (
 SKILL_DIR_REL = ".agents/skills/update-self"
 
 # The runnable entry point beside this package: the module itself cannot be run by path.
+# own-process: outlives-caller -- restart-self's helper restarts the chat that started it, so it must outlive that chat's processes
 ENTRY_STUB_PATH = Path(__file__).resolve().parents[2] / "scripts" / "update_self.py"
 
 

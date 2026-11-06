@@ -468,7 +468,7 @@ and a merge made on top of them, already carry a release the running agents
 never loaded:
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 RANGES=data/.tasks/update-self/footprint-ranges.json
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
