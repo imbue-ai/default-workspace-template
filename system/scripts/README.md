@@ -77,6 +77,10 @@ needs a directory put on `sys.path`, and each stub says which. See
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
+- Early sign-in: `start_early_sign_in.sh`, which the Imbue Studio app runs over
+  SSH while a new workspace is built. It starts the chat app's
+  `chat-early-sign-in` the way supervisord starts the chat app (see
+  `system/apps/chat/README.md`).
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the routines runner and its
