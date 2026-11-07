@@ -56,6 +56,7 @@ _BUILTIN_SERVICE_ORDER = (
     "cron",
     "screen",
     "files",
+    "app-store",
     "routines",
     "getting-started",
     "style-guide",

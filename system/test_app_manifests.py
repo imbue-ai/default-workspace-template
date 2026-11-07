@@ -553,6 +553,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": True,
         "system-monitor": True,
         "style-guide": True,
+        # The App Store runs installs in the background and restores its apps' programs at startup.
+        "app-store": False,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
@@ -574,6 +576,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": "app",
         "system-monitor": "system",
         "style-guide": "system",
+        "app-store": "app",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the Screen's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
@@ -627,6 +630,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (30, "screen"),
         (40, "terminal"),
         (45, "routines"),
+        (48, "app-store"),
         (50, "system-monitor"),
     ]
     # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).
