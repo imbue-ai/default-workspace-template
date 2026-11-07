@@ -5,7 +5,8 @@ as agent_secrets_guard.sh hands it over. Exits 0 to allow; exits 2 with a
 guiding stderr message to BLOCK. See the wrapper for the why.
 
 Two halves, one rule (policy P9): a value stored under ``data/.secrets/`` may
-reach a process only through ``with_secrets.py``. mcpc's store is
+reach a process only through ``with_secrets.py``. A workspace set up before
+MCP servers went through latchkey may still hold mcpc's store at
 ``data/.secrets/mcpc/``, which its ``~/.mcpc`` link also names, so a mention of
 the link counts as a mention of the directory.
 
@@ -46,8 +47,8 @@ from tk_command_parsing.uv_run import unwrap_uv_run
 SECRETS_DIRECTORY = "data/.secrets"
 # The one file under the directory that holds no secret.
 _README_NAME = "README.md"
-# mcpc's store, under the directory, by the name that does not spell it out: the
-# ~/.mcpc link.
+# An older workspace's mcpc store, under the directory, by the name that does
+# not spell it out: the ~/.mcpc link.
 _MCPC_STORE_RE = re.compile(r"(?:^|/)\.mcpc(?:/|$)")
 # Substrings one of which every refused command contains, for the cheap early return.
 _STORE_MARKERS = (SECRETS_DIRECTORY, ".mcpc")
@@ -273,8 +274,6 @@ def _block_message(reason: str) -> str:
         "  python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>\n\n"
         "Listing the directory (`ls`) and deleting a file (`rm`) are allowed. To change "
         "a value, request it again with request_secret.py rather than editing the file. "
-        "mcpc's store (~/.mcpc) is data/.secrets/mcpc/: reach it only "
-        "through the mcpc command (`mcpc` lists sessions, `mcpc @<name> logs` shows one's log). "
         "See the connect-external-service skill.\n"
     )
 

@@ -22,13 +22,13 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
-import type { DisplayDecision, HandoffState } from "./Chats";
+import type { DisplayDecision, HandoffState, MessageAuthor } from "./Chats";
 import type { SendStatus } from "./Response";
 
 export interface OutgoingMessage {
   id: string;
-  /** The text the user typed (shown verbatim unless ``displayDecision`` makes it a notice), not
-   *  the attachment-expanded form. */
+  /** The text its sender typed, not the attachment-expanded form; the bubble shows the body
+   *  ``displayDecision`` gives it, and the text itself without one. */
   content: string;
   /** The send-time message_id (contract A4) when the caller minted one. A backend record that
    *  carries the same id (a message held while the chat switches harness) replaces this bubble
@@ -38,6 +38,9 @@ export interface OutgoingMessage {
   sentAt: number;
   /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
   displayDecision?: DisplayDecision;
+  /** Who sent it, for a held send that comes back as a bubble when its switch ends; absent for the viewer's own
+   *  send. */
+  author?: MessageAuthor;
 }
 
 /** Just the render decision a backend record carries, or undefined for a plain message. */
@@ -68,6 +71,7 @@ export function addOutgoing(
   content: string,
   messageId?: string,
   displayDecision?: DisplayDecision,
+  author?: MessageAuthor,
 ): string {
   const id = `outgoing-${nextId++}`;
   const sentAt = Date.now();
@@ -77,6 +81,7 @@ export function addOutgoing(
     sentAt,
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
+    ...(author === undefined ? {} : { author }),
   });
   m.redraw();
   return id;
@@ -247,7 +252,10 @@ export function trackBackendArrivals(
         const returning = previous.handoff.held_sends;
         for (const held of isCancelled ? returning.slice(1) : returning) {
           if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held));
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), {
+            author: held.author,
+            author_name: held.author_name,
+          });
         }
         for (let i = 0; i < consumedBySuccessor; i++) {
           removeOldest(chat.chat_id);
