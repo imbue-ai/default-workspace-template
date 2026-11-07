@@ -841,9 +841,9 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
-    assert row["default_shortcut"] == {"launch": "new", "mode": "focus"}
+    assert row["default_shortcuts"] == [{"launch": "new", "mode": "focus"}]
     # Written in the order the contract spells the inline table (tomllib keeps file order).
-    assert list(row["default_shortcut"]) == ["launch", "mode"]
+    assert list(row["default_shortcuts"][0]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
     assert row["description"] == "Browse and open the files in this workspace."
@@ -907,6 +907,34 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         },
         {"id": "unbound", "label": "Something with no default", "default_chords": []},
     ]
+
+
+def test_manifest_registration_copies_every_default_shortcut_of_an_array_and_clears_the_one_table_key(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        '[[apps]]\nname = "screen"\nurl = "http://localhost:8400"\n'
+        'default_shortcut = {launch = "screen", mode = "focus"}\n'
+    )
+    manifest = _write_manifest(
+        tmp_path,
+        'name = "screen"\ndisplay_name = "Screen"\nicon = "icon.svg"\n\n'
+        '[[default_shortcut]]\nlaunch = "screen"\nmode = "focus"\n\n'
+        '[[default_shortcut]]\nlaunch = "browser"\nmode = "new"\n',
+    )
+
+    result = _run(
+        ["--manifest", str(manifest), "--url", "http://localhost:8400"], apps_file
+    )
+
+    assert result.returncode == 0, result.stderr
+    (row,) = _read_apps(apps_file)
+    assert row["default_shortcuts"] == [
+        {"launch": "screen", "mode": "focus"},
+        {"launch": "browser", "mode": "new"},
+    ]
+    assert "default_shortcut" not in row
 
 
 def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(
@@ -988,8 +1016,18 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
-            "default_shortcut must be a table with string 'launch' and 'mode'",
+            "default_shortcut must be a table, or an array of tables, with string 'launch' and 'mode'",
             id="default-shortcut-launch-not-a-string",
+        ),
+        pytest.param(
+            'default_shortcut = [{launch = "open", mode = "focus"}, "browser"]\n',
+            "default_shortcut must be a table, or an array of tables, with string 'launch' and 'mode'",
+            id="default-shortcut-array-entry-not-a-table",
+        ),
+        pytest.param(
+            "default_shortcut = []\n",
+            "default_shortcut, when declared, names at least one shortcut",
+            id="default-shortcut-empty-array",
         ),
         pytest.param(
             '[[message_handlers]]\ntype = "minds:focus-chat"\n',
@@ -1085,6 +1123,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "stop_when_no_windows",
         "system",
         "default_shortcut",
+        "default_shortcuts",
         "actions",
         "launch_paths",
         "launcher_rank",
@@ -1365,7 +1404,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
             "label": "web-abcd1234",
             "icon": awkward_icon,
             "internal": True,
-            "default_shortcut": {"launch": "new", "mode": "focus"},
+            "default_shortcuts": [{"launch": "new", "mode": "focus"}],
             "launch_paths": [
                 {
                     "id": "new",

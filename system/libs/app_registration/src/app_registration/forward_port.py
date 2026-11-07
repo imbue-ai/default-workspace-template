@@ -23,8 +23,8 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
-``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-the names of the params, and ``method``, ``presets``, ``text_param``,
+``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
+``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
 ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
@@ -203,10 +203,13 @@ _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]
 # The registry keys a manifest owns. A manifest registration rewrites every one
 # of them (absent in the manifest means absent on the row), so a stale value
 # from an earlier manifest never lingers. ``instances``, ``instances_url``, and
-# ``actions`` are keys no manifest declares any more (the tabbed shell's); they
-# stay here so a registration clears them off a row an older release wrote.
-# CLEANUP: drop the three retired keys around late October 2026, once every
-# workspace has re-registered its apps under this release.
+# ``actions`` are keys no manifest declares any more (the tabbed shell's), and
+# ``default_shortcut`` is the one table ``default_shortcuts`` replaced; they stay
+# here so a registration clears them off a row an older release wrote.
+# CLEANUP: drop the three tabbed-shell keys around late October 2026, once
+# every workspace has re-registered its apps under the release that retired
+# them, and ``default_shortcut`` once no registry row predates the
+# ``default_shortcuts`` key; every app rewrites its row when it next starts.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
     "description",
@@ -221,6 +224,7 @@ _MANIFEST_OWNED_KEYS = (
     "system",
     "launcher_rank",
     "default_shortcut",
+    "default_shortcuts",
     "actions",
     "launch_paths",
     "pin",
@@ -626,10 +630,10 @@ def _read_manifest(
 
     shortcut = raw.get("default_shortcut")
     if shortcut is not None:
-        copied_shortcut, shortcut_error = _copied_default_shortcut(shortcut, path)
-        if copied_shortcut is None:
+        copied_shortcuts, shortcut_error = _copied_default_shortcuts(shortcut, path)
+        if copied_shortcuts is None:
             return {}, None, shortcut_error
-        fields["default_shortcut"] = copied_shortcut
+        fields["default_shortcuts"] = copied_shortcuts
 
     pin = raw.get("pin")
     if pin is not None:
@@ -684,23 +688,34 @@ def _copied_tables(
     return copied, None
 
 
-def _copied_default_shortcut(
+def _copied_default_shortcuts(
     shortcut: Any, path: Path
-) -> tuple[dict[str, object] | None, str | None]:
-    """The manifest's ``default_shortcut`` (any TOML value) as the registry row carries
-    it: ``launch`` and ``mode``, in the order the contract spells the inline table. Returns
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    """The manifest's ``default_shortcut`` (any TOML value: one table, or an array of
+    them) as the registry row's ``default_shortcuts`` carries it: each one's ``launch``
+    and ``mode``, in the order the contract spells the inline table. Returns
     ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
     requires."""
-    if not (
-        isinstance(shortcut, dict)
-        and isinstance(shortcut.get("launch"), str)
-        and isinstance(shortcut.get("mode"), str)
-    ):
+    entries = shortcut if isinstance(shortcut, list) else [shortcut]
+    if not entries:
         return (
             None,
-            f"manifest {str(path)!r}: default_shortcut must be a table with string 'launch' and 'mode'",
+            f"manifest {str(path)!r}: default_shortcut, when declared, names at least one shortcut",
         )
-    return {"launch": shortcut["launch"], "mode": shortcut["mode"]}, None
+    copied: list[dict[str, object]] = []
+    for entry in entries:
+        if not (
+            isinstance(entry, dict)
+            and isinstance(entry.get("launch"), str)
+            and isinstance(entry.get("mode"), str)
+        ):
+            return (
+                None,
+                f"manifest {str(path)!r}: default_shortcut must be a table, or an array of tables, "
+                "with string 'launch' and 'mode'",
+            )
+        copied.append({"launch": entry["launch"], "mode": entry["mode"]})
+    return copied, None
 
 
 def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | None]:
