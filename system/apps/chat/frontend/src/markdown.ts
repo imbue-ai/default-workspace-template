@@ -4,6 +4,7 @@ import { Marked } from "marked";
 import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { classifyLink, fileUrl } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
+import { localImageUrl, uploadedImageSize } from "./models/attachments";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 import { TOOL_CALL_PART } from "./views/ToolCallBlock";
 
@@ -91,10 +92,63 @@ export function requestedAtUrl(value: string, requestedAt: string): string | nul
   return `${value}?requested_at=${encodeURIComponent(requestedAt)}`;
 }
 
-function appendRequestedAt(container: HTMLElement, requestedAt: string): void {
+const IMAGE_LOADING_CLASS = "is-loading";
+const IMAGE_ARRIVING_CLASS = "is-arriving";
+
+/** Give a loaded image that has no width and height of its own the size the browser decoded. An SVG
+ *  with only a viewBox has none, and in a bubble that shrinks to fit its content it would draw at nothing. */
+function holdDecodedSize(image: HTMLImageElement): void {
+  if (image.hasAttribute("width") || image.naturalWidth === 0) return;
+  image.setAttribute("width", String(image.naturalWidth));
+  image.setAttribute("height", String(image.naturalHeight));
+}
+
+function revealLoadedImage(event: Event): void {
+  const image = event.target as HTMLImageElement;
+  holdDecodedSize(image);
+  image.classList.remove(IMAGE_LOADING_CLASS);
+  image.classList.add(IMAGE_ARRIVING_CLASS);
+  // With reduced motion there is no fade, and so no end of one to wait for.
+  if (getComputedStyle(image).animationName === "none") {
+    image.classList.remove(IMAGE_ARRIVING_CLASS);
+    return;
+  }
+  image.addEventListener("animationend", () => image.classList.remove(IMAGE_ARRIVING_CLASS), { once: true });
+}
+
+function clearImageLoading(event: Event): void {
+  (event.target as HTMLElement).classList.remove(IMAGE_LOADING_CLASS);
+}
+
+/**
+ * Point each image at what draws it soonest and keep its space while it loads. An upload's path carries
+ * the size it is drawn at, so its box takes exactly that space; an image this document uploaded draws
+ * from its local copy; any other is tagged with ``requestedAt``. Until it loads, an image holds a
+ * placeholder box (at a fixed shape when its size is unknown), so a message that is only an image never
+ * shows as an empty bubble, then fades in over that box.
+ */
+function prepareImages(container: HTMLElement, requestedAt: string | undefined): void {
   for (const image of Array.from(container.querySelectorAll("img"))) {
-    const tagged = requestedAtUrl(image.getAttribute("src") ?? "", requestedAt);
-    if (tagged !== null) image.setAttribute("src", tagged);
+    const src = image.getAttribute("src") ?? "";
+    const size = uploadedImageSize(src);
+    if (size !== null) {
+      image.setAttribute("width", String(size.width));
+      image.setAttribute("height", String(size.height));
+    }
+    const localUrl = localImageUrl(src);
+    if (localUrl !== undefined) {
+      image.setAttribute("src", localUrl);
+    } else if (requestedAt !== undefined) {
+      const tagged = requestedAtUrl(src, requestedAt);
+      if (tagged !== null) image.setAttribute("src", tagged);
+    }
+    if (image.complete) {
+      holdDecodedSize(image);
+      continue;
+    }
+    image.classList.add(IMAGE_LOADING_CLASS);
+    image.addEventListener("load", revealLoadedImage, { once: true });
+    image.addEventListener("error", clearImageLoading, { once: true });
   }
 }
 
@@ -185,9 +239,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const element = vnode.dom as HTMLElement;
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    if (vnode.attrs.requestedAt) {
-      appendRequestedAt(element, vnode.attrs.requestedAt);
-    }
+    prepareImages(element, vnode.attrs.requestedAt || undefined);
     // Clicking an inline image opens it full-screen. The listener is delegated
     // on the container, which mithril reuses across redraws, so it survives the
     // innerHTML resets in onupdate without needing to be re-attached.
@@ -209,9 +261,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const expanded = saveExpandedState(element);
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    if (vnode.attrs.requestedAt) {
-      appendRequestedAt(element, vnode.attrs.requestedAt);
-    }
+    prepareImages(element, vnode.attrs.requestedAt || undefined);
     restoreExpandedState(element, expanded);
   },
   view() {

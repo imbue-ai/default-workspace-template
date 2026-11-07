@@ -1588,6 +1588,18 @@ describe("MessageInput send failure notice", () => {
     expect(getOutgoingMessages("agent-delivered").map((outgoing) => outgoing.content)).toEqual(["/compact"]);
   });
 
+  it("paints the Sending bubble of an attachment-only send with the attachment, not an empty bubble", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("ok");
+    mocks.getComposerAttachments.mockReturnValue([{ status: "ready", uploaded: { path: "/code/uploads/a/p.png" } }]);
+
+    await typeAndSend(MessageInput(), "agent-image-only", "");
+    mocks.getComposerAttachments.mockReturnValue([]);
+
+    expect(getOutgoingMessages("agent-image-only").map((outgoing) => outgoing.content)).toEqual([
+      " + /code/uploads/a/p.png",
+    ]);
+  });
+
   it("removes the delivered message even when Restart drained a queue block above it", async () => {
     // Restart prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and

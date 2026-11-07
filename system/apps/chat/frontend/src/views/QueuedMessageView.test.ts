@@ -26,6 +26,7 @@ vi.mock("../models/Response", () => ({
 }));
 vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
+import { buildMessageWithAttachments } from "../models/attachments";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { USER_BUBBLE_CLASS } from "./user-message-display";
 
@@ -99,6 +100,20 @@ describe("renderQueuedMessages", () => {
     expect(text).toContain("first");
     expect(text).toContain("second");
     expect(allByClass(nodes, "queued-message")).toHaveLength(2);
+  });
+
+  it("draws a queued message's attachment as markdown, without the label it carries to the agent", () => {
+    const path = "/code/uploads/abc/photo.png";
+    mocks.queued = [queuedMessage("q1", buildMessageWithAttachments("look at this", [path]))];
+
+    const bubble = findByClass(renderQueuedMessages("agent-1"), USER_BUBBLE_CLASS);
+
+    expect(renderedText(bubble)).toContain("look at this");
+    expect(renderedText(bubble)).not.toContain("See attachment here:");
+    const markdownContents = flatten(bubble).flatMap((vnode) =>
+      typeof vnode.attrs?.content === "string" ? [vnode.attrs.content] : [],
+    );
+    expect(markdownContents).toEqual([`![${path}](${path})`]);
   });
 
   it("shows a queued background-task report as its one-line notice, not the raw report", () => {

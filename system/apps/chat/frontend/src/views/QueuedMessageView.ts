@@ -37,6 +37,7 @@ import {
   USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
+  renderUserBubbleContent,
 } from "./user-message-display";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
@@ -118,9 +119,11 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
   return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-    ]),
+    m(
+      "div",
+      { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART },
+      renderUserBubbleContent(queued.content),
+    ),
   ]);
 }
 
