@@ -29,7 +29,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { OTHER_BUBBLE_CLASS, USER_BUBBLE_CONTINUED_CLASS } from "./user-message-display";
+import { OTHER_BUBBLE_CLASS, OTHER_BUBBLE_CONTINUED_CLASS, USER_BUBBLE_CONTINUED_CLASS } from "./user-message-display";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -298,18 +298,26 @@ describe("renderQueuedMessages in a shared workspace", () => {
     setParticipantsForTesting(null, []);
   });
 
-  it("draws another person's queued message under their name, in their words alone", () => {
+  it("names another person once over a run of their queued messages, in their words alone, and the viewer never", () => {
     setParticipantsForTesting("user:owner-1", roster);
-    mocks.queued = [glennsMessage("q1", false), queuedMessage("q2", "and mine")];
+    mocks.queued = [glennsMessage("q1", false), glennsMessage("q2", false), queuedMessage("q3", "and mine")];
 
     const rendered = renderQueuedMessages("agent-1");
 
-    const [glenns, owners] = allByClass(rendered, "queued-message");
-    expect(String(glenns?.attrs?.className)).toContain("message-other");
-    expect(renderedText(findByExactClass(glenns, "message-author")).trim()).toBe("Glenn");
-    expect(renderedText(findByClass(glenns, OTHER_BUBBLE_CLASS)).trim()).toBe("hi");
+    const [glennsFirst, glennsSecond, owners] = allByClass(rendered, "queued-message");
+    expect(String(glennsFirst?.attrs?.className)).toContain("message-other");
+    expect(renderedText(findByExactClass(glennsFirst, "message-author")).trim()).toBe("Glenn");
+    expect(renderedText(findByClass(glennsFirst, OTHER_BUBBLE_CLASS)).trim()).toBe("hi");
     expect(renderedText(rendered)).not.toContain("[from:");
+    // Further down Glenn's run: the bubble alone, as his second turn would be.
+    expect(String(glennsSecond?.attrs?.className)).toContain("message-other");
+    expect(findByExactClass(glennsSecond, "message-author")).toBeUndefined();
+    expect(findByClass(glennsSecond, "message-user-bubble")?.attrs?.className).toBe(
+      `${OTHER_BUBBLE_CONTINUED_CLASS} opacity-85`,
+    );
+    // The group's header names the viewer's own, so it wears no "You" even after another person's run.
     expect(String(owners?.attrs?.className)).not.toContain("message-other");
+    expect(findByExactClass(owners, "message-you")).toBeUndefined();
     expect(renderedText(findByClass(owners, USER_BUBBLE_CONTINUED_CLASS)).trim()).toBe("and mine");
   });
 
