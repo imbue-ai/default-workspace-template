@@ -6,4 +6,5 @@
 #
 # Installed at /opt/auth-sandbox/sign-in-browser.sh by auth_sandbox.modal_image_build; its source is
 # system/libs/auth_sandbox/sandbox/sign-in-browser.sh.
+set -euo pipefail
 exec /opt/fortress/tilion-fortress/tilion --window-position=0,0 "$@"

@@ -157,7 +157,10 @@ def test_sign_in_browser_script_runs_the_fortress_launcher_with_its_window_at_th
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert commands == [f'exec {FORTRESS_LAUNCHER_PATH} --window-position=0,0 "$@"']
+    assert commands == [
+        "set -euo pipefail",
+        f'exec {FORTRESS_LAUNCHER_PATH} --window-position=0,0 "$@"',
+    ]
 
 
 def test_boot_script_turns_off_xfwm4s_compositor_before_the_screen_starts_it() -> None:
