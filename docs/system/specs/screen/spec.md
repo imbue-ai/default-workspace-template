@@ -233,7 +233,9 @@ Three pipelines in neko's config, keyframe interval one second, in the codec `SC
 | `watch` | 20 | 2500 kbps | veryfast | 4 |
 | `control` | 30 | 4000 kbps | veryfast | 4 |
 
-The preset column is x264's; VP8 runs every profile at `cpu-used=8`.
+The preset column is x264's; VP8 runs every profile at `cpu-used=8`, with a 1000 ms rate-control buffer (500 initial, 600 optimal) and the quantizer held to 4..48.
+A Screen whose environment sets `SCREEN_VIDEO_QUALITY=high` (`standard`, the default, or `high`, in any case; `high` needs `SCREEN_VIDEO_CODEC=vp8`, and anything else stops the service at start) runs each VP8 profile at twice its bitrate, with a 2000 ms buffer (1000 initial, 1500 optimal) and the quantizer held to 2..48; the auth sandbox sets it, since a sign-in is mostly text, which this keeps as sharp while a page scrolls as when it is still, and sharp at once after a change or a keyframe rather than over the next two seconds.
+The keyframe interval stays one second at either quality: neko does not answer a viewer's picture loss indication with a keyframe, so the interval bounds how long a connecting viewer waits for its first picture.
 
 The service chooses one profile for everyone from aggregate state: `control` while a human holds control and has sent input in the last 10 seconds, `idle` while nobody has sent input for 60 seconds and no agent holds the lease, `watch` otherwise.
 A Screen whose environment sets `SCREEN_VIDEO_PROFILE` to a profile's id (`idle`, `watch` or `control`, in any case; any other value stops the service at start) holds every viewer on that profile whatever the lease and the input, from before the first stack start on; the auth sandbox sets `control`, since it exists for one user actively signing in, who would otherwise see the `idle` picture until their first click.

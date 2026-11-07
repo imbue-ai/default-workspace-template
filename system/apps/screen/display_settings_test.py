@@ -3,17 +3,20 @@ import pytest
 from screen.data_types import DisplaySettings
 from screen.data_types import ScreenSize
 from screen.data_types import VideoCodec
+from screen.data_types import VideoQuality
 from screen.display_settings import display_settings_from_environ
 from screen.display_settings import parse_fixed_size
 from screen.display_settings import parse_switch
 from screen.display_settings import parse_video_codec
 from screen.display_settings import parse_video_profile
+from screen.display_settings import parse_video_quality
 from screen.errors import ScreenConfigurationError
 
 
 def test_an_environment_without_the_settings_is_a_workspaces_screen() -> None:
     assert display_settings_from_environ({}) == DisplaySettings(
         video_codec=VideoCodec.H264,
+        video_quality=VideoQuality.STANDARD,
         fixed_size=None,
         is_desktop_panel_shown=True,
         is_ice_lite=False,
@@ -22,12 +25,13 @@ def test_an_environment_without_the_settings_is_a_workspaces_screen() -> None:
     assert display_settings_from_environ({"SCREEN_VIDEO_CODEC": " ", "SCREEN_FIXED_SIZE": ""}) == DisplaySettings()
 
 
-def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_at_control_drops_the_panel_and_runs_ice_lite() -> (
+def test_an_auth_sandboxs_environment_is_a_fixed_size_high_quality_vp8_control_stream_without_panel_on_ice_lite() -> (
     None
 ):
     settings = display_settings_from_environ(
         {
             "SCREEN_VIDEO_CODEC": "vp8",
+            "SCREEN_VIDEO_QUALITY": "high",
             "SCREEN_FIXED_SIZE": "1288x806",
             "SCREEN_VIDEO_PROFILE": "control",
             "SCREEN_DESKTOP_PANEL": "off",
@@ -36,6 +40,7 @@ def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_at_control_drop
     )
     assert settings == DisplaySettings(
         video_codec=VideoCodec.VP8,
+        video_quality=VideoQuality.HIGH,
         fixed_size=ScreenSize(width=1288, height=806, rate=60),
         is_desktop_panel_shown=False,
         is_ice_lite=True,
@@ -59,6 +64,18 @@ def test_the_codec_is_read_in_any_case_and_an_unknown_one_is_refused() -> None:
     assert parse_video_codec("Vp8") == VideoCodec.VP8
     with pytest.raises(ScreenConfigurationError, match="h264, vp8"):
         parse_video_codec("av1")
+
+
+def test_the_video_quality_is_read_in_any_case_and_high_needs_vp8() -> None:
+    assert parse_video_quality("", VideoCodec.H264) == VideoQuality.STANDARD
+    assert parse_video_quality("Standard", VideoCodec.H264) == VideoQuality.STANDARD
+    assert parse_video_quality("HIGH", VideoCodec.VP8) == VideoQuality.HIGH
+    settings = display_settings_from_environ({"SCREEN_VIDEO_CODEC": "vp8", "SCREEN_VIDEO_QUALITY": " high "})
+    assert settings.video_quality == VideoQuality.HIGH
+    with pytest.raises(ScreenConfigurationError, match="SCREEN_VIDEO_QUALITY names 'best', not one of standard, high"):
+        display_settings_from_environ({"SCREEN_VIDEO_CODEC": "vp8", "SCREEN_VIDEO_QUALITY": "best"})
+    with pytest.raises(ScreenConfigurationError, match="SCREEN_VIDEO_QUALITY=high needs SCREEN_VIDEO_CODEC=vp8"):
+        display_settings_from_environ({"SCREEN_VIDEO_QUALITY": "high"})
 
 
 def test_the_video_profile_is_a_profiles_id_in_any_case_and_an_unknown_one_is_refused() -> None:

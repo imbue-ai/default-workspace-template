@@ -136,11 +136,22 @@ class VideoCodec(UpperCaseStrEnum):
     VP8 = auto()
 
 
+class VideoQuality(UpperCaseStrEnum):
+    """How the VP8 pipelines trade bandwidth for picture (spec section 8.1): ``STANDARD`` at the profile table's
+    rates, ``HIGH`` at twice the bitrate with a finer quantizer floor and a deeper rate-control buffer."""
+
+    STANDARD = auto()
+    HIGH = auto()
+
+
 class DisplaySettings(FrozenModel):
     """What a Screen's environment decides for the service's life (spec sections 4.3, 5.3, 7.2 and 8.1): its picture
     and video profile, its desktop session's panel and neko's ICE mode."""
 
     video_codec: VideoCodec = Field(default=VideoCodec.H264, description="The codec of the WebRTC video")
+    video_quality: VideoQuality = Field(
+        default=VideoQuality.STANDARD, description="How the VP8 pipelines trade bandwidth for picture"
+    )
     fixed_size: ScreenSize | None = Field(
         default=None,
         description="The display's one mode, which viewers' size reports do not change; None to follow them",

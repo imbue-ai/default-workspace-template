@@ -110,12 +110,17 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
 another address, which it refuses to do outside gate mode.
 
-Five more variables, read once at service start, change the picture, the desktop and the
-stream; a workspace sets none of them, and the auth sandbox sets all five
+Six more variables, read once at service start, change the picture, the desktop and the
+stream; a workspace sets none of them, and the auth sandbox sets all six
 (`system/libs/auth_sandbox/README.md`). A value the service cannot use stops it at start.
 
 - `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
   profiles in (see "Profiles, visibility and audio").
+- `SCREEN_VIDEO_QUALITY`: `standard` (the default) or `high`, in any case; `high` needs
+  `SCREEN_VIDEO_CODEC=vp8`. High runs each VP8 profile at twice its bitrate (`control` at 8000
+  kbps), with a 2000 ms rate-control buffer (1000 initial, 1500 optimal) and the quantizer held to
+  2..48, so text stays sharp while a page scrolls and right after it changes (see "Profiles,
+  visibility and audio").
 - `SCREEN_FIXED_SIZE`: `WxH`, the display's one mode: any size within 640x480 and 1920x1080 whose
   width is a multiple of 8 (CVT's cell) and whose height is even (the encoders' I420), not only
   one a report could produce. `xorg.conf` lists it first, so the X server starts at it,
@@ -305,7 +310,15 @@ own builds download on their own but other builds may lack; without it neko cann
 video track ("codec is not supported by remote") and no WebRTC picture arrives. With `SCREEN_VIDEO_CODEC=vp8`
 they are libvpx realtime (`deadline=1`, `cpu-used=8`, no lag) in CBR at the same bitrates, with
 WebRTC's rate-control buffer (1000 ms, 500 initial, 600 optimal), 95% undershoot and the
-quantizer held to 4..48 so small text stays legible while the picture moves. neko evaluates
+quantizer held to 4..48 so small text stays legible while the picture moves; with
+`SCREEN_VIDEO_QUALITY=high` each at twice its bitrate, with a 2000 ms buffer (1000 initial, 1500
+optimal) and the quantizer held to 2..48. Measured on a scrolling text page, high lifts the
+picture from about 46 to 54 dB (luma PSNR against the display) while it moves and removes the
+dip each keyframe left for two seconds after it stops, at about 6 Mbit/s while scrolling and no
+more than standard once still; neko has no bandwidth estimator, so the viewer's link must carry
+that. The keyframe interval stays one second at either quality: neko does not answer a viewer's
+picture loss indication with a keyframe, so the interval bounds how long a connecting viewer
+waits for its first picture. neko evaluates
 each `gst_params` value as an expression and prints the result with Go's `%v`, so a number of a
 million or more would reach the encoder in exponent form (`3e+06`); vp8enc's bitrate, in bits
 per second, is written `round(2500 * 1000)`, which evaluates to an integer. The service chooses one for

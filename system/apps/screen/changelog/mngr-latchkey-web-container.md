@@ -8,6 +8,8 @@
 
 - `SCREEN_VIDEO_CODEC` (`h264`, the default, or `vp8`) picks the codec neko streams in. With `vp8` the three profiles keep their frame rates and bitrates as libvpx realtime CBR pipelines, which Firefox decodes without Cisco's OpenH264 plugin.
 
+- `SCREEN_VIDEO_QUALITY` (`standard`, the default, or `high`, in any case; `high` needs `SCREEN_VIDEO_CODEC=vp8`) set to `high` runs each VP8 profile at twice its bitrate (`control` at 8000 kbit/s) with a 2000 ms rate-control buffer and the quantizer floor at 2, so text stays sharp while a page scrolls and right after it changes, rather than refining over the next two seconds with a dip at every keyframe. A value the service cannot use stops it at start.
+
 - `SCREEN_FIXED_SIZE=WxH` (any size within 640x480 and 1920x1080 whose width is a multiple of 8 and whose height is even, such as the auth sandbox's 1288x806) keeps the display at one mode: the X server and neko start at it, and `POST /api/screen-size` answers `{"applied": false, "reason": "fixed size"}` without resizing, as `screen size WxH` then says, exiting 1. A value the service cannot use stops it at start.
 
 - A mode's CVT modeline takes `cvt`'s vertical sync width for every size: an aspect ratio counts only when the height is a whole multiple of its denominator, as `cvt` tests it, so a size such as 1288x806 or 656x496 no longer gets a 16:10 or 4:3 sync width `cvt` would not give it.

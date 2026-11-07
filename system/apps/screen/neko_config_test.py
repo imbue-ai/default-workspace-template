@@ -10,6 +10,7 @@ from screen.data_types import DisplaySettings
 from screen.data_types import NekoSecrets
 from screen.data_types import ScreenSize
 from screen.data_types import VideoCodec
+from screen.data_types import VideoQuality
 from screen.neko_config import SCREENCAST_RATE
 from screen.neko_config import neko_config_document
 from screen.neko_config import render_neko_yaml
@@ -19,7 +20,12 @@ _SECRETS = NekoSecrets(
     user_password=SecretStr("user-secret"), admin_password=SecretStr("admin-secret"), api_token=SecretStr("api-secret")
 )
 _DEFAULT = DisplaySettings()
-_AUTH_SANDBOX = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1288, height=806, rate=60))
+_AUTH_SANDBOX = DisplaySettings(
+    video_codec=VideoCodec.VP8,
+    video_quality=VideoQuality.HIGH,
+    fixed_size=ScreenSize(width=1288, height=806, rate=60),
+)
+_VP8_STANDARD = DisplaySettings(video_codec=VideoCodec.VP8)
 # neko writes a parameter as ``key=<value>`` with Go's ``%v`` of the gval result: a plain number is a float64, printed in
 # exponent form from a million up, which an encoder refuses.
 _GVAL_PLAIN_NUMBER = re.compile(r"^\d{1,6}$")
@@ -86,7 +92,7 @@ def test_video_pipelines_follow_the_profile_table() -> None:
 
 
 def test_vp8_pipelines_carry_the_profile_table_in_realtime_cbr() -> None:
-    document = neko_config_document(_SECRETS, _AUTH_SANDBOX)
+    document = neko_config_document(_SECRETS, _VP8_STANDARD)
     video = document["capture"]["video"]
     assert video["codec"] == "vp8"
     assert video["ids"] == ["idle", "watch", "control"]
@@ -115,11 +121,51 @@ def test_vp8_pipelines_carry_the_profile_table_in_realtime_cbr() -> None:
         assert params["end-usage"] == "cbr"
         assert params["lag-in-frames"] == "0"
         assert params["keyframe-max-dist"] == pipeline["fps"]
+        assert (params["buffer-size"], params["buffer-initial-size"], params["buffer-optimal-size"]) == (
+            "1000",
+            "500",
+            "600",
+        )
+        assert (params["min-quantizer"], params["max-quantizer"]) == ("4", "48")
         assert "x264enc" not in str(pipeline)
 
 
+def test_high_quality_doubles_the_vp8_bitrate_and_deepens_the_buffer_and_the_quantizer_floor() -> None:
+    standard = neko_config_document(_SECRETS, _VP8_STANDARD)["capture"]["video"]["pipelines"]
+    high = neko_config_document(_SECRETS, _AUTH_SANDBOX)["capture"]["video"]["pipelines"]
+    assert {name: pipeline["gst_params"]["target-bitrate"] for name, pipeline in high.items()} == snapshot(
+        {"idle": "round(1600 * 1000)", "watch": "round(5000 * 1000)", "control": "round(8000 * 1000)"}
+    )
+    assert high["control"]["gst_params"] == snapshot(
+        {
+            "deadline": "1",
+            "cpu-used": "8",
+            "threads": "4",
+            "lag-in-frames": "0",
+            "end-usage": "cbr",
+            "target-bitrate": "round(8000 * 1000)",
+            "undershoot": "95",
+            "buffer-size": "2000",
+            "buffer-initial-size": "1000",
+            "buffer-optimal-size": "1500",
+            "min-quantizer": "2",
+            "max-quantizer": "48",
+            "keyframe-max-dist": "30",
+        }
+    )
+    # Only the rate control differs: the frame rate, speed, threads and keyframe interval are the profile's.
+    changed = {"target-bitrate", "buffer-size", "buffer-initial-size", "buffer-optimal-size", "min-quantizer"}
+    for name, pipeline in high.items():
+        assert {key: value for key, value in pipeline.items() if key != "gst_params"} == {
+            key: value for key, value in standard[name].items() if key != "gst_params"
+        }
+        assert {
+            key for key, value in pipeline["gst_params"].items() if standard[name]["gst_params"][key] != value
+        } == (changed)
+
+
 def test_every_encoder_parameter_survives_nekos_expression_printing() -> None:
-    for settings in (_DEFAULT, _AUTH_SANDBOX):
+    for settings in (_DEFAULT, _VP8_STANDARD, _AUTH_SANDBOX):
         for pipeline in neko_config_document(_SECRETS, settings)["capture"]["video"]["pipelines"].values():
             for key, value in pipeline["gst_params"].items():
                 assert (

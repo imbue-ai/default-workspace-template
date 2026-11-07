@@ -125,9 +125,11 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
     assert f'export SCREEN_FRAME_ANCESTORS="${CHROME_ORIGIN_ENV_VAR}"' in exports
     assert f'readonly CONNECT_INFO_PATH="{CONNECT_INFO_PATH}"' in text
     assert 'export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"' in exports
-    # The Screen's sign-in picture: every browser's codec, a display exactly the sign-in window (1288x805, plus a
-    # row for an even height), the control profile throughout, no panel, and neko as an ICE lite agent.
+    # The Screen's sign-in picture: every browser's codec at high quality, a display exactly the sign-in window
+    # (1288x805, plus a row for an even height), the control profile throughout, no panel, and neko as an ICE lite
+    # agent.
     assert 'export SCREEN_VIDEO_CODEC="vp8"' in exports
+    assert 'export SCREEN_VIDEO_QUALITY="high"' in exports
     assert 'export SCREEN_FIXED_SIZE="1288x806"' in exports
     assert 'export SCREEN_VIDEO_PROFILE="control"' in exports
     assert 'export SCREEN_DESKTOP_PANEL="off"' in exports

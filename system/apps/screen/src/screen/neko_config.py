@@ -12,6 +12,7 @@ from imbue.imbue_common.pure import pure
 from screen.data_types import DisplaySettings
 from screen.data_types import NekoSecrets
 from screen.data_types import VideoCodec
+from screen.data_types import VideoQuality
 from screen.primitives import DISPLAY
 from screen.primitives import ICE_MUX_PORT
 from screen.primitives import MAX_HEIGHT
@@ -61,15 +62,43 @@ VIDEO_PROFILES: Final[tuple[VideoProfile, ...]] = (
     ),
 )
 
-# libvpx's realtime rate-control buffer, in milliseconds of the target bitrate: WebRTC's own VP8 settings, so a burst
-# (a page scrolling) is spread over a second rather than sent at once.
-VP8_BUFFER_SIZE_MS: Final[int] = 1000
-VP8_BUFFER_INITIAL_SIZE_MS: Final[int] = 500
-VP8_BUFFER_OPTIMAL_SIZE_MS: Final[int] = 600
-# The quantizer range (0 to 63): a cap below libvpx's own keeps small text legible while the picture moves, at the
-# cost of overshooting the bitrate in a full-screen change; a still picture is refined well below it.
-VP8_MIN_QUANTIZER: Final[int] = 4
-VP8_MAX_QUANTIZER: Final[int] = 48
+
+class Vp8RateControl(FrozenModel):
+    """libvpx's rate control at one video quality: the bitrate against the profile table's, the rate-control buffer in
+    milliseconds of that bitrate, and the quantizer range (0 to 63)."""
+
+    bitrate_multiplier: int = Field(description="The target bitrate as a multiple of the profile's")
+    buffer_size_ms: int = Field(description="The rate-control buffer")
+    buffer_initial_size_ms: int = Field(description="The buffer's fill at the start")
+    buffer_optimal_size_ms: int = Field(description="The fill the rate control aims for")
+    min_quantizer: int = Field(description="The finest quantizer, which a still picture is refined down to")
+    max_quantizer: int = Field(description="The coarsest quantizer")
+
+
+VP8_RATE_CONTROL: Final[dict[VideoQuality, Vp8RateControl]] = {
+    # WebRTC's own VP8 buffer, so a burst (a page scrolling) is spread over a second rather than sent at once; a cap
+    # below libvpx's own quantizer keeps small text legible while the picture moves.
+    VideoQuality.STANDARD: Vp8RateControl(
+        bitrate_multiplier=1,
+        buffer_size_ms=1000,
+        buffer_initial_size_ms=500,
+        buffer_optimal_size_ms=600,
+        min_quantizer=4,
+        max_quantizer=48,
+    ),
+    # For a sign-in's text: the doubled bitrate keeps scrolling text as sharp as still text, and the deeper buffer
+    # lets the picture after a change, or after each keyframe, start sharp rather than refine over two seconds. The
+    # keyframe interval stays one second: neko sends no keyframe on a viewer's request, so the interval bounds how long
+    # a connecting viewer waits for its first picture.
+    VideoQuality.HIGH: Vp8RateControl(
+        bitrate_multiplier=2,
+        buffer_size_ms=2000,
+        buffer_initial_size_ms=1000,
+        buffer_optimal_size_ms=1500,
+        min_quantizer=2,
+        max_quantizer=48,
+    ),
+}
 
 
 @pure
@@ -89,7 +118,8 @@ def _x264_pipeline(profile: VideoProfile) -> dict[str, Any]:
 
 
 @pure
-def _vp8_pipeline(profile: VideoProfile) -> dict[str, Any]:
+def _vp8_pipeline(profile: VideoProfile, quality: VideoQuality) -> dict[str, Any]:
+    rate_control = VP8_RATE_CONTROL[quality]
     return {
         "gst_encoder": "vp8enc",
         "gst_params": {
@@ -99,13 +129,13 @@ def _vp8_pipeline(profile: VideoProfile) -> dict[str, Any]:
             "lag-in-frames": "0",
             "end-usage": "cbr",
             # vp8enc counts bits per second; round() makes the product an integer (see _pipeline_config).
-            "target-bitrate": f"round({profile.bitrate_kbps} * 1000)",
+            "target-bitrate": f"round({profile.bitrate_kbps * rate_control.bitrate_multiplier} * 1000)",
             "undershoot": "95",
-            "buffer-size": str(VP8_BUFFER_SIZE_MS),
-            "buffer-initial-size": str(VP8_BUFFER_INITIAL_SIZE_MS),
-            "buffer-optimal-size": str(VP8_BUFFER_OPTIMAL_SIZE_MS),
-            "min-quantizer": str(VP8_MIN_QUANTIZER),
-            "max-quantizer": str(VP8_MAX_QUANTIZER),
+            "buffer-size": str(rate_control.buffer_size_ms),
+            "buffer-initial-size": str(rate_control.buffer_initial_size_ms),
+            "buffer-optimal-size": str(rate_control.buffer_optimal_size_ms),
+            "min-quantizer": str(rate_control.min_quantizer),
+            "max-quantizer": str(rate_control.max_quantizer),
             "keyframe-max-dist": str(profile.fps),
         },
         "gst_suffix": "",
@@ -113,12 +143,16 @@ def _vp8_pipeline(profile: VideoProfile) -> dict[str, Any]:
 
 
 @pure
-def _pipeline_config(profile: VideoProfile, codec: VideoCodec) -> dict[str, Any]:
+def _pipeline_config(profile: VideoProfile, settings: DisplaySettings) -> dict[str, Any]:
     # neko evaluates each gst_params value as a gval expression and writes ``key=<result>`` with Go's ``%v``: a
     # number is a float64, which ``%v`` prints in exponent form from a million up (``3e+06``, which an encoder
     # refuses), so a value that large is written ``round(...)``, which yields an integer; a bare word that names no
     # variable evaluates to nothing and is passed through as written, so a preset name works.
-    encoder = _x264_pipeline(profile) if codec == VideoCodec.H264 else _vp8_pipeline(profile)
+    encoder = (
+        _x264_pipeline(profile)
+        if settings.video_codec == VideoCodec.H264
+        else _vp8_pipeline(profile, settings.video_quality)
+    )
     return {
         "fps": str(profile.fps),
         "gst_prefix": "! video/x-raw,format=I420",
@@ -130,7 +164,7 @@ def _pipeline_config(profile: VideoProfile, codec: VideoCodec) -> dict[str, Any]
 @pure
 def neko_config_document(secrets: NekoSecrets, settings: DisplaySettings) -> dict[str, Any]:
     """neko's configuration as a document: loopback HTTP, the two ICE muxes on the published port, the three
-    profiles in the settings' codec, the display at the fixed size or the cap, the multiuser provider with this
+    profiles in the settings' codec and quality, the display at the fixed size or the cap, the multiuser provider with this
     start's passwords, the session rules of spec section 6.2."""
     width, height = (
         (settings.fixed_size.width, settings.fixed_size.height)
@@ -153,9 +187,7 @@ def neko_config_document(secrets: NekoSecrets, settings: DisplaySettings) -> dic
                 "display": DISPLAY,
                 "codec": settings.video_codec.value.lower(),
                 "ids": list(VIDEO_IDS),
-                "pipelines": {
-                    profile.video_id: _pipeline_config(profile, settings.video_codec) for profile in VIDEO_PROFILES
-                },
+                "pipelines": {profile.video_id: _pipeline_config(profile, settings) for profile in VIDEO_PROFILES},
                 # The screencast pipeline takes this global flag (the per-pipeline one covers the WebRTC pipelines
                 # alone), and the viewer draws its own pointer, so no cursor is painted into any picture.
                 "show_pointer": False,

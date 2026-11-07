@@ -77,12 +77,15 @@ export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"
 # VP8, which every browser decodes over WebRTC (Firefox decodes H.264 only with Cisco's OpenH264
 # plugin), whatever browser the user signs in from.
 export SCREEN_VIDEO_CODEC="vp8"
+# VP8 at twice the profile's bitrate with a deeper rate-control buffer and a finer quantizer floor: a sign-in is
+# mostly text, which stays sharp while a page scrolls and right after it changes.
+export SCREEN_VIDEO_QUALITY="high"
 # One display size, whatever the viewer's frame, and exactly latchkey's login window: Playwright's 1280x720
 # viewport in a 1288x805 window, which sign-in-browser.sh places at the top left corner, plus one row
 # for an even height (VP8 encodes I420). A display a small viewer shrank would cut the window off, and a
 # larger one spends the viewer's screen on empty desktop; the viewer scales the picture to its frame.
 export SCREEN_FIXED_SIZE="1288x806"
-# The control profile (30 fps, 4000 kbit/s) from the first frame: the sandbox exists for one user actively
+# The control profile (30 fps, 8000 kbit/s at high quality) from the first frame: the sandbox exists for one user actively
 # signing in, so the picture never drops to the idle or watch profile while nobody holds control or types.
 export SCREEN_VIDEO_PROFILE="control"
 # A desktop session without the XFCE panel: the user signs in through one browser window, and a panel

@@ -1,6 +1,6 @@
 """The display settings a Screen reads from its environment at service start (docs/system/specs/screen/spec.md
-sections 4.3, 5.3, 7.2 and 8.1): the video codec, a fixed display size, a pinned video profile, whether the desktop
-session runs its panel, and whether neko runs ICE lite. An auth sandbox sets all five; a workspace sets none."""
+sections 4.3, 5.3, 7.2 and 8.1): the video codec and quality, a fixed display size, a pinned video profile, whether the
+desktop session runs its panel, and whether neko runs ICE lite. An auth sandbox sets all six; a workspace sets none."""
 
 from collections.abc import Mapping
 from typing import Final
@@ -9,6 +9,7 @@ from imbue.imbue_common.pure import pure
 from screen.data_types import DisplaySettings
 from screen.data_types import ScreenSize
 from screen.data_types import VideoCodec
+from screen.data_types import VideoQuality
 from screen.errors import InvalidScreenSizeError
 from screen.errors import ScreenConfigurationError
 from screen.primitives import MAX_HEIGHT
@@ -21,6 +22,7 @@ from screen.xorg_config import CVT_CELL_GRANULARITY_PX
 from screen.xorg_config import MODE_REFRESH_HZ
 
 ENV_VIDEO_CODEC: Final[str] = "SCREEN_VIDEO_CODEC"
+ENV_VIDEO_QUALITY: Final[str] = "SCREEN_VIDEO_QUALITY"
 ENV_FIXED_SIZE: Final[str] = "SCREEN_FIXED_SIZE"
 ENV_VIDEO_PROFILE: Final[str] = "SCREEN_VIDEO_PROFILE"
 ENV_DESKTOP_PANEL: Final[str] = "SCREEN_DESKTOP_PANEL"
@@ -39,6 +41,21 @@ def parse_video_codec(value: str) -> VideoCodec:
         names = ", ".join(codec.value.lower() for codec in VideoCodec)
         raise ScreenConfigurationError(f"{ENV_VIDEO_CODEC} names {value!r}, not one of {names}")
     return VideoCodec[value.upper()]
+
+
+@pure
+def parse_video_quality(value: str, codec: VideoCodec) -> VideoQuality:
+    """``standard`` or ``high``, in any case; empty is the default, standard. ``high`` tunes the VP8 pipelines alone,
+    so it needs ``SCREEN_VIDEO_CODEC=vp8``."""
+    if not value:
+        return VideoQuality.STANDARD
+    if value.upper() not in VideoQuality.__members__:
+        names = ", ".join(quality.value.lower() for quality in VideoQuality)
+        raise ScreenConfigurationError(f"{ENV_VIDEO_QUALITY} names {value!r}, not one of {names}")
+    quality = VideoQuality[value.upper()]
+    if quality == VideoQuality.HIGH and codec != VideoCodec.VP8:
+        raise ScreenConfigurationError(f"{ENV_VIDEO_QUALITY}=high needs {ENV_VIDEO_CODEC}=vp8")
+    return quality
 
 
 @pure
@@ -86,8 +103,10 @@ def parse_switch(name: str, value: str, default: bool) -> bool:
 
 @pure
 def display_settings_from_environ(environ: Mapping[str, str]) -> DisplaySettings:
+    video_codec = parse_video_codec(environ.get(ENV_VIDEO_CODEC, "").strip())
     return DisplaySettings(
-        video_codec=parse_video_codec(environ.get(ENV_VIDEO_CODEC, "").strip()),
+        video_codec=video_codec,
+        video_quality=parse_video_quality(environ.get(ENV_VIDEO_QUALITY, "").strip(), video_codec),
         fixed_size=parse_fixed_size(environ.get(ENV_FIXED_SIZE, "").strip()),
         pinned_video_id=parse_video_profile(environ.get(ENV_VIDEO_PROFILE, "").strip()),
         is_desktop_panel_shown=parse_switch(ENV_DESKTOP_PANEL, environ.get(ENV_DESKTOP_PANEL, "").strip(), True),
