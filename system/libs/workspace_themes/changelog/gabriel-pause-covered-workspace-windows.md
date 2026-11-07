@@ -1,0 +1,1 @@
+- A theme's `--desk-window-radius` is now a desktop metric the validator checks, like the title bar height: it must be a length in `px`, from 0px to 32px. The shell now reads the window radius to tell which windows other windows cover, and a value in another unit (`0`, `0.5rem`) would have stopped it reading any of the theme's metrics.

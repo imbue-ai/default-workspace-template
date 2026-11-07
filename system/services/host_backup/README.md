@@ -98,8 +98,8 @@ is rewritten out of history by its path pattern.
   set in `restic.env`. Backend credentials are not gated by host_backup --
   restic reports its own error if the chosen backend needs one that is
   missing.
-- Before the snapshot is taken, the tick runs `uv run --no-sync env-converge capture`
-  (best-effort, bounded at 120s) so the environment record
+- Before the snapshot is taken, the tick runs env-converge's capture in-process
+  (best-effort; each of its probes has its own timeout) so the environment record
   (`~/.mngr/plugin/env-converge/`) inside the backup describes the packages
   installed at backup time. apt is already event-fresh via its
   `DPkg::Post-Invoke` hook; this refreshes the probe-based sources (npm

@@ -1,7 +1,9 @@
 """Register or remove an app port in data/.state/apps.toml.
 
 Uses file locking to safely upsert or remove entries. Called by services
-on startup to declare the ports they expose.
+on startup to declare the ports they expose: a supervisord program line runs the
+``system/scripts/forward_port.py`` stub, and Python code imports this module and
+calls ``register_manifest``, ``register`` or ``remove``.
 
 Usage:
     python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300
@@ -9,9 +11,9 @@ Usage:
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
     python3 system/scripts/forward_port.py --remove --name terminal
 
-This script is deliberately standard-library only: every supervisord program
-line runs it under a plain ``python3`` before the program's own command, so
-registration must never depend on the root venv being intact. It reads TOML
+This module is deliberately standard-library only, so it runs under a plain
+``python3``: app program lines run it that way before their own command,
+including the ones users scaffolded, which no release rewrites. It reads TOML
 with ``tomllib`` and writes the registry's flat ``[[apps]]`` shape with the
 private writer below.
 
@@ -21,8 +23,8 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
-``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-the names of the params, and ``method``, ``presets``, ``text_param``,
+``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
+``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
 ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
@@ -67,16 +69,18 @@ generic letter monogram -- it does not hide the entry (that is
 import argparse
 import contextlib
 import fcntl
+import logging
 import os
 import re
 import secrets
-import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -199,10 +203,13 @@ _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]
 # The registry keys a manifest owns. A manifest registration rewrites every one
 # of them (absent in the manifest means absent on the row), so a stale value
 # from an earlier manifest never lingers. ``instances``, ``instances_url``, and
-# ``actions`` are keys no manifest declares any more (the tabbed shell's); they
-# stay here so a registration clears them off a row an older release wrote.
-# CLEANUP: drop the three retired keys around late October 2026, once every
-# workspace has re-registered its apps under this release.
+# ``actions`` are keys no manifest declares any more (the tabbed shell's), and
+# ``default_shortcut`` is the one table ``default_shortcuts`` replaced; they stay
+# here so a registration clears them off a row an older release wrote.
+# CLEANUP: drop the three tabbed-shell keys around late October 2026, once
+# every workspace has re-registered its apps under the release that retired
+# them, and ``default_shortcut`` once no registry row predates the
+# ``default_shortcuts`` key; every app rewrites its row when it next starts.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
     "description",
@@ -217,6 +224,7 @@ _MANIFEST_OWNED_KEYS = (
     "system",
     "launcher_rank",
     "default_shortcut",
+    "default_shortcuts",
     "actions",
     "launch_paths",
     "pin",
@@ -565,10 +573,9 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             f.write(rendered)
         os.replace(tmp_path, path)
-    except Exception:
+    finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        raise
 
 
 def _read_manifest(
@@ -623,10 +630,10 @@ def _read_manifest(
 
     shortcut = raw.get("default_shortcut")
     if shortcut is not None:
-        copied_shortcut, shortcut_error = _copied_default_shortcut(shortcut, path)
-        if copied_shortcut is None:
+        copied_shortcuts, shortcut_error = _copied_default_shortcuts(shortcut, path)
+        if copied_shortcuts is None:
             return {}, None, shortcut_error
-        fields["default_shortcut"] = copied_shortcut
+        fields["default_shortcuts"] = copied_shortcuts
 
     pin = raw.get("pin")
     if pin is not None:
@@ -639,7 +646,11 @@ def _read_manifest(
     if theming is not None:
         mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
         if not isinstance(mode, str):
-            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: theming must be a table whose mode is a string",
+            )
         fields["theming_mode"] = mode
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
@@ -677,23 +688,34 @@ def _copied_tables(
     return copied, None
 
 
-def _copied_default_shortcut(
+def _copied_default_shortcuts(
     shortcut: Any, path: Path
-) -> tuple[dict[str, object] | None, str | None]:
-    """The manifest's ``default_shortcut`` (any TOML value) as the registry row carries
-    it: ``launch`` and ``mode``, in the order the contract spells the inline table. Returns
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    """The manifest's ``default_shortcut`` (any TOML value: one table, or an array of
+    them) as the registry row's ``default_shortcuts`` carries it: each one's ``launch``
+    and ``mode``, in the order the contract spells the inline table. Returns
     ``(copied, None)``, or ``(None, error)`` when the value is not shaped as the manifest
     requires."""
-    if not (
-        isinstance(shortcut, dict)
-        and isinstance(shortcut.get("launch"), str)
-        and isinstance(shortcut.get("mode"), str)
-    ):
+    entries = shortcut if isinstance(shortcut, list) else [shortcut]
+    if not entries:
         return (
             None,
-            f"manifest {str(path)!r}: default_shortcut must be a table with string 'launch' and 'mode'",
+            f"manifest {str(path)!r}: default_shortcut, when declared, names at least one shortcut",
         )
-    return {"launch": shortcut["launch"], "mode": shortcut["mode"]}, None
+    copied: list[dict[str, object]] = []
+    for entry in entries:
+        if not (
+            isinstance(entry, dict)
+            and isinstance(entry.get("launch"), str)
+            and isinstance(entry.get("mode"), str)
+        ):
+            return (
+                None,
+                f"manifest {str(path)!r}: default_shortcut must be a table, or an array of tables, "
+                "with string 'launch' and 'mode'",
+            )
+        copied.append({"launch": entry["launch"], "mode": entry["mode"]})
+    return copied, None
 
 
 def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | None]:
@@ -1062,7 +1084,7 @@ def register(
         if icon_error is not None:
             if is_new_pickable:
                 raise RegistrationError(icon_error)
-            sys.stderr.write(f"warning: {icon_error}; registering without an icon\n")
+            _logger.warning("%s; registering without an icon", icon_error)
         if icon is None and not is_icon_declined and is_new_pickable:
             raise RegistrationError(
                 f"app {name!r} is new and has no icon: pass --icon-file with a tile icon "
@@ -1082,6 +1104,45 @@ def register(
         )
 
 
+class ManifestOverrides(TypedDict, total=False):
+    """The manifest-owned keys a registration may replace on an app's row."""
+
+    internal: bool
+    stop_when_no_windows: bool
+
+
+def register_manifest(
+    path: Path,
+    manifest_path: Path,
+    url: str,
+    *,
+    name_from_flag: str | None = None,
+    overrides: ManifestOverrides | None = None,
+) -> str:
+    """Register the app ``manifest_path`` describes at ``url`` in the registry at ``path``, as
+    ``--manifest`` does; return its name.
+
+    ``name_from_flag`` (``--name``) must match the manifest's name. ``overrides`` replaces the
+    manifest's values on the row for this registration only: the next registration from the
+    manifest alone (the app's own restart) writes the manifest's values back. Raises
+    RegistrationError when the manifest or the registration is refused.
+    """
+    manifest_fields, icon_path, manifest_error = _read_manifest(
+        manifest_path, name_from_flag
+    )
+    if manifest_error is not None:
+        raise RegistrationError(manifest_error)
+    name = str(manifest_fields["name"])
+    register(
+        path,
+        name,
+        url,
+        icon_path=icon_path,
+        manifest_fields={**manifest_fields, **(overrides or {})},
+    )
+    return name
+
+
 def remove(path: Path, name: str) -> None:
     """Remove ``name`` from the registry at ``path``; a name with no entry is a no-op."""
     name_error = validate_service_name(name)
@@ -1092,6 +1153,7 @@ def remove(path: Path, name: str) -> None:
 
 
 def main() -> None:
+    logging.basicConfig(format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Register or remove an app port")
     parser.add_argument(
         "--name",
@@ -1196,34 +1258,23 @@ def main() -> None:
             "--display-name, --theming-mode, or --internal"
         )
 
-    manifest_fields: dict[str, object] | None = None
-    icon_path: Path | None = (
-        Path(args.icon_file) if args.icon_file is not None else None
-    )
-    if args.manifest is not None:
-        manifest_fields, icon_path, manifest_error = _read_manifest(
-            Path(args.manifest), args.name
-        )
-        if manifest_error is not None:
-            parser.error(manifest_error)
-        name = str(manifest_fields["name"])
-    else:
-        name = args.name
-
     try:
-        if args.remove:
-            remove(apps_file(), name)
+        if args.manifest is not None:
+            register_manifest(
+                apps_file(), Path(args.manifest), args.url, name_from_flag=args.name
+            )
+        elif args.remove:
+            remove(apps_file(), args.name)
         else:
             register(
                 apps_file(),
-                name,
+                args.name,
                 args.url,
-                icon_path=icon_path,
+                icon_path=Path(args.icon_file) if args.icon_file is not None else None,
                 is_icon_declined=args.no_icon,
                 internal=args.internal,
                 program=args.program,
                 display_name=args.display_name,
-                manifest_fields=manifest_fields,
                 theming_mode=args.theming_mode,
             )
     except RegistrationError as error:

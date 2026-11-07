@@ -248,17 +248,18 @@ def test_any_local_command_output_is_hidden_not_just_the_model_bars() -> None:
 def test_bash_blocks_become_chips_rather_than_bubbles() -> None:
     # Bash mode is NOT flagged isMeta, so without a detector these render as a user
     # bubble full of raw XML. They stay visible -- the user asked for that output -- but
-    # as a chip, whose body renders in a <pre><code> so it reads as terminal output.
+    # as a chip, whose body renders in a <pre><code> so it reads as terminal output. The
+    # person ran it, so it is their chip, not one in the agent's turn.
     command = classify_user_message("<bash-input>ls -la</bash-input>")
     assert command is not None
-    assert command.display is DisplayKind.CHIP
+    assert command.display is DisplayKind.PERSON_CHIP
     assert command.display_label == "Bash"
     assert command.display_body == "ls -la"
 
     # stdout and stderr arrive together in ONE message, the stderr half usually empty.
     output = classify_user_message("<bash-stdout>test</bash-stdout><bash-stderr></bash-stderr>")
     assert output is not None
-    assert output.display is DisplayKind.CHIP
+    assert output.display is DisplayKind.PERSON_CHIP
     assert output.display_label == "Output"
     assert output.display_body == "test"
 
@@ -270,7 +271,7 @@ def test_bash_blocks_become_chips_rather_than_bubbles() -> None:
     # An empty result still chips rather than falling through to a raw-XML bubble.
     empty = classify_user_message("<bash-stdout></bash-stdout><bash-stderr></bash-stderr>")
     assert empty is not None
-    assert empty.display is DisplayKind.CHIP
+    assert empty.display is DisplayKind.PERSON_CHIP
     assert empty.display_body == ""
 
 

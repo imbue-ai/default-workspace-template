@@ -176,11 +176,13 @@ from update_self_skill.update_apply_contract import (
 from update_self_skill.update_chat_pause import (
     AgentListingError,
     LeadIdentity,
+    MainChatPauseError,
     UnknownAgentError,
     list_agents,
     merge_stopped,
     pause,
     read_background_runners,
+    read_main_chat_id,
     resume,
     run_command,
     select_pause_targets,
@@ -905,8 +907,9 @@ def _cmd_run_status_stop_chats(args: argparse.Namespace) -> int:
             read_background_runners(PROC_DIR),
             lead,
             args.agent,
+            read_main_chat_id(repo_root),
         )
-    except (AgentListingError, UnknownAgentError) as e:
+    except (AgentListingError, UnknownAgentError, MainChatPauseError) as e:
         print(f"error: {e}; nothing was paused.", file=sys.stderr)
         return 1
     if not targets:
@@ -1373,7 +1376,8 @@ def build_parser() -> argparse.ArgumentParser:
     stop_chats_parser = run_status_sub.add_parser(
         "stop-chats",
         help="Pause the other chats and background agents that are busy (or the ones "
-        "named), recording each so resume-chats brings it back.",
+        "named), recording each so resume-chats brings it back. A busy main chat is only "
+        "interrupted: the chat app starts it again as soon as it stops.",
         parents=[common],
     )
     stop_chats_parser.add_argument(
@@ -1382,7 +1386,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME",
         help="Pause this chat or background agent whatever it is doing (to free memory); "
-        "repeatable. Without it, every busy one is paused.",
+        "repeatable, and refused for the main chat. Without it, every busy one is paused.",
     )
     stop_chats_parser.add_argument(
         "--chat",

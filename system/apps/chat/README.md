@@ -42,7 +42,17 @@ observe`, its own supervised service) writes, and serves:
   account list changes (`accounts_updated` on `/api/ws`, from a poll of the
   account index) and reads it again, so a chat whose account was removed
   elsewhere shows the signed-out notice at once; a send refused for it anyway
-  offers "Choose a provider" in place of Retry.
+  offers "Choose a provider" in place of Retry. Each account carries when it
+  last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
+  that failed on the chat's sign-in before then reads "Signed in again." in
+  every open chat (a turn of the chat's current agent only: an earlier agent's
+  failure was on that agent's account). While the chat app is sending the refused message again
+  itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
+  says so; otherwise it offers to send the message again while it is still the
+  chat's newest turn, and after a resend that stopped partway, the messages it
+  did not get to. Once a refused message is sent again right after its
+  sign-in error, before the user writes anything else, the original and the
+  error are hidden, so the message shows once.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -240,12 +250,16 @@ reads the reply being written off the agent's terminal pane three times a
 second, through mngr's `stream_snapshot` converter
 (`harnesses/claude/reply_draft.py`), and sends what changed:
 `{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
-shows the draft after the transcript while `after_event_id` is still the last
-event it holds, so the reply landing replaces it at once; an empty `text`
-clears it. A draft that matches a reply the transcript already holds is never
-sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. Codex also writes an agent message to its
-rollout only once it is finished; its draft comes from the
+shows the draft while `after_event_id` is still the last event it holds, so the
+reply landing replaces it at once; an empty `text` clears it. It shows where the
+reply will land: while a step is open, as that step's caption (or at the end of
+its work, when the step is expanded), and otherwise as a bubble at the end of
+the agent's output (see the stretch layout below). A step left open from an
+earlier turn takes it only once the agent works in it again in the new turn. A
+draft that matches a reply the transcript already holds is never sent. The
+terminal's rendering loses heading levels and code-fence languages, which the
+landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
 rollout holds the message's id. Pi records an assistant message only on
@@ -369,6 +383,15 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
+page whose request got no answer sends it again under the same id, marked
+`is_repeat`, and the repeat gets the first send's answer, a refusal included
+(waiting for it while it is still under way), rather than a second delivery. A
+Retry under the same id gets a taken send's answer, but is sent afresh after a
+refusal. A page whose request still gets no answer cannot know whether the chat
+app took it, and the chat app is out of its reach, so nothing sends it again: it
+gets the "Couldn't confirm your message arrived" notice.
+
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again
 once, by discovery or at the same place. One the agent is not accepting yet
@@ -379,8 +402,8 @@ either, and is tried once more. One mngr could not confirm
 (`submission_unconfirmed`), or failed in a way it could not classify
 (`unknown`), may or may not have arrived; not sending one that never arrived is
 worse than sending it twice, so it is sent again once at the same place, and
-the route answers a send that then lands `{"status": "resent"}`. The page shows
-"Sent again" under the message, with a "?" saying the agent may see it twice,
+the route answers a send that then lands `{"status": "resent"}` (as the ledger
+answers its repeats). The page shows "Sent again" under the message, with a "?" saying the agent may see it twice,
 and folds a second copy that reaches the transcript into that line
 (`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
 time is not sent a third: its failure gets the "Couldn't confirm your message
@@ -879,10 +902,28 @@ login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
 the line was reworded, on its own probe; a denial the browser reports says
 access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
-keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
-sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+keeps waiting with Try again). A ChatGPT code login that cannot start says so
+and offers trying again or an API key. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
-first way in (`reauth_method` on each account row).
+first way in (`reauth_method` on each account row). Signing in again
+restarts the live agents bound to the account (by the `account=<id>` label described below),
+and once a restarted agent is back, the message (or messages) its sign-in error
+answered is sent to it again through the delivery the message route uses, so
+the user does not retype it. Nothing is sent when the agent had already worked
+on that turn before the sign-in failed, when the user has written since, or while
+the chat is switching to another agent or account (or once it has switched).
+Which messages a sign-in error refused goes by timestamp, on both the page
+(`auth-recovery.ts`) and the chat app: claude can write the error into its
+transcript ahead of the message it refused.
+
+A sign-in error only shows to someone looking at the chat, so the chat app also
+tells the Imbue Studio app's feed (`sign_in_notices.py`,
+`imbue_studio_notifications.py`). A chat's refusals form a run, from its first
+live reply flagged `is_auth_error` to its next reply that is not, and only the
+run's first refusal is posted: one notification as the chat's own agent, so a
+click opens the chat, carrying the chat's watchers as `watched_by`, so a reader
+already in the chat gets no toast. The backlog a watcher reads when it starts is
+history and is never announced.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
@@ -1017,8 +1058,22 @@ workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
 app proxies from the shell -- asked at that path with the page's own query, its
 caching answer relayed -- so the page needs no second origin.
-The agent's prose is drawn as bubbles under that picture and the workspace's name,
-one per reply (tool chips and cards sit between them, outside the bubbles).
+A stretch of the agent's output -- everything it does until a person speaks or another
+agent takes over -- sits under the workspace's name, once, with its picture beside the
+first piece. Each message's prose is a grey bubble of its own. Its tool chips, step
+timeline and the system notices among them sit on the chat between the bubbles, on the
+bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
+stretch, through the chip icons, step bullets and notice ticks, stopping short of each
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
+line (the working dot, the harness's caption, and how long the turn has run); a call in a
+step's work is said by the status line instead, which is the stretch's last piece on the
+line whenever it shows; the done mark sits just under the stretch. A command a person
+runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
+person's side and end the stretch (display `person_chip`). The reply the agent is still
+writing, and a switch the transcript does not show yet, end the last stretch while it is
+open, and open a stretch of their own after a person's turn or a switch to another agent.
+A run of one person's turns names them once, over its first bubble ("You" for the
+viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 

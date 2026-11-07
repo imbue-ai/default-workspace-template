@@ -916,6 +916,47 @@ describe("message-sent listeners", () => {
   });
 });
 
+describe("a send that got no answer", () => {
+  function sentIds(): unknown[] {
+    return mockRequest.mock.calls.map((call) => (call[0] as { body: { message_id: string } }).body.message_id);
+  }
+
+  it("is sent again under the same id until the chat app answers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    try {
+      mockRequest.mockClear();
+      mockRequest
+        .mockRejectedValueOnce({ code: 0, response: null })
+        .mockRejectedValueOnce({ code: 504, response: null })
+        .mockResolvedValueOnce({ status: "ok" });
+      const sent = sendMessage(freshChat(), "hello", "m-1");
+      await vi.runAllTimersAsync();
+      expect(await sent).toBe("ok");
+      expect(sentIds()).toEqual(["m-1", "m-1", "m-1"]);
+      const repeatFlags = mockRequest.mock.calls.map(
+        (call) => (call[0] as { body: { is_repeat: boolean } }).body.is_repeat,
+      );
+      expect(repeatFlags).toEqual([false, true, true]);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is not sent again when the chat app answered with a refusal", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    try {
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce({ code: 500, response: { detail: "the agent is in shell mode" } });
+      await expect(sendMessage(freshChat(), "hello", "m-1")).rejects.toMatchObject({ code: 500 });
+      expect(sentIds()).toEqual(["m-1"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("event detail cache", () => {
   const detail = { inputs_by_tool_call_id: { c1: "full input" }, output: "full output", thinking: null };
 

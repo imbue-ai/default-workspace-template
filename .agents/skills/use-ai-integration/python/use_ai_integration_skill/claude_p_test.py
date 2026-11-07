@@ -374,11 +374,10 @@ def _isolate_credential_sources(
 ) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
-    chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
-    relative path); CLAUDE_CONFIG_DIR points at the tmp dir for settings; the
-    process-env credential vars are cleared.
+    CLAUDE_CONFIG_DIR points at the tmp dir for settings and the process-env
+    credential vars are cleared; each test passes ``_snapshot_path(tmp_path)``
+    for the snapshot, so a real one in the workspace never reaches it.
     """
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     _clear_credential_env_vars(monkeypatch)
     return tmp_path / "settings.json"
@@ -389,10 +388,14 @@ def _isolate_credential_sources_in_home(
 ) -> None:
     """Like ``_isolate_credential_sources``, but as a service sees it: no
     CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
-    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     _clear_credential_env_vars(monkeypatch)
+
+
+def _snapshot_path(tmp_path: Path) -> str:
+    """Where a test's own snapshot lives, laid out as the workspace lays it out."""
+    return str(tmp_path / "data" / ".secrets" / "anthropic.env")
 
 
 def _clear_credential_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -414,7 +417,7 @@ def test_credentials_prefer_snapshot_over_settings(
         "ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n"
     )
 
-    creds = claude_p.read_workspace_ai_credentials()
+    creds = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
 
     assert creds.api_key == "sk-pinned-key"
     assert creds.base_url == "https://pinned/"
@@ -426,7 +429,7 @@ def test_credentials_fall_back_to_settings_without_snapshot(
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-settings-key"}}')
 
-    creds = claude_p.read_workspace_ai_credentials()
+    creds = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
 
     assert creds.api_key == "sk-settings-key"
     assert creds.base_url is None
@@ -444,7 +447,7 @@ def test_credentials_read_default_claude_dir_without_config_dir_or_account(
         '{"env": {"ANTHROPIC_API_KEY": "sk-default-dir-key"}}'
     )
 
-    creds = claude_p.read_workspace_ai_credentials()
+    creds = claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path))
 
     assert creds.api_key == "sk-default-dir-key"
 
@@ -463,7 +466,10 @@ def test_credentials_read_the_default_account_when_config_dir_env_unset(
         '{"env": {"ANTHROPIC_API_KEY": "sk-shared-key"}}'
     )
 
-    assert claude_p.read_workspace_ai_credentials().api_key == "sk-account-key"
+    assert (
+        claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path)).api_key
+        == "sk-account-key"
+    )
 
 
 def test_credentials_never_take_oauth_token_from_snapshot(
@@ -475,7 +481,10 @@ def test_credentials_never_take_oauth_token_from_snapshot(
     snapshot.parent.mkdir(parents=True)
     snapshot.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-handwritten\n")
 
-    assert claude_p.read_workspace_ai_credentials().oauth_token is None
+    assert (
+        claude_p.read_workspace_ai_credentials(_snapshot_path(tmp_path)).oauth_token
+        is None
+    )
 
 
 def test_write_snapshot_captures_key_and_base_url_only(
@@ -488,9 +497,10 @@ def test_write_snapshot_captures_key_and_base_url_only(
         ' "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}'
     )
 
-    written = claude_p.write_anthropic_env_snapshot()
+    written = claude_p.write_anthropic_env_snapshot(_snapshot_path(tmp_path))
 
-    snapshot = tmp_path / written
+    snapshot = Path(written)
+    assert written == _snapshot_path(tmp_path)
     content = snapshot.read_text()
     assert (
         content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
@@ -506,5 +516,13 @@ def test_write_snapshot_raises_without_a_key(
     settings.write_text('{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}')
 
     with pytest.raises(claude_p.ClaudeCLIError, match="nothing to snapshot"):
-        claude_p.write_anthropic_env_snapshot()
+        claude_p.write_anthropic_env_snapshot(_snapshot_path(tmp_path))
     assert not (tmp_path / "data" / ".secrets" / "anthropic.env").exists()
+
+
+def test_snapshot_path_is_the_workspace_secrets_dir_from_any_cwd() -> None:
+    """The snapshot never resolves against the caller's cwd: run from a skill or app
+    directory, a relative path would put the key in a file git sees, which Claude
+    Code then diffs, key included, into the session transcript."""
+    path = claude_p.ANTHROPIC_ENV_SNAPSHOT_PATH
+    assert path == "/home/user/workspace/data/.secrets/anthropic.env"

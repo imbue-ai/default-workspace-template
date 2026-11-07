@@ -6,6 +6,7 @@ from loguru import logger
 
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
+from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import read_origin_label
@@ -39,7 +40,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.critical is False
     assert row.stop_when_no_windows is False
     assert row.priority == "user"
-    assert row.default_shortcut is None
+    assert row.default_shortcuts == ()
     assert row.launch_paths == ()
     assert row.launcher_rank is None
     assert row.pin is None
@@ -61,7 +62,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "critical = false\n"
         "stop_when_no_windows = true\n"
         'priority = "files"\n'
-        'default_shortcut = {launch = "new", mode = "focus"}\n'
+        'default_shortcuts = [{launch = "new", mode = "focus"}, {launch = "recent", mode = "new"}]\n'
         'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
@@ -87,8 +88,10 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     ]
     assert row.display_name == "Files"
     assert row.priority == "files"
-    assert row.default_shortcut is not None
-    assert row.default_shortcut.launch == "new"
+    assert [(shortcut.launch, shortcut.mode) for shortcut in row.default_shortcuts] == [
+        ("new", ShortcutMode.FOCUS),
+        ("recent", ShortcutMode.NEW),
+    ]
     assert [
         (launch_path.id, launch_path.label, launch_path.path, launch_path.params, launch_path.text_param)
         for launch_path in row.launch_paths
@@ -121,6 +124,23 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "independent",
         "floating",
     )
+
+
+def test_a_row_registered_before_the_shortcut_list_reads_its_one_default_shortcut(tmp_path: Path) -> None:
+    """A row an older registration wrote carries one ``default_shortcut`` table; it reads as a list of one."""
+    registry = tmp_path / "apps.toml"
+    registry.write_text(
+        "[[apps]]\n"
+        'name = "browser"\n'
+        'url = "http://localhost:8200"\n'
+        'program = "browser"\n'
+        'default_shortcut = {launch = "new", mode = "focus"}\n'
+        'launch_paths = [{id = "new", label = "Browser", path = "/new", method = "POST"}]\n'
+    )
+
+    (row,) = read_registry(registry)
+
+    assert [(shortcut.launch, shortcut.mode) for shortcut in row.default_shortcuts] == [("new", ShortcutMode.FOCUS)]
 
 
 def test_a_pin_on_a_row_reads_its_defaults_for_the_keys_the_manifest_left_out(tmp_path: Path) -> None:
@@ -231,9 +251,7 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_regi
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
-    tmp_path: Path, registration_registry: Path
-) -> None:
+def test_register_app_reports_the_refusal_of_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
@@ -241,10 +259,11 @@ def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
         register_app(manifest_path, AppUrl("http://localhost:8300"))
 
 
-def test_register_app_needs_the_registration_script_under_the_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, registration_registry: Path) -> None:
+    (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text('name = "registered"\ndisplay_name = "Registered"\nicon = "icon.svg"\n')
+    registration_registry.write_text("[[apps]\nname = \n")
 
-    with pytest.raises(AppRegistrationError, match="not found"):
-        register_app(tmp_path / "app.toml", AppUrl("http://localhost:8300"))
+    with pytest.raises(AppRegistrationError, match="registration of"):
+        register_app(manifest_path, AppUrl("http://localhost:8300"))

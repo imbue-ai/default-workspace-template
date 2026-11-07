@@ -1,14 +1,15 @@
-import subprocess
-import sys
 import time
 import tomllib
 from pathlib import Path
 from typing import Final
 
+from app_registration import forward_port
 from loguru import logger
+from pydantic import AliasChoices
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import field_validator
 
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
@@ -20,6 +21,7 @@ from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
 from app_manifest.manifest import ThemingMode
+from app_manifest.manifest import as_default_shortcut_list
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
@@ -29,6 +31,7 @@ from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
+from app_manifest.registry_location import registry_path
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 
@@ -53,13 +56,8 @@ SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (
     SHELL_CONTEXT_MENU_PATH,
 )
 
-# The registration script, relative to the repo root every supervised program runs from.
-FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
-
-# Registration is one local file write; past the first threshold it is suspicious, past the
-# second it is broken.
+# Registration is one local file write; past this it is suspicious.
 REGISTRATION_SLOW_SECONDS: Final[float] = 2.0
-REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
 
 
 class RegistryLaunchPath(FrozenModel):
@@ -144,8 +142,13 @@ class RegistryRow(FrozenModel):
         description="Whether the shell may stop the app's program once no window shows it",
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(
-        default=None, description="The shortcut a new desktop is seeded with"
+    # CLEANUP: drop the ``default_shortcut`` alias and ``_read_one_default_shortcut_as_a_list`` once no registry row
+    # predates the ``default_shortcuts`` key; every app rewrites its row when it next starts.
+    default_shortcuts: tuple[DefaultShortcut, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices("default_shortcuts", "default_shortcut"),
+        description="The shortcuts a new desktop is seeded with, in order; an older row's one ``default_shortcut`` "
+        "reads as a list of one",
     )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
@@ -175,6 +178,11 @@ class RegistryRow(FrozenModel):
         description="How the app takes part in workspace themes, when its manifest declares [theming]; absent means "
         "the app does not wear them yet and can be made themeable",
     )
+
+    @field_validator("default_shortcuts", mode="before")
+    @classmethod
+    def _read_one_default_shortcut_as_a_list(cls, value: object) -> object:
+        return as_default_shortcut_list(value)
 
 
 def read_registry(path: Path) -> list[RegistryRow]:
@@ -229,39 +237,17 @@ def read_origin_label(path: Path, name: AppName) -> str:
 
 
 def register_app(manifest_path: Path, app_url: AppUrl) -> None:
-    """Upsert the app's registry row through ``forward_port.py --manifest``; raises AppRegistrationError when that fails.
+    """Upsert the app's registry row from its manifest, as ``forward_port.py --manifest`` does; raises
+    AppRegistrationError when the manifest or the registration is refused.
 
-    Run under this interpreter from the repo root, the way every app's entry point registers itself
-    at startup (the supervisord program lines of apps with no entry point run the script directly).
+    Every app's entry point calls this at startup, from the repo root (the supervisord program lines
+    of apps with no entry point run the script directly).
     """
-    if not FORWARD_PORT_SCRIPT.is_file():
-        raise AppRegistrationError(
-            f"registration script {FORWARD_PORT_SCRIPT} not found; the app must run from the repo root"
-        )
-    command = [
-        sys.executable,
-        str(FORWARD_PORT_SCRIPT),
-        "--manifest",
-        str(manifest_path),
-        "--url",
-        app_url,
-    ]
     started_at = time.monotonic()
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=REGISTRATION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise AppRegistrationError(
-            f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"
-        ) from e
+        forward_port.register_manifest(registry_path(), manifest_path, app_url)
+    except (forward_port.RegistryError, OSError, ValueError) as e:
+        raise AppRegistrationError(f"registration of {manifest_path} failed: {e}") from e
     elapsed = time.monotonic() - started_at
-    if completed.returncode != 0:
-        raise AppRegistrationError(
-            f"registration of {manifest_path} failed with exit code {completed.returncode}: {completed.stderr.strip()}"
-        )
     if elapsed > REGISTRATION_SLOW_SECONDS:
         logger.warning("Registered {} slowly, in {:.1f}s", manifest_path, elapsed)

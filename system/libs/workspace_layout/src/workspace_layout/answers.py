@@ -124,7 +124,10 @@ class InventoryApp(FrozenModel):
     critical: bool = Field(description="Whether the workspace never stops the app")
     stop_when_no_windows: bool = Field(description="Whether the app is stopped once no window shows it")
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(description="The launch paths the app offers")
-    default_shortcut: DefaultShortcut | None = Field(description="The shortcut a new desktop is seeded with")
+    default_shortcuts: tuple[DefaultShortcut, ...] = Field(
+        description="The shortcuts a new desktop is seeded with, as the app declares them; none for an app that leaves "
+        "the choice to the shell"
+    )
     launcher_rank: int | None = Field(description="Where the app sits in the launcher")
     pin: Pin | None = Field(description="The app's pinned taskbar entry")
     message_handlers: tuple[MessageHandler, ...] = Field(description="The message types the app handles")

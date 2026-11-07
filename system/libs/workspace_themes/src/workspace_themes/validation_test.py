@@ -89,6 +89,7 @@ def test_contract_css_passes(tmp_path: Path) -> None:
         ),
         (":root { --desk-title-bar-height: 9px; }", "is 9px, outside 16px to 64px"),
         (":root { --desk-title-bar-height: 2em; }", "must be a length in px"),
+        (":root { --desk-window-radius: 0; }", "must be a length in px"),
         ('@import url("other.css");', "@import is not allowed"),
         ("@layer theme { :root { color: red; } }", "@layer is not allowed"),
         (

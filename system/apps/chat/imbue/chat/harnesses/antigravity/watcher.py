@@ -53,6 +53,7 @@ from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
@@ -118,6 +119,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     _queue_snapshot_callback: Any
     _flush_send: Any
     _flush_is_alive: Any
+    _flush_note_resent: Any
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
     _emit_embargo_until: float
@@ -167,6 +169,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._queue_snapshot_callback = None
         self._flush_send = None
         self._flush_is_alive = None
+        self._flush_note_resent = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
         self._watch_observer = None
@@ -505,10 +508,11 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
 
-    def set_flush_hooks(self, send: Any, is_alive: Any) -> None:
-        """Receive the ability to deliver, and to tell whether the agent is still alive."""
+    def set_flush_hooks(self, send: Any, is_alive: Any, note_resent: Any) -> None:
+        """Receive the ability to deliver, to tell whether the agent is still alive, and to record a repeat."""
         self._flush_send = send
         self._flush_is_alive = is_alive
+        self._flush_note_resent = note_resent
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         return self._queue.snapshot()
@@ -654,6 +658,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if not claimed:
             return
         before = self._turn_state.user_turn_texts()
+        first_flushed_at = self._queue.note_flush_began(claimed, time.time())
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
@@ -663,6 +668,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
             if send(block):
                 delivered, witnessed = self._observe_delivery(before, block, claimed)
+                if first_flushed_at is not None and delivered and self._flush_note_resent is not None:
+                    self._flush_note_resent(block, first_flushed_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
         finally:
             # DEPART BEFORE ARRIVE (contract A3b). The queue entry is removed FIRST, and only
             # then are the transcript events it turned into released. Emitting as we found them

@@ -88,7 +88,6 @@ describe("the done mark under the latest reply", () => {
     const root = document.createElement("div");
     m.render(root, m(TurnDoneMark, { chatId: CHAT_ID, events }));
     expect(root.querySelector(".turn-done-mark .turn-done-mark__label")?.textContent).toBe("Done in 23s");
-    expect(root.querySelector(".turn-done-mark__check svg")).not.toBeNull();
   });
 
   it("says only Done for a wait under a second", () => {

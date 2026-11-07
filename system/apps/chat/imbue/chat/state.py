@@ -47,6 +47,7 @@ from imbue.chat.reply_drafts import capture_tmux_session_pane
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.send_ledger import SendLedger
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.tray_feed import first_paragraph
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -112,6 +113,8 @@ class ChatAppState(MutableModel):
     # The intakes held for the chat root to apply (``chat_intakes.py``): drafts, choices, and first messages
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)
+    # Each send's answer by its send-time id, so the page can repeat a send it got no answer to.
+    send_ledger: SendLedger = Field(default_factory=SendLedger)
     event_queues: AgentEventQueues
     chat_namer: ChatNamer | None = Field(
         default=None,
@@ -207,6 +210,7 @@ class ChatAppState(MutableModel):
                 if any(is_workspace_agent_turn(event) for event in events):
                     self.agent_manager.clear_chat_awaiting(chat_id)
                 self.bubble_agent_turns(chat_id, agent_id, events)
+                self.agent_manager.report_sign_in_failures(chat_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -248,6 +252,7 @@ class ChatAppState(MutableModel):
                     SendDelivery,
                 ),
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
+                lambda text, sent_after: self.agent_manager.note_resent_send(agent_info.id, text, sent_after),
             )
             self.watchers[agent_info.id] = watcher
             self._starting_watchers[id(watcher)] = watcher

@@ -69,7 +69,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     critical: false,
     stop_when_no_windows: false,
     launch_paths: [launchPathRecord({ label: `New ${name}` })],
-    default_shortcut: { launch: "new", mode: "focus" },
+    default_shortcuts: [{ launch: "new", mode: "focus" }],
     launcher_rank: null,
     pin: null,
     message_handlers: [],
@@ -117,6 +117,22 @@ export function chatLikeAppRecord(name: string, overrides: Partial<AppRecord> = 
         presets: { target: "current_chat", is_draft: "true" },
         draft_param: "message",
       }),
+    ],
+    ...overrides,
+  });
+}
+
+/** The ``screen`` app shaped like the Screen's manifest: its page ``screen`` at ``/`` and the POST ``browser`` at
+ *  ``/launch/browser``, each a focus default shortcut. */
+export function screenAppRecord(overrides: Partial<AppRecord> = {}): AppRecord {
+  return appRecord("screen", {
+    launch_paths: [
+      launchPathRecord({ id: "screen", label: "Screen", path: "/" }),
+      launchPathRecord({ id: "browser", label: "Browser", path: "/launch/browser", method: "POST" }),
+    ],
+    default_shortcuts: [
+      { launch: "screen", mode: "focus" },
+      { launch: "browser", mode: "focus" },
     ],
     ...overrides,
   });
@@ -274,6 +290,7 @@ export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> 
 export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
   return {
     titleBarHeight: 36,
+    windowRadius: 12,
     taskbarHeight: 48,
     cellWidth: 96,
     cellHeight: 112,
@@ -310,6 +327,7 @@ export function rosterParticipantRecord(key: string, overrides: Partial<RosterPa
     is_connected: true,
     last_seen: null,
     last_input_at: null,
+    is_admitted_by_domain: false,
     ...overrides,
   };
 }

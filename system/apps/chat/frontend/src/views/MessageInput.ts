@@ -24,7 +24,6 @@ import {
   sendMessage,
   sentUserTurnIds,
 } from "../models/Response";
-import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
@@ -36,9 +35,18 @@ import {
 } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, launchAwaitingChatAsRoom, openSwitchDialog } from "./SwitchDialog";
-import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
-import { noteResentSend } from "../models/ResentSends";
-import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  addOutgoing,
+  clearOutgoing,
+  dropOutgoing,
+  dropOutgoingNoTurnWillRetire,
+  getOutgoingMessages,
+} from "../models/OutgoingMessages";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  isUnansweredRequest,
+} from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
   areAccountsLoaded,
@@ -81,7 +89,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 
-const MAX_TEXTAREA_HEIGHT_PX = 240;
+export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
 /* Styling.
  * Utilities in the markup; the message-input and composer-attachment class
@@ -127,30 +135,14 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "compact_unavailable",
 ]);
 
-/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
- *  compaction (its own status and chips show what the send did), or a message Stop took back while the
- *  agent came up (it is in the composer again). */
-function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
-  if (status === "compaction_requested" || status === "withdrawn") {
-    dropOutgoing(chatId, outgoingId);
-  }
-}
-
-/** Have the message's row say the chat app sent it a second time, when it did: mngr could not confirm the
- *  first, which may have reached the agent too. */
-function noteIfResent(
-  chatId: string,
-  sentText: string,
-  priorTurnIds: ReadonlySet<string>,
-  status: SendStatus | null,
-): void {
-  if (status === "resent") {
-    noteResentSend(chatId, sentText, priorTurnIds);
-  }
-}
-
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
+}
+
+/** The kind the notice handles a failed send as. A send that got no answer may have been delivered
+ *  before its answer was lost, so it is handled as one mngr could not confirm. */
+function noticeKindOf(sendError: unknown): SendFailureKind {
+  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {
@@ -168,6 +160,23 @@ function composerHintKey(chatId: string): string {
 // merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
+
+// What the failure notice says about a send, in place of mngr's reason, which is written for its own
+// command line. "unknown" keeps that reason: it is the only account of what went wrong.
+const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
+  input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
+  agent_unreachable: "The agent isn't running and didn't start.",
+  not_ready: "The agent isn't ready for messages yet. Try again in a moment.",
+  state_unknown: "Couldn't reach the agent just now. Try again in a moment.",
+  agent_not_found: "Couldn't find the agent. Try again in a moment.",
+  not_submitted: "The agent didn't take your message. Try again.",
+};
+
+// Added to the sentence above only when the notice offers Restart.
+const SEND_FAILURE_RESTART_SENTENCES: Partial<Record<SendFailureKind, string>> = {
+  input_blocked: "Or restart the agent.",
+  agent_unreachable: "Restart it to send your message.",
+};
 
 // The hint a chat's composer shows as its placeholder until its next send (the multiplayer spec, section 9.2:
 // "How do you want to change <app>?"), by chat; set from outside the component, as the prepends are, and taken
@@ -331,8 +340,15 @@ export function prependToComposer(chatId: string, block: string): void {
  *  The row holds its height while the text is measured collapsed to one line. Otherwise the page
  *  lays out around a one-line composer for that moment, and the browser clamps the transcript's
  *  scroll position to fit it: a tall composer would pull the transcript off its bottom on every
- *  redraw. */
-function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
+ *  redraw.
+ *
+ *  Once the text outgrows the cap the textarea scrolls. It keeps its scroll position across the
+ *  collapse, which not every browser preserves. Typing (``isTyping``) with the caret at the end of the
+ *  draft scrolls it all the way down instead, since the browser scrolls the caret into view without
+ *  the padding under the last line. */
+function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
+  const scrollTopPx = textarea.scrollTop;
+  const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
   row.style.height = `${row.getBoundingClientRect().height}px`;
   row.removeAttribute("data-stacked");
   textarea.style.overflowY = "hidden";
@@ -342,7 +358,12 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
     row.hasAttribute("data-attachments") || textarea.scrollHeight > textarea.clientHeight,
   );
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
-  textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+  const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
+  textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
+  const targetScrollTopPx =
+    isOverflowing && isTypingAtEnd ? textarea.scrollHeight - textarea.clientHeight : scrollTopPx;
+  // Writing scrollTop is a programmatic scroll, which would interrupt the reader scrolling the draft mid-gesture.
+  if (textarea.scrollTop !== targetScrollTopPx) textarea.scrollTop = targetScrollTopPx;
   row.style.height = "";
 }
 
@@ -463,6 +484,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Whether the composer was disabled at the last render, so it takes focus the moment a provider makes it usable.
   let wasComposerDisabled = false;
   let messageRowElement: HTMLElement | null = null;
+  // An edit refits the composer as typing, and so does the redraw that follows it: the browser scrolls the caret
+  // into view after the input event, which can undo the edit's own scroll to the bottom.
+  let isTypingUntilRedraw = false;
   // Refits the composer when its width changes, since that changes where the text wraps.
   let messageRowResizeObserver: ResizeObserver | null = null;
   let messageRowWidthPx = 0;
@@ -479,7 +503,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Component state like the notices above, NOT module state: every open chat panel mounts its
   // own MessageInput, and a module-level value would raise the notice in all of them at once.
   // `recovery` is what makes the notice actionable, and it is carried by the OPERATION rather
-  // than the failure: a send can be repeated, so it offers Cancel / Retry / Force, while a
+  // than the failure: a send can be repeated, so it offers Cancel / Retry / Restart, while a
   // failed interrupt has nothing to repeat and gets a plain OK. Any send failure qualifies --
   // a dialog holding the input, a readiness timeout, a transport error -- because the ways out
   // are the same whatever the reason; only the text differs.
@@ -491,6 +515,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     text: string;
     sentText: string;
     attachments: readonly ComposerAttachment[];
+    /** The failed send's id: a retry goes under it, so the chat app answers it as it answered the
+     *  first when the first was delivered after all, rather than delivering it twice. */
+    messageId: string;
   };
   let actionFailureDetail: string | null = null;
   // A failed Stop shares this notice, and telling the user their message could not be sent when
@@ -498,7 +525,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let actionFailureTitle = "Couldn't send your message";
   let actionFailureRecovery: SendRecovery | null = null;
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
-  let actionFailureInFlight: "retry" | "force" | null = null;
+  let actionFailureInFlight: "retry" | "restart" | null = null;
   // One notice instance each: the component closes over its own dismiss handler, so sharing one
   // between notices would let whichever rendered last answer the others' Escape.
   const actionFailureNotice = makeNoticeDialog();
@@ -506,7 +533,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
-  // A send mngr typed into the agent but could not confirm: its text went back to the composer
+  // A send mngr typed into the agent but could not confirm, or one the chat app never answered
+  // (it may have delivered it before the answer was lost): its text went back to the composer
   // like any failed send's, but the agent may have it. Once its turn reaches the transcript
   // the copy comes back out and its notice closes, so the user does not send it a second time.
   // Kept past Cancel, which leaves the copy in the composer just the same. One per send, across
@@ -517,7 +545,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     // A Send again that is unconfirmed too keeps the first watch: the turns read before the
     // first send let a landing of either one count.
     if (
-      describeRequestErrorKind(err) === "submission_unconfirmed" &&
+      noticeKindOf(err) === "submission_unconfirmed" &&
       !unconfirmedSends.some((watched) => watched.recovery === recovery)
     ) {
       unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
@@ -528,7 +556,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     unconfirmedSends = unconfirmedSends.filter((watched) => watched.recovery !== recovery);
   }
   // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
-  // the notice offers choosing a provider instead of Retry and Force.
+  // the notice offers choosing a provider instead of Retry and Restart.
   let isActionFailureOnSignedOutAccount = false;
   // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
   let externalRetry: (() => Promise<void>) | null = null;
@@ -566,7 +594,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
     localStorage.setItem(messageTextKey(currentChatId), messageText);
     mentionDraft = null;
-    refitComposer();
+    refitAfterEdit();
     focusMessageTextarea();
     m.redraw();
   }
@@ -596,10 +624,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement?.focus();
   }
 
-  function refitComposer(): void {
+  function refitComposer(isTyping = false): void {
     if (messageRowElement !== null && messageTextareaElement !== null) {
-      fitComposer(messageRowElement, messageTextareaElement);
+      fitComposer(messageRowElement, messageTextareaElement, isTyping);
     }
+  }
+
+  function refitAfterEdit(): void {
+    isTypingUntilRedraw = true;
+    refitComposer(true);
   }
 
   function attachMessageRow(rowVnode: m.VnodeDOM): void {
@@ -882,11 +915,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             return null;
           }
           const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
+          clearActionFailureNotice();
           actionFailureTitle =
             failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
           actionFailureDetail = `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
-          actionFailureRecovery = null;
-          externalRetry = null;
           m.redraw();
           return null;
         }
@@ -963,7 +995,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              noteIfResent(chatId, finalText, priorTurnIds, await sendMessage(chatId, finalText, messageId));
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }
@@ -995,7 +1027,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
-          noteIfResent(chatId, finalText, priorTurnIds, status);
         } catch (err) {
           // The backend confirms delivery before resolving, so a rejection means the message was
           // NOT accepted. A /compact the server declined to run gets the declined-command notice
@@ -1010,7 +1041,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
-          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments, messageId };
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Notices only if they are still on the agent that failed -- this catch runs after an
@@ -1021,7 +1052,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
-              actionFailureKind = describeRequestErrorKind(err);
+              actionFailureKind = noticeKindOf(err);
               isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
               actionFailureRecovery = recovery;
             }
@@ -1289,11 +1320,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       ): void {
         const deliveredIds = new Set(deliveredAttachments.map((attachment) => attachment.localId));
         // Emphatically NOT "clear the composer". By this point the box can also hold a draft
-        // typed while the send was failing, and -- after Force -- the queue block drained out of
+        // typed while the send was failing, and -- after Restart -- the queue block drained out of
         // the harness so the restart would not destroy it. Wiping it wholesale would throw away
         // the very messages this feature exists to protect. Remove the one copy that was just
         // delivered, and leave everything else exactly where it is.
-        // Removed wherever it sits, not just at the front: Force drains the harness queue back
+        // Removed wherever it sits, not just at the front: Restart drains the harness queue back
         // into the composer BEFORE sending, so by now the delivered message usually has that
         // block above it and a prefix-only strip would leave it behind -- sent, and still in the
         // box. Only the first occurrence goes, so a user who genuinely typed the same text twice
@@ -1371,13 +1402,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           clearActionFailureNotice();
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
+          actionFailureKind = describeRequestErrorKind(err);
           actionFailureInFlight = null;
         }
         m.redraw();
       }
 
       /**
-       * Shared tail of Retry and Force: send the message again and settle the notice.
+       * Shared tail of Retry and Restart: send the message again and settle the notice.
        *
        * Sends ``sentText`` -- what actually went to the agent, attachment references included --
        * not the typed prose, which would drop the attachments silently.
@@ -1385,7 +1417,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
-        const messageId = mintMessageId();
+        const messageId = recovery.messageId;
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {
@@ -1409,7 +1441,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailureDetail = describeRequestError(err);
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
-            actionFailureKind = describeRequestErrorKind(err);
+            actionFailureKind = noticeKindOf(err);
             isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
             actionFailureInFlight = null;
           } else {
@@ -1419,18 +1451,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
 
-      /** Force: restart the agent, then send. Destructive -- it ends any in-progress turn. */
-      async function forceFailedSend(): Promise<void> {
+      /** Restart: restart the agent, then send. Destructive -- it ends any in-progress turn. */
+      async function restartFailedSend(): Promise<void> {
         const recovery = actionFailureRecovery;
         if (recovery === null || actionFailureInFlight !== null) {
           return;
         }
-        actionFailureInFlight = "force";
+        actionFailureInFlight = "restart";
         m.redraw();
         // Rescue anything queued inside the harness first. The restart below SIGKILLs the agent,
         // which drops that queue -- and a feature whose rule is "never lose the message" must not
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
-        // are about to force is often the one that is stuck, so a drain that fails or is refused
+        // are about to restart is often the one that is stuck, so a drain that fails or is refused
         // must not stop the restart the user actually asked for.
         try {
           const drained = await drainToComposer(recovery.chatId);
@@ -1444,11 +1476,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // The restart itself, unconditionally: the drain does not guarantee one. Claude's
           // empty-queue path is a native chord, and pi/codex hand back a block without ever
           // restarting -- so a non-empty block is not evidence the process was replaced, and a
-          // wedged agent is exactly what Force is for. If this is refused (the services agent
+          // wedged agent is exactly what Restart is for. If this is refused (the services agent
           // carries is_primary=true, say) that refusal becomes the notice's text, nothing is sent.
           await interruptAgent(recovery.chatId);
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
+          actionFailureKind = describeRequestErrorKind(err);
           actionFailureInFlight = null;
           m.redraw();
           return;
@@ -1479,14 +1512,16 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           });
         }
         // The chat app already tried once more for an agent that was down and would not start,
-        // and Force's restart is the stronger way to bring it up, so Retry is not offered. Every
+        // and Restart is the stronger way to bring it up, so Retry is not offered. Every
         // other kind -- and anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
-        // The text was typed and Enter sent but nothing confirmed the agent took it, so it may
-        // already be in the agent's input or turn and a resend can deliver it twice. The notice shows
-        // its own sentence: mngr's reason for this kind is its diagnostics (the whole pane included).
+        // The text was typed and Enter sent but nothing confirmed the agent took it, or the chat app
+        // never answered the send, so it may already be in the agent's input or turn and a resend
+        // can deliver it twice. The notice shows its own sentence: mngr's reason for this kind is its
+        // diagnostics (the whole pane included), and an unanswered send has no reason at all.
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
+        const sendFailureSentence = SEND_FAILURE_SENTENCES[actionFailureKind];
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
           : { label: "Retry", inFlight: "Retrying…", tooltip: "Tries the same thing again" };
@@ -1494,16 +1529,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           title: isUnconfirmed ? "Couldn't confirm your message arrived" : actionFailureTitle,
           body: isUnconfirmed
             ? ["The agent may already have it, so check its terminal before you send it again."]
-            : [
-                detail,
-                // Only when the detail does not already say what to do: an input_blocked reason is
-                // the dialog's own advice ("press Enter in its terminal to run it").
-                actionFailureKind === "agent_unreachable"
-                  ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-                  : isRepeatable && actionFailureKind !== "input_blocked"
-                    ? "You can open the agent's terminal, fix it there, then Retry."
-                    : null,
-              ],
+            : sendFailureSentence !== undefined
+              ? [
+                  sendFailureSentence,
+                  recovery === null ? null : (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null),
+                ]
+              : [detail, isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
@@ -1518,7 +1549,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            // Force needs a message to send afterwards, so it is offered only for our own send --
+            // Restart needs a message to send afterwards, so it is offered only for our own send --
             // and never for an agent that is merely still starting, where restarting would
             // discard the session it was about to finish bringing up, or for one that may already
             // be working on this message, where it would cut that turn off and send it twice. It
@@ -1528,11 +1559,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               ? []
               : [
                   {
-                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    tooltip: "Restarts agent to reset it & resends message",
+                    label: actionFailureInFlight === "restart" ? "Restarting…" : "Restart",
+                    tooltip: "Restarts the agent, then sends your message. Anything it's working on stops.",
                     isDestructive: true,
                     isDisabled: actionFailureInFlight !== null,
-                    run: () => void forceFailedSend(),
+                    run: () => void restartFailedSend(),
                   },
                 ]),
           ],
@@ -1791,7 +1822,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                     mountedComposerTextarea = messageTextareaElement;
-                    refitComposer();
+                    refitComposer(isTypingUntilRedraw);
+                    isTypingUntilRedraw = false;
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
@@ -1804,7 +1836,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
                     updateMentionDraft(textarea);
-                    refitComposer();
+                    refitAfterEdit();
                     if (messageText.trim() !== "") warmUpStoppedChat(chatId);
                   },
                   onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),

@@ -325,6 +325,20 @@ def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> No
         )
 
 
+def test_every_prose_await_runs_as_a_waiter() -> None:
+    """A lead's wait on its worker in the caller's band is shed under memory pressure, and the
+    lead never hears that the worker finished; ``--waiter`` keeps it in the runner's band."""
+    await_commands = _prose_await_commands()
+    assert await_commands, "no prose runs create_worker.py await; this guard is vacuous"
+    offenders = []
+    for prose, command in await_commands:
+        runner_words = shlex.split(command.split("create_worker.py await")[0])
+        runner_options = runner_words[: runner_words.index("--")]
+        if "--waiter" not in runner_options:
+            offenders.append(f"{prose}: `{command.strip()}`")
+    assert not offenders, "\n".join(offenders)
+
+
 def test_no_prose_waits_through_a_harness_own_background_tool() -> None:
     """A wait an agent must be woken from goes through ``run_in_background.py``: the
     ``run_in_background`` flag is claude's alone, and no other harness has a background tool

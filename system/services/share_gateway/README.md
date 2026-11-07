@@ -251,6 +251,75 @@ it as `{"owner":true}`, never as a visitor.
 Services key behavior on `user_id`; `email` is for display beside whatever
 profile they fetch, never a substitute identity.
 
+## The access log
+
+caddy writes one JSON line per request it serves, to
+`data/.state/share_gateway/access.log`: when, the visitor's address (the real
+one, from the PROXY protocol header the relay's frpc stamps), the origin the
+request named (an app's label host), the method, the path, the protocol, the
+status, the response size and the duration. It is the owner's own record of
+every request the share served, for debugging an app and for seeing a flood
+of probes or refusals.
+
+It never carries a header, a query string or a response header: the session
+cookie and a visiting agent's admission token ride request headers, the login
+callback's handoff token rides the query string, `Set-Cookie` rides the
+response headers, and an app's own headers may carry that app's credentials.
+caddy's log filter deletes all three wholesale (`User-Agent` goes with them)
+and cuts the query string from the URI. Nothing in a line says who the
+requester was; identity lives in the request counts below.
+
+The log rolls at 8 MiB, keeping 4 rolled, compressed files for at most 30
+days, so it never takes more than about 40 MiB. Unsharing leaves it in place;
+the next share appends to it. The gateway's own process logs no request
+line of its own (caddy's supersedes it); it still logs every denial.
+
+## The request counts
+
+The gateway counts every request caddy asks it about (`/_auth/verify`) and
+writes the counts once a minute to
+`$MNGR_AGENT_STATE_DIR/events/gateway_requests/events.jsonl`, the services
+agent's events directory, one record per minute and key under the standard
+event envelope (`type` `gateway_request_count`, `source` `gateway_requests`):
+
+```json
+{"timestamp": "2026-11-04T17:23:00.000000000Z", "type": "gateway_request_count", "event_id": "evt-...",
+ "source": "gateway_requests", "window_start": "2026-11-04T17:22:00+00:00", "window_seconds": 60,
+ "service": "worldbuilder", "requester_kind": "user", "requester_id": "3f1c...", "method_class": "read",
+ "outcome": "allowed", "request_count": 41}
+```
+
+- `service` is the registered app name the Host resolved to (never the
+  label), empty for a host that is not one of the workspace's origins.
+- `requester_kind` is `owner`, `user` (a visitor with a session, whose
+  `user_id` is `requester_id`), `agent` (a visiting agent, its id in
+  `requester_id`), `none` (no session or token), or `overflow`.
+- `method_class` is `read` (GET, HEAD, OPTIONS), `write` (any other method)
+  or `websocket` (an upgrade, whatever the method).
+- `outcome` is `allowed` or `denied:<reason>`, the reason one of
+  `foreign_host`, `origin`, `agent_access_unconfigured`, `agent_token`,
+  `no_session`, `grants_misconfigured` and `no_grant`. A redirect to the
+  broker counts as `denied:no_session`; the hosted chrome's CORS preflight
+  counts as allowed by nobody.
+- `timestamp` is the window's end, when the count became final; a replay of
+  the stream is deduplicated by `event_id` downstream.
+
+Never a path, a query string, an address or a header. The auth label's
+`/_auth/*` and `/_agent/*` surfaces, `/_health` and the loading page are
+routed without the auth step and are not counted (the access log has them).
+A window keeps at most 256 distinct keys; every further key folds into one
+`overflow` record, so a flood bounds itself. The stream archives itself at
+32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`
+library's rule. A gateway that stops flushes every window, the open one
+included; one that dies loses the windows not yet flushed, up to about two
+minutes. With
+`MNGR_AGENT_STATE_DIR` unset nothing is counted.
+
+The analytics collection of an explorer-plan workspace reads this feed and
+the shell's `window_opened` and `window_input` client-activity events
+(`specs/minds-app-usage-signals/spec.md` in the mngr repo); the access log is
+never collected. See `docs/system/analytics-collection.md`.
+
 ## Visiting agents
 
 A coding agent running outside the workspace (on the user's laptop, in a cloud

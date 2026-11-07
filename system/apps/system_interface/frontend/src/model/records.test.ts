@@ -201,7 +201,7 @@ describe("parseAppRecord", () => {
       name: "docs",
       url: "http://127.0.0.1:1",
       launch_paths: [{ id: "new", label: "New docs", path: "/new", params: ["message"] }],
-      default_shortcut: { action: "new", launch: "new", mode: "new" },
+      default_shortcuts: [{ action: "new", launch: "new", mode: "new" }],
       launcher_rank: 10,
       is_running: true,
     });
@@ -213,14 +213,14 @@ describe("parseAppRecord", () => {
     expect(app.launch_paths[0].presets).toEqual({});
     expect(app.launch_paths[0].text_param).toBeNull();
     expect(app.launch_paths[0].draft_param).toBeNull();
-    expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
+    expect(app.default_shortcuts).toEqual([{ launch: "new", mode: "new" }]);
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.stop_when_no_windows).toBe(false);
     expect(app.pin).toBeNull();
-    expect(
-      parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true }).stop_when_no_windows,
-    ).toBe(true);
+    const bare = parseAppRecord({ name: "docs", url: "http://127.0.0.1:1", stop_when_no_windows: true });
+    expect(bare.stop_when_no_windows).toBe(true);
+    expect(bare.default_shortcuts).toEqual([]);
   });
 
   it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
@@ -254,14 +254,20 @@ describe("parseAppRecord", () => {
     ).toThrow(WireShapeError);
   });
 
-  it("reads a focus shortcut and a null rank", () => {
+  it("reads several shortcuts and a null rank", () => {
     const app = parseAppRecord({
       name: "files",
       url: "http://127.0.0.1:2",
-      default_shortcut: { launch: "new", mode: "focus" },
+      default_shortcuts: [
+        { launch: "new", mode: "focus" },
+        { launch: "recent", mode: "new" },
+      ],
       launcher_rank: null,
     });
-    expect(app.default_shortcut).toEqual({ launch: "new", mode: "focus" });
+    expect(app.default_shortcuts).toEqual([
+      { launch: "new", mode: "focus" },
+      { launch: "recent", mode: "new" },
+    ]);
     expect(app.launcher_rank).toBeNull();
     expect(app.launch_paths).toEqual([]);
   });
@@ -426,6 +432,7 @@ describe("the tray's records (the multiplayer spec)", () => {
       is_connected: true,
       last_seen: "2026-10-25T11:00:00Z",
       last_input_at: null,
+      is_admitted_by_domain: false,
     };
     expect(parseRoster([participant])).toEqual([participant]);
     expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(WireShapeError);

@@ -530,6 +530,13 @@ def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
     return snapshot.active_agent.is_connecting
 
 
+def is_chat_resending_after_sign_in(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_resending_after_sign_in`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_resending_after_sign_in
+
+
 def seed_agent_state(
     manager: AgentManager,
     agent_id: str,
@@ -1377,6 +1384,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_resending_after_sign_in=False,
             is_busy=False,
             background_tasks=(),
         ),
@@ -1508,7 +1516,7 @@ def running_workspace(
             "chat",
             chat_url,
             is_critical=True,
-            default_shortcut=("root", "focus"),
+            default_shortcuts=[("root", "focus")],
             display_name="Chat",
             launch_paths=(
                 ("root", "Chat", "/"),

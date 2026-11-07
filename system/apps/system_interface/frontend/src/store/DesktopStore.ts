@@ -33,7 +33,7 @@ import {
   NO_TEXT_APP_REASON,
   appChatLaunchOf,
   appChatParams,
-  appShortcutOf,
+  appShortcutsOf,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -850,7 +850,7 @@ export class DesktopStore {
 
   /** The backdrop the frames are fractions of: the owner's while a viewed desktop is drawn in a letterbox, else
    *  this one. */
-  private frameBackdrop(): PixelSize {
+  frameBackdrop(): PixelSize {
     return this.viewingLetterbox()?.size ?? this.backdrop;
   }
 
@@ -1014,7 +1014,7 @@ export class DesktopStore {
   }
 
   /** A home tile's tap: the app's window on this client's desktop nearest the top of its stack, else its newest
-   *  window anywhere, else the launch of the app's desktop shortcut (``appShortcutOf``), or its first launch path
+   *  window anywhere, else the launch of the app's first desktop shortcut (``appShortcutsOf``), or its first launch path
    *  when it has none. */
   async runHomeTile(appName: string): Promise<void> {
     const target = focusTargetOf(this.state, appName);
@@ -1023,7 +1023,7 @@ export class DesktopStore {
       return;
     }
     const app = appByName(this.state, appName);
-    const launch = (app === undefined ? null : appShortcutOf(app))?.launch ?? app?.launch_paths[0]?.id;
+    const launch = (app === undefined ? undefined : appShortcutsOf(app)[0])?.launch ?? app?.launch_paths[0]?.id;
     if (app === undefined || launch === undefined) {
       this.toast(`Cannot open: ${appName} has nothing to open`);
       return;
@@ -2506,9 +2506,10 @@ export class DesktopStore {
     }
   }
 
-  /** Run a shortcut in its mode: focus raises the app's most recent window and opens only when there is none.
-   *  Before the apps are known (the inventory has not answered) the user is told to wait rather than that
-   *  the app is missing. */
+  /** Run a shortcut in its mode: focus raises the app's most recent window and runs the launch path only when there
+   *  is none, but always runs a one-window app's POST launch path into that window (``resolveLaunchRun``). Before
+   *  the apps are known (the inventory has not answered) the user is told to wait rather than that the app is
+   *  missing. */
   async runLaunch(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const run = resolveLaunchRun(this.state, app, launch, mode);
     switch (run.kind) {
@@ -3374,11 +3375,16 @@ export class DesktopStore {
     void this.flushPendingSave();
   }
 
+  /** The move or resize of a window in progress, else null. */
+  windowGesture(): MoveGesture | ResizeGesture | null {
+    const gesture = this.gesture;
+    return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
+  }
+
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
-    const gesture = this.gesture;
-    if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
-    if (gesture.windowId !== windowId) return null;
+    const gesture = this.windowGesture();
+    if (gesture === null || gesture.windowId !== windowId) return null;
     return gesture.currentRect;
   }
 

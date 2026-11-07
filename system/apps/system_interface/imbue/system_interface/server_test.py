@@ -810,10 +810,13 @@ def test_a_present_identity_header_that_does_not_parse_is_refused_by_every_route
     assert _heartbeat(client, None).get_json()["participant"] == "owner"
 
 
-def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient) -> None:
+def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient, app: Flask) -> None:
+    """Neither presence nor, whatever windows the body reports, a ``window_input`` event."""
     agent = RequestIdentity(owner=False, agent_id="va-0123", agent_name="Visitor", granter="user:8c0f")
-    assert _heartbeat(client, agent).status_code == 204
+    body = {"client_id": "c1", "input_windows": [{"window_id": "win-0123456789abcdef", "app": "files"}]}
+    assert _heartbeat(client, agent, body).status_code == 204
     assert client.get("/api/presence").get_json() == {"users": []}
+    assert state_of(app).shell.activity.read_events() == []
 
 
 def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClient) -> None:

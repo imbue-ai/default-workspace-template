@@ -3,8 +3,10 @@ import {
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
+  launchPathRecord,
   layoutRecord,
   placementRecord,
+  screenAppRecord,
   windowRecord,
 } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
@@ -37,6 +39,36 @@ describe("resolveLaunchRun", () => {
       layout: layoutRecord([placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })]),
     });
     expect(resolveLaunchRun(state, "docs", "new", "focus")).toEqual({ kind: "raise", windowId: "win-1" });
+  });
+
+  it("a focus shortcut of a one-window app's POST launch path runs it even with a window to focus", () => {
+    const screen = screenAppRecord();
+    // A many-window app (its default shortcut opens new windows): a focus shortcut of its POST path still raises.
+    const terminal = appRecord("terminal", {
+      launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })],
+      default_shortcuts: [{ launch: "new", mode: "new" }],
+    });
+    const viewing = desktopRecord("home", {
+      windows: [windowRecord("win-9", "screen", "/"), windowRecord("win-8", "terminal", "/t/1")],
+    });
+    const state = [
+      { type: "apps_updated", apps: [screen, terminal] } as DesktopEvent,
+      { type: "desktops_updated", desktops: [viewing] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+      {
+        type: "layout_loaded",
+        desktopId: "home",
+        layout: layoutRecord([placementRecord("win-9"), placementRecord("win-8")]),
+      } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+
+    expect(resolveLaunchRun(state, "screen", "screen", "focus")).toEqual({ kind: "raise", windowId: "win-9" });
+    expect(resolveLaunchRun(state, "screen", "browser", "focus")).toEqual({
+      kind: "open",
+      app: "screen",
+      launch: "browser",
+    });
+    expect(resolveLaunchRun(state, "terminal", "new", "focus")).toEqual({ kind: "raise", windowId: "win-8" });
   });
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {

@@ -45,6 +45,9 @@ export interface ActiveAgent {
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
   // Sending, shown on the status row at the end of the transcript.
   is_connecting: boolean;
+  // The account was signed in again and the chat app is restarting the agent to send it the
+  // message its sign-in failure refused, if any: the page offers no send of its own meanwhile.
+  is_resending_after_sign_in: boolean;
   // The agent will resume on its own: a turn is in flight, or a background task is pending.
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
@@ -128,6 +131,13 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
   return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
+/** A message delivered by sending it a second time (the backend's ``ResentSendSnapshot``). */
+export interface ResentSend {
+  text: string;
+  sent_after: number;
+  closed_at: number | null;
+}
+
 /** What a chat is (the backend's ``ChatKind``): a conversation with an agent, or a room, a message log among the
  *  workspace's people whose agent is the room's reader (the multiplayer spec, section 7.3). */
 export type ChatKind = "agent" | "room";
@@ -155,6 +165,8 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  // The backend's ``ResentSendSnapshot``s, oldest first (see ResentSends.ts).
+  resent_sends?: ResentSend[];
   /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
    *  while one of them works (section 7.4). Empty for an agent chat. */
   awaiting_chat_ids: string[];

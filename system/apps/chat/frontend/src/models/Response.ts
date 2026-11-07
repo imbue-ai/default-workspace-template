@@ -8,7 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -97,6 +97,8 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   display?:
     | "hidden"
     | "chip"
+    // A chip of the person's own doing (a bash-mode command and its output), drawn on their side.
+    | "person_chip"
     | "skill_expansion"
     | "permission_resolution"
     | "secret_resolution"
@@ -736,6 +738,12 @@ export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnId
   return userTurnIdsLandedSince(getEventsForChat(chatId), text, priorTurnIds).length > 0;
 }
 
+/** The user turns among ``events`` holding exactly ``text``, oldest first. */
+export function userTurnsHolding(events: readonly TranscriptEvent[], text: string): UserMessageEvent[] {
+  const wanted = text.trim();
+  return events.filter(isSentUserTurn).filter((event) => event.content.trim() === wanted);
+}
+
 /** The ids of the user turns among ``events`` holding exactly ``text`` that are not among ``priorTurnIds`` and
  *  came after all of them, oldest first (see ``hasUserTurnLandedSince``). */
 export function userTurnIdsLandedSince(
@@ -1130,7 +1138,7 @@ export function announceMessageSent(chatId: string): void {
 /** How the message route took a send: delivered ("ok"), delivered by a second send because the first could
  *  not be confirmed and may have landed too ("resent"), held while the chat switches agents ("held"),
  *  run as a compaction instead of being sent ("compaction_requested", a `/compact` no transcript
- *  turn will echo), or taken back by Stop while the agent came up ("withdrawn", nothing delivered). */
+ *  turn will echo), or taken back by Stop before it landed ("withdrawn", nothing delivered). */
 export type SendStatus = "ok" | "resent" | "held" | "compaction_requested" | "withdrawn";
 
 /** Send a message to a chat; resolves with how the route took it, or null when there was nothing to send. */
@@ -1150,21 +1158,35 @@ export async function sendMessage(
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
   // attribute a request to a client via `workspace-layout context`. The message_id is
-  // the stable send-time id the backend reconciles delivery against (A4).
-  const response = await m.request<{ status: SendStatus }>({
-    method: "POST",
-    url: apiUrl("/api/chats/:chatId/message"),
-    params: { chatId },
-    body: {
-      message: trimmed,
-      message_id: id,
-      is_single_send: isSingleSend,
-      client_id: getClientId(),
-      desktop_id: getActiveDesktopId(),
-    },
-  });
-  return response.status;
+  // the stable send-time id the backend reconciles delivery against (A4), and answers a
+  // repeat under it as it answered the first, so a send that got no answer is sent again.
+  // A repeat says it is one, so it gets the first send's refusal too rather than a send of its own.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await m.request<{ status: SendStatus }>({
+        method: "POST",
+        url: apiUrl("/api/chats/:chatId/message"),
+        params: { chatId },
+        body: {
+          message: trimmed,
+          message_id: id,
+          is_single_send: isSingleSend,
+          client_id: getClientId(),
+          desktop_id: getActiveDesktopId(),
+          is_repeat: attempt > 0,
+        },
+      });
+      return response.status;
+    } catch (error) {
+      const delayMs = UNANSWERED_SEND_RETRY_DELAYS_MS[attempt];
+      if (!isUnansweredRequest(error) || delayMs === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
+
+/** How long a send that got no answer waits before each repeat under its id: about half a minute in all. */
+const UNANSWERED_SEND_RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 8000, 15000];
 
 export async function interruptAgent(chatId: string): Promise<void> {
   await m.request({

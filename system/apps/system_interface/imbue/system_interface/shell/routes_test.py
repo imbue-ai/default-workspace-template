@@ -22,6 +22,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_theming import AppThemingStore
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
@@ -102,6 +103,128 @@ def _op(client: FlaskClient, op: str, args: dict[str, Any], requester: dict[str,
 
 
 # Section 6: the client-activity report
+
+
+def test_every_window_open_is_recorded_in_the_client_activity_log(client: FlaskClient, app: Flask) -> None:
+    """Section 6: a ``window_opened`` per open, naming the app and the window but never the path, whether a client
+    opened it, an op with a requester did, or an op opened it unplaced with nobody connected."""
+    _register_client(app, "c1", "home")
+    first = _open_window(client, "files", "/private/folder/").get_json()["window"]["id"]
+    # A focus re-open of the same page answers the existing window; it is recorded as such.
+    again = _open_window(client, "files", "/private/folder/", if_present="focus").get_json()
+    assert again["is_new"] is False and again["window"]["id"] == first
+    by_op = _op(client, "open", {"app": "terminal", "client": "c1"}, {"app": "chat", "marker": "agent-1"})
+    assert by_op.status_code == 200
+
+    events = [event for event in _shell(app).activity.read_events() if event["type"] == "window_opened"]
+    assert [
+        (
+            event["client_id"],
+            event["desktop_id"],
+            event["app"],
+            event["window_id"],
+            event["is_new"],
+            event["requester"],
+        )
+        for event in events
+    ] == [
+        ("c1", "home", "files", first, True, ""),
+        ("c1", "home", "files", first, False, ""),
+        ("c1", "home", "terminal", by_op.get_json()["window_id"], True, "chat:agent-1"),
+    ]
+    assert all("path" not in event and "title" not in event for event in events)
+    assert all(event["source"] == "client_activity" and event["event_id"] for event in events)
+
+
+def _heartbeat_with_input(client: FlaskClient, client_id: str | None, input_windows: Any) -> Any:
+    body: dict[str, Any] = {"input_age_seconds": 2.0, "input_windows": input_windows}
+    if client_id is not None:
+        body["client_id"] = client_id
+    return client.post("/api/presence/heartbeat", json=body, headers=identity_headers(_BOB_IDENTITY))
+
+
+def _window_input_events(app: Flask) -> list[tuple[str, str, str, str, str]]:
+    return [
+        (event["client_id"], event["desktop_id"], event["app"], event["window_id"], event["kind"])
+        for event in _shell(app).activity.read_events()
+        if event["type"] == "window_input"
+    ]
+
+
+def test_a_heartbeats_input_reports_are_recorded_as_window_input_events(client: FlaskClient, app: Flask) -> None:
+    """Section 6.3 of the app-usage-signals spec: each reported window becomes one ``window_input`` with the
+    desktop's app and desktop; a window that is gone keeps the reported app when it is registered and takes the
+    client's active desktop; a report of an unregistered app is dropped; a window reported with both kinds in one
+    heartbeat is written once, as input; and a second heartbeat inside the minute writes nothing more."""
+    _register_client(app, "c1", "home")
+    files_window = _open_window(client, "files", "/private/folder/").get_json()["window"]["id"]
+    gone_window = "win-0123456789abcdef"
+    first = _heartbeat_with_input(
+        client,
+        "c1",
+        [
+            {"window_id": files_window, "app": "wrong-name", "kind": "focus"},
+            {"window_id": files_window, "app": "files"},
+            {"window_id": gone_window, "app": "terminal", "kind": "focus"},
+            {"window_id": "win-fedcba9876543210", "app": "never-registered"},
+        ],
+    )
+    assert first.status_code == 200 and first.get_json()["participant"] == "user:user-bob-4471"
+    assert _window_input_events(app) == [
+        ("c1", "home", "files", files_window, "input"),
+        ("c1", "home", "terminal", gone_window, "focus"),
+    ]
+
+    again = _heartbeat_with_input(client, "c1", [{"window_id": files_window, "app": "files"}])
+    assert again.status_code == 200
+    assert len(_window_input_events(app)) == 2
+    assert all("path" not in event for event in _shell(app).activity.read_events())
+
+
+def test_a_heartbeat_is_never_refused_for_its_input_reports(client: FlaskClient, app: Flask) -> None:
+    """A refused heartbeat would record no presence and the page keeps its reports across a failed send, so a page
+    from before the reports (no client id), a client id off the rule, a field off its shape, and an entry off its
+    shape each record presence and drop the reports, never the heartbeat."""
+    _register_client(app, "c1", "home")
+    window_id = _open_window(client, "files", "/").get_json()["window"]["id"]
+    for client_id, input_windows in (
+        (None, [{"window_id": window_id, "app": "files"}]),
+        ("not/a/client", [{"window_id": window_id, "app": "files"}]),
+        ("c1", "not-a-list"),
+        ("c1", [{"window_id": "not-a-window", "app": "files"}, "not-an-object", {"app": "files"}]),
+        ("c1", [{"window_id": window_id, "app": "files", "kind": "unknown"}]),
+    ):
+        response = _heartbeat_with_input(client, client_id, input_windows)
+        assert response.status_code == 200, (client_id, input_windows, response.get_json())
+    assert _window_input_events(app) == []
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["user_id"] == "user-bob-4471" and user["last_input_at"] is not None
+
+
+def test_a_heartbeat_is_not_refused_when_the_desktops_cannot_be_read_for_its_input_reports(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A desktops record the shell cannot bring up to date (here, a directory where the file goes, so the seeding
+    write fails) drops the reports with a warning: presence is recorded and the heartbeat answered as before."""
+    _register_client(app, "c1", "home")
+    desktops_path = _shell(app).desktops.state_directory / DESKTOPS_FILENAME
+    desktops_path.unlink()
+    desktops_path.mkdir()
+
+    response = _heartbeat_with_input(client, "c1", [{"window_id": "win-0123456789abcdef", "app": "files"}])
+
+    assert response.status_code == 200, response.get_json()
+    assert _window_input_events(app) == []
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["user_id"] == "user-bob-4471"
+
+
+def test_an_unplaced_op_open_is_recorded_with_no_client(client: FlaskClient, app: Flask) -> None:
+    opened = _op(client, "open", {"app": "files"}, {"app": "chat", "marker": ""})
+    assert opened.status_code == 200 and opened.get_json()["client_id"] is None
+
+    (event,) = [event for event in _shell(app).activity.read_events() if event["type"] == "window_opened"]
+    assert (event["client_id"], event["app"], event["is_new"], event["requester"]) == ("", "files", True, "chat")
 
 
 def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: Flask) -> None:

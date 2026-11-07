@@ -59,6 +59,14 @@ def test_workspace_email_domain_grant_matches_by_domain() -> None:
     assert grants.allows(_NOBODY, "imbue.com", None, _GRANTABLE) is False
 
 
+def test_allows_email_domain_matches_by_domain_alone() -> None:
+    grants = parse_grants(_FULL_GRANTS)
+    assert grants.workspace.allows_email_domain("Anyone@IMBUE.com") is True
+    assert grants.workspace.allows_email_domain("bob@example.com") is False
+    assert grants.workspace.allows_email_domain("imbue.com") is False
+    assert grants.services["web"].allows_email_domain("dave@partner.org") is True
+
+
 def test_per_service_grant_admits_only_that_service() -> None:
     grants = parse_grants(_FULL_GRANTS)
     assert grants.allows(_NOBODY, "carol@example.com", "web", _GRANTABLE) is True
