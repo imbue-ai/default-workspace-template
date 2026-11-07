@@ -554,6 +554,27 @@ def test_the_profile_follows_input_and_the_lease(
     assert service.refresh_profile() == "idle"
 
 
+@pytest.mark.parametrize("display_settings", [DisplaySettings(pinned_video_id="control")])
+def test_a_pinned_profile_is_streamed_from_the_start_whatever_the_lease_and_input(
+    client: FlaskClient, service: ScreenService, manual_clock: ManualClock
+) -> None:
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    start_service_stack(service)
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    manual_clock.advance(61)
+    assert service.refresh_profile() == "control"
+    acquired = client.post("/api/control/acquire", headers=_AGENT_A, json={})
+    assert acquired.get_json()["ok"] is True
+    assert service.refresh_profile() == "control"
+    client.post("/api/control/release", headers=_AGENT_A)
+    session = _controlling_session(client, service)
+    assert client.post("/api/input-seen", json={"session_id": session["session_id"]}).status_code == 204
+    manual_clock.advance(600)
+    assert service.refresh_profile() == "control"
+    service.stack.stop("the test ended it")
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+
+
 def test_input_seen_needs_a_known_session(client: FlaskClient, service: ScreenService) -> None:
     start_service_stack(service)
     assert client.post("/api/input-seen", json={}).status_code == 400

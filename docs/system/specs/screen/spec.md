@@ -236,6 +236,7 @@ Three pipelines in neko's config, keyframe interval one second, in the codec `SC
 The preset column is x264's; VP8 runs every profile at `cpu-used=8`.
 
 The service chooses one profile for everyone from aggregate state: `control` while a human holds control and has sent input in the last 10 seconds, `idle` while nobody has sent input for 60 seconds and no agent holds the lease, `watch` otherwise.
+A Screen whose environment sets `SCREEN_VIDEO_PROFILE` to a profile's id (`idle`, `watch` or `control`, in any case; any other value stops the service at start) holds every viewer on that profile whatever the lease and the input, from before the first stack start on; the auth sandbox sets `control`, since it exists for one user actively signing in, who would otherwise see the `idle` picture until their first click.
 It announces the choice on its own WebSocket (section 10.2), and every viewer selects it with `signal/video`, so neko runs one encoder.
 `show_pointer` is off per pipeline; the controller's pointer takes the remote cursor's shape from the image neko sends over the peer's data channel (section 12).
 

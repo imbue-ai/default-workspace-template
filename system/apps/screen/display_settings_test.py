@@ -7,21 +7,29 @@ from screen.display_settings import display_settings_from_environ
 from screen.display_settings import parse_fixed_size
 from screen.display_settings import parse_switch
 from screen.display_settings import parse_video_codec
+from screen.display_settings import parse_video_profile
 from screen.errors import ScreenConfigurationError
 
 
 def test_an_environment_without_the_settings_is_a_workspaces_screen() -> None:
     assert display_settings_from_environ({}) == DisplaySettings(
-        video_codec=VideoCodec.H264, fixed_size=None, is_desktop_panel_shown=True, is_ice_lite=False
+        video_codec=VideoCodec.H264,
+        fixed_size=None,
+        is_desktop_panel_shown=True,
+        is_ice_lite=False,
+        pinned_video_id=None,
     )
     assert display_settings_from_environ({"SCREEN_VIDEO_CODEC": " ", "SCREEN_FIXED_SIZE": ""}) == DisplaySettings()
 
 
-def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_drops_the_panel_and_runs_ice_lite() -> None:
+def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_at_control_drops_the_panel_and_runs_ice_lite() -> (
+    None
+):
     settings = display_settings_from_environ(
         {
             "SCREEN_VIDEO_CODEC": "vp8",
             "SCREEN_FIXED_SIZE": "1360x864",
+            "SCREEN_VIDEO_PROFILE": "control",
             "SCREEN_DESKTOP_PANEL": "off",
             "SCREEN_ICE_LITE": "on",
         }
@@ -31,6 +39,7 @@ def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_drops_the_panel
         fixed_size=ScreenSize(width=1360, height=864, rate=60),
         is_desktop_panel_shown=False,
         is_ice_lite=True,
+        pinned_video_id="control",
     )
 
 
@@ -50,6 +59,17 @@ def test_the_codec_is_read_in_any_case_and_an_unknown_one_is_refused() -> None:
     assert parse_video_codec("Vp8") == VideoCodec.VP8
     with pytest.raises(ScreenConfigurationError, match="h264, vp8"):
         parse_video_codec("av1")
+
+
+def test_the_video_profile_is_a_profiles_id_in_any_case_and_an_unknown_one_is_refused() -> None:
+    assert parse_video_profile("") is None
+    assert parse_video_profile("CONTROL") == "control"
+    assert parse_video_profile("idle") == "idle"
+    assert display_settings_from_environ({"SCREEN_VIDEO_PROFILE": " Watch "}).pinned_video_id == "watch"
+    with pytest.raises(
+        ScreenConfigurationError, match="SCREEN_VIDEO_PROFILE names 'fast', not one of idle, watch, control"
+    ):
+        display_settings_from_environ({"SCREEN_VIDEO_PROFILE": "fast"})
 
 
 def test_a_fixed_size_must_be_one_a_viewers_report_could_produce() -> None:

@@ -1,6 +1,6 @@
 """The display settings a Screen reads from its environment at service start (docs/system/specs/screen/spec.md
-sections 4.3, 5.3, 7.2 and 8.1): the video codec, a fixed display size, whether the desktop session runs its panel,
-and whether neko runs ICE lite. An auth sandbox sets all four; a workspace sets none."""
+sections 4.3, 5.3, 7.2 and 8.1): the video codec, a fixed display size, a pinned video profile, whether the desktop
+session runs its panel, and whether neko runs ICE lite. An auth sandbox sets all five; a workspace sets none."""
 
 from collections.abc import Mapping
 from typing import Final
@@ -11,11 +11,13 @@ from screen.data_types import ScreenSize
 from screen.data_types import VideoCodec
 from screen.errors import InvalidScreenSizeError
 from screen.errors import ScreenConfigurationError
+from screen.primitives import VIDEO_IDS
 from screen.primitives import parse_size_argument
 from screen.sizing import quantize_screen_size
 
 ENV_VIDEO_CODEC: Final[str] = "SCREEN_VIDEO_CODEC"
 ENV_FIXED_SIZE: Final[str] = "SCREEN_FIXED_SIZE"
+ENV_VIDEO_PROFILE: Final[str] = "SCREEN_VIDEO_PROFILE"
 ENV_DESKTOP_PANEL: Final[str] = "SCREEN_DESKTOP_PANEL"
 ENV_ICE_LITE: Final[str] = "SCREEN_ICE_LITE"
 _SWITCH_VALUES: Final[dict[str, bool]] = {"on": True, "off": False}
@@ -52,6 +54,16 @@ def parse_fixed_size(value: str) -> ScreenSize | None:
 
 
 @pure
+def parse_video_profile(value: str) -> str | None:
+    """A profile's id (``idle``, ``watch`` or ``control``), in any case; empty is no pinned profile."""
+    if not value:
+        return None
+    if value.lower() not in VIDEO_IDS:
+        raise ScreenConfigurationError(f"{ENV_VIDEO_PROFILE} names {value!r}, not one of {', '.join(VIDEO_IDS)}")
+    return value.lower()
+
+
+@pure
 def parse_switch(name: str, value: str, default: bool) -> bool:
     """``on`` or ``off``, in any case; empty is ``default``."""
     if not value:
@@ -66,6 +78,7 @@ def display_settings_from_environ(environ: Mapping[str, str]) -> DisplaySettings
     return DisplaySettings(
         video_codec=parse_video_codec(environ.get(ENV_VIDEO_CODEC, "").strip()),
         fixed_size=parse_fixed_size(environ.get(ENV_FIXED_SIZE, "").strip()),
+        pinned_video_id=parse_video_profile(environ.get(ENV_VIDEO_PROFILE, "").strip()),
         is_desktop_panel_shown=parse_switch(ENV_DESKTOP_PANEL, environ.get(ENV_DESKTOP_PANEL, "").strip(), True),
         is_ice_lite=parse_switch(ENV_ICE_LITE, environ.get(ENV_ICE_LITE, "").strip(), False),
     )

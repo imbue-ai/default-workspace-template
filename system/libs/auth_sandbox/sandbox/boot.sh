@@ -81,6 +81,9 @@ export SCREEN_VIDEO_CODEC="vp8"
 # viewport, a window of about 1288x805, and would overflow a display a small viewer shrank. The viewer
 # scales the picture to its frame instead.
 export SCREEN_FIXED_SIZE="1360x864"
+# The control profile (30 fps, 4000 kbit/s) from the first frame: the sandbox exists for one user actively
+# signing in, so the picture never drops to the idle or watch profile while nobody holds control or types.
+export SCREEN_VIDEO_PROFILE="control"
 # A desktop session without the XFCE panel: the user signs in through one browser window, and a panel
 # would offer only what the sandbox does not have.
 export SCREEN_DESKTOP_PANEL="off"

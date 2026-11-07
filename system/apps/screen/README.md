@@ -110,8 +110,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
 another address, which it refuses to do outside gate mode.
 
-Four more variables, read once at service start, change the picture, the desktop and the
-stream; a workspace sets none of them, and the auth sandbox sets all four
+Five more variables, read once at service start, change the picture, the desktop and the
+stream; a workspace sets none of them, and the auth sandbox sets all five
 (`system/libs/auth_sandbox/README.md`). A value the service cannot use stops it at start.
 
 - `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
@@ -120,6 +120,10 @@ stream; a workspace sets none of them, and the auth sandbox sets all four
   produce (multiples of 16, or the cap, within 640x480 and 1920x1080). `xorg.conf` lists it
   first, so the X server starts at it, `neko.yaml` names it as neko's screen, and
   `POST /api/screen-size` no longer resizes; the viewer scales the picture to its frame.
+- `SCREEN_VIDEO_PROFILE`: unset (the default) or a profile's id, `idle`, `watch` or `control`, in
+  any case. Set, every viewer is held on that profile whatever the lease and the input clock, from
+  before the first stack start on; unset, the service chooses it (see "Profiles, visibility and
+  audio"). The auth sandbox pins `control`, since it exists for one user actively signing in.
 - `SCREEN_DESKTOP_PANEL`: `on` (the default) or `off`. Off, the desktop session runs without
   `xfce4-panel` (and without Thunar's daemon): before each stack start the service writes the
   user's `~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml` (`xfce_session_config.py`,
@@ -305,7 +309,8 @@ per second, is written `round(2500 * 1000)`, which evaluates to an integer. The 
 everyone from the lease and the input clock: `control` while a human holds control and
 input arrived in the last ten seconds, `idle` while nothing has arrived for a minute
 and no agent holds the lease, `watch` otherwise (a stack start counts as input, so a
-fresh Screen streams at `watch` for its first minute). Input arrives through
+fresh Screen streams at `watch` for its first minute); with `SCREEN_VIDEO_PROFILE` set it
+is that profile throughout. Input arrives through
 `POST /api/input-seen` from the controller's viewer and through every agent command.
 The choice is re-evaluated every second, on every input and on every lease change,
 announced as `profile` on `/api/ws`, and every viewer selects it with `signal/video`,

@@ -137,8 +137,8 @@ class VideoCodec(UpperCaseStrEnum):
 
 
 class DisplaySettings(FrozenModel):
-    """What a Screen's environment decides for the service's life (spec sections 4.3, 5.3, 7.2 and 8.1): its picture,
-    its desktop session's panel and neko's ICE mode."""
+    """What a Screen's environment decides for the service's life (spec sections 4.3, 5.3, 7.2 and 8.1): its picture
+    and video profile, its desktop session's panel and neko's ICE mode."""
 
     video_codec: VideoCodec = Field(default=VideoCodec.H264, description="The codec of the WebRTC video")
     fixed_size: ScreenSize | None = Field(
@@ -150,6 +150,10 @@ class DisplaySettings(FrozenModel):
     )
     is_ice_lite: bool = Field(
         default=False, description="Whether neko runs ICE lite, answering connectivity checks without starting its own"
+    )
+    pinned_video_id: str | None = Field(
+        default=None,
+        description="The video profile every viewer is held on whatever the lease and input; None to choose it from them",
     )
 
 
