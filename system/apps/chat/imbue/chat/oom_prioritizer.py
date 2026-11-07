@@ -136,8 +136,8 @@ class ChatOomPrioritizer:
         # Set by every ``reapply`` once the pass thread runs; the thread clears it as it
         # takes a pass. A set event is never lost: a pass recomputes everything.
         self._pass_wanted = threading.Event()
-        self._sweep_stop = threading.Event()
-        self._sweep_thread: threading.Thread | None = None
+        self._pass_stop = threading.Event()
+        self._pass_thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Apply the current state once on this thread, then start the pass thread.
@@ -149,20 +149,20 @@ class ChatOomPrioritizer:
         if self._set_adj is None:
             return
         self.reapply()
-        self._sweep_stop.clear()
+        self._pass_stop.clear()
         self._pass_wanted.clear()
-        thread = threading.Thread(target=self._run_passes, daemon=True, name="oom-chat-sweep")
-        self._sweep_thread = thread
+        thread = threading.Thread(target=self._run_passes, daemon=True, name="oom-chat-passes")
+        self._pass_thread = thread
         thread.start()
 
     def stop(self) -> None:
         """Stop the pass thread; a pass already running finishes. Idempotent; safe if ``start`` never ran."""
-        self._sweep_stop.set()
+        self._pass_stop.set()
         self._pass_wanted.set()
-        thread = self._sweep_thread
+        thread = self._pass_thread
         if thread is not None:
             thread.join(timeout=5)
-            self._sweep_thread = None
+            self._pass_thread = None
 
     def seed_last_message_times(self, last_message_at_by_chat_id: dict[ChatId, float]) -> None:
         """Seed per-chat last-message times from a durable record, at startup.
@@ -250,7 +250,7 @@ class ChatOomPrioritizer:
         """
         if self._set_adj is None:
             return
-        thread = self._sweep_thread
+        thread = self._pass_thread
         if thread is None or not thread.is_alive():
             self._reapply_once()
             return
@@ -265,14 +265,14 @@ class ChatOomPrioritizer:
         supervisor log), after which passes run on the requesting threads again, as
         they did before the thread existed.
         """
-        while not self._sweep_stop.is_set():
+        while not self._pass_stop.is_set():
             self._pass_wanted.wait(timeout=self._sweep_interval_seconds)
             self._pass_wanted.clear()
-            if self._sweep_stop.is_set():
+            if self._pass_stop.is_set():
                 return
             self._run_one_pass_logging_failures()
             # Pace the passes, so a burst of events costs one pass per interval.
-            self._sweep_stop.wait(timeout=self._min_pass_interval_seconds)
+            self._pass_stop.wait(timeout=self._min_pass_interval_seconds)
 
     def _run_one_pass_logging_failures(self) -> None:
         started_at = time.monotonic()
