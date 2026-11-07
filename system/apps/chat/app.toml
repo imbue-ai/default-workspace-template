@@ -12,11 +12,11 @@ launcher_rank = 10
 # rather than offering it up front.
 system = true
 
-# A desktop shortcut opens the chat list; a chat is created only from inside it, or through the
+# A desktop shortcut raises the pinned chat list; a chat is created only from inside it, or through the
 # intake route below.
 [default_shortcut]
 launch = "root"
-mode = "new"
+mode = "focus"
 
 # The chat's pinned taskbar entry (docs/system/blueprint/pinned-taskbar-entries/): one root window on
 # every desktop, never closed, showing each viewer their own selected chat.
