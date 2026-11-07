@@ -27,7 +27,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { USER_BUBBLE_CLASS } from "./user-message-display";
+import { USER_BUBBLE_CONTINUED_CLASS } from "./user-message-display";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -121,7 +121,7 @@ describe("renderQueuedMessages", () => {
     expect(renderedText(notice)).toContain("Wait for the worker (finished)");
     expect(renderedText(nodes)).not.toContain("<background-task-report>");
     // The user's own queued message is still a verbatim bubble beside it.
-    expect(renderedText(findByClass(nodes, USER_BUBBLE_CLASS))).toContain("my own words");
+    expect(renderedText(findByClass(nodes, USER_BUBBLE_CONTINUED_CLASS))).toContain("my own words");
   });
 
   it("draws a report the backend is sending like the transcript notice it becomes, and a parked one muted", () => {
