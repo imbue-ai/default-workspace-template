@@ -5,6 +5,7 @@ from datetime import timezone
 import jwt
 from flask import Flask
 from flask import Response
+from werkzeug.datastructures import MultiDict
 
 from share_gateway.identity import RequesterIdentity
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
@@ -98,13 +99,22 @@ def test_set_session_cookie_sets_a_plain_copy_and_a_partitioned_copy() -> None:
 
 def test_verify_session_from_cookies_accepts_whichever_copy_verifies() -> None:
     value = mint_session_cookie_value(_SECRET, _BOB, _DOMAIN)
-    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: value}, _DOMAIN) == _BOB
-    assert verify_session_from_cookies(_SECRET, {PARTITIONED_SESSION_COOKIE_NAME: value}, _DOMAIN) == _BOB
+    assert verify_session_from_cookies(_SECRET, MultiDict({SESSION_COOKIE_NAME: value}), _DOMAIN) == _BOB
+    assert verify_session_from_cookies(_SECRET, MultiDict({PARTITIONED_SESSION_COOKIE_NAME: value}), _DOMAIN) == _BOB
     # A stale plain copy must not mask a valid partitioned one.
-    both = {SESSION_COOKIE_NAME: "garbage", PARTITIONED_SESSION_COOKIE_NAME: value}
+    both = MultiDict({SESSION_COOKIE_NAME: "garbage", PARTITIONED_SESSION_COOKIE_NAME: value})
     assert verify_session_from_cookies(_SECRET, both, _DOMAIN) == _BOB
-    assert verify_session_from_cookies(_SECRET, {}, _DOMAIN) is None
-    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: "garbage"}, _DOMAIN) is None
+    assert verify_session_from_cookies(_SECRET, MultiDict(), _DOMAIN) is None
+    assert verify_session_from_cookies(_SECRET, MultiDict({SESSION_COOKIE_NAME: "garbage"}), _DOMAIN) is None
+
+
+def test_verify_session_from_cookies_tries_every_value_sent_under_a_name() -> None:
+    # A same-named cookie set for a parent domain is sent beside the workspace's own, and may come first;
+    # it must not mask the session.
+    value = mint_session_cookie_value(_SECRET, _OWNER, _DOMAIN)
+    foreign = mint_session_cookie_value("a-foreign-secret", _OWNER, _DOMAIN)
+    shadowed = MultiDict([(SESSION_COOKIE_NAME, foreign), (SESSION_COOKIE_NAME, value)])
+    assert verify_session_from_cookies(_SECRET, shadowed, _DOMAIN) == _OWNER
 
 
 def test_strip_session_cookie_removes_only_ours() -> None:

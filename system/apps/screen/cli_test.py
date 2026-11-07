@@ -7,9 +7,9 @@ from screen.cli import EXIT_PREEMPTED
 from screen.cli import EXIT_TIMEOUT
 from screen.cli import describe_controller
 from screen.cli import parse_answer_body
-from screen.cli import parse_size_argument
 from screen.cli import render_acquire_answer
 from screen.errors import InvalidScreenSizeError
+from screen.primitives import parse_size_argument
 
 
 def test_acquire_answers_map_to_the_fleet_exit_codes() -> None:

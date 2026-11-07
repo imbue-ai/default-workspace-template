@@ -14,6 +14,7 @@ from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
 from screen.connect_info import ConnectInfoAggregator
+from screen.data_types import DisplaySettings
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -24,6 +25,8 @@ from screen.service import ScreenService
 from screen.stack import STOP_REASON_FILENAME
 from screen.stack import ScreenStack
 from screen.stack import secrets_from_neko_yaml
+from screen.xfce_session_config import XFCE_SESSION_CHANNEL_RELATIVE_PATH
+from screen.xfce_session_config import render_xfce_session_channel
 from testing import start_service_stack
 from testing import wait_until
 
@@ -76,6 +79,20 @@ def test_start_renders_the_configuration_and_brings_the_members_up_in_order(
     assert f'XDG_DESKTOP_DIR="{tmp_path / "Desktop"}"' in user_dirs
     assert f'XDG_DOWNLOAD_DIR="{tmp_path / "Downloads"}"' in user_dirs
     assert (tmp_path / "Desktop").is_dir() and (tmp_path / "Downloads").is_dir()
+
+
+def test_a_workspaces_start_leaves_the_desktop_sessions_panel_alone(service: ScreenService, tmp_path: Path) -> None:
+    start_service_stack(service)
+    assert not (tmp_path / "home" / XFCE_SESSION_CHANNEL_RELATIVE_PATH).exists()
+
+
+@pytest.mark.parametrize("display_settings", [DisplaySettings(is_desktop_panel_shown=False)])
+def test_a_start_without_the_panel_names_the_panel_less_session_before_the_session_starts(
+    service: ScreenService, fake_supervisor: FakeSupervisor, tmp_path: Path
+) -> None:
+    start_service_stack(service)
+    assert ("start", "screen-session") in fake_supervisor.calls
+    assert (tmp_path / "home" / XFCE_SESSION_CHANNEL_RELATIVE_PATH).read_text() == render_xfce_session_channel(None)
 
 
 def test_a_member_that_fails_to_start_stops_the_rest_and_records_why(
@@ -337,7 +354,7 @@ def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
 
 def test_secrets_are_read_back_from_a_rendered_neko_yaml() -> None:
     secrets = NekoSecrets(user_password=SecretStr("u"), admin_password=SecretStr("a"), api_token=SecretStr("t"))
-    read_back = secrets_from_neko_yaml(render_neko_yaml(secrets))
+    read_back = secrets_from_neko_yaml(render_neko_yaml(secrets, DisplaySettings()))
     assert read_back.user_password.get_secret_value() == "u"
     assert read_back.admin_password.get_secret_value() == "a"
     assert read_back.api_token.get_secret_value() == "t"

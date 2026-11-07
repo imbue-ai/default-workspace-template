@@ -21,10 +21,17 @@ from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.chrome_launcher import should_disable_sandbox
 from screen.connect_info import ConnectInfoAggregator
+from screen.data_types import DisplaySettings
+from screen.display_settings import display_settings_from_environ
+from screen.errors import ScreenConfigurationError
 from screen.launch import DetachedProcessLauncher
 from screen.launch import screen_process_environment
 from screen.messenger import ChatAgentMessenger
 from screen.neko_client import NekoClient
+from screen.owner_gate import OWNER_TOKEN_SHA256_FILE_ENV_VAR
+from screen.owner_gate import OwnerGate
+from screen.owner_gate import is_loopback_address
+from screen.owner_gate import owner_gate_from_environ
 from screen.primitives import APP_NAME
 from screen.primitives import BROWSER_MANIFEST_PATH
 from screen.primitives import BROWSER_PROFILE_ROOT
@@ -62,6 +69,8 @@ class ScreenServiceArguments(FrozenModel):
     static_directory: Path = Field(description="The frontend's built bundle")
     host: str = Field(description="The address the page server binds")
     is_registered: bool = Field(description="Whether this boot registers the manifest (a throwaway boot does not)")
+    owner_gate: OwnerGate | None = Field(description="Gate mode's owner gate (an auth sandbox), or None")
+    display_settings: DisplaySettings = Field(description="The video codec and any fixed display size")
 
 
 def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) -> ScreenService:
@@ -80,6 +89,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         launcher=DetachedProcessLauncher(working_directory=repo_root),
         messenger=ChatAgentMessenger(repo_root=repo_root),
         connectivity=ConnectInfoAggregator(brokers=brokers_from_environ(os.environ)),
+        display_settings=arguments.display_settings,
     )
     # Chromium's profile root follows $MNGR_HOST_DIR, so an upgraded workspace keeps its logins.
     profile_root = Path(os.environ.get("MNGR_HOST_DIR", str(BROWSER_PROFILE_ROOT.parent))) / BROWSER_PROFILE_ROOT.name
@@ -114,6 +124,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_running=service.on_running,
         set_api_token=service.set_api_token,
         on_stopping=fleet.prepare_for_stack_stop,
+        display_settings=arguments.display_settings,
     )
     service.attach_stack(stack)
     # After the stack is attached: loading broadcasts state, which reads it.
@@ -125,7 +136,7 @@ def run_screen_service(arguments: ScreenServiceArguments, wait_for_shutdown: Cal
     """Serve the routes, start the service's clocks, register the app, and wait for SIGTERM or SIGINT."""
     proxy_server = ProxyServer()
     service = build_service(arguments, proxy_server)
-    app = build_app(service, arguments.static_directory, NekoProxy())
+    app = build_app(service, arguments.static_directory, NekoProxy(), arguments.owner_gate)
     with serve_in_background(arguments.host, app_url_port(arguments.app_url), app):
         proxy_server.start()
         service.start()
@@ -164,7 +175,14 @@ def run_screen_service(arguments: ScreenServiceArguments, wait_for_shutdown: Cal
     show_default=True,
     help="The frontend's built bundle",
 )
-@click.option("--port", type=int, default=SERVICE_PORT, show_default=True, help="The loopback port to serve on")
+@click.option(
+    "--host",
+    envvar="SCREEN_LISTEN_HOST",
+    default=SERVICE_HOST,
+    show_default=True,
+    help="The address to serve on (an auth sandbox binds every interface, behind the owner gate)",
+)
+@click.option("--port", type=int, default=SERVICE_PORT, show_default=True, help="The port to serve on")
 @click.option(
     "--no-register",
     "is_unregistered",
@@ -172,15 +190,22 @@ def run_screen_service(arguments: ScreenServiceArguments, wait_for_shutdown: Cal
     default=False,
     help="Skip the registration: a throwaway boot that must not re-point the live row",
 )
-def main(manifest_path: Path, state_dir: Path, static_directory: Path, port: int, is_unregistered: bool) -> None:
+def main(
+    manifest_path: Path, state_dir: Path, static_directory: Path, host: str, port: int, is_unregistered: bool
+) -> None:
     """Run the Screen service: the workspace's streamed desktop as a window."""
+    owner_gate = owner_gate_from_environ(os.environ)
+    if owner_gate is None and not is_loopback_address(host):
+        raise ScreenConfigurationError(f"serving on {host} needs the owner gate ({OWNER_TOKEN_SHA256_FILE_ENV_VAR})")
     arguments = ScreenServiceArguments(
         manifest_path=manifest_path,
         app_url=AppUrl(f"http://localhost:{port}"),
         state_dir=state_dir,
         static_directory=static_directory,
-        host=SERVICE_HOST,
+        host=host,
         is_registered=not is_unregistered,
+        owner_gate=owner_gate,
+        display_settings=display_settings_from_environ(os.environ),
     )
     sys.exit(run_screen_service(arguments, wait_for_shutdown_signal))
 

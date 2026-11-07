@@ -15,15 +15,26 @@ VM_EXEC_PORT="${OWNER_EXEC_VM_PORT:-8794}"
 # The VM is the container's default gateway. Resolve it rather than hardcoding
 # 172.17.0.1 so a custom docker network still works.
 #
-# Both the `command -v` probe and the `|| true` are load-bearing under `set -euo pipefail`:
-# iproute2 is absent on some hosts, and a bare failing pipeline exits 127 BEFORE the skip
-# branch below, so supervisord logs "exit status 127; not expected" on every boot of a host
-# this script is meant to skip cleanly.
-if ! command -v ip >/dev/null 2>&1; then
-    echo "register_vm_exec: no 'ip' command; skipping vm-exec registration" >&2
-    exit 0
+# iproute2 is absent from the product image, so the kernel's route table is the
+# fallback; its gateway column is the address in little-endian hex. Every
+# probe ends in `|| true`: under `set -euo pipefail` a failing pipeline would
+# exit before the skip branch below, which supervisord logs as an unexpected exit.
+ROUTE_TABLE="${REGISTER_VM_EXEC_ROUTE_TABLE:-/proc/net/route}"
+default_gateway_from_route_table() {
+    local iface destination hex_gateway rest
+    while read -r iface destination hex_gateway rest; do
+        if [ "$destination" = "00000000" ] && [ "$hex_gateway" != "00000000" ]; then
+            printf '%d.%d.%d.%d\n' "$((16#${hex_gateway:6:2}))" "$((16#${hex_gateway:4:2}))" \
+                "$((16#${hex_gateway:2:2}))" "$((16#${hex_gateway:0:2}))"
+            return 0
+        fi
+    done < <(tail -n +2 "$ROUTE_TABLE" 2>/dev/null || true)
+}
+if command -v ip >/dev/null 2>&1; then
+    gateway="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
+else
+    gateway="$(default_gateway_from_route_table || true)"
 fi
-gateway="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
 if [ -z "${gateway:-}" ]; then
     echo "register_vm_exec: no default gateway; skipping vm-exec registration" >&2
     exit 0

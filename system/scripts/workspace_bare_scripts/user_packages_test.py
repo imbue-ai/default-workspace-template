@@ -71,6 +71,25 @@ def test_a_member_glob_makes_every_matching_package_built_in(tmp_path: Path) -> 
     assert user_packages.user_packages(repo_root) == ["system/services/poller"]
 
 
+def test_a_package_the_root_workspace_excludes_is_built_in_and_not_a_user_package(
+    tmp_path: Path,
+) -> None:
+    repo_root = _root(tmp_path, ["system/apps/chat"])
+    with (repo_root / "pyproject.toml").open("a") as pyproject:
+        pyproject.write('exclude = ["system/libs/auth_sandbox"]\n')
+    for relative in (
+        "system/apps/chat",
+        "system/libs/auth_sandbox",
+        "system/libs/helpers",
+    ):
+        _package(repo_root, relative)
+
+    assert user_packages.built_in_standalone_projects(repo_root) == [
+        "system/libs/auth_sandbox"
+    ]
+    assert user_packages.user_packages(repo_root) == ["system/libs/helpers"]
+
+
 def test_a_standalone_package_has_no_problems(tmp_path: Path) -> None:
     repo_root = _root(tmp_path, [])
     package = _package(

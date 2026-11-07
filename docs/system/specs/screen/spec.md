@@ -94,6 +94,7 @@ A strip at the top names who has control: "You", "<name>", "Agent <name>", or "N
 When someone else has control, the strip offers "Take control"; input from a non-controlling viewer is not sent.
 When an agent has control, the Screen is dimmed slightly, the agent's name is shown, and "Take control" is there, as in the browser app's agent overlay; a URL the human asked to open while an agent drives is held and offered as it is today.
 "Give control back" appears for the human who took it from an agent, so the agent can resume (the browser's `return_to_agents`), and for the owner while a handoff waits unclaimed.
+A viewer opened with `?strip=off` (the auth sandbox's frame in the hosted chrome, which draws its own controls) has no strip: the screencast alert with "Retry now" (section 5.4) and the notices (a refused verb's reason, a drop's result) show as a small banner over the top of the stage while they apply, and a press or a key on the stage while another human session holds control takes control (in gate mode every session is the owner's); the press itself is not sent.
 
 Several humans may watch at once, each from their own client; the controller's cursor is the remote one, and other viewers' cursors are shown as neko's inactive cursors.
 
@@ -129,7 +130,7 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 
 | Thing | Where | Notes |
 |---|---|---|
-| Screen service | `127.0.0.1:8090`, registered as the app's URL | HTTP and WebSocket, the viewer's only origin |
+| Screen service | `127.0.0.1:8090`, registered as the app's URL | HTTP and WebSocket, the viewer's only origin; `--host` or `SCREEN_LISTEN_HOST` binds another address, which only gate mode allows (section 6.5) |
 | neko HTTP and WebSocket | `127.0.0.1:8091` | reached only through the service's `/neko/` proxy |
 | neko UDP mux and TCP mux | `0.0.0.0:59000/udp` and `0.0.0.0:59000/tcp` inside the container | the workspace's two published ports, declared by every create template as `publish__extend = ["59000/udp", "59000/tcp"]` (the `modal` template declares `["59000/tcp"]` alone: Modal tunnels carry TCP only, and mngr refuses a UDP declaration before the sandbox exists) |
 | CDP proxy | `127.0.0.1:8083` | unchanged from the browser app |
@@ -137,9 +138,10 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 ### 5.2 `GET /api/connect-info`
 
 The viewer's one question: `{"ice_servers": [...], "candidates": [{"host", "port", "protocol"}], "expires_at"}`.
-The service asks, with a two-second bound each and in parallel, the desktop (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/<id>/media-endpoints` and `.../ice-servers`, the integration spec section 4, reached as the chat app's notification client reaches the desktop) and the share gateway's loopback route (`GET http://127.0.0.1:8791/connect-info`, section 15), and answers the union, with candidates filtered to guest port 59000 and de-duplicated.
+The service asks, with a two-second bound each and in parallel, the desktop (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/<id>/media-endpoints` and `.../ice-servers`, the integration spec section 4, reached as the chat app's notification client reaches the desktop) the share gateway's loopback route (`GET http://127.0.0.1:8791/connect-info`, section 15), and, when `SCREEN_CONNECT_INFO_PATH` names one, a connect-info file read on every request (an auth sandbox's, which its connector writes with the sandbox's TCP tunnel to port 59000), and answers the union, with candidates filtered to guest port 59000 and de-duplicated.
+A candidate a broker names by a hostname (the auth sandbox's Modal tunnel, a relay) is answered as one candidate per IPv4 address the name resolves to, within that broker's bound, because Firefox ignores a remote ICE candidate whose address is not an IP; a name that does not resolve in the container is kept as the name, for a viewer that may resolve it, and a malformed one drops its candidate, never the answer.
 `?relay=1` is the only time the service asks for ICE servers; without it `ice_servers` is empty (the TURN spec's direct-first rule).
-Both brokers may be absent; the answer is then an empty candidate list, which the viewer treats as "try the server's own candidate as given".
+All brokers may be absent; the answer is then an empty candidate list, which the viewer treats as "try the server's own candidate as given".
 The answer is held in memory only.
 
 ### 5.3 Signaling and candidate rewriting
@@ -148,6 +150,7 @@ The viewer opens `wss://<origin>/neko/api/ws?token=<session token>` (section 6.3
 For every server candidate it receives, the viewer emits one rewritten copy per entry of `candidates` whose protocol matches, replacing the address and port, giving each copy a distinct foundation so the browser treats them as distinct candidates, and keeping everything else; it drops the original unless `candidates` is empty.
 Its own peer connection carries `ice_servers` from `connect-info` and `iceTransportPolicy: "all"`.
 A connection that does not reach `connected` within four seconds, or that fails later, refetches `connect-info?relay=1` and restarts ICE; the viewer records `needs-relay` per client in local storage and fetches with `relay=1` first next time.
+A Screen whose environment sets `SCREEN_ICE_LITE=on` (the auth sandbox, reached on one candidate, its TCP tunnel) runs neko with `webrtc.icelite: true`: neko answers the viewer's connectivity checks and runs none of its own.
 
 ### 5.4 Fallback without WebRTC
 
@@ -181,6 +184,17 @@ Humans never see them: the viewer calls `POST /api/session` on the service, whic
 The viewer logs its session out (`POST /neko/api/logout`) on `pagehide`, and neko drops a `multiuser` session on logout, so sessions do not accumulate across page loads; the service also deletes any session that has been disconnected for ten minutes.
 The service's own admin session and REST calls use `session.api_token`, generated the same way.
 A request with no identity header is the owner: the gateway and the forwarder both stamp one, so a header-less request can only have come over loopback, from an agent or a test.
+Gate mode (section 6.5) replaces this rule.
+
+### 6.5 Gate mode
+
+An auth sandbox serves the Screen on every interface over Modal's TLS, with no gateway in front of it to vouch for the requester.
+Its boot script sets `SCREEN_OWNER_TOKEN_SHA256_FILE` (a file that holds the hash of an owner token its connector minted, once the sandbox is claimed) and `SCREEN_FRAME_ANCESTORS` (the hosted chrome's origin), which turns gate mode on.
+The service reads the file on every request that is not loopback; while it is absent, empty or not a hash, only loopback is admitted.
+In gate mode `X-Imbue-Identity` is ignored and every admitted request is the owner: a loopback request whose `Host` names loopback (`127.0.0.1`, `localhost` or `[::1]`) is admitted as is, a GET carrying the matching `?owner_token=` sets an owner session cookie and redirects to the same URL without it, and every other request, WebSocket included, needs that session or is refused with 401.
+A request that its browser marks (`Sec-Fetch-Site`) as made by a page of another origin is refused with 403 unless it is a GET or HEAD navigation, since every `*.modal.host` page is same-site with the Screen and so carries its session cookies, and a page the sandbox's sign-in browser shows can reach the Screen over loopback.
+Every response carries `frame-ancestors` naming the chrome's origin.
+The README's "Gate mode" gives the cookies and their checks.
 
 ### 6.4 Agents
 
@@ -193,6 +207,8 @@ Screenshots come from `GET /api/screenshot`, which the service answers from neko
 
 Xorg with the dummy driver on `:99`, `xorg.conf` rendered by the service at stack start: `VideoRam` sized for the 1080p cap at 32 bpp with headroom, `Virtual 1920 1080`, a `Modes` list seeded with `1920x1080`, `1600x900`, `1280x720`, neko's `xf86-input-neko` touchscreen as the one configured input device (`Driver "neko"`, its socket under the stack's runtime dir, the layout's `CorePointer`; mouse and keyboard arrive over XTEST), and `-noreset -nolisten tcp`.
 XFCE as neko's image ships it: `startxfce4` with the panel, Thunar and xfwm4 compositing on, PulseAudio with a null sink as the default device.
+A Screen whose environment sets `SCREEN_DESKTOP_PANEL=off` (the auth sandbox, where the user signs in through one browser window) runs the session without the panel: before each stack start the service writes the user's `xfce4-session` channel file (`~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml`, its other properties kept) naming a failsafe session of its own, `ScreenNoPanel`, which runs `xfwm4`, `xfsettingsd` and `xfdesktop` (the system failsafe session less `xfce4-panel` and `Thunar --daemon`), with `/general/SaveOnExit` false so no saved session takes its place; xfconfd reads the user's file over the system one, and with no saved session `xfce4-session` starts the failsafe session that file names (verified with xfce4-session 4.20 on an Xvfb display).
+Unset or `on`, nothing is written.
 The session runs as the workspace user with `HOME` the workspace home, so XFCE and application state ride the persistent volume and the backup.
 
 ### 7.2 Sizing
@@ -202,13 +218,14 @@ The session runs as the workspace user with `HOME` the workspace home, so XFCE a
 - The service rounds width and height down to multiples of 16, clamps to `[640x480, 1920x1080]`, and if the size differs from the current one: adds a mode named `<w>x<h>_60` with `xrandr --newmode` (a `cvt`-computed modeline) and `--addmode` on the dummy output when it is not already there, then `POST /neko/api/room/screen` with it.
   Neko restarts the capture and broadcasts `screen/updated`; viewers letterbox the new aspect.
 - Added modes are kept for the stack's life; they cost nothing.
+- A Screen whose environment fixes its size (`SCREEN_FIXED_SIZE=WxH`, any size within the floor and the cap whose width is a multiple of 8, CVT's cell, and whose height is even, for the encoders' I420, since no report is applied to it; the auth sandbox's 1288x806, exactly latchkey's login window, Playwright's 1280x720 viewport in a 1288x805 window) starts at that mode (`xorg.conf` lists it first and `neko.yaml` names it) and answers every report `{"applied": false, "reason": "fixed size"}` without resizing.
 - Every viewer draws the video at its intrinsic aspect, centred, letterboxed in the stage.
 
 ## 8. Video profiles, visibility and audio
 
 ### 8.1 Profiles
 
-Three pipelines in neko's config, all H.264 constrained baseline from x264 with `tune=zerolatency`, `byte-stream=true`, keyframe interval one second:
+Three pipelines in neko's config, keyframe interval one second, in the codec `SCREEN_VIDEO_CODEC` names: by default H.264 constrained baseline from x264 with `tune=zerolatency`, `byte-stream=true`, and with `vp8` libvpx in realtime CBR at the same rates (the auth sandbox's, section 11):
 
 | id | fps | bitrate | preset | threads |
 |---|---|---|---|---|
@@ -216,7 +233,10 @@ Three pipelines in neko's config, all H.264 constrained baseline from x264 with 
 | `watch` | 20 | 2500 kbps | veryfast | 4 |
 | `control` | 30 | 4000 kbps | veryfast | 4 |
 
+The preset column is x264's; VP8 runs every profile at `cpu-used=8`.
+
 The service chooses one profile for everyone from aggregate state: `control` while a human holds control and has sent input in the last 10 seconds, `idle` while nobody has sent input for 60 seconds and no agent holds the lease, `watch` otherwise.
+A Screen whose environment sets `SCREEN_VIDEO_PROFILE` to a profile's id (`idle`, `watch` or `control`, in any case; any other value stops the service at start) holds every viewer on that profile whatever the lease and the input, from before the first stack start on; the auth sandbox sets `control`, since it exists for one user actively signing in, who would otherwise see the `idle` picture until their first click.
 It announces the choice on its own WebSocket (section 10.2), and every viewer selects it with `signal/video`, so neko runs one encoder.
 `show_pointer` is off per pipeline; the controller's pointer takes the remote cursor's shape from the image neko sends over the peer's data channel (section 12).
 
@@ -276,7 +296,7 @@ The manifest's `priority = "screen"`; `system/test_app_manifests.py` and the ban
 
 ### 10.1 Routes
 
-All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
+All on `127.0.0.1:8090`, identity from `X-Imbue-Identity` (in gate mode, section 6.5, on the listen host, every admitted request the owner):
 
 | Route | Purpose |
 |---|---|
@@ -321,10 +341,11 @@ Chromium profiles stay under `$MNGR_HOST_DIR/browser-profiles/` and the tab mani
 A page in the `workspace_ui` npm workspace, built into the service's static output: the video element, the strip, the overlays (starting, stopped, agent has control, screencast fallback), the mobile controls, and no in-page chat.
 It imports the app contract and connects with `capabilities: {navigation: false, closeChord: true}`; its location report is `/` with the title from `state`; `onCloseRequest` sends Ctrl+W to the remote as a key chord rather than closing the window.
 It speaks neko's events directly (section 2.3) for signaling, input, cursors, clipboard and screen updates, and the service's `/api/ws` for everything else.
+As the page loads it asks for `/api/state`, `/api/session` and `/api/connect-info` at once: a session asked for before the stack runs is refused and asked for again once the state says it runs, and the first signaling uses the prefetched `connect-info` unless it is older than 30 seconds or was asked without the relay servers the request wants.
 Keys are mapped from `KeyboardEvent.code` to X keysyms with neko's own table, copied under its Apache-2.0 notice into `system/libs/workspace_ui`.
 They are read from a hidden text input inside the stage, which takes the focus the stage is given: a browser extension that binds letters as commands (Vimium and its kin) stands down for an editable element and for nothing else, so keys typed at the stage itself never reached the Screen.
 Input is sent only while this viewer's session is the controller and the viewer is visible.
-Neko's constrained-baseline H.264 decodes natively over WebRTC in every browser Studio supports, so the viewer needs no WebCodecs and nothing of the browser app's decoding path.
+The video decodes natively over WebRTC, so the viewer needs no WebCodecs and nothing of the browser app's decoding path. Neko's constrained-baseline H.264 decodes so in Chromium-based browsers and Safari, and in Firefox only with Cisco's OpenH264 plugin, which Mozilla's builds download on their own but which a build or a profile may lack; without it neko cannot start the video track ("codec is not supported by remote") and no WebRTC picture arrives. A workspace's Screen keeps H.264; the auth sandbox, viewed from whatever browser the user signs in with, sets `SCREEN_VIDEO_CODEC=vp8`, which every browser decodes over WebRTC.
 
 ## 12. The three fullscreen layers
 

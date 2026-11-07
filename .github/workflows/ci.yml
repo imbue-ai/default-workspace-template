@@ -165,6 +165,17 @@ jobs:
           npm run typecheck --workspace=libs/workspace_ui
           npm test
 
+      # The latchkey CLI setup_system.sh pins, which the auth sandbox suite below runs against;
+      # installed before /tmp loses exec.
+      - name: Install the pinned latchkey CLI
+        run: |
+          version="$(sed -n 's/^: "${LATCHKEY_VERSION:=\([0-9.]*\)}"$/\1/p' system/scripts/setup_system.sh)"
+          if [ -z "$version" ]; then
+            echo "no LATCHKEY_VERSION pin found in system/scripts/setup_system.sh" >&2
+            exit 1
+          fi
+          npm install -g "latchkey@$version"
+
       # A workspace container mounts /tmp noexec, where a test's stub
       # executable is skipped and the real tool runs. This runner's /tmp is exec, so
       # without this a pytest root that fails to load pytest-executable-tmp would pass
@@ -208,6 +219,15 @@ jobs:
         if: steps.python_suites.outputs.on_runner == 'true'
         working-directory: system/apps/chat
         run: uv run pytest -m ''
+
+      # The auth sandbox library is its own uv project, which the root workspace excludes, so
+      # neither the root suite nor the offload job collects it. Its suite runs here, from its
+      # own lock and venv (a stale lock fails the sync), against the latchkey CLI installed above.
+      - name: Run system/libs/auth_sandbox tests
+        working-directory: system/libs/auth_sandbox
+        run: |
+          uv sync --locked
+          uv run --no-sync pytest
 
   # The three pytest roots inside the workspace image on Modal, through offload
   # (offload-modal*.toml at the repo root). The bare runner above has none of

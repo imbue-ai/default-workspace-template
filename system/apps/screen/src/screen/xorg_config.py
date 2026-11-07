@@ -34,7 +34,7 @@ _CVT_CLOCK_STEP_MHZ: Final[float] = 0.25
 _CVT_MIN_VSYNC_BP_US: Final[float] = 550.0
 _CVT_MIN_V_PORCH: Final[int] = 3
 _CVT_H_SYNC_PERCENT: Final[float] = 8.0
-_CVT_CELL_GRAN: Final[int] = 8
+CVT_CELL_GRANULARITY_PX: Final[int] = 8
 _CVT_C_PRIME: Final[float] = 30.0
 _CVT_M_PRIME: Final[float] = 300.0
 _CVT_MIN_V_BPORCH: Final[int] = 6
@@ -69,11 +69,12 @@ def mode_name(width: int, height: int) -> str:
 
 
 @pure
-def _cvt_vertical_sync_width(width: int, height: int) -> int:
-    """CVT's sync width by aspect ratio (4:3, 16:9, 16:10, 5:4, 15:9), 10 for anything else."""
+def _cvt_vertical_sync_width(h_pixels_rounded: int, height: int) -> int:
+    """CVT's sync width by aspect ratio (4:3, 16:9, 16:10, 5:4, 15:9), 10 for anything else; a ratio counts only
+    when the height is a whole multiple of its denominator and the rounded width is exactly the ratio's."""
     aspect_widths = ((4, 3, 4), (16, 9, 5), (16, 10, 6), (5, 4, 7), (15, 9, 7))
     for aspect_width, aspect_height, sync_width in aspect_widths:
-        if width == (height * aspect_width // aspect_height) // _CVT_CELL_GRAN * _CVT_CELL_GRAN:
+        if height % aspect_height == 0 and height * aspect_width // aspect_height == h_pixels_rounded:
             return sync_width
     return 10
 
@@ -81,8 +82,8 @@ def _cvt_vertical_sync_width(width: int, height: int) -> int:
 @pure
 def cvt_modeline(width: int, height: int) -> Modeline:
     """The CVT 1.2 modeline for ``width`` by ``height`` at 60 Hz, as ``cvt <w> <h> 60`` computes it."""
-    h_pixels_rounded = (width // _CVT_CELL_GRAN) * _CVT_CELL_GRAN
-    v_sync_width = _cvt_vertical_sync_width(width, height)
+    h_pixels_rounded = (width // CVT_CELL_GRANULARITY_PX) * CVT_CELL_GRANULARITY_PX
+    v_sync_width = _cvt_vertical_sync_width(h_pixels_rounded, height)
     h_period_estimate_us = (1_000_000.0 / MODE_REFRESH_HZ - _CVT_MIN_VSYNC_BP_US) / (
         height + _CVT_MIN_V_PORCH + _CVT_INTERLACE
     )
@@ -92,15 +93,17 @@ def cvt_modeline(width: int, height: int) -> Modeline:
     v_total = height + v_sync_and_back_porch + _CVT_MIN_V_PORCH
     ideal_duty_cycle = _CVT_C_PRIME - (_CVT_M_PRIME * h_period_estimate_us / 1000.0)
     if ideal_duty_cycle < 20.0:
-        h_blank = (h_pixels_rounded * 20 // (100 - 20)) // (2 * _CVT_CELL_GRAN) * (2 * _CVT_CELL_GRAN)
+        h_blank = (
+            (h_pixels_rounded * 20 // (100 - 20)) // (2 * CVT_CELL_GRANULARITY_PX) * (2 * CVT_CELL_GRANULARITY_PX)
+        )
     else:
         h_blank = (
             int(h_pixels_rounded * ideal_duty_cycle / (100.0 - ideal_duty_cycle))
-            // (2 * _CVT_CELL_GRAN)
-            * (2 * _CVT_CELL_GRAN)
+            // (2 * CVT_CELL_GRANULARITY_PX)
+            * (2 * CVT_CELL_GRANULARITY_PX)
         )
     h_total = h_pixels_rounded + h_blank
-    h_sync_width = (int(h_total * _CVT_H_SYNC_PERCENT / 100.0) // _CVT_CELL_GRAN) * _CVT_CELL_GRAN
+    h_sync_width = (int(h_total * _CVT_H_SYNC_PERCENT / 100.0) // CVT_CELL_GRANULARITY_PX) * CVT_CELL_GRANULARITY_PX
     pixel_clock_mhz = math.floor((h_total / h_period_estimate_us) / _CVT_CLOCK_STEP_MHZ) * _CVT_CLOCK_STEP_MHZ
     h_sync_end = h_pixels_rounded + h_blank // 2
     return Modeline(
@@ -118,10 +121,14 @@ def cvt_modeline(width: int, height: int) -> Modeline:
 
 
 @pure
-def render_xorg_conf() -> str:
-    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes, neko's touchscreen as
-    the one configured input device (mouse and keyboard arrive over XTEST), no VT, no PCI probing."""
-    modelines = [cvt_modeline(width, height) for width, height in SEEDED_MODES]
+def render_xorg_conf(fixed_mode: tuple[int, int] | None) -> str:
+    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes (led by a fixed
+    ``(width, height)``, so the server starts at it), neko's touchscreen as the one configured input device (mouse
+    and keyboard arrive over XTEST), no VT, no PCI probing."""
+    sizes = list(SEEDED_MODES)
+    if fixed_mode is not None:
+        sizes = [fixed_mode, *(size for size in sizes if size != fixed_mode)]
+    modelines = [cvt_modeline(width, height) for width, height in sizes]
     modes_list = " ".join(f'"{modeline.name}"' for modeline in modelines)
     modeline_lines = "\n".join(f"  {modeline.render()}" for modeline in modelines)
     return f"""Section "ServerFlags"

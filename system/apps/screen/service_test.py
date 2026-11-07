@@ -8,6 +8,8 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+import pytest
+import yaml
 from flask.testing import FlaskClient
 from websockets.sync.client import connect as connect_websocket
 
@@ -16,12 +18,15 @@ from mock_display_modes_test import FakeDisplayModes
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.data_types import DisplaySettings
 from screen.data_types import IceServer
 from screen.data_types import IceServersAnswer
 from screen.data_types import Lifecycle
 from screen.data_types import MediaCandidate
 from screen.data_types import NekoSessionRecord
+from screen.data_types import ScreenSize
 from screen.data_types import TransportProtocol
+from screen.data_types import VideoCodec
 from screen.data_types import XWindow
 from screen.primitives import NekoSessionId
 from screen.primitives import XWindowId
@@ -36,6 +41,7 @@ _IDENTITY = {"X-Imbue-Identity": json.dumps({"owner": True, "user_id": "u1", "em
 _VISITOR = {"X-Imbue-Identity": json.dumps({"owner": False, "user_id": "u2", "email": "mia@example.com"})}
 _AGENT_A = {"X-Mngr-Agent-Id": "chat-a", "X-Mngr-Agent-Name": "Alice"}
 _AGENT_B = {"X-Mngr-Agent-Id": "chat-b", "X-Mngr-Agent-Name": "Bob"}
+_FIXED_VP8 = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1288, height=806, rate=60))
 
 
 def _session(client: FlaskClient, headers: dict[str, str]) -> dict:
@@ -84,13 +90,13 @@ def test_connect_info_answers_the_brokers_union_and_asks_for_ice_servers_only_wi
     desktop.ice_servers = IceServersAnswer(
         ice_servers=(IceServer(urls="stun:stun.cloudflare.com:3478"),), expires_at="2026-10-17T13:00:00Z"
     )
-    gateway.candidates = (MediaCandidate(host="relay.example", port=40123, protocol=TransportProtocol.TCP),)
+    gateway.candidates = (MediaCandidate(host="203.0.113.7", port=40123, protocol=TransportProtocol.TCP),)
     direct = client.get("/api/connect-info").get_json()
     assert direct == {
         "ice_servers": [],
         "candidates": [
             {"host": "127.0.0.1", "port": 32771, "protocol": "udp"},
-            {"host": "relay.example", "port": 40123, "protocol": "tcp"},
+            {"host": "203.0.113.7", "port": 40123, "protocol": "tcp"},
         ],
         "expires_at": None,
     }
@@ -476,6 +482,25 @@ def test_a_non_controllers_size_report_is_ignored(
     assert not any(call.startswith("size:") for call in fake_neko.calls)
 
 
+@pytest.mark.parametrize("display_settings", [_FIXED_VP8])
+def test_a_fixed_size_is_rendered_at_start_and_no_report_resizes_it(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko, fake_display_modes: FakeDisplayModes
+) -> None:
+    start_service_stack(service)
+    neko_yaml = yaml.safe_load((service.state_dir / "neko.yaml").read_text())
+    assert neko_yaml["desktop"]["screen"] == "1288x806@60"
+    assert neko_yaml["capture"]["video"]["codec"] == "vp8"
+    assert '    Modes "1288x806_60" ' in (service.state_dir / "xorg.conf").read_text()
+    session = _controlling_session(client, service)
+    for body in ({"width": 704, "height": 480, "session_id": session["session_id"]}, {"width": 1024, "height": 768}):
+        answer = client.post("/api/screen-size", json=body)
+        assert answer.status_code == 200
+        assert answer.get_json()["applied"] is False
+        assert answer.get_json()["reason"] == "fixed size"
+    assert not any(call.startswith("size:") for call in fake_neko.calls)
+    assert fake_display_modes.added == []
+
+
 def test_a_size_request_with_no_session_is_the_commands_and_is_applied(
     client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
 ) -> None:
@@ -527,6 +552,27 @@ def test_the_profile_follows_input_and_the_lease(
     client.post("/api/control/release", headers=_AGENT_A)
     manual_clock.advance(61)
     assert service.refresh_profile() == "idle"
+
+
+@pytest.mark.parametrize("display_settings", [DisplaySettings(pinned_video_id="control")])
+def test_a_pinned_profile_is_streamed_from_the_start_whatever_the_lease_and_input(
+    client: FlaskClient, service: ScreenService, manual_clock: ManualClock
+) -> None:
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    start_service_stack(service)
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    manual_clock.advance(61)
+    assert service.refresh_profile() == "control"
+    acquired = client.post("/api/control/acquire", headers=_AGENT_A, json={})
+    assert acquired.get_json()["ok"] is True
+    assert service.refresh_profile() == "control"
+    client.post("/api/control/release", headers=_AGENT_A)
+    session = _controlling_session(client, service)
+    assert client.post("/api/input-seen", json={"session_id": session["session_id"]}).status_code == 204
+    manual_clock.advance(600)
+    assert service.refresh_profile() == "control"
+    service.stack.stop("the test ended it")
+    assert client.get("/api/state").get_json()["video_id"] == "control"
 
 
 def test_input_seen_needs_a_known_session(client: FlaskClient, service: ScreenService) -> None:

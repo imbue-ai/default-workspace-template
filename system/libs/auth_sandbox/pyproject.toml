@@ -1,0 +1,67 @@
+[project]
+name = "auth-sandbox"
+version = "0.1.0"
+description = "The web latchkey auth sandbox's commands: the session's preparation, the browser sign-in and typed-credential entry the Imbue Studio web chrome drives over owner-exec, the claim watcher the boot script runs, plus the sandbox image's build steps."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.0",
+    "imbue-common",
+    "imbue-mngr-latchkey",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+auth-sandbox-prepare = "auth_sandbox.cli:prepare_command"
+auth-sandbox-sign-in = "auth_sandbox.cli:sign_in_command"
+auth-sandbox-set-credentials = "auth_sandbox.cli:set_credentials_command"
+auth-sandbox-await-claim = "auth_sandbox.cli:await_claim_command"
+auth-sandbox-render-config = "auth_sandbox.cli:render_config_command"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/auth_sandbox"]
+
+[dependency-groups]
+dev = [
+    # pytest, inline-snapshot and the ratchet helpers test_auth_sandbox_ratchets.py imports.
+    "imbue-common[testing]",
+    "pytest-timeout>=2.0",
+    # The same plugins every pytest root of the workspace loads: the agent environment cleared and a
+    # skip refused where the environment is meant to be complete, and a tmp_path a stub executable can run from.
+    "pytest-workspace-env",
+    "pytest-executable-tmp",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.87",
+]
+
+# Its own project, not a root workspace member (the root pyproject's [tool.uv.workspace] exclude):
+# imbue-mngr-latchkey brings mngr plugins a workspace's own mngr must not load, so only the auth
+# sandbox image installs this library. The mngr packages are held to the root's pin
+# (set_mngr_pin.py moves both), and the workspace's test plugins come from their directories.
+[tool.uv.sources]
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "2d209bddd0e71fc5a816d6282190eee47ced00cf", subdirectory = "libs/imbue_common" }
+imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "2d209bddd0e71fc5a816d6282190eee47ced00cf", subdirectory = "libs/mngr_latchkey" }
+pytest-workspace-env = { path = "../pytest_workspace_env", editable = true }
+pytest-executable-tmp = { path = "../pytest_executable_tmp", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+required_plugins = ["pytest-workspace-env", "pytest-executable-tmp"]
+addopts = ["--timeout=10"]
+timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
+
+[tool.ty.src]
+# The image build's Modal driver runs only from a developer's machine with `--with modal`; the
+# workspace never installs modal, so ty cannot resolve it here. Its steps (image_build) are checked.
+exclude = ["src/auth_sandbox/modal_image_build.py"]

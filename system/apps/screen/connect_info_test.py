@@ -1,12 +1,16 @@
-"""``connect-info`` over fake brokers (both, one, none, slow, refusing) and the two real brokers over a loopback
-stand-in for the latchkey proxy and the share gateway."""
+"""``connect-info`` over fake brokers (both, one, none, slow, refusing), the two real HTTP brokers over a loopback
+stand-in for the latchkey proxy and the share gateway, and the connect-info file an auth sandbox's connector writes."""
 
+import ipaddress
 import json
+import socket
 import threading
 import time
+from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
@@ -15,12 +19,17 @@ from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
 from mock_broker_test import FakeBroker
+from screen.brokers import ConnectInfoFileBroker
 from screen.brokers import DesktopBroker
 from screen.brokers import ShareGatewayBroker
+from screen.brokers import brokers_from_environ
 from screen.brokers import parse_candidates
 from screen.brokers import parse_ice_servers_answer
 from screen.connect_info import ConnectInfoAggregator
+from screen.connect_info import is_ip_literal
 from screen.connect_info import merge_connect_info
+from screen.connect_info import resolve_candidate_hosts
+from screen.connect_info import resolve_ipv4_addresses
 from screen.data_types import IceServer
 from screen.data_types import IceServersAnswer
 from screen.data_types import MediaCandidate
@@ -29,7 +38,7 @@ from screen.errors import ConnectivityBrokerError
 
 _UDP = MediaCandidate(host="127.0.0.1", port=32771, protocol=TransportProtocol.UDP, guest_port=59000)
 _TCP = MediaCandidate(host="127.0.0.1", port=32772, protocol=TransportProtocol.TCP, guest_port=59000)
-_RELAY_TCP = MediaCandidate(host="relay-us1.example", port=40123, protocol=TransportProtocol.TCP, guest_port=59000)
+_RELAY_TCP = MediaCandidate(host="203.0.113.7", port=40123, protocol=TransportProtocol.TCP, guest_port=59000)
 _SSH = MediaCandidate(host="127.0.0.1", port=32770, protocol=TransportProtocol.TCP, guest_port=22)
 _TURN = IceServer(urls=("turn:turn.cloudflare.com:3478?transport=udp",), username="u", credential="c")
 _STUN = IceServer(urls="stun:stun.cloudflare.com:3478")
@@ -114,6 +123,68 @@ def test_relay_servers_get_a_longer_bound_than_candidates() -> None:
     assert answer.candidates == ()
     assert answer.ice_servers == (_TURN,)
     assert 0.5 < elapsed < 2.5
+
+
+def _fake_resolver(
+    addresses_by_name: Mapping[str, tuple[str, ...]], asked: list[str]
+) -> Callable[[str], tuple[str, ...]]:
+    def resolve(host: str) -> tuple[str, ...]:
+        asked.append(host)
+        if host not in addresses_by_name:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return addresses_by_name[host]
+
+    return resolve
+
+
+def test_a_hostname_candidate_becomes_one_candidate_per_address_and_an_ip_is_kept_as_it_is() -> None:
+    asked: list[str] = []
+    named = MediaCandidate(host="r482.modal.host", port=38209, protocol=TransportProtocol.TCP, guest_port=59000)
+    resolve = _fake_resolver({"r482.modal.host": ("198.51.100.4", "198.51.100.5")}, asked)
+    assert resolve_candidate_hosts((_UDP, named), resolve) == (
+        _UDP,
+        MediaCandidate(host="198.51.100.4", port=38209, protocol=TransportProtocol.TCP, guest_port=59000),
+        MediaCandidate(host="198.51.100.5", port=38209, protocol=TransportProtocol.TCP, guest_port=59000),
+    )
+    assert asked == ["r482.modal.host"]
+
+
+def test_a_hostname_that_does_not_resolve_here_is_kept_for_the_viewer_to_resolve() -> None:
+    laptop_only = MediaCandidate(host="docker-box.local", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    assert resolve_candidate_hosts((laptop_only, _TCP), _fake_resolver({}, [])) == (laptop_only, _TCP)
+
+
+def test_a_malformed_hostname_drops_its_candidate_alone() -> None:
+    malformed = MediaCandidate(host="a..b", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    assert resolve_candidate_hosts((malformed, _TCP), resolve_ipv4_addresses) == (_TCP,)
+
+
+def test_is_ip_literal_accepts_both_families_and_refuses_names() -> None:
+    assert is_ip_literal("203.0.113.5")
+    assert is_ip_literal("2001:db8::1")
+    assert not is_ip_literal("r482.modal.host")
+    assert not is_ip_literal("localhost")
+
+
+def test_the_answer_carries_resolved_addresses_deduplicated_across_brokers() -> None:
+    named = MediaCandidate(host="r482.modal.host", port=32772, protocol=TransportProtocol.TCP, guest_port=59000)
+    laptop_only = MediaCandidate(host="docker-box.local", port=40000, protocol=TransportProtocol.TCP, guest_port=59000)
+    file_broker = FakeBroker(name="connect-info file", candidates=(named, laptop_only))
+    resolve = _fake_resolver({"r482.modal.host": ("127.0.0.1", "198.51.100.4", "198.51.100.4")}, [])
+    answer = ConnectInfoAggregator(brokers=(_desktop(), file_broker), resolve_host=resolve).fetch(is_relay=False)
+    assert answer.document()["candidates"] == [
+        {"host": "127.0.0.1", "port": 32771, "protocol": "udp"},
+        {"host": "127.0.0.1", "port": 32772, "protocol": "tcp"},
+        {"host": "198.51.100.4", "port": 32772, "protocol": "tcp"},
+        {"host": "docker-box.local", "port": 40000, "protocol": "tcp"},
+    ]
+
+
+def test_the_system_resolver_answers_ipv4_addresses_for_localhost() -> None:
+    addresses = resolve_ipv4_addresses("localhost")
+    assert addresses
+    assert all(ipaddress.ip_address(address).version == 4 for address in addresses)
+    assert len(addresses) == len(set(addresses))
 
 
 def test_merge_keeps_candidates_without_a_guest_port() -> None:
@@ -263,3 +334,37 @@ def test_the_route_answers_empty_lists_with_both_brokers_silent_and_forbids_cach
     assert answer.status_code == 200
     assert answer.get_json() == {"ice_servers": [], "candidates": [], "expires_at": None}
     assert answer.headers["Cache-Control"] == "no-store"
+
+
+def test_the_connect_info_file_is_read_on_every_request_and_absent_until_written(tmp_path: Path) -> None:
+    path = tmp_path / "auth-sandbox-connect-info.json"
+    broker = ConnectInfoFileBroker(path=path)
+    with pytest.raises(ConnectivityBrokerError):
+        broker.fetch_candidates()
+    path.write_text(
+        json.dumps(
+            {
+                "candidates": [{"host": "r7.modal.host", "port": 40517, "protocol": "tcp", "guest_port": 59000}],
+                "ice_servers": [],
+                "expires_at": None,
+            }
+        )
+    )
+    assert broker.fetch_candidates() == (
+        MediaCandidate(host="r7.modal.host", port=40517, protocol=TransportProtocol.TCP, guest_port=59000),
+    )
+    assert broker.fetch_ice_servers() == IceServersAnswer(ice_servers=(), expires_at=None)
+    for unreadable in ("not json", "[]", '{"candidates": "nope"}'):
+        path.write_text(unreadable)
+        with pytest.raises(ConnectivityBrokerError):
+            broker.fetch_candidates()
+
+
+def test_the_connect_info_file_is_asked_only_when_the_environment_names_it(tmp_path: Path) -> None:
+    assert [broker.name for broker in brokers_from_environ({})] == ["share gateway"]
+    path = tmp_path / "connect-info.json"
+    brokers = brokers_from_environ({"SCREEN_CONNECT_INFO_PATH": str(path)})
+    assert [broker.name for broker in brokers] == ["connect-info file", "share gateway"]
+    file_broker = brokers[0]
+    assert isinstance(file_broker, ConnectInfoFileBroker)
+    assert file_broker.path == path

@@ -27,6 +27,7 @@ function build() {
     onToggleAudio: () => undefined,
     onRetry,
     onToggleDetails,
+    isBanner: false,
   });
   document.body.append(strip.element);
   const alert = strip.element.querySelector<HTMLElement>("[data-screen-alert]");
@@ -35,6 +36,26 @@ function build() {
   const details = strip.element.querySelector<HTMLButtonElement>("[data-screen-details]");
   if (!alert || !status || !retry || !details) throw new Error("the strip is missing a media-path control");
   return { strip, alert, status, retry, details, onRetry, onToggleDetails };
+}
+
+/** The strip as the banner over the stage (``strip=off``): no Details, no control buttons. */
+function buildBanner() {
+  const onRetry = vi.fn();
+  const strip = new Strip({
+    onTakeControl: () => undefined,
+    onReturnControl: () => undefined,
+    pointerLockButton: document.createElement("button"),
+    onToggleAudio: () => undefined,
+    onRetry,
+    onToggleDetails: () => undefined,
+    isBanner: true,
+  });
+  document.body.append(strip.element);
+  const alert = strip.element.querySelector<HTMLElement>("[data-screen-alert]");
+  const status = strip.element.querySelector<HTMLElement>(".screen-strip__status");
+  const retry = strip.element.querySelector<HTMLButtonElement>("[data-screen-retry]");
+  if (!alert || !status || !retry) throw new Error("the banner is missing its alert");
+  return { strip, alert, status, retry, onRetry };
 }
 
 afterEach(() => {
@@ -99,5 +120,44 @@ describe("Strip after a handoff", () => {
     const { strip } = build();
     strip.update(handedOff, "s1", false, "connected", null);
     expect(strip.element.querySelector<HTMLElement>("[data-screen-return-control]")?.hidden).toBe(true);
+  });
+});
+
+describe("Strip as the banner (strip=off)", () => {
+  it("carries only the alert and the notices, and none of the control row", () => {
+    const { strip } = buildBanner();
+    expect(strip.element.classList.contains("screen-strip--banner")).toBe(true);
+    expect(strip.element.querySelector("[data-screen-controller]")).toBeNull();
+    expect(strip.element.querySelector("[data-screen-take-control]")).toBeNull();
+    expect(strip.element.querySelector("[data-screen-mute]")).toBeNull();
+    expect(strip.element.querySelector("[data-screen-details]")).toBeNull();
+  });
+
+  it("shows only while the screencast alert, a notice or a transient line applies", () => {
+    const { strip, alert, status, retry, onRetry } = buildBanner();
+    expect(strip.element.hidden).toBe(true);
+
+    strip.update(NOBODY, "s1", false, "connecting", null);
+    expect(strip.element.hidden).toBe(true);
+
+    strip.update(NOBODY, "s1", false, "screencast", null);
+    expect(strip.element.hidden).toBe(false);
+    expect(alert.textContent).toContain("Low-quality picture");
+    expect(status.hidden).toBe(true);
+    retry.click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    strip.update(NOBODY, "s1", false, "connected", "the human has control");
+    expect(strip.element.hidden).toBe(false);
+    expect(alert.hidden).toBe(true);
+    expect(status.textContent).toBe("the human has control");
+
+    strip.update(NOBODY, "s1", false, "connected", null);
+    expect(strip.element.hidden).toBe(true);
+
+    strip.showStatus("Saved to the Screen's desktop");
+    expect(strip.element.hidden).toBe(false);
+    strip.showStatus("");
+    expect(strip.element.hidden).toBe(true);
   });
 });

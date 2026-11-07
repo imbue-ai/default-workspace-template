@@ -11,7 +11,8 @@
  * endpoints ``connect-info`` names and escalates to a relay, then to the JPEG screencast, when no pair connects
  * (section 5), tried again from the screencast on a timer and on the strip's Retry; the strip's Details panel says
  * which path is in use. The controller's pointer takes the remote cursor's shape from the image neko sends over the
- * peer's data channel (section 12).
+ * peer's data channel (section 12). The state, a session and ``connect-info`` are asked for at once as the page
+ * loads; ``?strip=off`` turns the strip into a banner over the stage and a press there into Take control.
  */
 
 import "./style.css";
@@ -35,7 +36,6 @@ import { SCREENCAST_FPS } from "./screencast";
 import {
   ServiceEvents,
   ServiceRequestError,
-  fetchState,
   postCancelPendingUrl,
   postInputSeen,
   postReturnControl,
@@ -51,8 +51,12 @@ import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_
 import { Strip } from "./strip";
 import { fittedVideoRect } from "./view_transform";
 import type { Size } from "./view_transform";
+import { startStartupFetches } from "./startup";
+import type { StartupFetches } from "./startup";
+import { isHeldByAnotherSession, parseViewerOptions } from "./viewer_options";
+import type { ViewerOptions } from "./viewer_options";
 import { REEVALUATE_INTERVAL_MS, ViewerVisibility } from "./visibility";
-import { NekoStream, type StreamStatus } from "./webrtc";
+import { NekoStream, type PrefetchedConnectInfo, type StreamStatus } from "./webrtc";
 
 export const PAGE_PATH = "/";
 
@@ -96,9 +100,15 @@ class Viewer {
   private isAudioEnabled = false;
   private isNekoOpen = false;
   private lastInputSeenAt = 0;
+  private isTakingControl = false;
   private reportLocation: ((title: string) => void) | null = null;
+  /** The answers asked for at page load, each taken once (``startup.ts``). */
+  private prefetchedSession: Promise<NekoSessionAnswer> | null;
+  private prefetchedConnectInfo: PrefetchedConnectInfo | null;
 
-  constructor(mount: HTMLElement) {
+  constructor(mount: HTMLElement, options: ViewerOptions, startup: StartupFetches) {
+    this.prefetchedSession = startup.session;
+    this.prefetchedConnectInfo = startup.connectInfo;
     this.root.className = "screen-root";
     // The deltas have no neko event to go to yet (pointer_lock.ts): the control stays hidden and they are dropped.
     this.pointerLock = new PointerLockControl({ stage: this.stage, onRelativeMove: () => undefined });
@@ -109,6 +119,7 @@ class Viewer {
       onToggleAudio: () => this.setAudioEnabled(!this.isAudioEnabled),
       onRetry: () => this.stream?.retryNow(),
       onToggleDetails: (isOpen) => this.details.setOpen(isOpen),
+      isBanner: !options.isStripShown,
     });
     this.details = new DetailsPanel({
       getStats: () => this.stream?.getStats() ?? null,
@@ -137,7 +148,13 @@ class Viewer {
     this.cast.hidden = true;
     this.cast.dataset.screenScreencast = "true";
     this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element, this.details.element);
-    this.root.append(this.strip.element, this.stage);
+    if (options.isStripShown) {
+      this.root.append(this.strip.element, this.stage);
+    } else {
+      this.stage.append(this.strip.element);
+      this.root.append(this.stage);
+      this.wireTakeControlOnInput();
+    }
     mount.append(this.root);
     // A phone never resizes the Screen (spec D7); the shell gives pages no phone signal, so the shared queries
     // the shell itself switches on decide.
@@ -199,6 +216,20 @@ class Viewer {
         if (isSent) this.input?.tapWithControl(XK_V);
       });
     });
+  }
+
+  /** Without the strip there is no Take control button: the user's first press or key on the stage takes control
+   *  from another session (gate mode, where every session is the owner's). The press itself is not sent: input
+   *  flows once the lease is this session's. */
+  private wireTakeControlOnInput(): void {
+    const onInput = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest("button") !== null) return;
+      if (this.state?.lifecycle !== "running") return;
+      if (!isHeldByAnotherSession(this.state.control, this.session?.session_id ?? null)) return;
+      void this.takeControl();
+    };
+    this.stage.addEventListener("pointerdown", onInput, { capture: true });
+    this.stage.addEventListener("keydown", onInput, { capture: true });
   }
 
   private wireFileDrop(): void {
@@ -273,6 +304,8 @@ class Viewer {
     const previousVideoId = this.state?.video_id;
     this.state = state;
     if (state.title !== previousTitle) this.reportLocation?.(state.title);
+    // A session asked for at page load is only good for the stack that ran then.
+    if (state.lifecycle !== "running") this.prefetchedSession = null;
     if (state.lifecycle === "running") {
       if (this.session === null) void this.signIn();
       else if (this.stream && state.video_id !== previousVideoId) this.stream.selectVideo(state.video_id);
@@ -329,8 +362,11 @@ class Viewer {
     window.clearTimeout(this.signInRetryTimer);
     try {
       let session: NekoSessionAnswer;
+      const prefetched = this.prefetchedSession;
+      this.prefetchedSession = null;
       try {
-        session = await postSession();
+        // A prefetched session that was refused (asked for before the stack ran) is asked for again.
+        session = prefetched !== null ? await prefetched.catch(() => postSession()) : await postSession();
       } catch (error) {
         this.noteSignInFailure(error);
         return;
@@ -367,6 +403,10 @@ class Viewer {
           }),
       );
       this.stream.setAudioEnabled(this.isAudioEnabled);
+      if (this.prefetchedConnectInfo !== null) {
+        this.stream.primeConnectInfo(this.prefetchedConnectInfo);
+        this.prefetchedConnectInfo = null;
+      }
       this.input = new InputRelay(socket, this.stage, () => this.noteInput());
       if (this.mobile) this.input.viewTransform = () => this.mobile?.viewTransform ?? { zoom: 1, pan: { x: 0, y: 0 } };
       this.input.screen = this.screenSize;
@@ -552,8 +592,13 @@ class Viewer {
   }
 
   private async takeControl(): Promise<void> {
-    if (this.session === null) return;
-    this.showNotice(await postTakeControl(this.session.session_id));
+    if (this.session === null || this.isTakingControl) return;
+    this.isTakingControl = true;
+    try {
+      this.showNotice(await postTakeControl(this.session.session_id));
+    } finally {
+      this.isTakingControl = false;
+    }
     // The new controller's layout decides the keyboard map (its stage the Screen's size, through the reporter).
     this.sendKeyboardMap();
     this.stage.focus();
@@ -571,10 +616,13 @@ class Viewer {
   }
 }
 
+// Asked for as the module runs, ahead of the page's load event, and all at once.
+const startup = startStartupFetches(() => performance.now());
+
 function bootstrap(): void {
   const mount = document.getElementById("app");
   if (mount === null) return;
-  const viewer = new Viewer(mount);
+  const viewer = new Viewer(mount, parseViewerOptions(window.location.search), startup);
   let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
     capabilities: { navigation: false, closeChord: true },
@@ -589,7 +637,7 @@ function bootstrap(): void {
   window.addEventListener("focus", () => connection.focused());
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   const events = new ServiceEvents((event) => viewer.handleEvent(event));
-  fetchState()
+  startup.state
     .then((state) => viewer.handleEvent({ type: "state", ...state }))
     .catch((error) => console.error("[screen] state failed", error))
     .finally(() => events.start());

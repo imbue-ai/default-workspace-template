@@ -1,0 +1,1 @@
+A pending permission request's card in the chat has a "Deny" button beside "Review & respond". It denies the request without opening the review dialog: the card posts `minds:deny-request` with the request's id to Imbue Studio, which denies it exactly as the dialog's Deny does, and the card turns into its "Denied" receipt when the verdict comes back.

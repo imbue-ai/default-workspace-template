@@ -4017,7 +4017,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "websockets", specifier = ">=13" },
-    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "werkzeug", specifier = ">=3.1" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-scripts", editable = "system/scripts" },
 ]

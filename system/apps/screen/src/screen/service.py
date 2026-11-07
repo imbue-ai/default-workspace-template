@@ -35,6 +35,7 @@ from screen.data_types import AddedMode
 from screen.data_types import ChromiumView
 from screen.data_types import ControlView
 from screen.data_types import Controller
+from screen.data_types import DisplaySettings
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -181,6 +182,12 @@ class ScreenService(MutableModel):
     connectivity: ConnectInfoAggregator = Field(
         frozen=True, description="Answers connect-info from the brokers (spec section 5.2)"
     )
+    display_settings: DisplaySettings = Field(
+        default_factory=DisplaySettings,
+        frozen=True,
+        description="The codec, any fixed size (which size reports then leave alone, spec section 7.2) and any pinned "
+        "video profile (spec section 8.1)",
+    )
     broadcaster: ViewerBroadcaster = Field(default_factory=ViewerBroadcaster, description="The viewers' event fan-out")
     is_event_subscription_enabled: bool = Field(
         default=True, frozen=True, description="Whether to follow neko's WebSocket (off under a fake neko)"
@@ -225,6 +232,8 @@ class ScreenService(MutableModel):
             clock=self.clock,
         )
         self._modes_ledger = ModesLedger(path=self.state_dir / MODES_RECORD_FILENAME)
+        if self.display_settings.pinned_video_id is not None:
+            self.video_id = self.display_settings.pinned_video_id
 
     def attach_stack(self, stack: ScreenStack) -> None:
         self._stack = stack
@@ -553,11 +562,16 @@ class ScreenService(MutableModel):
         )
 
     def refresh_profile(self) -> str:
-        """Re-choose the video id from the aggregate state; a change is announced to every viewer. A stack that is
-        not running has no encoder to choose for, so the id rests at ``watch`` until the next start."""
-        chosen = (
-            choose_video_id(self.profile_inputs()) if self.stack.lifecycle == Lifecycle.RUNNING else VIDEO_ID_WATCH
-        )
+        """Re-choose the video id from the aggregate state; a change is announced to every viewer. A pinned profile
+        is the id whatever the state. A stack that is not running has no encoder to choose for, so the id rests at
+        ``watch`` until the next start."""
+        pinned = self.display_settings.pinned_video_id
+        if pinned is not None:
+            chosen = pinned
+        elif self.stack.lifecycle == Lifecycle.RUNNING:
+            chosen = choose_video_id(self.profile_inputs())
+        else:
+            chosen = VIDEO_ID_WATCH
         with self._lock:
             is_changed = chosen != self.video_id
             self.video_id = chosen

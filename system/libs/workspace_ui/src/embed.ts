@@ -120,6 +120,12 @@ export const IMMERSIVE_REQUEST: "minds:immersive-request" =
 export const IMMERSIVE_CHANGED: "minds:immersive-changed" =
   "IMMERSIVE_CHANGED" in embedContract ? embedContract.IMMERSIVE_CHANGED : "minds:immersive-changed";
 
+// Workspace -> embedder: deny one permission request outright, as the chrome's request dialog's Deny does, without
+// opening the dialog. Payload: { requestId }, the id OPEN_REQUEST_MODAL takes. An embedder that does not know the type
+// drops it, so the request simply stays pending.
+export const DENY_REQUEST: "minds:deny-request" =
+  "DENY_REQUEST" in embedContract ? embedContract.DENY_REQUEST : "minds:deny-request";
+
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // Every embedder->workspace type the contract defines: the endpoint dispatches

@@ -21,6 +21,7 @@ from app_manifest.primitives import AppUrl
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
 from screen.errors import ServeError
+from screen.owner_gate import request_target_with_owner_token_redacted
 
 SERVER_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 5.0
 SIGNAL_EXIT_CODE_BASE: Final[int] = 128
@@ -28,9 +29,22 @@ _STOP_SIGNALS: Final[tuple[signal.Signals, ...]] = (signal.SIGTERM, signal.SIGIN
 
 
 class Http11RequestHandler(WSGIRequestHandler):
-    """Werkzeug's handler pinned to HTTP/1.1: keepalive and the incremental flush the proxied streams need."""
+    """Werkzeug's handler pinned to HTTP/1.1: keepalive and the incremental flush the proxied streams need. Its access
+    log never shows a gated Screen's owner token, which the chrome's framed URL carries."""
 
     protocol_version = "HTTP/1.1"
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        # The path is unset when the request line was bad; werkzeug logs the raw line then.
+        target = getattr(self, "path", None)
+        if target is None:
+            super().log_request(code, size)
+            return
+        self.path = request_target_with_owner_token_redacted(target)
+        try:
+            super().log_request(code, size)
+        finally:
+            self.path = target
 
 
 @pure

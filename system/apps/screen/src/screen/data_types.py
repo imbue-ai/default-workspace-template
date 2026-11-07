@@ -129,6 +129,34 @@ class ScreenSize(FrozenModel):
     rate: int = Field(description="Refresh rate in Hz")
 
 
+class VideoCodec(UpperCaseStrEnum):
+    """The codec neko encodes the WebRTC video in (spec section 8.1)."""
+
+    H264 = auto()
+    VP8 = auto()
+
+
+class DisplaySettings(FrozenModel):
+    """What a Screen's environment decides for the service's life (spec sections 4.3, 5.3, 7.2 and 8.1): its picture
+    and video profile, its desktop session's panel and neko's ICE mode."""
+
+    video_codec: VideoCodec = Field(default=VideoCodec.H264, description="The codec of the WebRTC video")
+    fixed_size: ScreenSize | None = Field(
+        default=None,
+        description="The display's one mode, which viewers' size reports do not change; None to follow them",
+    )
+    is_desktop_panel_shown: bool = Field(
+        default=True, description="Whether the desktop session runs the XFCE panel (spec section 4.3)"
+    )
+    is_ice_lite: bool = Field(
+        default=False, description="Whether neko runs ICE lite, answering connectivity checks without starting its own"
+    )
+    pinned_video_id: str | None = Field(
+        default=None,
+        description="The video profile every viewer is held on whatever the lease and input; None to choose it from them",
+    )
+
+
 class AddedMode(FrozenModel):
     """A RANDR mode the service added this stack life (spec section 7.2)."""
 

@@ -118,6 +118,46 @@ describe("NekoStream", () => {
     statuses.length = 0;
   }
 
+  it("takes a primed connect-info once, for the first request that asks the same way", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(url);
+      return { ok: true, json: async () => RELAY_INFO };
+    });
+    const primed: ConnectInfo = { ...RELAY_INFO, candidates: [{ host: "203.0.113.7", port: 40001, protocol: "tcp" }] };
+    stream.primeConnectInfo({ isRelay: false, answer: Promise.resolve(primed), askedAt: performance.now() });
+
+    stream.request("watch");
+    await settle();
+    expect(fetched).toEqual([]);
+    expect(stream.lastConnectInfo).toEqual(primed);
+    expect(socket.sent).toEqual(["signal/request"]);
+
+    stream.request("watch");
+    await settle();
+    expect(fetched).toEqual(["/api/connect-info"]);
+  });
+
+  it("asks afresh when the primed answer was asked another way or has grown old", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(url);
+      return { ok: true, json: async () => RELAY_INFO };
+    });
+    const answer = Promise.resolve(RELAY_INFO);
+    rememberNeedsRelay(window.localStorage);
+    stream.primeConnectInfo({ isRelay: false, answer, askedAt: performance.now() });
+    stream.request("watch");
+    await settle();
+    expect(fetched).toEqual(["/api/connect-info?relay=1"]);
+
+    window.localStorage.clear();
+    stream.primeConnectInfo({ isRelay: false, answer, askedAt: performance.now() - 60_000 });
+    stream.request("watch");
+    await settle();
+    expect(fetched).toEqual(["/api/connect-info?relay=1", "/api/connect-info"]);
+  });
+
   it("says connecting again while a peer fails before the screencast", async () => {
     stream.request("watch");
     await settle();

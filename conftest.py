@@ -15,18 +15,23 @@ from workspace_bare_scripts import user_packages
 # config ignores them and each runs from its own directory.
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
-# A user package is a standalone project whose tests run from its own directory and
-# venv; collected here they would import packages the root venv does not have.
-_USER_PACKAGE_DIRECTORIES: Final[tuple[Path, ...]] = tuple(
+# A user package, and a built-in package the root workspace excludes, is a standalone
+# project whose tests run from its own directory and venv; collected here they would
+# import packages the root venv does not have.
+_STANDALONE_PACKAGE_DIRECTORIES: Final[tuple[Path, ...]] = tuple(
     (Path(__file__).parent / relative).resolve()
-    for relative in user_packages.user_packages(Path(__file__).parent)
+    for relative in (
+        *user_packages.user_packages(Path(__file__).parent),
+        *user_packages.built_in_standalone_projects(Path(__file__).parent),
+    )
 )
 
 
 def pytest_ignore_collect(collection_path: Path) -> bool | None:
     resolved = collection_path.resolve()
     if any(
-        resolved.is_relative_to(directory) for directory in _USER_PACKAGE_DIRECTORIES
+        resolved.is_relative_to(directory)
+        for directory in _STANDALONE_PACKAGE_DIRECTORIES
     ):
         return True
     return None

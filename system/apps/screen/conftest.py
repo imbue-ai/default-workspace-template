@@ -1,9 +1,12 @@
+import hashlib
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from pydantic import SecretBytes
 
 from mock_broker_test import FakeBroker
 from mock_chromium_test import FakeCdpConnector
@@ -18,6 +21,8 @@ from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
 from screen.cdp_proxy import ProxyServer
 from screen.connect_info import ConnectInfoAggregator
+from screen.data_types import DisplaySettings
+from screen.owner_gate import OwnerGate
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
@@ -116,8 +121,16 @@ def proxy_server() -> ProxyServer:
 
 
 @pytest.fixture
+def display_settings() -> DisplaySettings:
+    """The ``service`` fixture's display settings, a workspace's by default; a test parametrizes this name to fix the
+    size or change the codec."""
+    return DisplaySettings()
+
+
+@pytest.fixture
 def service(
     tmp_path: Path,
+    display_settings: DisplaySettings,
     fake_supervisor: FakeSupervisor,
     fake_neko: FakeNeko,
     fake_display_modes: FakeDisplayModes,
@@ -143,6 +156,7 @@ def service(
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         connectivity=ConnectInfoAggregator(brokers=fake_brokers, deadline_seconds=1.0),
+        display_settings=display_settings,
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,
@@ -181,6 +195,7 @@ def service(
         on_running=built.on_running,
         set_api_token=built.set_api_token,
         on_stopping=fleet.prepare_for_stack_stop,
+        display_settings=display_settings,
     )
     built.attach_stack(stack)
     built.start()
@@ -200,9 +215,48 @@ def loopback_shell(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackShell]:
 
 @pytest.fixture
 def app(service: ScreenService, tmp_path: Path) -> Flask:
-    return build_app(service, tmp_path / "static", NekoProxy())
+    return build_app(service, tmp_path / "static", NekoProxy(), None)
 
 
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+@pytest.fixture
+def owner_token() -> str:
+    return "screen-owner-token-" + uuid4().hex
+
+
+@pytest.fixture
+def owner_token_sha256_path(tmp_path: Path, owner_token: str) -> Path:
+    """The claimed sandbox's digest file, with a trailing newline as a shell's write leaves one."""
+    path = tmp_path / "screen_token_sha256"
+    path.write_text(hashlib.sha256(owner_token.encode("utf-8")).hexdigest() + "\n")
+    return path
+
+
+@pytest.fixture
+def owner_gate(owner_token_sha256_path: Path) -> OwnerGate:
+    return OwnerGate(
+        owner_token_sha256_path=owner_token_sha256_path,
+        frame_ancestors="https://chrome.example.test",
+        session_secret=SecretBytes(uuid4().bytes),
+    )
+
+
+@pytest.fixture
+def gated_app(service: ScreenService, tmp_path: Path, owner_gate: OwnerGate) -> Flask:
+    """The service's routes in gate mode (an auth sandbox's), with a neko proxy pointed at a port nothing serves."""
+    return build_app(
+        service,
+        tmp_path / "static",
+        NekoProxy(base_url="http://127.0.0.1:9", websocket_url="ws://127.0.0.1:9"),
+        owner_gate,
+    )
+
+
+@pytest.fixture
+def gated_client(gated_app: Flask) -> FlaskClient:
+    """A client that keeps no cookies, so each test names the cookies a request carries."""
+    return gated_app.test_client(use_cookies=False)

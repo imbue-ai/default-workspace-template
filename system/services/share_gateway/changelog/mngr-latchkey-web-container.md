@@ -1,0 +1,1 @@
+- Session verification tries every value the browser sends under a session cookie's name (`imbue_machine_session` and the partitioned copy), not only the first: a same-named cookie set for a parent domain is sent beside the workspace's own and may come first, and it no longer masks a valid session.

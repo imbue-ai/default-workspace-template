@@ -152,8 +152,8 @@ class NekoInterface(MutableModel, ABC):
 
 class ConnectivityBrokerInterface(MutableModel, ABC):
     """One source of where the Screen's media port is reachable and of relay servers: the desktop through the
-    latchkey proxy, or the share gateway over loopback (spec section 5.2). Every call may raise
-    ``ConnectivityBrokerError``; the aggregator treats that as the broker being absent."""
+    latchkey proxy, the share gateway over loopback, or an auth sandbox's connect-info file (spec section 5.2). Every
+    call may raise ``ConnectivityBrokerError``; the aggregator treats that as the broker being absent."""
 
     name: str = Field(frozen=True, description="What the broker is called in logs")
 

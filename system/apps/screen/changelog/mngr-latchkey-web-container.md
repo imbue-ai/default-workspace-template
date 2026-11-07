@@ -1,0 +1,25 @@
+- Gate mode, for the web latchkey auth sandbox, which serves the Screen over Modal's TLS with no share gateway in front of it: when `SCREEN_OWNER_TOKEN_SHA256_FILE` is set, a loopback request whose `Host` names loopback is still the owner (a page that reaches loopback through a DNS name of its own is not), the file it names is read on every other request for the owner token's SHA-256 (while it is absent, empty or malformed only loopback is admitted, and a malformed one is logged, so a pooled sandbox's Screen can start before anyone claims it), a GET with a matching `?owner_token=` sets the owner session (`screen_owner_session` and the partitioned `screen_owner_session_partitioned`, host-only, an HMAC under a secret held in memory) and redirects to the same URL without the token, and every other request, WebSockets and the `/neko/` proxy included, answers 401 without that session. A request that its browser marks (`Sec-Fetch-Site`) as made by a page of another origin, loopback included, answers 403 unless it is a GET or HEAD navigation, since every `*.modal.host` page is same-site with the Screen and carries its session cookies, and a page the sandbox's sign-in browser shows can reach the Screen over loopback. Every cookie value under either name is tried, so a same-named cookie another `modal.host` page set cannot mask the session. In gate mode `X-Imbue-Identity` is ignored and every response carries `Content-Security-Policy: frame-ancestors <SCREEN_FRAME_ANCESTORS>`. The access log shows every `owner_token` value as `REDACTED`. Without the variable the service behaves as before.
+
+- `screen-service --host` (or `SCREEN_LISTEN_HOST`) binds an address other than `127.0.0.1`; the service refuses one that is not loopback unless gate mode is on.
+
+- `GET /api/connect-info` also reads the connect-info document in the file `SCREEN_CONNECT_INFO_PATH` names, on every request, when that variable is set; an absent or unreadable file is a broker that did not answer.
+
+- `GET /api/connect-info` answers a candidate a broker named by a hostname as one candidate per IPv4 address the name resolves to, since Firefox ignores a remote ICE candidate whose address is a name; a name that does not resolve in the container is kept as the name, for a viewer that may resolve it (a remote docker daemon's host), and a malformed one drops that candidate, with a log line, never the answer.
+
+- `SCREEN_VIDEO_CODEC` (`h264`, the default, or `vp8`) picks the codec neko streams in. With `vp8` the three profiles keep their frame rates and bitrates as libvpx realtime CBR pipelines, which Firefox decodes without Cisco's OpenH264 plugin.
+
+- `SCREEN_FIXED_SIZE=WxH` (any size within 640x480 and 1920x1080 whose width is a multiple of 8 and whose height is even, such as the auth sandbox's 1288x806) keeps the display at one mode: the X server and neko start at it, and `POST /api/screen-size` answers `{"applied": false, "reason": "fixed size"}` without resizing, as `screen size WxH` then says, exiting 1. A value the service cannot use stops it at start.
+
+- A mode's CVT modeline takes `cvt`'s vertical sync width for every size: an aspect ratio counts only when the height is a whole multiple of its denominator, as `cvt` tests it, so a size such as 1288x806 or 656x496 no longer gets a 16:10 or 4:3 sync width `cvt` would not give it.
+
+- `SCREEN_VIDEO_PROFILE` (`idle`, `watch` or `control`, in any case) holds every viewer on that video profile whatever the lease and the input, from before the first stack start on; the state document and the viewer's stream use it throughout. Unset, the service chooses the profile as before. A value that names no profile stops the service at start.
+
+- `SCREEN_DESKTOP_PANEL=off` runs the desktop session without the XFCE panel (and Thunar's daemon): before each stack start the service writes the user's `xfce4-session` channel file naming a failsafe session of its own, `ScreenNoPanel` (`xfwm4`, `xfsettingsd`, `xfdesktop`), with `SaveOnExit` off, keeping the file's other properties. Unset or `on`, nothing is written.
+
+- `SCREEN_ICE_LITE=on` runs neko as an ICE lite agent (`webrtc.icelite`), for a Screen reached on one candidate it is told of. Unset or `off`, neko is unchanged. Both switches read `on` or `off` in any case and stop the service at start on anything else.
+
+- The Screen requires Werkzeug 3.1 or later, whose `set_cookie` takes the `partitioned` flag the gate sets.
+
+- The viewer's `?strip=off` (kept through the gate's owner-token redirect) hides the control row: the screencast alert with "Retry now" and the notices show as a small banner over the stage only while they apply, and a press or key on the stage while another human session holds control takes control. Without the parameter the viewer is unchanged.
+
+- The viewer asks for `/api/state`, `/api/session` and `/api/connect-info` at once as the page loads, rather than one after another; a session refused because the stack was not running yet is asked for again once it runs, and the first signaling uses the prefetched `connect-info` while it is fresh.

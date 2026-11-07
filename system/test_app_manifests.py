@@ -752,6 +752,7 @@ def test_every_package_the_template_ships_is_a_root_member() -> None:
     assert unlisted == [], (
         f"{unlisted} sit under system/ with no uv.lock of their own and are not root "
         "workspace members. A package the template ships belongs in the root "
-        "pyproject.toml's [tool.uv.workspace] members; a user package is instead "
+        "pyproject.toml's [tool.uv.workspace] members (or its exclude, for a built-in "
+        "package that is its own project no workspace syncs); a user package is instead "
         f"converted to a standalone project ({user_packages.MIGRATION_REFERENCE})."
     )

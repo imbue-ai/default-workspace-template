@@ -19,7 +19,7 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 ## The service
 
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
-owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
+owner), except in gate mode (below), where every admitted request is the owner. A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`,
 `/api/ws`, `/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
 `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
@@ -52,7 +52,9 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   `session_id` is not the controlling human's answers `{"applied": false, "reason":
   "not the controller"}`; a report with no session is the `screen size` command's and
   is applied. Added modes are recorded in `data/.state/screen/modes.json` for the
-  stack's life and forgotten when it ends.
+  stack's life and forgotten when it ends. While the size is fixed (`SCREEN_FIXED_SIZE`,
+  below) every report answers `{"applied": false, "reason": "fixed size"}` and nothing is
+  resized, and `screen size WxH` exits 1 naming the size that stands.
 - `POST /api/input-seen`, body `{"session_id"}`: the viewer's input relay reporting
   activity (throttled to one per two seconds client-side), the profile chooser's clock.
 - `POST /api/clipboard/image`, multipart `session_id` and `image` (an `image/...` part; the whole
@@ -104,6 +106,86 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   (`api_models.py` names what every route takes and answers; the manifest's `api_schema_path`;
   `system/libs/app_schema`), for an agent that reaches the Screen from inside the workspace or
   over a share. A refusal on any route is `{"detail": ...}`.
+
+The service listens on `127.0.0.1`; `--host`, or `SCREEN_LISTEN_HOST` in its environment, binds
+another address, which it refuses to do outside gate mode.
+
+Five more variables, read once at service start, change the picture, the desktop and the
+stream; a workspace sets none of them, and the auth sandbox sets all five
+(`system/libs/auth_sandbox/README.md`). A value the service cannot use stops it at start.
+
+- `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
+  profiles in (see "Profiles, visibility and audio").
+- `SCREEN_FIXED_SIZE`: `WxH`, the display's one mode: any size within 640x480 and 1920x1080 whose
+  width is a multiple of 8 (CVT's cell) and whose height is even (the encoders' I420), not only
+  one a report could produce. `xorg.conf` lists it first, so the X server starts at it,
+  `neko.yaml` names it as neko's screen, and `POST /api/screen-size` no longer resizes; the
+  viewer scales the picture to its frame.
+- `SCREEN_VIDEO_PROFILE`: unset (the default) or a profile's id, `idle`, `watch` or `control`, in
+  any case. Set, every viewer is held on that profile whatever the lease and the input clock, from
+  before the first stack start on; unset, the service chooses it (see "Profiles, visibility and
+  audio"). The auth sandbox pins `control`, since it exists for one user actively signing in.
+- `SCREEN_DESKTOP_PANEL`: `on` (the default) or `off`. Off, the desktop session runs without
+  `xfce4-panel` (and without Thunar's daemon): before each stack start the service writes the
+  user's `~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml` (`xfce_session_config.py`,
+  keeping the channel's other properties) to name a failsafe session of its own, `ScreenNoPanel`,
+  which runs `xfwm4`, `xfsettingsd` and `xfdesktop`, with `/general/SaveOnExit` false so no saved
+  session replaces it. xfconfd reads that file over the system one when the session starts.
+  On, nothing is written.
+- `SCREEN_ICE_LITE`: `off` (the default) or `on`. On, `neko.yaml` sets `webrtc.icelite`, so neko
+  answers the viewer's connectivity checks without gathering or checking candidates of its own:
+  the auth sandbox is reached on one candidate, its TCP tunnel, which the viewer names.
+
+### Gate mode
+
+An auth sandbox (`system/libs/auth_sandbox/README.md`) serves the Screen on every interface,
+reached over Modal's TLS with no share gateway in front of it, so nothing vouches for the
+requester. Its boot script sets `SCREEN_OWNER_TOKEN_SHA256_FILE` (the path of a file that will
+hold the lower-case hex SHA-256 of an owner token the connector minted and gave the hosted
+chrome) and `SCREEN_FRAME_ANCESTORS` (the chrome's origin), which turns gate mode on
+(`owner_gate.py`); with the first unset the service behaves as above, and with the first set the
+second is required.
+
+The file is read on every request that is not loopback. A pooled sandbox starts its Screen
+before anyone claims it, and the sandbox writes the digest only at the claim, so until then (no
+file, or an empty one) the gate admits loopback alone: no token opens a session and no session
+cookie is accepted. A file that does not hold 64 lower-case hex digits, or cannot be read, is
+logged and treated the same way.
+
+- A request from loopback (`127.0.0.1`, `::1`) whose `Host` names loopback (`127.0.0.1`,
+  `localhost` or `[::1]`, any port) is the owner, as everywhere: the boot script's `/health` and
+  `/api/start`, the watcher, the commands. A page that reaches loopback through a name of its own
+  (a rebound or wildcard DNS name, over plain http, where the browser sends no fetch metadata)
+  names that host, so it needs the owner session like any other request.
+- A GET carrying `?owner_token=<token>` whose SHA-256 matches sets the owner session and answers
+  302 to the same path and query without `owner_token`; a token that does not match answers 401.
+  The token stays good for the sandbox's life, so an iframe reload may present it again.
+- Every other request, HTTP and WebSocket alike (`/api/ws`, `/neko/...`, any path), needs the
+  owner session, else 401 `{"detail": "an owner session is required"}`, with no redirect.
+- A request that its browser marks as made by a page of another origin (`Sec-Fetch-Site` neither
+  `same-origin` nor `none`) answers 403 `{"detail": "only the Screen's own pages may call it"}`,
+  unless it is a GET or HEAD navigation (the chrome's frame of the Screen, and the tab it opens).
+  Every `*.modal.host` page is same-site with the Screen, so the browser sends the session cookies
+  with such a page's requests and WebSockets too, and a page the sandbox's sign-in browser shows
+  can reach the Screen over loopback, so this holds for loopback as well.
+- The session is two cookies with the same value, `screen_owner_session` (`Secure; HttpOnly;
+  SameSite=Lax; Path=/`) and `screen_owner_session_partitioned` (`Secure; HttpOnly;
+  SameSite=None; Partitioned; Path=/`), with no `Domain`, for the browser reasons the share
+  gateway's `session_cookie.py` gives. The value is an HMAC-SHA256 under a secret generated at
+  start and held in memory only, so a restart ends every session. Every value the request
+  carries under either name is tried: `modal.host` is not on the Public Suffix List, so any
+  Modal customer's page can set same-named cookies for the parent domain.
+- `X-Imbue-Identity` is ignored: no proxy stamps it, so it is the client's own to set.
+- Every response carries `Content-Security-Policy: frame-ancestors <SCREEN_FRAME_ANCESTORS>`,
+  replacing any `frame-ancestors` directive a response already had.
+
+The hosted chrome frames the viewer at `/?owner_token=<token>&strip=off`; the redirect keeps
+`strip=off`. With it (`frontend/src/viewer_options.ts`; any other value, or none, changes
+nothing) the viewer hides its control row, since the chrome draws its own: the screencast alert
+with its "Retry now" and a refused verb's or a drop's notice show as a small banner over the top
+of the stage while they apply, and nothing otherwise. With no Take control button, a press or a
+key on the stage while another human session holds control takes control (every session is the
+owner's here); the press itself is not sent, input flows once the lease is this session's.
 
 ## The browser
 
@@ -212,14 +294,24 @@ the seconds after. The sweep only ever raises, so repeating it writes nothing mo
 
 ## Profiles, visibility and audio
 
-Three H.264 pipelines in `neko.yaml` (spec section 8.1): `idle` 5 fps 800 kbps
-ultrafast one thread, `watch` 20 fps 2500 kbps veryfast four threads, `control` 30 fps
-4000 kbps veryfast four threads, all constrained baseline with `tune=zerolatency`, a
-one-second keyframe interval and `show_pointer` off. The service chooses one for
+Three pipelines in `neko.yaml` (spec section 8.1): `idle` 5 fps 800 kbps one thread,
+`watch` 20 fps 2500 kbps four threads, `control` 30 fps 4000 kbps four threads, each with a
+one-second keyframe interval and `show_pointer` off. In H.264, the default, they are x264
+constrained baseline with `tune=zerolatency`, `idle` at the ultrafast preset and the others at
+veryfast. Firefox decodes H.264 over WebRTC only with Cisco's OpenH264 plugin, which Mozilla's
+own builds download on their own but other builds may lack; without it neko cannot start the
+video track ("codec is not supported by remote") and no WebRTC picture arrives. With `SCREEN_VIDEO_CODEC=vp8`
+they are libvpx realtime (`deadline=1`, `cpu-used=8`, no lag) in CBR at the same bitrates, with
+WebRTC's rate-control buffer (1000 ms, 500 initial, 600 optimal), 95% undershoot and the
+quantizer held to 4..48 so small text stays legible while the picture moves. neko evaluates
+each `gst_params` value as an expression and prints the result with Go's `%v`, so a number of a
+million or more would reach the encoder in exponent form (`3e+06`); vp8enc's bitrate, in bits
+per second, is written `round(2500 * 1000)`, which evaluates to an integer. The service chooses one for
 everyone from the lease and the input clock: `control` while a human holds control and
 input arrived in the last ten seconds, `idle` while nothing has arrived for a minute
 and no agent holds the lease, `watch` otherwise (a stack start counts as input, so a
-fresh Screen streams at `watch` for its first minute). Input arrives through
+fresh Screen streams at `watch` for its first minute); with `SCREEN_VIDEO_PROFILE` set it
+is that profile throughout. Input arrives through
 `POST /api/input-seen` from the controller's viewer and through every agent command.
 The choice is re-evaluated every second, on every input and on every lease change,
 announced as `profile` on `/api/ws`, and every viewer selects it with `signal/video`,
@@ -345,7 +437,7 @@ workspace's visitors reach it through the relay's `screen-media` tcp proxy or th
 Neko itself is told nothing about any of this: its candidates carry the container's own
 address, and the viewer rewrites them.
 
-`GET /api/connect-info` asks two brokers in parallel, each bounded (two seconds for candidates,
+`GET /api/connect-info` asks its brokers in parallel, each bounded (two seconds for candidates,
 eight for relay servers: they are asked for only once the direct path has failed, and the
 desktop's first answer mints a credential through the connector and Cloudflare, which has taken
 longer than two seconds), and answers the union:
@@ -359,17 +451,30 @@ longer than two seconds), and answers the union:
   (`system/services/share_gateway/README.md`), which answers only while the workspace is
   shared: the box's own published endpoints, one tcp candidate per relay at the share's
   media port, and the relay credential the gateway holds.
+- When `SCREEN_CONNECT_INFO_PATH` names a file (an auth sandbox's
+  `/run/auth-sandbox-connect-info.json`, which the connector writes with the sandbox's raw TCP
+  tunnel to port 59000), that file, read on every request: a connect-info document
+  `{"candidates", "ice_servers", "expires_at"}`. A file that is absent or unreadable is the
+  broker being absent.
 
-Candidates are filtered to guest port 59000, de-duplicated, and spelled with a lower-case
-`protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector lower-case, and
-the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
+A candidate whose `host` is a name rather than an IP (a Modal tunnel's `r482.modal.host`, a
+relay's hostname) is answered as one candidate per IPv4 address the name resolves to, resolved
+within its broker's bound: Firefox ignores a remote ICE candidate whose address is a name, where
+Chromium resolves it. A name that does not resolve in the container is kept as the name (it may
+name a host only the viewer's machine resolves, such as a remote docker daemon's), and a
+malformed one drops that candidate, with a log line, never the answer. Candidates are filtered to guest port 59000, de-duplicated, and spelled with a
+lower-case `protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector
+lower-case, and the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
 viewer unchanged, and `expires_at` the earliest expiry. A broker that is slow, unreachable
-or refusing is simply absent; with both absent the answer is empty lists, which the viewer
+or refusing is simply absent; with all of them absent the answer is empty lists, which the viewer
 reads as "use the server's own candidate". The answer is never written to disk and the
 route forbids caching: a relay credential is a bearer token.
 
 The viewer (`frontend/src/webrtc.ts`, `candidates.ts`, `ice_policy.ts`) fetches
-`connect-info` before signaling, builds its peer connection with the ICE servers and
+`connect-info` before signaling (as the page loads it asks for `/api/state`, `/api/session` and
+`connect-info` at once, `startup.ts`, and its first signaling uses that answer unless it is
+older than 30 seconds or was asked without the relay servers the request wants; a session asked
+for before the stack runs is refused and asked for again once it runs), builds its peer connection with the ICE servers and
 `iceTransportPolicy: "all"`, and for every server candidate neko sends emits one copy per
 `candidates` entry of the same protocol with the address and port replaced and a distinct
 foundation, dropping the original (unless `candidates` is empty). A connection that is not

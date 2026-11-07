@@ -18,10 +18,14 @@ def test_cvt_modelines_match_the_cvt_tool() -> None:
     assert cvt_modeline(1024, 768).render() == snapshot(
         'Modeline "1024x768_60" 63.50 1024 1072 1176 1328 768 771 775 798 -HSync +VSync'
     )
+    # 806 lines are not a whole multiple of 10, so 1288 is no 16:10 width and the sync is the default 10 lines.
+    assert cvt_modeline(1288, 806).render() == snapshot(
+        'Modeline "1288x806_60" 84.50 1288 1360 1488 1688 806 809 819 837 -HSync +VSync'
+    )
 
 
 def test_xorg_conf_renders_the_dummy_screen_the_seeded_modes_and_nekos_touchscreen() -> None:
-    assert render_xorg_conf() == snapshot("""\
+    assert render_xorg_conf(None) == snapshot("""\
 Section "ServerFlags"
   Option "DontVTSwitch" "true"
   Option "AllowMouseOpenFail" "true"
@@ -72,3 +76,16 @@ Section "ServerLayout"
   InputDevice "screen_touchscreen" "CorePointer"
 EndSection
 """)
+
+
+def test_a_fixed_mode_leads_the_modes_list_so_the_server_starts_at_it() -> None:
+    rendered = render_xorg_conf((1288, 806))
+    assert '    Modes "1288x806_60" "1920x1080_60" "1600x900_60" "1280x720_60"' in rendered
+    assert f"  {cvt_modeline(1288, 806).render()}" in rendered
+    assert "    Virtual 1920 1080" in rendered
+
+
+def test_a_fixed_mode_that_is_already_seeded_is_listed_once_first() -> None:
+    rendered = render_xorg_conf((1280, 720))
+    assert '    Modes "1280x720_60" "1920x1080_60" "1600x900_60"\n' in rendered
+    assert rendered.count('Modeline "1280x720_60"') == 1

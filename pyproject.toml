@@ -162,6 +162,11 @@ members = [
     ".agents/shared/scripts",
     ".agents/skills/*/python",
 ]
+# Built-in packages that are their own uv project, each with its own lock and venv, which no
+# workspace syncs: the auth sandbox library, which only the auth sandbox image installs (its
+# imbue-mngr-latchkey would give a workspace's mngr plugins system/config/mngr_plugins.toml
+# does not assign it). Neither members nor user packages (user_packages.py).
+exclude = ["system/libs/auth_sandbox"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

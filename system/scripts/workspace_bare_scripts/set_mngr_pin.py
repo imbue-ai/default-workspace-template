@@ -10,7 +10,10 @@ lines make the build require BuildKit (``docker buildx``), which a public pin mu
 do -- Ubuntu's ``docker.io`` and Homebrew's docker CLI ship without it -- so they exist
 only while the pin is private. This script is the one writer of all of it: a pin move
 adds or removes the BuildKit lines with the repo, and ``--check`` refuses a tree where
-the two disagree.
+the two disagree. A built-in package that is its own uv project (the root workspace's
+``exclude``, such as the auth sandbox library) pins the mngr packages it uses in its own
+``pyproject.toml``; a pin move rewrites those too (its ``uv.lock`` then needs a
+``uv lock --project <dir>``), and ``--check`` refuses one left on another pin.
 
     set_mngr_pin.py --public <commit>      # pin the public mirror, drop the BuildKit lines
     set_mngr_pin.py --internal <commit>    # pin mngr-internal, add the BuildKit lines
@@ -37,6 +40,7 @@ from workspace_bare_scripts.list_mngr_plugins import (
     MngrPinError,
     read_mngr_source,
 )
+from workspace_bare_scripts.user_packages import built_in_standalone_projects
 
 MNGR_REPOS = (PUBLIC_MNGR_REPO, INTERNAL_MNGR_REPO)
 SETTINGS_PATH = ".mngr/settings.toml"
@@ -129,16 +133,34 @@ def buildkit_lines_kind(files: dict[str, str]) -> str:
     return kinds.pop()
 
 
-def rewrite_pin_sources(pyproject_text: str, repo_url: str, rev: str) -> str:
-    """Point every ``[tool.uv.sources]`` entry on an mngr repo at ``repo_url`` and ``rev``."""
+def _mngr_sources(pyproject_text: str) -> dict[str, dict]:
+    """The ``[tool.uv.sources]`` entries that point at an mngr repo, by package name."""
     sources = (
         tomllib.loads(pyproject_text).get("tool", {}).get("uv", {}).get("sources", {})
     )
-    pinned = [
-        name
+    return {
+        name: source
         for name, source in sources.items()
         if isinstance(source, dict) and source.get("git") in MNGR_REPOS
+    }
+
+
+def standalone_pin_paths(root: Path) -> list[str]:
+    """The ``pyproject.toml`` of each built-in standalone project that pins an mngr package."""
+    paths = [
+        f"{directory.rstrip('/')}/{PYPROJECT_PATH}"
+        for directory in built_in_standalone_projects(root)
     ]
+    return [
+        path
+        for path in paths
+        if (root / path).is_file() and _mngr_sources((root / path).read_text())
+    ]
+
+
+def rewrite_pin_sources(pyproject_text: str, repo_url: str, rev: str) -> str:
+    """Point every ``[tool.uv.sources]`` entry on an mngr repo at ``repo_url`` and ``rev``."""
+    pinned = list(_mngr_sources(pyproject_text))
     if not pinned:
         raise MngrPinError(
             f"{PYPROJECT_PATH} pins nothing to {' or '.join(MNGR_REPOS)}"
@@ -176,10 +198,11 @@ def set_pin(root: Path, kind: str, rev: str) -> list[str]:
     repo_url = INTERNAL_MNGR_REPO if kind == INTERNAL_KIND else PUBLIC_MNGR_REPO
     files = {lines.path: (root / lines.path).read_text() for lines in BUILDKIT_LINES}
     buildkit_lines_kind(files)
-    written = [PYPROJECT_PATH]
-    (root / PYPROJECT_PATH).write_text(
-        rewrite_pin_sources((root / PYPROJECT_PATH).read_text(), repo_url, rev)
-    )
+    written = [PYPROJECT_PATH, *standalone_pin_paths(root)]
+    for path in written:
+        (root / path).write_text(
+            rewrite_pin_sources((root / path).read_text(), repo_url, rev)
+        )
     for lines in BUILDKIT_LINES:
         text = (
             lines.to_internal(files[lines.path])
@@ -195,17 +218,30 @@ def set_pin(root: Path, kind: str, rev: str) -> list[str]:
 
 
 def check_tree(root: Path) -> str:
-    """The pin kind of the tree at ``root``; raises when its BuildKit lines say otherwise."""
-    pin_kind = read_mngr_source((root / PYPROJECT_PATH).read_text()).kind
+    """The pin kind of the tree at ``root``; raises when its BuildKit lines say otherwise, or
+    when a built-in standalone project pins mngr anywhere but the root's commit."""
+    pin = read_mngr_source((root / PYPROJECT_PATH).read_text())
     lines_kind = buildkit_lines_kind(
         {lines.path: (root / lines.path).read_text() for lines in BUILDKIT_LINES}
     )
-    if pin_kind != lines_kind:
+    if pin.kind != lines_kind:
         raise MngrPinTreeError(
-            f"{PYPROJECT_PATH} pins the {pin_kind} mngr repo but the BuildKit lines are shaped for a "
-            f"{lines_kind} pin; run set_mngr_pin.py --{pin_kind} <commit> to make them agree"
+            f"{PYPROJECT_PATH} pins the {pin.kind} mngr repo but the BuildKit lines are shaped for a "
+            f"{lines_kind} pin; run set_mngr_pin.py --{pin.kind} <commit> to make them agree"
         )
-    return pin_kind
+    for path in standalone_pin_paths(root):
+        off_pin = sorted(
+            name
+            for name, source in _mngr_sources((root / path).read_text()).items()
+            if (source.get("git"), source.get("rev")) != (pin.git_url, pin.rev)
+        )
+        if off_pin:
+            raise MngrPinTreeError(
+                f"{path} pins {', '.join(off_pin)} somewhere other than {PYPROJECT_PATH}'s "
+                f"{pin.git_url} at {pin.rev}; run set_mngr_pin.py --{pin.kind} {pin.rev}, then "
+                f"uv lock --project {path.removesuffix('/' + PYPROJECT_PATH)}"
+            )
+    return pin.kind
 
 
 def main(argv: list[str] | None = None) -> int:
