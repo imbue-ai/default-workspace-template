@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Participant } from "./Participants";
+import { personFixture } from "./participantFixture";
 
 const { mockRequest } = vi.hoisted(() => ({ mockRequest: vi.fn() }));
 vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }));
@@ -13,28 +14,10 @@ async function loadParticipants(): Promise<typeof import("./Participants")> {
   return import("./Participants");
 }
 
-function participant(key: string, overrides: Partial<Participant> = {}): Participant {
-  return {
-    key,
-    kind: "person",
-    display_name: key,
-    profile_picture_url: null,
-    email: null,
-    handle: key,
-    color: "#000",
-    is_owner: false,
-    is_connected: true,
-    last_seen: null,
-    last_input_at: null,
-    ...overrides,
-  };
-}
-
 const ROSTER = [
-  participant("user:owner-1", { display_name: "Josh", is_owner: true }),
-  participant("user:bob-2", { display_name: "Bob", profile_picture_url: "https://pictures.example/bob.png" }),
-  participant("workspace-agent", {
-    display_name: "Atlas",
+  personFixture("user:owner-1", "Josh", { is_owner: true }),
+  personFixture("user:bob-2", "Bob", { profile_picture_url: "https://pictures.example/bob.png" }),
+  personFixture("workspace-agent", "Atlas", {
     kind: "workspace_agent",
     handle: "agent",
     profile_picture_url: "/api/participants/workspace-agent/picture",
@@ -120,7 +103,7 @@ describe("ensureParticipants again", () => {
       expect(mockRequest).toHaveBeenCalledTimes(2);
 
       await vi.advanceTimersByTimeAsync(1);
-      answerRequests("user:bob-2", [...ROSTER, participant("user:carol-3", { display_name: "Carol" })]);
+      answerRequests("user:bob-2", [...ROSTER, personFixture("user:carol-3", "Carol")]);
       await participants.ensureParticipants();
       expect(mockRequest).toHaveBeenCalledTimes(4);
       expect(participants.getParticipant("user:carol-3")?.display_name).toBe("Carol");

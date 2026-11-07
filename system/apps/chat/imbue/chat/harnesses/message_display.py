@@ -538,13 +538,22 @@ def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: 
     author_name, spoken = split_author_prefix(content)
     if author_name is not None:
         event[AUTHOR_NAME_FIELD] = author_name
-    decision = classify_user_message(spoken, is_meta=is_meta)
-    if decision is None and author_name is not None:
-        decision = MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
+    decision = classify_delivered_message(content, is_meta=is_meta)
     if decision is not None:
         decision.apply_to(event)
     if is_non_turn_tail(spoken, is_meta=is_meta):
         event["non_turn_tail"] = True
+
+
+@pure
+def classify_delivered_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
+    """The render decision for a message as the agent was handed it: the detectors run on the words behind a
+    ``[from: <name>] `` prefix, and a message carrying one shows those words as its body."""
+    author_name, spoken = split_author_prefix(content)
+    decision = classify_user_message(spoken, is_meta=is_meta)
+    if decision is None and author_name is not None:
+        return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
+    return decision
 
 
 @pure

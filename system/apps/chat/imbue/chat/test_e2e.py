@@ -808,6 +808,31 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_another_persons_queued_message_is_drawn_under_their_name_without_the_prefix(
+    tmp_path: Path, page: Page
+) -> None:
+    """A visitor's message the harness queued (as delivered, prefixed) is drawn on the owner's page as the turn it
+    becomes will be: under their name, beside their monogram, and never with the prefix."""
+    delivered = "[from: Bob] actually also update the changelog"
+    events = [*_QUEUED_SESSION_EVENTS[:-1], {**_QUEUED_SESSION_EVENTS[-1], "content": delivered}]
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        server.chat_state.authors.record(
+            ChatId(FIXTURE_AGENT_ID),
+            new_author_annotation("msg-bob-1", ParticipantKey("user:user-bob-4471"), "Bob", delivered),
+        )
+        _open_fixture_chat(page, server)
+
+        queued = _chat(page).locator(".queued-message", has_text="actually also update the changelog")
+        expect(queued).to_be_visible(timeout=15000)
+        expect(queued).to_have_class(re.compile(r"message-other"))
+        # Joined to Bob's annotation: the prefix alone would name a synthetic ``name:Bob``.
+        expect(queued.locator("[data-author]")).to_have_attribute("data-author", "user:user-bob-4471")
+        expect(queued.locator(".message-author")).to_have_text("Bob")
+        expect(queued.locator("[data-participant-picture]")).to_have_text("B")
+        expect(_chat(page).locator(".queued-group")).not_to_contain_text("[from:")
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
     """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
     with _running_e2e_server(tmp_path) as server:
