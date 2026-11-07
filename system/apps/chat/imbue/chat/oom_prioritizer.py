@@ -35,8 +35,8 @@ switching to, or messaging one of them never moves its score. A chat with no liv
 process (dormant, revives on its next message) is simply skipped until its
 process exists.
 
-Re-tagging is event-driven plus a slow sweep, and every pass runs on one
-background thread. The events (a presence report that changes whether a chat is
+Re-tagging is event-driven plus a slow sweep, and once started, every pass runs
+on one background thread. The events (a presence report that changes whether a chat is
 open or visible, a send, a lifecycle change) cover everything that *raises* a
 chat's protection; each only asks the pass thread for a pass, so no request waits
 on one and a burst of them costs one pass. The sweep exists because staleness is
@@ -73,8 +73,7 @@ from imbue.chat.presence import PresenceTransition
 from imbue.chat.primitives import ChatId
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
-# minute-granularity is ample; each pass is a handful of stats and ``/proc``
-# writes per chat.
+# minute-granularity is ample, and a pass costs a read of the whole pid registry.
 SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 
 # The least time between two passes. A burst of events (the lifecycle changes of a
