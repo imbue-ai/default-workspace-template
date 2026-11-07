@@ -92,6 +92,22 @@ export SCREEN_DESKTOP_PANEL="off"
 # the viewer's checks and gathers nothing of its own.
 export SCREEN_ICE_LITE="on"
 
+# xfwm4 without its compositor. Under a compositing manager Chromium draws its restored window's shadow
+# inside its own X window (16 px left and right, 10 px above, 32 px below), so the 1288x805 window Playwright
+# sizes would show a 1256x763 browser framed in black, its page cut 24 px short on the right and 44 px at the
+# bottom; without one the whole X window is the browser. xfwm4 reads its channel when the Screen's stack starts
+# it, and xfconfd fills in every property this file leaves out.
+mkdir -p "$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+cat > "$HOME/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<'EOF'
+<?xml version="1.1" encoding="UTF-8"?>
+
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="use_compositing" type="bool" value="false"/>
+  </property>
+</channel>
+EOF
+
 mkdir -p /var/log/supervisor "$REPO_ROOT/data/.state"
 cd "$REPO_ROOT"
 

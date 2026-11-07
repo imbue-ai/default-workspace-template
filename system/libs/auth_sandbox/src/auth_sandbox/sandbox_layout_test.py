@@ -4,6 +4,7 @@ import configparser
 import os
 import re
 import subprocess
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,23 @@ def test_sign_in_browser_script_runs_the_fortress_launcher_with_its_window_at_th
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert commands == [f'exec {FORTRESS_LAUNCHER_PATH} --window-position=0,0 "$@"']
+
+
+def test_boot_script_turns_off_xfwm4s_compositor_before_the_screen_starts_it() -> None:
+    text = (_REPO_ROOT / BOOT_SCRIPT_SOURCE).read_text()
+    opener = (
+        """cat > "$HOME/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<'EOF'\n"""
+    )
+    start = text.index(opener) + len(opener)
+    assert start < text.index("supervisord -n")
+    channel = ElementTree.fromstring(text[start : text.index("\nEOF\n", start)])
+    assert channel.tag == "channel"
+    assert channel.get("name") == "xfwm4"
+    (general,) = channel.findall("property")
+    assert general.get("name") == "general"
+    assert [prop.attrib for prop in general] == [
+        {"name": "use_compositing", "type": "bool", "value": "false"}
+    ]
 
 
 def test_boot_script_runs_the_claim_watcher_and_ends_the_sandbox_with_it() -> None:
