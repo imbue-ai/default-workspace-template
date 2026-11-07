@@ -5418,7 +5418,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     writes: list[tuple[int, int]] = []
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=manager._read_active_process_started_at,
     )

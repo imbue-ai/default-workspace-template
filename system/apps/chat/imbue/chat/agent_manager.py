@@ -21,7 +21,7 @@ from chat_background_tasks.markers import TaskSource
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pids_by_agent_id
+from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.primitives import ParticipantKey
@@ -1687,7 +1687,7 @@ class AgentManager:
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
+            resolve_pids_by_chat_id=manager._resolve_active_pids_by_chat_id,
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1710,10 +1710,19 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
-        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
-        active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
+    def _resolve_active_pids_by_chat_id(self, chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        """The pids of the processes each chat runs on, for the OOM prioritizer, from one read of the pid registry.
+
+        A chat with no active agent, or whose agent has no live process, maps to an empty list.
+        """
+        pids_by_agent_id = live_pids_by_agent_id()
+        pids_by_chat_id: dict[ChatId, list[int]] = {}
+        for chat_id in chat_ids:
+            active_agent_id = self._active_agent_id_of_chat(chat_id)
+            pids_by_chat_id[chat_id] = (
+                [] if active_agent_id is None else sorted(pids_by_agent_id.get(active_agent_id, []))
+            )
+        return pids_by_chat_id
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
