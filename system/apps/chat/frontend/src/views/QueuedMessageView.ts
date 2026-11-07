@@ -28,15 +28,20 @@ import type { QueuedMessage } from "../models/Chats";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
-import { renderNotYetRealBubble, type OwnBubbleRun } from "./OutgoingMessageView";
+import {
+  closedPendingRun,
+  continuesPendingRun,
+  renderNotYetRealBubble,
+  type PendingBubbleRun,
+} from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
   NOTICE_ROW_SPACING_CLASS,
-  USER_BUBBLE_CONTINUED_CLASS,
-  USER_MESSAGE_PART,
-  USER_MESSAGE_ROW_CLASS,
+  authorOfTurn,
   renderNoticeRow,
+  renderUserBubble,
+  userMessageRowClass,
 } from "./user-message-display";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
@@ -87,8 +92,9 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
 
 /** Render one queued message as a user bubble. Reuses the user-bubble *view* (the
  *  same markup ``StableUserMessage`` produces for a plain prompt) directly: a queued message is
- *  shown verbatim, except one the transcript will show as a notice (a background command's
- *  report), which shows as that notice already.
+ *  drawn as its transcript turn will be -- under its sender, in the words behind the author prefix
+ *  the agent is handed with a non-owner's message -- and one the transcript will show as a notice
+ *  (a background command's report) shows as that notice already.
  *
  *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend, or a
  *  Claude message still queued when the reply landed)
@@ -96,11 +102,11 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  re-sent message stays continuously visible through the resend rather than blinking out
  *  (contract A1a); the backend drives the transition to the committed turn.
  *
- *  Drawn down `ownRun`, as every pending send is (see OwnBubbleRun). */
-function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, ownRun: OwnBubbleRun): m.Vnode {
+ *  Drawn down `run`, as every pending send is (see PendingBubbleRun). */
+function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, run: PendingBubbleRun): m.Vnode {
   const cls = classifyDecidedMessage(queued.content, queued);
   if (cls.kind === UserMessageKind.Notice) {
-    ownRun.isOpen = false;
+    run.isOpen = false;
     // A notice being sent is drawn like the transcript row it becomes, as a sending bubble is.
     const rowClass = [
       "queued-message queued-notice",
@@ -111,21 +117,36 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, ownRun: O
       .join(" ");
     return renderNoticeRow(`queued-${queued.queued_id}`, rowClass, cls);
   }
+  const author = authorOfTurn(queued);
+  // The group's header names the viewer's bubbles, so theirs wear no "You" in it; another person's is named as its
+  // turn will be, once over a run of theirs.
+  if (isInGroup && author === null) {
+    run.isOpen = true;
+    run.author = null;
+  }
   if (queued.is_sending === true) {
     return renderNotYetRealBubble(
-      { key: `queued-${queued.queued_id}`, content: queued.content, isGroupSpaced: isInGroup },
-      ownRun,
+      {
+        key: `queued-${queued.queued_id}`,
+        content: queued.content,
+        isGroupSpaced: isInGroup,
+        displayDecision: queued,
+        author: queued,
+      },
+      run,
     );
   }
+  const isContinued = continuesPendingRun(run, author);
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
-  // is the rhythm between queued bubbles). Only the group draws a parked bubble,
-  // and its header names them, so it wears no "You".
-  ownRun.isOpen = true;
-  return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CONTINUED_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-    ]),
-  ]);
+  // is the rhythm between queued bubbles).
+  return m(
+    "div",
+    { class: `${userMessageRowClass(author)} queued-message`, key: `queued-${queued.queued_id}` },
+    renderUserBubble(author, [m("div", { class: "message-content whitespace-pre-wrap" }, cls.body)], {
+      isContinued,
+      bubbleExtraClass: "opacity-85",
+    }),
+  );
 }
 
 /**
@@ -136,7 +157,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, ownRun: O
  * the queued bubbles follow below. The group is a live mirror of the backend
  * snapshot -- it is never held or reconstructed on the frontend.
  */
-export function renderQueuedMessages(chatId: string, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode[] {
+export function renderQueuedMessages(chatId: string, run: PendingBubbleRun = closedPendingRun()): m.Vnode[] {
   const queued = getQueuedMessagesForChat(chatId);
   if (queued.length === 0) {
     return [];
@@ -150,7 +171,7 @@ export function renderQueuedMessages(chatId: string, ownRun: OwnBubbleRun = { is
   // identical markup to the optimistic ones they replace, so the handoff is invisible rather
   // than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
-    return queued.map((message) => renderQueuedBubble(message, false, ownRun));
+    return queued.map((message) => renderQueuedBubble(message, false, run));
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
@@ -207,11 +228,7 @@ export function renderQueuedMessages(chatId: string, ownRun: OwnBubbleRun = { is
   return [
     m("div", { class: "queued-group mb-5 flex flex-col items-stretch gap-2", key: "queued-group" }, [
       header,
-      ...queued.map((message) => {
-        // The group's header names its bubbles, so none of them wears "You".
-        ownRun.isOpen = true;
-        return renderQueuedBubble(message, true, ownRun);
-      }),
+      ...queued.map((message) => renderQueuedBubble(message, true, run)),
     ]),
   ];
 }

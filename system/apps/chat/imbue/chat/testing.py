@@ -509,18 +509,25 @@ def is_e2e_browser_installed() -> bool:
     return cache_dir.exists() and any(cache_dir.iterdir())
 
 
-def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
-    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
-    values: list[bool] = []
+def drain_pushes(client_queue: queue.Queue[str | None]) -> list[dict[str, Any]]:
+    """Every message queued so far for a registered client, in order; the client must not have been evicted."""
+    messages: list[dict[str, Any]] = []
     while not client_queue.empty():
         raw = client_queue.get_nowait()
-        assert raw is not None
-        message = json.loads(raw)
-        if message["type"] == "chats_updated":
-            values.extend(
-                chat["active_agent"]["is_connecting"] for chat in message["chats"] if chat["chat_id"] == chat_id
-            )
-    return values
+        assert raw is not None, "the broadcaster evicted the test's client"
+        messages.append(json.loads(raw))
+    return messages
+
+
+def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
+    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+    return [
+        chat["active_agent"]["is_connecting"]
+        for message in drain_pushes(client_queue)
+        if message["type"] == "chats_updated"
+        for chat in message["chats"]
+        if chat["chat_id"] == chat_id
+    ]
 
 
 def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
@@ -1032,7 +1039,7 @@ def build_test_state(
     )
     if tray_feed is not None:
         manager.set_chats_updated_listener(tray_feed.report_chats)
-    manager.set_participants_reader(state.authors.participant_keys)
+    manager.set_author_annotations_reader(state.authors.annotations)
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

@@ -1045,9 +1045,14 @@ read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
 several queued messages), else not at all: an unstamped turn is the owner's. The
-prefix is stripped into `display_body` so the page never shows it, and a send held
-while the chat converges is listed in the snapshot's `held_sends` without it too; the
-terminal view shows the pane as it is.
+prefix is stripped into `display_body` so the page never shows it; the
+terminal view shows the pane as it is. A message the page shows before its turn
+exists is drawn under its sender the same way: each of the harness queue's entries
+(`active_agent.queued_messages`) is joined to its annotation like a turn and gets the
+words behind its prefix as `display_body`, and each send held while the chat
+converges (`handoff.held_sends`) or is being created (the provisional chat's
+`held_sends`) is listed without the prefix and with the author of the annotation
+recorded under its message id.
 
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own

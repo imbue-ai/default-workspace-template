@@ -23,6 +23,7 @@ import {
   isViewerOwner,
   participantName,
 } from "../models/Participants";
+import type { MessageAuthor } from "../models/Chats";
 import type { UserMessageEvent } from "../models/Response";
 import { railNodeAttrs } from "./agent-rail";
 import { AGENT_TEXT_EDGE_CLASS, STRETCH_TEXT_EDGE_CLASS } from "./machine-bubbles";
@@ -43,8 +44,14 @@ export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-
 /** Another person's turn (the multiplayer spec, section 5.4): left-aligned, their picture beside the bubble. */
 export const OTHER_PERSON_ROW_CLASS = "message message-user message-other flex flex-col items-start";
 
+/** Who a user turn was said by, when it is not the viewer: their participant key and their name. */
+export interface TurnAuthor {
+  key: string;
+  name: string;
+}
+
 /** Whether two turns are by the same person: the viewer (null), or one author's key. */
-function isSameSpeaker(a: { key: string } | null, b: { key: string } | null): boolean {
+export function isSameSpeaker(a: TurnAuthor | null, b: TurnAuthor | null): boolean {
   return a === null || b === null ? a === b : a.key === b.key;
 }
 
@@ -60,18 +67,17 @@ export function continuesSpeakerRun(event: UserMessageEvent, previousTurn: UserM
  *  before the workspace was shared, or the account the roster marks as the owner, which an owner page opened before
  *  the share still calls ``owner`` -- so it is the viewer's own when the viewer is the owner, and the owner's entry
  *  otherwise. Until the page knows who it is, every turn reads as the viewer's own. */
-export function authorOfTurn(
-  event: Pick<UserMessageEvent, "author" | "author_name">,
-): { key: string; name: string } | null {
+export function authorOfTurn(event: MessageAuthor): TurnAuthor | null {
   const own = getOwnParticipant();
   if (own === null) return null;
-  if (event.author === undefined || isOwnerKey(event.author)) {
+  const key = event.author ?? null;
+  if (key === null || isOwnerKey(key)) {
     if (isViewerOwner()) return null;
     const owner = getOwner();
     return owner === null ? null : { key: owner.key, name: owner.display_name };
   }
-  if (event.author === own) return null;
-  return { key: event.author, name: participantName(event.author, event.author_name ?? null) };
+  if (key === own) return null;
+  return { key, name: participantName(key, event.author_name ?? null) };
 }
 
 /** The bubble is the chat's declared `user-message` part (its app.toml `[theming]`), which themes may style. */
@@ -92,6 +98,10 @@ export const USER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-br-[4px] bg-user-b
 export const USER_BUBBLE_CONTINUED_CLASS = `${USER_BUBBLE_BASE} bg-user-bubble`;
 /** Another person's bubble: left-aligned under their name, in the agent's grey. */
 const OTHER_BUBBLE_BASE = `${USER_BUBBLE_BASE} bg-fill-active/75`;
+/** Another person's bubble opening a run of theirs, squared at its top-left where their picture sits. */
+export const OTHER_BUBBLE_CLASS = `${OTHER_BUBBLE_BASE} rounded-tl-[4px]`;
+/** Another person's bubble further down a run of theirs. */
+export const OTHER_BUBBLE_CONTINUED_CLASS = OTHER_BUBBLE_BASE;
 
 /** The small name over the first bubble of a run: "You" over the viewer's own, the author's name over another's. */
 const SPEAKER_LABEL_CLASS = "mb-1 text-(length:--font-size-helper) leading-[1.4] text-faint";
@@ -99,6 +109,61 @@ const SPEAKER_LABEL_CLASS = "mb-1 text-(length:--font-size-helper) leading-[1.4]
 /** "You", over the first of a run of the viewer's own bubbles. */
 export function renderOwnSpeakerLabel(): m.Vnode {
   return m("div", { class: `message-you ${SPEAKER_LABEL_CLASS} pr-4` }, "You");
+}
+
+/** The row a user turn sits in: the viewer's own on the right, another person's on the left. */
+export function userMessageRowClass(author: TurnAuthor | null): string {
+  return author === null ? USER_MESSAGE_ROW_CLASS : OTHER_PERSON_ROW_CLASS;
+}
+
+/** How a user turn's bubble sits in its run. */
+export interface UserBubbleOptions {
+  /** True further down a run of the author's turns: the bubble alone, with no name over it and no picture beside
+   *  it, in line with the run's first. */
+  isContinued: boolean;
+  /** Added to the bubble (a queued message's muting). */
+  bubbleExtraClass?: string;
+}
+
+/** A user turn's bubble: the viewer's own under "You", or another person's under their name with their picture at
+ *  the left, level with the bubble's top; further down a run of theirs, the bubble alone. */
+export function renderUserBubble(
+  author: TurnAuthor | null,
+  children: m.Children[],
+  options: UserBubbleOptions,
+): m.Children {
+  const isContinued = options.isContinued;
+  const extra = options.bubbleExtraClass === undefined ? "" : ` ${options.bubbleExtraClass}`;
+  if (author === null) {
+    return [
+      isContinued ? null : renderOwnSpeakerLabel(),
+      m(
+        "div",
+        { class: `${isContinued ? USER_BUBBLE_CONTINUED_CLASS : USER_BUBBLE_CLASS}${extra}`, ...USER_MESSAGE_PART },
+        children,
+      ),
+    ];
+  }
+  const entry = getParticipant(author.key);
+  return m("div", { class: "message-other-turn flex w-full items-start gap-2", "data-author": author.key }, [
+    isContinued
+      ? m("span", { class: "w-6 shrink-0", "aria-hidden": "true" })
+      : participantPicture({
+          name: author.name,
+          pictureUrl: entry?.profile_picture_url ?? null,
+          color: entry?.color ?? null,
+          size: TURN_FACE_SIZE_PX,
+          extra: "message-author-picture mt-5",
+        }),
+    m("div", { class: "flex min-w-0 flex-1 flex-col items-start" }, [
+      isContinued ? null : m("div", { class: `message-author ${SPEAKER_LABEL_CLASS} pl-4` }, author.name),
+      m(
+        "div",
+        { class: `${isContinued ? OTHER_BUBBLE_CONTINUED_CLASS : OTHER_BUBBLE_CLASS}${extra}`, ...USER_MESSAGE_PART },
+        children,
+      ),
+    ]),
+  ]);
 }
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
@@ -188,38 +253,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      if (author === null) {
-        return [
-          isContinued ? null : renderOwnSpeakerLabel(),
-          m(
-            "div",
-            { class: isContinued ? USER_BUBBLE_CONTINUED_CLASS : USER_BUBBLE_CLASS, ...USER_MESSAGE_PART },
-            bubbleChildren,
-          ),
-        ];
-      }
-      // Another person's turn: their picture at the left, level with the bubble's top, and their name over the
-      // bubble's text; further down a run of theirs, the bubble alone, in line with the first.
-      const entry = getParticipant(author.key);
-      return m("div", { class: "message-other-turn flex w-full items-start gap-2", "data-author": author.key }, [
-        isContinued
-          ? m("span", { class: "w-6 shrink-0", "aria-hidden": "true" })
-          : participantPicture({
-              name: author.name,
-              pictureUrl: entry?.profile_picture_url ?? null,
-              color: entry?.color ?? null,
-              size: TURN_FACE_SIZE_PX,
-              extra: "message-author-picture mt-5",
-            }),
-        m("div", { class: "flex min-w-0 flex-1 flex-col items-start" }, [
-          isContinued ? null : m("div", { class: `message-author ${SPEAKER_LABEL_CLASS} pl-4` }, author.name),
-          m(
-            "div",
-            { class: `${OTHER_BUBBLE_BASE}${isContinued ? "" : " rounded-tl-[4px]"}`, ...USER_MESSAGE_PART },
-            bubbleChildren,
-          ),
-        ]),
-      ]);
+      return renderUserBubble(author, bubbleChildren, { isContinued });
     },
   };
 }
@@ -287,9 +321,7 @@ export function renderUserMessage(
       ? `message message-system-collapsed flex flex-col items-start ${STRETCH_TEXT_EDGE_CLASS}`
       : kind === UserMessageKind.Notice
         ? `message message-notice-row ${STRETCH_TEXT_EDGE_CLASS}`
-        : authorOfTurn(event) === null
-          ? `${USER_MESSAGE_ROW_CLASS} mb-5`
-          : `${OTHER_PERSON_ROW_CLASS} mb-5`;
+        : `${userMessageRowClass(authorOfTurn(event))} mb-5`;
   const isAgentsSystemChip = kind === UserMessageKind.SystemChip && !isPersonsChipMessage(event);
   // A person's turn is a row of its own, which the virtualized list measures by
   // its id (``.message-list > [id]``).
