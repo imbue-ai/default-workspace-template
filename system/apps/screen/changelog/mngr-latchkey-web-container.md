@@ -20,6 +20,6 @@
 
 - The Screen requires Werkzeug 3.1 or later, whose `set_cookie` takes the `partitioned` flag the gate sets.
 
-- The viewer's `?strip=off` (kept through the gate's owner-token redirect) hides the control row: the screencast alert with "Retry now" and the notices show as a small banner over the stage only while they apply, and a press or key on the stage while another human session holds control takes control. Without the parameter the viewer is unchanged.
+- The viewer's `?strip=off` (kept through the gate's owner-token redirect) hides the control row: the screencast alert with "Retry now" and the notices show as a small banner over the stage only while they apply, and a press or key on the stage while another human session holds control takes control. It also skips the local clipboard read when the page gets focus, which Firefox answers with a "Paste" menu at every click back into the frame; a paste (Ctrl+V) still sends the local clipboard to the Screen, and a copy on the Screen still reaches the local clipboard. Without the parameter the viewer is unchanged.
 
 - The viewer asks for `/api/state`, `/api/session` and `/api/connect-info` at once as the page loads, rather than one after another; a session refused because the stack was not running yet is asked for again once it runs, and the first signaling uses the prefetched `connect-info` while it is fresh.

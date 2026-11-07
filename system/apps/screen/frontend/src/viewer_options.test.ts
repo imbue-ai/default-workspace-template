@@ -1,5 +1,5 @@
-/** The viewer's URL options: ``strip=off`` hides the control row, and a stripless viewer takes control from another
- *  human session at the first press or key (spec section 11). */
+/** The viewer's URL options: ``strip=off`` hides the control row and skips the focus-time clipboard read, and a
+ *  stripless viewer takes control from another human session at the first press or key (spec section 11). */
 import { describe, expect, it } from "vitest";
 
 import type { ControlDocument } from "./state";
@@ -18,12 +18,14 @@ const NOBODY: ControlDocument = {
 };
 
 describe("parseViewerOptions", () => {
-  it("hides the strip only for strip=off", () => {
-    expect(parseViewerOptions("?strip=off")).toEqual({ isStripShown: false });
-    expect(parseViewerOptions("?view=compact&strip=off")).toEqual({ isStripShown: false });
-    expect(parseViewerOptions("")).toEqual({ isStripShown: true });
-    expect(parseViewerOptions("?strip=on")).toEqual({ isStripShown: true });
-    expect(parseViewerOptions("?strip=OFF")).toEqual({ isStripShown: true });
+  it("hides the strip and skips the focus-time clipboard read only for strip=off", () => {
+    const stripless = { isStripShown: false, isClipboardReadOnFocus: false };
+    const standard = { isStripShown: true, isClipboardReadOnFocus: true };
+    expect(parseViewerOptions("?strip=off")).toEqual(stripless);
+    expect(parseViewerOptions("?view=compact&strip=off")).toEqual(stripless);
+    expect(parseViewerOptions("")).toEqual(standard);
+    expect(parseViewerOptions("?strip=on")).toEqual(standard);
+    expect(parseViewerOptions("?strip=OFF")).toEqual(standard);
   });
 });
 

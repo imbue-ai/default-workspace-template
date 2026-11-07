@@ -10,8 +10,8 @@ interface Harness {
 }
 
 /** ``isRemoteRefusing`` makes every write to the Screen fail, as the service's image route does for a session that
- *  does not hold control. */
-function build(isRemoteRefusing = false): Harness {
+ *  does not hold control; ``isReadOnFocus`` false is a ``strip=off`` viewer's bridge. */
+function build(isRemoteRefusing = false, isReadOnFocus = true): Harness {
   const remote = { text: "", html: "", image: null as Blob | null };
   const local = { text: "", html: "", image: null as Blob | null, isFocused: true };
   const log: string[] = [];
@@ -45,10 +45,13 @@ function build(isRemoteRefusing = false): Harness {
       log.push(`local-write:${items.text ?? ""}${items.image ? "[image]" : ""}`);
     },
     async read() {
+      log.push("local-read");
       return { text: local.text, html: local.html, image: local.image };
     },
   };
-  const bridge = new ClipboardBridge(transport, localClipboard, (message) => log.push(`status:${message}`));
+  const bridge = new ClipboardBridge(transport, localClipboard, { isReadOnFocus }, (message) =>
+    log.push(`status:${message}`),
+  );
   bridge.isActive = true;
   return { bridge, remote, local, log };
 }
@@ -77,6 +80,26 @@ describe("ClipboardBridge", () => {
     await bridge.onFocus();
     expect(remote.text).toBe("from laptop");
     expect(log.filter((entry) => entry.startsWith("remote-text"))).toHaveLength(1);
+  });
+
+  it("skips the read on focus when it is off, and still sends a paste and flushes a kept local write", async () => {
+    const { bridge, remote, local, log } = build(false, false);
+    local.text = "from laptop";
+    await bridge.onFocus();
+    expect(log).toEqual([]);
+    const textPaste = {
+      items: [],
+      getData: (type: string) => (type === "text/plain" ? "pasted" : ""),
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(textPaste)).toBe(true);
+    expect(remote.text).toBe("pasted");
+    local.isFocused = false;
+    remote.text = "copied remotely";
+    await bridge.onRemoteTextUpdated();
+    expect(local.text).toBe("from laptop");
+    local.isFocused = true;
+    await bridge.onFocus();
+    expect(local.text).toBe("copied remotely");
   });
 
   it("does not echo what it just received back to the Screen", async () => {

@@ -94,7 +94,7 @@ A strip at the top names who has control: "You", "<name>", "Agent <name>", or "N
 When someone else has control, the strip offers "Take control"; input from a non-controlling viewer is not sent.
 When an agent has control, the Screen is dimmed slightly, the agent's name is shown, and "Take control" is there, as in the browser app's agent overlay; a URL the human asked to open while an agent drives is held and offered as it is today.
 "Give control back" appears for the human who took it from an agent, so the agent can resume (the browser's `return_to_agents`), and for the owner while a handoff waits unclaimed.
-A viewer opened with `?strip=off` (the auth sandbox's frame in the hosted chrome, which draws its own controls) has no strip: the screencast alert with "Retry now" (section 5.4) and the notices (a refused verb's reason, a drop's result) show as a small banner over the top of the stage while they apply, and a press or a key on the stage while another human session holds control takes control (in gate mode every session is the owner's); the press itself is not sent.
+A viewer opened with `?strip=off` (the auth sandbox's frame in the hosted chrome, which draws its own controls) has no strip: the screencast alert with "Retry now" (section 5.4) and the notices (a refused verb's reason, a drop's result) show as a small banner over the top of the stage while they apply, and a press or a key on the stage while another human session holds control takes control (in gate mode every session is the owner's); the press itself is not sent. It also skips the local clipboard read on focus (section 13): a paste still sends the local clipboard.
 
 Several humans may watch at once, each from their own client; the controller's cursor is the remote one, and other viewers' cursors are shown as neko's inactive cursors.
 
@@ -378,6 +378,7 @@ Neko's relative-motion support is verified in the implementation; without it the
 
 - Remote to local: on `clipboard/updated` the viewer reads text and HTML from the event and writes them with the Clipboard API; when the service's `clipboard` event says an image is present, the viewer fetches `/neko/api/room/clipboard/image.png` and writes it.
 - Local to remote: on focus and on paste, while this viewer holds control, the viewer reads the local clipboard; text and HTML go through `clipboard/set`; an image goes to `POST /api/clipboard/image` as this session (multipart `session_id` and `image`), which the service accepts from the session in control alone and places on the X clipboard with the migrated `xclipboard` module.
+  A viewer opened with `?strip=off` (section 11) reads it on paste alone: Firefox answers a script's clipboard read with a "Paste" menu the user must click, which at every click back into the auth sandbox's frame would be a menu on every click.
 - The keyboard map: the viewer sends `keyboard/map` once per session from `navigator.language` and the layout it detects, defaulting to `us`.
 
 ## 14. Mobile

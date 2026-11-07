@@ -185,7 +185,9 @@ nothing) the viewer hides its control row, since the chrome draws its own: the s
 with its "Retry now" and a refused verb's or a drop's notice show as a small banner over the top
 of the stage while they apply, and nothing otherwise. With no Take control button, a press or a
 key on the stage while another human session holds control takes control (every session is the
-owner's here); the press itself is not sent, input flows once the lease is this session's.
+owner's here); the press itself is not sent, input flows once the lease is this session's. It
+also skips the local clipboard read on focus, which Firefox answers with a "Paste" menu at every
+click back into the frame: the local clipboard reaches the Screen on paste (Ctrl+V) alone.
 
 ## The browser
 
@@ -355,7 +357,8 @@ session alone and with text only, so the directions are:
   included). A paste chord (Ctrl+V, Cmd+V) is
   left to the browser so its `paste` event carries the data; once the remote clipboard
   holds it the viewer taps V with Ctrl held on the remote, and a paste that did not cross
-  says so in the strip. What was just received is never echoed back, by content hash.
+  says so in the strip. What was just received is never echoed back, by content hash. A
+  viewer opened with `strip=off` skips the read on focus and sends on paste alone.
 - `keyboard/map` goes once per neko connection and again when this session takes
   control (only the host may set it), with the layout `navigator.language` suggests,
   `us` by default.

@@ -171,6 +171,7 @@ class Viewer {
         () => this.session?.session_id ?? null,
       ),
       navigatorClipboard,
+      { isReadOnFocus: options.isClipboardReadOnFocus },
       (message) => this.showClipboardStatus(message),
     );
     this.mobile = this.isPhone ? this.buildMobileControls() : null;

@@ -5,9 +5,10 @@
  * there, which the viewer fetches from neko's image route and writes. Local to remote: on focus and on paste the
  * viewer reads the local clipboard; text and HTML go to neko's clipboard route (its ``clipboard/set`` message
  * carries text alone), an image to the service's ``/api/clipboard/image`` as this session, which the service
- * accepts from the session in control alone (a visitor in control included). A paste that does not cross says so
- * in the strip; the focus sweep stays quiet. A local write needs a focused document, so one that fails is kept for
- * the next focus.
+ * accepts from the session in control alone (a visitor in control included). A viewer opened with ``strip=off``
+ * skips the read on focus, which Firefox answers with a "Paste" menu at every click into the frame, and sends the
+ * local clipboard on paste alone. A paste that does not cross says so in the strip; the focus sweep stays quiet. A
+ * local write needs a focused document, so one that fails is kept for the next focus.
  */
 
 export const CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024;
@@ -132,6 +133,7 @@ export class ClipboardBridge {
   constructor(
     private readonly transport: ClipboardTransport,
     private readonly local: LocalClipboard,
+    private readonly options: { readonly isReadOnFocus: boolean },
     private readonly onStatus: (message: string) => void = () => undefined,
   ) {}
 
@@ -160,10 +162,11 @@ export class ClipboardBridge {
     await this.writeLocally(() => this.local.write({ image }), "Image copied from the Screen");
   }
 
-  /** The document got focus: whatever the local clipboard holds goes to the Screen, once per content. */
+  /** The document got focus: a local write kept for it runs, and (unless the read on focus is off) whatever the
+   *  local clipboard holds goes to the Screen, once per content. */
   async onFocus(): Promise<void> {
     this.flushPendingLocalWrite();
-    if (!this.isActive) return;
+    if (!this.isActive || !this.options.isReadOnFocus) return;
     const contents = await this.local.read().catch(() => null);
     if (contents === null) return;
     await this.sendToRemote(contents.text, contents.html, contents.image, false);
