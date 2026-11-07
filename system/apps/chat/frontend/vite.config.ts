@@ -40,11 +40,13 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "../imbue/chat/static"),
     emptyOutDir: true,
     rollupOptions: {
-      // The chat document, which the chat app serves at /<agent-id>, and the chat root (the
-      // chat list beside an inner chat frame), served at / and /new.
+      // The chat document, which the chat app serves at /<agent-id>, the chat root (the
+      // chat list beside an inner chat frame), served at / and /new, and the provider chooser
+      // on its own, which the early sign-in serves while the workspace is built.
       input: {
         chat: path.resolve(__dirname, "chat.html"),
         root: path.resolve(__dirname, "root.html"),
+        sign_in: path.resolve(__dirname, "sign_in.html"),
       },
     },
   },

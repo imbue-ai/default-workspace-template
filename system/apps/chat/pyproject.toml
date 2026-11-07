@@ -71,6 +71,8 @@ dev = [
 
 [project.scripts]
 chat-app = "imbue.chat.main:main"
+# Run by the Imbue Studio app over SSH while a new workspace is built (imbue/chat/early_sign_in.py).
+chat-early-sign-in = "imbue.chat.early_sign_in:main"
 
 [build-system]
 requires = ["hatchling"]

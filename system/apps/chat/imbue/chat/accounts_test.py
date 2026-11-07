@@ -23,6 +23,7 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import discard_account_dir
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
+from imbue.chat.accounts import move_in_account
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import read_signed_in_at
 from imbue.chat.accounts import reconcile
@@ -572,3 +573,35 @@ def test_regenerating_writes_the_file_for_an_index_that_predates_it(tmp_path: Pa
     regenerate_create_defaults(tmp_path)
 
     assert _written_create_section()["label__extend"] == [f"account={account.id}"]
+
+
+def test_moving_in_an_account_puts_its_folder_and_its_row_in_the_live_store(tmp_path: Path) -> None:
+    staging, live = tmp_path / "staging", tmp_path / "live"
+    account_id, staged = mint_account_dir(staging)
+    (staged / ".credentials.json").write_text('{"token": "t-81"}')
+
+    account = move_in_account(account_id, "anthropic", "Anthropic", staging, live)
+
+    assert not staged.exists()
+    assert (account_dir(account_id, live) / ".credentials.json").read_text() == '{"token": "t-81"}'
+    assert read_index(live).accounts == (account,)
+    assert read_index(live).mru == account_id
+    # The live store's boot sweep keeps it: the folder and its row arrived together.
+    assert reconcile(live) == ((), ())
+
+
+def test_moving_in_refuses_a_folder_that_is_not_there(tmp_path: Path) -> None:
+    with pytest.raises(AccountError, match="does not exist"):
+        move_in_account("0" * 32, "anthropic", "Anthropic", tmp_path / "staging", tmp_path / "live")
+
+
+def test_moving_in_never_replaces_a_live_folder(tmp_path: Path) -> None:
+    staging, live = tmp_path / "staging", tmp_path / "live"
+    account_id, staged = mint_account_dir(staging)
+    account_dir(account_id, live).mkdir(parents=True)
+
+    with pytest.raises(AccountError, match="already exists"):
+        move_in_account(account_id, "anthropic", "Anthropic", staging, live)
+
+    assert staged.is_dir()
+    assert read_index(live).accounts == ()
