@@ -41,7 +41,7 @@ class _Harness:
         self.process_started_at: dict[ChatId, float] = {}
         self.reports_sent = 0
         self.registry_reads = 0
-        # ``time.monotonic()`` at the start of each pass, for asserting how far apart passes are.
+        # ``time.monotonic()`` at each pass's registry read, for asserting how far apart passes are.
         self.pass_started_at: list[float] = []
         # A band write blocks here while a test holds the gate closed, so the test can act mid-pass.
         self.write_gate = threading.Event()
@@ -480,13 +480,16 @@ def test_passes_asked_for_in_quick_succession_are_at_least_the_minimum_interval_
     h = _Harness(chat_ids=["a"], pids={"a": 10}, min_pass_interval_seconds=0.3)
     try:
         h.prioritizer.start()
+        # Hold the pass thread inside its next write, so the second request is made while the
+        # pass serving the first is still running; the pacing wait only begins once it finishes.
+        h.write_gate.clear()
         h.prioritizer.record_message(ChatId("a"))
         assert poll_until(lambda: h.registry_reads == 2)
-        # The pass thread is in, or about to enter, its pacing wait, so the pass this asks for
-        # cannot begin until the interval has elapsed since the previous pass finished.
         h.prioritizer.record_message(ChatId("a"))
+        released_at = time.monotonic()
+        h.write_gate.set()
         assert poll_until(lambda: h.registry_reads == 3, timeout=5.0)
-        assert h.pass_started_at[2] - h.pass_started_at[1] >= 0.3
+        assert h.pass_started_at[2] - released_at >= 0.3
     finally:
         h.prioritizer.stop()
 
