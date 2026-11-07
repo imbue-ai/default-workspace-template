@@ -291,3 +291,12 @@ Dropbox, Figma, GitHub, GitLab, Gmail, Google Analytics, Google Calendar, Google
 Docs, Google Drive, Google Sheets, Google Slides, Linear, Mailchimp, Notion, Ramp,
 Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more. The list
 that counts is `latchkey services list`.
+
+
+## Experimental support
+
+There are a few experimental connectors in the form of Latchkey
+plugins that are disabled by default: Strava, Spotify, Garmin.
+To use them, the user must manually install them in the Imbue
+Studio desktop app (Permissions -> Add connection ->
+scroll to the bottom -> Install experimental connector).
