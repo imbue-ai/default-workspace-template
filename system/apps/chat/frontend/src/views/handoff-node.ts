@@ -3,7 +3,7 @@
  * while it runs, "Handed off from Claude Code to Codex" once the switch has landed, expandable to
  * the retiring agent's summary turn and the prompt the successor started with. A landed switch
  * draws a rule under the node: everything below it is the successor's. One rendering whether
- * the node sits in a progress block's timeline or stands as a row of its own, and whether it
+ * the node sits in a progress block's timeline or stands in a frame of its own, and whether it
  * was built from the transcript
  * (``HandoffNode``) or, before the summary request has landed there, from the chat's snapshot
  * alone (``renderHandoffTailNode``).
@@ -22,9 +22,11 @@ import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
 import {
   TIMELINE_BODY_CLASS,
-  TIMELINE_BULLET_CLASS,
   TIMELINE_CHEVRON_CLASS,
   TIMELINE_NODE_CLASS,
+  TIMELINE_STEPS_CLASS,
+  renderTimelineBullet,
+  renderTimelineTitleText,
   timelineChevronStateClass,
   timelineSpinnerBullet,
   timelineTitleClass,
@@ -92,7 +94,7 @@ function titleTone(status: HandoffNodeStatus): TimelineTone {
 }
 
 export interface HandoffNodeOptions {
-  /** True on the last node of a timeline, which caps the thread. */
+  /** True on the last node of a run of timeline nodes, which spaces none below it. */
   isLast: boolean;
   /** Where the node's expand state lives; a progress block scopes it to its section. */
   expansionKey: string;
@@ -117,7 +119,7 @@ export function renderHandoffNode(
     TIMELINE_NODE_CLASS,
   ].join(" ");
   return m("div", { class: classes, key: `handoff-${node.key}`, "data-handoff-status": status }, [
-    m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon(status)),
+    renderTimelineBullet(statusIcon(status)),
     m("div", { class: TIMELINE_BODY_CLASS }, [
       m(
         "button",
@@ -128,7 +130,7 @@ export function renderHandoffNode(
           onclick: canExpand ? () => toggleBlockExpanded(options.expansionKey) : undefined,
         },
         [
-          title,
+          renderTimelineTitleText(title),
           canExpand
             ? m(
                 "span",
@@ -163,13 +165,10 @@ export function renderHandoffNode(
             ],
           )
         : null,
-      // The boundary between the two agents' segments, once the switch has landed. Pulled left
-      // under the bullet and painted opaque, so it spans the row and caps the thread.
+      // The boundary between the two agents' segments, once the switch has landed, pulled left under the bullet
+      // so it spans the row.
       status === "done"
-        ? m("div", {
-            class: "pv-handoff-rule relative z-(--z-content) mt-3.5 -ml-[30px] h-2 border-t border-subtle bg-chat",
-            "aria-hidden": "true",
-          })
+        ? m("div", { class: "pv-handoff-rule mt-3.5 -ml-[30px] h-2 border-t border-subtle", "aria-hidden": "true" })
         : null,
     ]),
   ]);
@@ -182,15 +181,40 @@ export function renderHandoffTailNode(chatId: string, isOnTranscript: boolean): 
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null || isOnTranscript) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
-  // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
+  // Keyed like the parts beside it in a stretch: a keyed list refuses an unkeyed member.
+  return renderFramedHandoffNode(node, chatId, new Map(), {
+    key: "handoff-tail",
+    expansionKey: node.key,
+    extraClass: "handoff-tail-node",
+  });
+}
+
+interface HandoffFrame {
+  readonly key: string;
+  readonly expansionKey: string;
+  readonly extraClass?: string;
+}
+
+/** A handoff node standing outside a progress block, as a part of a stretch: the same timeline node a progress block
+ *  draws, in a run of its own on the stretch's line. */
+export function renderFramedHandoffNode(
+  node: HandoffNode,
+  chatId: string,
+  toolResults: Map<string, ToolResultEvent>,
+  frame: HandoffFrame,
+): m.Vnode {
   return m(
     "div",
     {
-      key: "handoff-tail",
-      class: "handoff-tail-node progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
+      key: frame.key,
+      class:
+        (frame.extraClass === undefined ? "" : `${frame.extraClass} `) +
+        "progress-block text-(length:--font-size-body) leading-normal",
     },
-    m("div.pv.pv--timeline.relative", [
-      m("div.pv-timeline-nodes", renderHandoffNode(node, chatId, new Map(), { isLast: true, expansionKey: node.key })),
-    ]),
+    m(
+      "div",
+      { class: `pv pv--timeline ${TIMELINE_STEPS_CLASS}` },
+      renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: frame.expansionKey }),
+    ),
   );
 }

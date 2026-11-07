@@ -196,7 +196,7 @@ other user requests). Each report arrives in your chat as a message that starts
 your next turn; handle it then.
 
 ```bash
-python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \
@@ -245,8 +245,10 @@ sub-workers it split its pass across are already gone with it):
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
 - **app**: refresh its window so the user sees the merged build
-  (`uv run --no-sync workspace-layout refresh --app <app-name>`), then close
-  the ticket.
+  (`uv run --no-sync workspace-layout refresh --app <app-name>`; for an app
+  `build-app` made, `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which
+  reloads its mock frame while one is up and its own windows otherwise), then
+  close the ticket.
 - **service**: it has no window -- restart its programs (`supervisorctl
   restart <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. Then close the ticket.

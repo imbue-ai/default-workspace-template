@@ -47,6 +47,7 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
+from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -163,7 +164,7 @@ def _shell_recording_hints(
 
 def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
     request = WindowOpenRequest(app=AppName(app), path=WindowPath(path), client_id=ClientId("laptop"))
-    return shell.open_window(desktop_id, request).window.id
+    return shell.open_window(desktop_id, request, None).window.id
 
 
 def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
@@ -305,7 +306,7 @@ def _launch_waking_manager(
         is_enabled=is_enabled,
         count_windows_by_app=lambda: {},
         granted_app_names=lambda: set(),
-        program_states=lambda: {"docs": "STOPPED"},
+        program_states=lambda: {"docs": SupervisorProgramState(statename="STOPPED", pid=0)},
         start_program=start_program,
         stop_program=lambda program: None,
         clock=clock,

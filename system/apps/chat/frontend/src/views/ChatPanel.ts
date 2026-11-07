@@ -72,18 +72,20 @@ import { TerminalViewToggle } from "./TerminalViewToggle";
 import { buildAgentTerminalUrl } from "../models/Chats";
 import { getShellHandshake } from "../shell";
 import {
-  buildConversationRows,
+  buildConversationView,
   MESSAGE_LIST_CLASS,
+  renderAgentTurnRow,
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
-import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
+import { ActivityIndicator, runningToolCall, turnStatusPlacement } from "./ActivityIndicator";
+import { authorOfTurn } from "./user-message-display";
 import { TurnDoneMark } from "./TurnDoneMark";
-import type { TranscriptEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { renderOutgoingMessages, type OwnBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
@@ -133,10 +135,65 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
-/** The chat's reply draft as a reply node, or nothing when there is none to show. */
-function renderReplyDraft(chatId: string): m.Vnode[] {
-  const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
-  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)];
+/** The chat's reply draft, while the window reaches the live end, or null when there is none to show. */
+function liveReplyDraft(chatId: string): AssistantMessageEvent | null {
+  return hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+}
+
+/** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
+ *  place; once the summary request or the landed switch is on the stream the rows carry it), then the reply the agent is still writing,
+ *  while the window reaches the live end and no step is live to show it in. Not a row of its own: a draft changes a
+ *  few times a second, and a row would re-walk the whole held transcript on every change. `opensStretch`: the nodes
+ *  start a stretch of their own rather than carry on the last row's. */
+function renderAgentLiveTail(chatId: string, opensStretch: boolean, isReplyDraftInStep: boolean): m.Vnode[] {
+  const events = getEventsForChat(chatId);
+  const handoff = getChatById(chatId)?.handoff ?? null;
+  const handoffNode = renderHandoffTailNode(
+    chatId,
+    hasOpenHandoffRequest(events, handoff) || hasLandedLiveSwitch(events, handoff),
+  );
+  const draft = isReplyDraftInStep ? null : liveReplyDraft(chatId);
+  return [
+    ...(handoffNode === null ? [] : [handoffNode]),
+    ...(draft === null
+      ? []
+      : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, opensStretch && handoffNode === null)]),
+  ];
+}
+
+/** Whether the last row holds the live end of the transcript: the row is an open stretch of the agent's output, and
+ *  the held window reaches the live end, so no unloaded events lie between the two. */
+function isLiveTailInLastRow(chatId: string, rows: readonly RowDescriptor[]): boolean {
+  return !hasMoreAfter(chatId) && (rows[rows.length - 1]?.takesLiveTail ?? false);
+}
+
+/** Whether the call the agent is running shows as a running chip on the last row's line, which then says it in place
+ *  of the status row. */
+function isRunningCallInline(chatId: string, rows: readonly RowDescriptor[]): boolean {
+  const running = runningToolCall(chatId);
+  return (
+    running !== null &&
+    isLiveTailInLastRow(chatId, rows) &&
+    (rows[rows.length - 1]?.chipCallIds.has(running.tool_call_id) ?? false)
+  );
+}
+
+/** Whether the viewer's own turn is the last thing said above their pending sends, which then carry on its run: the
+ *  last row is that turn, the window reaches the live end, and no stretch of the agent's output is drawn after it. */
+function isOwnTurnLast(chatId: string, rows: readonly RowDescriptor[], liveEnd: LiveEnd): boolean {
+  const turn = rows[rows.length - 1]?.speakerTurn ?? null;
+  return turn !== null && authorOfTurn(turn) === null && !hasMoreAfter(chatId) && !liveEnd.isAgentTurn;
+}
+
+/** The live end drawn after the rows, and whether it is a stretch of the agent's output of its own. */
+interface LiveEnd {
+  readonly nodes: m.Children[];
+  readonly isAgentTurn: boolean;
+}
+
+/** The agent's nodes as a stretch of their own, or nothing when there are none. */
+function asAgentTurn(nodes: m.Children[]): m.Vnode[] {
+  return nodes.length === 0 ? [] : [renderAgentTurnRow("live-agent-turn", nodes)];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -156,6 +213,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
+  // Whether the cached rows show the reply draft, in the step live at their tail.
+  let isReplyDraftInStep = false;
 
   // The scroll engine owns everything about scrolling: the FOLLOW /
   // USER_CONTROLLED state machine, anchor positioning, spacer sizing, the
@@ -411,6 +470,48 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return isRoomChat(chatId) ? [] : [renderTurnStatus(chatId, events)];
   }
 
+  /** The status row as the last piece of a stretch of the agent's output, on its line: nothing in a room, or while
+   *  the row stands under the user's own sends instead. */
+  function stretchStatusNodes(chatId: string, events: TranscriptEvent[], isCallInline: boolean): m.Children[] {
+    if (isRoomChat(chatId) || turnStatusPlacement(chatId) === "after-sends") return [];
+    return [
+      m(ActivityIndicator, {
+        key: "turn-status",
+        chatId,
+        events,
+        isInStretch: true,
+        isRunningCallInline: isCallInline,
+      }),
+    ];
+  }
+
+  /** The live end of the transcript when the last row does not hold it (the transcript ends on a person's turn or on
+   *  a switch to another agent, or the window stops short of the live end): the agent's output past the transcript as
+   *  a stretch of its own, the status row on its line, or the status row alone under the last row. */
+  function renderLiveEndAfterRows(chatId: string, events: TranscriptEvent[], rows: readonly RowDescriptor[]): LiveEnd {
+    if (isLiveTailInLastRow(chatId, rows)) return { nodes: [], isAgentTurn: false };
+    const agentNodes = renderAgentLiveTail(chatId, true, isReplyDraftInStep);
+    if (agentNodes.length > 0) {
+      return { nodes: asAgentTurn([...agentNodes, ...stretchStatusNodes(chatId, events, false)]), isAgentTurn: true };
+    }
+    return {
+      nodes: turnStatusPlacement(chatId) === "after-sends" ? [] : turnStatusNodes(chatId, events),
+      isAgentTurn: false,
+    };
+  }
+
+  /** The viewer's sends not yet on the transcript, in the order they show: what the agent has queued, what the chat
+   *  app holds through a switch, then this page's own. The first bubble wears "You" unless it carries on the viewer's
+   *  turn drawn above. */
+  function renderPendingSends(chatId: string, isAfterOwnTurn: boolean): m.Vnode[] {
+    const ownRun: OwnBubbleRun = { isOpen: isAfterOwnTurn };
+    return [
+      ...renderQueuedMessages(chatId, ownRun),
+      ...renderHeldSends(chatId, ownRun),
+      ...renderOutgoingMessages(chatId, ownRun),
+    ];
+  }
+
   /** Messages already on their way to a chat with no transcript yet, with the row saying where they are. */
   function withTurnStatus(chatId: string, nodes: m.Children[]): m.Children[] {
     return nodes.length === 0 ? nodes : [...nodes, ...turnStatusNodes(chatId, [])];
@@ -424,9 +525,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  agent lands (see MessageInput), and shows from its record on any page. */
   function renderStarting(chatId: string): m.Vnode {
     lastStartingChatId = chatId;
+    const ownRun: OwnBubbleRun = { isOpen: false };
     return renderEmptyConversation(
       "message-list-creating",
-      withTurnStatus(chatId, [...renderProvisionalHeldSends(chatId), ...renderOutgoingMessages(chatId)]),
+      withTurnStatus(chatId, [
+        ...renderProvisionalHeldSends(chatId, ownRun),
+        ...renderOutgoingMessages(chatId, ownRun),
+      ]),
       STARTING_STATUS,
     );
   }
@@ -654,10 +759,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const tailNodes =
       getEventCount(chatId) === 0
         ? [
-            renderHandoffTailNode(chatId, false),
-            ...renderQueuedMessages(chatId),
-            ...renderHeldSends(chatId),
-            ...renderOutgoingMessages(chatId),
+            ...asAgentTurn([renderHandoffTailNode(chatId, false)].filter((node) => node !== null)),
+            ...renderPendingSends(chatId, false),
           ].filter((node) => node !== null)
         : [];
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
@@ -741,13 +844,23 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(
+      const view = buildConversationView(
         chatId,
         events,
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
+        () => liveReplyDraft(chatId),
+        () =>
+          hasMoreAfter(chatId)
+            ? []
+            : [
+                ...renderAgentLiveTail(chatId, false, isReplyDraftInStep),
+                ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
+              ],
       );
+      cachedRows = view.rows;
+      isReplyDraftInStep = view.isReplyDraftInStep;
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -758,6 +871,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // spacer / row-run / spacer via the shared segment renderer.
     const plan = engine.computeRenderPlan();
     const isTurnStatusAfterSends = turnStatusPlacement(chatId) === "after-sends";
+    const liveEnd = renderLiveEndAfterRows(chatId, events, rows);
     return m("div", { class: "message-list-wrapper" }, [
       failedReloadNotice,
       // The queued-message group renders after the virtualized rows so it sits at
@@ -769,28 +883,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
-        // A switch the transcript does not show yet (draining, or restarting in place) gets its
-        // node here; once the summary request or the landed switch is on the stream the rows carry
-        // it. Spread rather than a hole: the list is keyed.
-        ...[
-          renderHandoffTailNode(
-            chatId,
-            hasOpenHandoffRequest(events, chat?.handoff ?? null) || hasLandedLiveSwitch(events, chat?.handoff ?? null),
-          ),
-        ].filter((node) => node !== null),
-        // The reply the agent is still writing, which its transcript does not hold yet, while the
-        // window reaches the live end. A node of its own rather than a row: a draft changes a few
-        // times a second, and a row would re-walk the whole held transcript on every change.
-        ...renderReplyDraft(chatId),
-        // The status row under the latest turn while the agent works on it, or that turn's done
-        // mark once it has finished; anything queued behind it follows.
-        ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
+        // The agent's output past the transcript and the status row end the last row's stretch when
+        // that row is the agent's and ends the transcript; otherwise they follow it.
+        ...liveEnd.nodes,
+        // The latest turn's done mark once it has finished; anything queued behind it follows, then
+        // the messages the chat app holds while the chat switches harness, then this page's own
+        // not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
-        ...renderQueuedMessages(chatId),
-        // The messages the chat app holds while the chat switches harness, then this page's
-        // own not-yet-delivered sends.
-        ...renderHeldSends(chatId),
-        ...renderOutgoingMessages(chatId),
+        ...renderPendingSends(chatId, isOwnTurnLast(chatId, rows, liveEnd)),
         // The status row under the user's own send while it waits on the agent.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),

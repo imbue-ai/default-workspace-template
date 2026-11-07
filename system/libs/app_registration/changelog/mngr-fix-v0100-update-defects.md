@@ -1,0 +1,1 @@
+- New library: the app registry writer, `app_registration.forward_port`, moved from `workspace_bare_scripts` and still standard-library only, so `system/scripts/forward_port.py` runs it under a bare `python3`. Python callers import it, and `register_manifest` registers the app an `app.toml` describes. The warning for a bad icon on an existing app is now logged (`WARNING: ...`).

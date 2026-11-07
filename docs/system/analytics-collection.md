@@ -31,6 +31,17 @@ listed in each -- and collection simply fails and the workspace is skipped
 plan stops collection at the next poll; workspaces on other plans, local
 workspaces, and self-hosted workspaces are never touched.
 
+Two of the feeds the script reads are written by this template's own
+services, whatever the plan: the share gateway's per-minute request counts
+(`events/gateway_requests/events.jsonl` under the services agent: which app,
+who asked, read or write, allowed or why not, never a path or an address;
+`system/services/share_gateway/README.md`) and the shell's `window_opened` and
+`window_input` client-activity events (which app a window was opened on,
+and which app you or a visitor interacted with in a given minute: the app and
+the window, never the path, the title, or what was typed or clicked). The
+gateway's per-request access log in `data/.state/share_gateway/access.log` is
+yours alone and is never collected.
+
 What is collected and how it is redacted is specified in the mngr repo:
 `specs/minds-analytics/disclosure.md` (the plain-language description) and
 `specs/minds-analytics/redaction-contract.md` (the exact per-field

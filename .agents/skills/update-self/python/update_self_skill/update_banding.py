@@ -49,6 +49,7 @@ def _load_bands(repo_root: Path):
     bands_src = repo_root / "system" / "services" / "oom_priority" / "src"
     if not (bands_src / "oom_priority" / "bands.py").is_file():
         return None
+    # import-path: other-tree -- the target release's oom_priority, at a path known only at run time
     sys.path.insert(0, str(bands_src))
     try:
         from oom_priority import bands
@@ -62,6 +63,7 @@ def _load_bands(repo_root: Path):
         )
         return None
     finally:
+        # import-path: other-tree -- takes back the edit above once the target's bands are read
         sys.path.remove(str(bands_src))
     missing = [name for name in _REQUIRED_BANDS_ATTRIBUTES if not hasattr(bands, name)]
     if not missing and _APPLY_BAND_SERVICE not in bands.SERVICE_BANDS:

@@ -57,6 +57,20 @@ from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.request_counts import DENIED_AGENT_ACCESS_UNCONFIGURED
+from share_gateway.request_counts import DENIED_AGENT_TOKEN
+from share_gateway.request_counts import DENIED_FOREIGN_HOST
+from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
+from share_gateway.request_counts import DENIED_NO_GRANT
+from share_gateway.request_counts import DENIED_NO_SESSION
+from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import OUTCOME_ALLOWED
+from share_gateway.request_counts import REQUESTER_KIND_AGENT
+from share_gateway.request_counts import REQUESTER_KIND_NONE
+from share_gateway.request_counts import REQUESTER_KIND_OWNER
+from share_gateway.request_counts import REQUESTER_KIND_USER
+from share_gateway.request_counts import RequestCounter
+from share_gateway.request_counts import classify_method
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -204,6 +218,9 @@ def build_gateway_app(
     # its scope admits the named service; None answers 403. Absent (older
     # callers, tests of the human path), every bearer request is refused.
     admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
+    # Counts every request the verify handler answers (request_counts.py); None counts nothing (tests of the
+    # routes alone).
+    request_counter: RequestCounter | None = None,
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
@@ -295,13 +312,20 @@ def build_gateway_app(
         registered_apps = get_registered_apps()
         label_to_name = build_label_to_name(registered_apps)
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
-        if not is_ours:
-            _log_denied("hostname is not one of this workspace's origins", host)
-            return _forbidden()
 
         # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
         # forward_auth block in the rendered Caddyfile).
         is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
+        method_class = classify_method(method, is_websocket_upgrade)
+
+        def _counted(response: Response, requester_kind: str, requester_id: str, outcome: str) -> Response:
+            if request_counter is not None:
+                request_counter.record(service_name or "", requester_kind, requester_id, method_class, outcome)
+            return response
+
+        if not is_ours:
+            _log_denied("hostname is not one of this workspace's origins", host)
+            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_FOREIGN_HOST)
 
         origin_header = request.headers.get("Origin")
         bearer_token = bearer_token_from_headers(request.headers.get("Authorization"))
@@ -315,7 +339,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _forbidden()
+            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
@@ -323,7 +347,7 @@ def build_gateway_app(
         # the preflight through exposes nothing: the actual request that
         # follows it is session-checked as usual.
         if method.upper() == "OPTIONS" and chrome_origin and origin_header == chrome_origin:
-            return Response(status=200)
+            return _counted(Response(status=200), REQUESTER_KIND_NONE, "", OUTCOME_ALLOWED)
 
         cookie_header = request.headers.get("Cookie", "")
 
@@ -335,27 +359,54 @@ def build_gateway_app(
         if bearer_token is not None:
             if admit_agent is None:
                 _log_denied("bearer token presented but agent access is not configured", host)
-                return Response("authentication required", status=401, mimetype="text/plain")
+                return _counted(
+                    Response("authentication required", status=401, mimetype="text/plain"),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_AGENT_ACCESS_UNCONFIGURED,
+                )
             agent_identity = admit_agent(bearer_token, service_name)
             if agent_identity is None:
                 _log_denied("bearer token is not a valid admission token for this origin", host)
-                return Response("forbidden", status=403, mimetype="text/plain")
-            return Response(
-                status=200,
-                headers={
-                    "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
-                    IDENTITY_HEADER: render_agent_identity_header(agent_identity),
-                },
+                return _counted(
+                    Response("forbidden", status=403, mimetype="text/plain"),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_AGENT_TOKEN,
+                )
+            return _counted(
+                Response(
+                    status=200,
+                    headers={
+                        "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+                        IDENTITY_HEADER: render_agent_identity_header(agent_identity),
+                    },
+                ),
+                REQUESTER_KIND_AGENT,
+                agent_identity.agent_id,
+                OUTCOME_ALLOWED,
             )
 
         identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
+                return _counted(
+                    _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False),
+                    REQUESTER_KIND_NONE,
+                    "",
+                    DENIED_NO_SESSION,
+                )
             _log_denied("no session on a non-HTML request", host)
-            return Response("authentication required", status=401, mimetype="text/plain")
+            return _counted(
+                Response("authentication required", status=401, mimetype="text/plain"),
+                REQUESTER_KIND_NONE,
+                "",
+                DENIED_NO_SESSION,
+            )
 
+        requester_kind = REQUESTER_KIND_OWNER if identity.is_owner else REQUESTER_KIND_USER
+        requester_id = "" if identity.is_owner else identity.user_id
         # The owner reaches every origin of their own workspace regardless of
         # the grants file (the broker vouched for ownership by user id). A
         # non-owner is re-checked against the grants file on every request so
@@ -365,12 +416,12 @@ def build_gateway_app(
                 grants = load_grants(grants_path)
             except GrantsError as exc:
                 _log_denied(f"grants file is missing or malformed (failing closed): {exc}", host)
-                return _misconfigured()
+                return _counted(_misconfigured(), requester_kind, requester_id, DENIED_GRANTS_MISCONFIGURED)
             if not grants.allows(
                 identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
-                return _forbidden()
+                return _counted(_forbidden(), requester_kind, requester_id, DENIED_NO_GRANT)
             _upgrade_invite(grants, identity)
 
         # Expose the caller's identity so caddy can copy it to the backend. It is
@@ -381,7 +432,7 @@ def build_gateway_app(
             "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
             IDENTITY_HEADER: render_identity_header(identity),
         }
-        return Response(status=200, headers=response_headers)
+        return _counted(Response(status=200, headers=response_headers), requester_kind, requester_id, OUTCOME_ALLOWED)
 
     @app.get("/_auth/callback")
     def callback() -> Response:

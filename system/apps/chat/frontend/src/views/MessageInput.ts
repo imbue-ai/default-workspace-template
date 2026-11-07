@@ -89,7 +89,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 
-const MAX_TEXTAREA_HEIGHT_PX = 240;
+export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
 /* Styling.
  * Utilities in the markup; the message-input and composer-attachment class
@@ -340,8 +340,15 @@ export function prependToComposer(chatId: string, block: string): void {
  *  The row holds its height while the text is measured collapsed to one line. Otherwise the page
  *  lays out around a one-line composer for that moment, and the browser clamps the transcript's
  *  scroll position to fit it: a tall composer would pull the transcript off its bottom on every
- *  redraw. */
-function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
+ *  redraw.
+ *
+ *  Once the text outgrows the cap the textarea scrolls. It keeps its scroll position across the
+ *  collapse, which not every browser preserves. Typing (``isTyping``) with the caret at the end of the
+ *  draft scrolls it all the way down instead, since the browser scrolls the caret into view without
+ *  the padding under the last line. */
+function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
+  const scrollTopPx = textarea.scrollTop;
+  const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
   row.style.height = `${row.getBoundingClientRect().height}px`;
   row.removeAttribute("data-stacked");
   textarea.style.overflowY = "hidden";
@@ -351,7 +358,12 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
     row.hasAttribute("data-attachments") || textarea.scrollHeight > textarea.clientHeight,
   );
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
-  textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+  const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
+  textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
+  const targetScrollTopPx =
+    isOverflowing && isTypingAtEnd ? textarea.scrollHeight - textarea.clientHeight : scrollTopPx;
+  // Writing scrollTop is a programmatic scroll, which would interrupt the reader scrolling the draft mid-gesture.
+  if (textarea.scrollTop !== targetScrollTopPx) textarea.scrollTop = targetScrollTopPx;
   row.style.height = "";
 }
 
@@ -472,6 +484,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Whether the composer was disabled at the last render, so it takes focus the moment a provider makes it usable.
   let wasComposerDisabled = false;
   let messageRowElement: HTMLElement | null = null;
+  // An edit refits the composer as typing, and so does the redraw that follows it: the browser scrolls the caret
+  // into view after the input event, which can undo the edit's own scroll to the bottom.
+  let isTypingUntilRedraw = false;
   // Refits the composer when its width changes, since that changes where the text wraps.
   let messageRowResizeObserver: ResizeObserver | null = null;
   let messageRowWidthPx = 0;
@@ -579,7 +594,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
     localStorage.setItem(messageTextKey(currentChatId), messageText);
     mentionDraft = null;
-    refitComposer();
+    refitAfterEdit();
     focusMessageTextarea();
     m.redraw();
   }
@@ -609,10 +624,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement?.focus();
   }
 
-  function refitComposer(): void {
+  function refitComposer(isTyping = false): void {
     if (messageRowElement !== null && messageTextareaElement !== null) {
-      fitComposer(messageRowElement, messageTextareaElement);
+      fitComposer(messageRowElement, messageTextareaElement, isTyping);
     }
+  }
+
+  function refitAfterEdit(): void {
+    isTypingUntilRedraw = true;
+    refitComposer(true);
   }
 
   function attachMessageRow(rowVnode: m.VnodeDOM): void {
@@ -1803,7 +1823,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                     mountedComposerTextarea = messageTextareaElement;
-                    refitComposer();
+                    refitComposer(isTypingUntilRedraw);
+                    isTypingUntilRedraw = false;
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
@@ -1816,7 +1837,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
                     updateMentionDraft(textarea);
-                    refitComposer();
+                    refitAfterEdit();
                     if (messageText.trim() !== "") warmUpStoppedChat(chatId);
                   },
                   onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),

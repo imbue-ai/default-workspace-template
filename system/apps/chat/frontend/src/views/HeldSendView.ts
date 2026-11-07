@@ -14,32 +14,34 @@ import m from "mithril";
 import { getChatById, getProvisionalChat } from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { isMessageCarriedBySwitch } from "../models/Response";
-import { renderNotYetRealBubble } from "./OutgoingMessageView";
+import { renderNotYetRealBubble, type OwnBubbleRun } from "./OutgoingMessageView";
 
-export function renderHeldSends(chatId: string): m.Vnode[] {
+/** The held messages, drawn down `ownRun`. */
+export function renderHeldSends(chatId: string, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
   const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
   return standing.map((held) =>
-    renderNotYetRealBubble({
-      key: `held-${held.message_id}`,
-      content: held.text,
-      extraRowClass: "held-send",
-      displayDecision: held,
-    }),
+    renderNotYetRealBubble(
+      { key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send", displayDecision: held },
+      ownRun,
+    ),
   );
 }
 
 /** The messages the chat app holds for a chat still being created (or whose create failed), at the tail of its
  *  empty conversation. This page's own bubble for one of them stands in its place, so a page that sent it shows
  *  it once; any other page, or this one reloaded, shows it from the record. */
-export function renderProvisionalHeldSends(chatId: string): m.Vnode[] {
+export function renderProvisionalHeldSends(chatId: string, ownRun: OwnBubbleRun = { isOpen: false }): m.Vnode[] {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined) return [];
   const ownBubbleIds = new Set(getOutgoingMessages(chatId).map((outgoing) => outgoing.messageId));
   return provisional.held_sends
     .filter((held) => !ownBubbleIds.has(held.message_id))
     .map((held) =>
-      renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
+      renderNotYetRealBubble(
+        { key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" },
+        ownRun,
+      ),
     );
 }

@@ -12,6 +12,11 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
+from imbue.chat.main_chat import MAIN_CHAT_FILENAME, MainChatStore
+from imbue.chat.primitives import ChatId
+
 from update_self_skill import (
     update_apply_contract,
     update_chat_pause,
@@ -345,6 +350,79 @@ def test_stop_chats_pauses_a_named_agent_for_memory_and_refuses_one_it_may_not(
     assert [entry.id for entry in _record(tmp_path).stopped_agents] == ["agent-idle"]
 
 
+def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The chat app starts the main chat again as soon as it stops, idle, so a stop interrupts it
+    rather than holding it: the resume tells it what happened without starting it."""
+    fake_agents.set_agents(
+        [
+            *_workspace_agents(),
+            # The main chat has handed off once, so its live agent carries the chat's id.
+            chat("agent-main-2", "Main", "RUNNING", chat_id="agent-main-1"),
+        ]
+    )
+    # Written by the chat app's own store, so the file's place and shape are the ones it keeps.
+    MainChatStore(path=tmp_path / DEFAULT_CHAT_DATA_DIR / MAIN_CHAT_FILENAME).write(
+        ChatId("agent-main-1")
+    )
+    assert _main(tmp_path, "run-status", "start") == 0
+
+    # Named to free memory, it is refused along with everything named beside it.
+    capsys.readouterr()
+    assert (
+        _main(
+            tmp_path,
+            "run-status",
+            "stop-chats",
+            "--agent",
+            "Main",
+            "--agent",
+            "Plan-the-trip",
+        )
+        == 1
+    )
+    assert "Main is the main chat" in capsys.readouterr().err
+    assert fake_agents.mngr_verbs() == []
+
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    assert "Interrupted the main chat Main" in capsys.readouterr().out
+    assert fake_agents.states()["Main"] == "STOPPED"
+    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
+
+    fake_agents.clear_calls()
+    assert (
+        _main(tmp_path, "run-status", "resume-chats", "--landed", "minds-v0.9.0") == 0
+    )
+    assert ["start", "agent-main-2"] not in fake_agents.mngr_verbs()
+    assert ["start", "agent-busy"] in fake_agents.mngr_verbs()
+    assert fake_agents.notes()[
+        "agent-main-1"
+    ] == update_resume_note.compose_resume_note(
+        landed_ref="minds-v0.9.0",
+        is_chat_paused=True,
+        wip_commit="",
+        interrupted_tasks=[],
+        restarted_workers=[],
+    )
+
+
+def test_stop_chats_warns_when_it_cannot_read_which_chat_is_the_main_chat(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_agents.set_agents(_workspace_agents())
+    main_chat_file = tmp_path / update_chat_pause.MAIN_CHAT_FILE
+    main_chat_file.parent.mkdir(parents=True)
+    main_chat_file.write_text("{not json", encoding="utf-8")
+    assert _main(tmp_path, "run-status", "start") == 0
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+
+    assert "the main chat is treated like any other chat" in capsys.readouterr().err
+    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
+
+
 def test_stop_chats_refuses_to_run_without_the_leads_identity(
     tmp_path: Path, fake_agents: FakeAgents, monkeypatch
 ) -> None:
@@ -418,6 +496,7 @@ def test_a_waiting_agent_whose_background_command_still_runs_is_paused_with_it(
         runners,
         lead,
         [],
+        None,
     )
     assert [target.agent.id for target in targets] == ["agent-idle"]
 
