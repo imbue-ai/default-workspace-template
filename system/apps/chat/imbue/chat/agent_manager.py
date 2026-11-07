@@ -2764,8 +2764,9 @@ class AgentManager:
             )
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
-        """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
-        Studio app when the report is what made someone watch it."""
+        """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
+        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
+        watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
@@ -5738,8 +5739,7 @@ class AgentManager:
         # of a chat messaged outside the workspace UI (by mngr or another agent):
         # entering a running state is the observable consequence of such a message,
         # and it keeps a chat exempt from its staleness climb for the turn's
-        # duration. After the broadcast because it writes to /proc, which the UI
-        # update should not wait on.
+        # duration. After the broadcast so the UI update never waits on it.
         with self._lock:
             self._running_chat_ids = frozenset(
                 chat_id_by_agent_id[agent_id]
