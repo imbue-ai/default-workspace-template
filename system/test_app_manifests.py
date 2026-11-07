@@ -476,7 +476,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal-pty"].program == "terminal-pty"
     assert by_name["terminal-pty"].priority == "terminal"
     assert by_name["terminal-pty"].launch_paths == ()
-    assert by_name["terminal-pty"].default_shortcut is None
+    assert by_name["terminal-pty"].default_shortcuts == ()
     assert by_name["chat"].internal is False
     assert by_name["chat"].critical is True
     assert by_name["chat"].program == "chat"
@@ -489,9 +489,14 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["screen"].program == "screen"
     assert by_name["screen"].priority == "screen"
     assert by_name["screen"].system is True
-    assert by_name["screen"].default_shortcut is not None
-    assert by_name["screen"].default_shortcut.launch == "screen"
-    assert by_name["screen"].default_shortcut.mode == "focus"
+    # Each of its launch paths is a desktop shortcut, as each is a launcher row.
+    assert [
+        (shortcut.launch, shortcut.mode)
+        for shortcut in by_name["screen"].default_shortcuts
+    ] == [
+        ("screen", "focus"),
+        ("browser", "focus"),
+    ]
     assert [
         (entry.id, entry.path, entry.method.value)
         for entry in by_name["screen"].launch_paths
@@ -576,9 +581,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["getting-started"].program == "getting-started"
     assert by_name["getting-started"].priority == "getting-started"
     assert by_name["getting-started"].launch_paths == ()
-    assert by_name["getting-started"].default_shortcut is not None
-    assert by_name["getting-started"].default_shortcut.launch == "open"
-    assert by_name["getting-started"].default_shortcut.mode == "focus"
+    assert [
+        (shortcut.launch, shortcut.mode)
+        for shortcut in by_name["getting-started"].default_shortcuts
+    ] == [("open", "focus")]
     assert by_name["getting-started"].pin is None
     # Its preview (update-app's preview_app.py) boots unregistered, so it does not re-point the live row.
     assert by_name["getting-started"].preview.command[:2] == (
@@ -591,18 +597,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["system-monitor"].program == "system-monitor"
     assert by_name["system-monitor"].priority == "system-monitor"
     assert by_name["system-monitor"].launch_paths == ()
-    assert by_name["system-monitor"].default_shortcut is not None
-    assert by_name["system-monitor"].default_shortcut.launch == "open"
-    assert by_name["system-monitor"].default_shortcut.mode == "focus"
+    assert [
+        (shortcut.launch, shortcut.mode)
+        for shortcut in by_name["system-monitor"].default_shortcuts
+    ] == [("open", "focus")]
     # Routines: one window over the schedule, focused like System Monitor; the runner's notifications land on a
     # routine's page through the one message type it registers, with the library's routine_id field as the path.
     assert by_name["routines"].critical is False
     assert by_name["routines"].program == "routines"
     assert by_name["routines"].priority == "routines"
     assert by_name["routines"].launch_paths == ()
-    assert by_name["routines"].default_shortcut is not None
-    assert by_name["routines"].default_shortcut.launch == "open"
-    assert by_name["routines"].default_shortcut.mode == "focus"
+    assert [
+        (shortcut.launch, shortcut.mode)
+        for shortcut in by_name["routines"].default_shortcuts
+    ] == [("open", "focus")]
     assert [
         (handler.type, handler.show) for handler in by_name["routines"].message_handlers
     ] == [("minds:show-routine", "/{routine_id}")]
@@ -628,9 +636,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("files", "new"),
         ("screen", "focus"),
     ):
-        shortcut = by_name[name].default_shortcut
-        assert shortcut is not None
-        assert shortcut.mode == mode, name
+        assert {shortcut.mode for shortcut in by_name[name].default_shortcuts} == {
+            mode
+        }, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the
     # post-launch-paths plan's section 7 and 8).
     assert by_name["system_interface"].launch_paths == ()
@@ -646,8 +654,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("lounge", "/api/chats/intake", "POST"),
         ("app-chat", "/api/chats/intake", "POST"),
     ]
-    assert by_name["chat"].default_shortcut is not None
-    assert by_name["chat"].default_shortcut.launch == "root"
+    assert [shortcut.launch for shortcut in by_name["chat"].default_shortcuts] == [
+        "root"
+    ]
     for name, launch_path, method in (
         ("terminal", "/new", "POST"),
         ("files", "/home/user/workspace/", "GET"),
@@ -656,9 +665,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             (entry.id, entry.path, entry.method.value)
             for entry in by_name[name].launch_paths
         ] == [("new", launch_path, method)], name
-        shortcut = by_name[name].default_shortcut
-        assert shortcut is not None
-        assert shortcut.launch == "new", name
+        assert [shortcut.launch for shortcut in by_name[name].default_shortcuts] == [
+            "new"
+        ], name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == []
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == [
         "message"

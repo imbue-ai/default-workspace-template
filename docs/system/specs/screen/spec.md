@@ -499,7 +499,7 @@ Each step leaves the tree green on the branch; nothing merges until the last.
 
 What the implementers found and verified where the tree departs from the text above; the text stands as the design, and these are the facts on the branch.
 
-- The launch path of the Screen's own page is `screen`, not `open`: the manifest schema reserves `open` for the launch path the shell synthesizes, so the default shortcut is `{launch = "screen", mode = "focus"}` (section 18).
+- The launch path of the Screen's own page is `screen`, not `open`: the manifest schema reserves `open` for the launch path the shell synthesizes, so its default shortcuts are `{launch = "screen", mode = "focus"}` and, for its Browser, `{launch = "browser", mode = "focus"}`: each launch path gets a desktop shortcut, as each gets a launcher row (section 18).
 - The supervisord group is `screen-stack`, not `screen`: a program outside a group is its own group of that name, and the service program is `screen` (section 9.1).
 - The service's own neko event session is a login with the admin password over the WebSocket, not the API token: the API-token session cannot open a WebSocket (section 6.2).
 - neko sends `clipboard/updated` to the host session alone and with text only, so the viewer reads text and HTML back through the REST clipboard route (`GET /api/room/clipboard`) and sets them through its POST, since `clipboard/set` drops the HTML (section 13).

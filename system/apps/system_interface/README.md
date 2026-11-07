@@ -130,8 +130,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
-`default_shortcuts_offered.json` (the apps whose default shortcut the shell
-has offered), `placements/<desktop>/<client>.json`,
+`default_shortcuts_offered.json` (the default shortcuts the shell has
+offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `avatar_selection.json`, and the client-activity
@@ -166,15 +166,19 @@ and the profile cache.
   any chat is busy on a background task that will wake its agent) and pushes
   `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
-  every registered app's default shortcut (its `default_shortcut`, else, for
-  an app a program runs, its first launch path taking no text and no mention,
-  or its first when every one takes one) on the first read after the registry
-  has been read.
-  An app that registers later has its default shortcut added to every
-  desktop once, on the registry change and on every read;
-  `default_shortcuts_offered.json` lists the apps offered so far, so a
-  shortcut the user removed stays removed. A client record holds the client's
-  active desktop, when it was last seen, and the user it last arrived as;
+  every registered app's default shortcuts (each `default_shortcut` it
+  declares, else, for an app a program runs, its first launch path taking no
+  text and no mention, or its first when every one takes one) on the first
+  read after the registry has been read.
+  A default shortcut not yet offered (an app that registers later, or a
+  further one an app comes to declare) is added to every desktop once, on the
+  registry change and on every read; `default_shortcuts_offered.json` lists
+  the `(app, launch)` targets offered so far, so a shortcut the user removed
+  stays removed. The same pass drops the shortcuts of an app no registry row
+  names (an app a release retired, whose row the update removed), and takes
+  those shortcuts off the record so they are offered again if it comes back.
+  A client record holds the client's active desktop, when it was last seen,
+  and the user it last arrived as;
   clients unseen for a while are pruned with their placement files.
   `users.json` holds the desktop made for each visiting user (see "Who is
   here").
@@ -196,7 +200,7 @@ and the profile cache.
   and the stamp it was based on; a save over a newer arrangement is refused
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
-  `default_shortcut`, and `is_running`.
+  `default_shortcuts`, and `is_running`.
 - **The op route** (`shell/desktop_routes.py`, over the request models of
   the `workspace_layout` library's `ops`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
@@ -278,7 +282,7 @@ The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
-icon, launch paths, default shortcut, launcher rank, message handlers) and
+icon, launch paths, default shortcuts, launcher rank, message handlers) and
 whether it is running.
 The page learns the apps from `GET /api/inventory` right after it arrives (one
 read for the desktops, the apps, and the clients), so it never draws a

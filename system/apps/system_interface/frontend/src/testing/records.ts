@@ -69,7 +69,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     critical: false,
     stop_when_no_windows: false,
     launch_paths: [launchPathRecord({ label: `New ${name}` })],
-    default_shortcut: { launch: "new", mode: "focus" },
+    default_shortcuts: [{ launch: "new", mode: "focus" }],
     launcher_rank: null,
     pin: null,
     message_handlers: [],
@@ -117,6 +117,22 @@ export function chatLikeAppRecord(name: string, overrides: Partial<AppRecord> = 
         presets: { target: "current_chat", is_draft: "true" },
         draft_param: "message",
       }),
+    ],
+    ...overrides,
+  });
+}
+
+/** The ``screen`` app shaped like the Screen's manifest: its page ``screen`` at ``/`` and the POST ``browser`` at
+ *  ``/launch/browser``, each a focus default shortcut. */
+export function screenAppRecord(overrides: Partial<AppRecord> = {}): AppRecord {
+  return appRecord("screen", {
+    launch_paths: [
+      launchPathRecord({ id: "screen", label: "Screen", path: "/" }),
+      launchPathRecord({ id: "browser", label: "Browser", path: "/launch/browser", method: "POST" }),
+    ],
+    default_shortcuts: [
+      { launch: "screen", mode: "focus" },
+      { launch: "browser", mode: "focus" },
     ],
     ...overrides,
   });
