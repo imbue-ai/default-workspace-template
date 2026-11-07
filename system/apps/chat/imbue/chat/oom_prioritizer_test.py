@@ -7,6 +7,7 @@ clock, a dict of process-start times, and a capturing ``set_adj`` so the exact
 """
 
 import threading
+import time
 from collections.abc import Sequence
 
 from oom_priority import bands
@@ -29,6 +30,7 @@ class _Harness:
         chat_ids: list[str],
         pids: dict[str, int | list[int]],
         sweep_interval_seconds: float = 3600.0,
+        min_pass_interval_seconds: float = 0.0,
     ) -> None:
         self.chat_ids = [ChatId(chat_id) for chat_id in chat_ids]
         self.pids = pids
@@ -50,7 +52,7 @@ class _Harness:
             clock=lambda: self.now,
             sweep_interval_seconds=sweep_interval_seconds,
             # Tests drive passes by hand or wait for them with ``poll_until``; pacing would only slow them.
-            min_pass_interval_seconds=0.0,
+            min_pass_interval_seconds=min_pass_interval_seconds,
             presence=PresenceTracker(clock=lambda: self.now),
         )
 
@@ -467,6 +469,22 @@ def test_once_started_a_report_returns_without_waiting_on_the_pass_that_writes_i
         assert poll_until(lambda: h.registry_reads == 3)
         assert poll_until(lambda: h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0))
         assert h.latest_adj_by_pid()[20] == _fresh(is_open=False, is_visible=False, recency_rank=1)
+    finally:
+        h.prioritizer.stop()
+
+
+def test_passes_asked_for_in_quick_succession_are_at_least_the_minimum_interval_apart() -> None:
+    h = _Harness(chat_ids=["a"], pids={"a": 10}, min_pass_interval_seconds=0.3)
+    try:
+        h.prioritizer.start()
+        h.prioritizer.record_message(ChatId("a"))
+        assert poll_until(lambda: h.registry_reads == 2)
+        # The pass thread is now in its pacing wait, so the pass this asks for cannot begin
+        # until the interval has elapsed since the previous pass finished.
+        asked_at = time.monotonic()
+        h.prioritizer.record_message(ChatId("a"))
+        assert poll_until(lambda: h.registry_reads == 3, timeout=5.0)
+        assert time.monotonic() - asked_at >= 0.3
     finally:
         h.prioritizer.stop()
 
