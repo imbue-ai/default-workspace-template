@@ -55,9 +55,9 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# The user's timezone, written once by the client that created the workspace
-# (the user-profile-state spec, section 8.4; the old boot-time fetch cached the
-# same file). /etc/localtime lives on the container rootfs and is lost when the
+# The workspace's timezone, written by the client that created the workspace and
+# again when the user changes it from Imbue Studio (the user-profile-state spec,
+# section 8.4; the old boot-time fetch cached the same file). /etc/localtime lives on the container rootfs and is lost when the
 # container is recreated, so each boot re-applies this instead of leaving the
 # container on UTC.
 USER_TIMEZONE_FILE = STATE_DIR / "user_timezone"
@@ -389,8 +389,9 @@ def _set_container_timezone(
 ) -> None:
     """Apply the user timezone the file under ``data/.state`` names, when there is one.
 
-    The creating client writes the file exactly once, when the workspace is made
-    (the user-profile-state spec, section 8.4); a workspace created by an older
+    The creating client writes the file when the workspace is made, and Imbue
+    Studio rewrites it when the user changes the workspace's timezone (the
+    user-profile-state spec, section 8.4); a workspace created by an older
     client holds whatever the old boot-time fetch last cached there. Best-effort
     throughout: an absent or unreadable file leaves the container on its
     current zone, never raises.

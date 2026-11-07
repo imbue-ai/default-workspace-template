@@ -27,25 +27,34 @@ with `--app <name>`, never a loop or a thread inside its service.
 
 ## First: confirm the timezone
 
-Schedules are in the container's local time, which the bootstrap applies at
-each boot from `data/.state/user_timezone` (written once by the client that
-created the workspace). The user may have moved since, so before writing a
-schedule check it:
+Schedules are in the container's local time. The bootstrap applies it at each
+boot from `data/.state/user_timezone`, which the client that created the
+workspace wrote. Later the user can change it in Imbue Studio, under Workspace
+settings > Timezone. `data/.state/user_timezone_source` reads `user` when the
+user chose the zone there. Before writing a schedule, check both zones:
 
 ```bash
-latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone   # -> {"timezone": "America/Los_Angeles"}
 cat /etc/timezone
+latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone   # -> {"timezone": "America/Los_Angeles"}
 ```
 
-If they differ, update the container before scheduling anything:
+The workspace's timezone is the user's setting, so never change it on your own,
+even when it differs from the computer's. Write the schedule in the workspace's
+zone. If the two differ and the schedule's times depend on it, tell the user
+which zone the routine will run in, and that they can change the workspace's
+zone in Workspace settings > Timezone.
+
+Only when the user asks you to set the workspace's timezone, set it the way
+that page does:
 
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
 echo "<Area/City>" > /etc/timezone
 echo "<Area/City>" > /home/user/workspace/data/.state/user_timezone
+echo user > /home/user/workspace/data/.state/user_timezone_source
 ```
 
-Routines read the clock on every tick, so the change applies at once.
+Routines read the clock on every tick, so the change applies to them at once.
 
 ## Add a routine
 
