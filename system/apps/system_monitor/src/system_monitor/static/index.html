@@ -633,7 +633,7 @@
     button.textContent = { scanning: "Measuring…", done: "Measure again", failed: "Try again" }[scan.state] || "See what's using the disk";
     if (scan.state === "done") {
       note.textContent = `As of ${clock(new Date(scan.scanned_at))}.`;
-      const shades = { workspace: "#7096b7", uploads: "#8eafcb", apps: "#aac3d9", caches: "#c6d7e5", other: "#cfcdc7" };
+      const shades = { workspace: "#7096b7", uploads: "#8eafcb", apps: "#aac3d9", caches: "#c6d7e5", home: "#dbe5ee", other: "#cfcdc7" };
       $("disk-table").hidden = false;
       $("disk-table").querySelector("tbody").innerHTML = scan.rows.map((row) => {
         const items = row.items.map((i) => `<tr><td class="sub">${esc(i.name)}${i.hint ? ` <span class="tag">${esc(i.hint)}</span>` : ""}</td><td class="num sub">${size(i.bytes)}</td></tr>`).join("");
