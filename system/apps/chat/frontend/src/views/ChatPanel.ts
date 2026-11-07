@@ -90,7 +90,7 @@ import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
-import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
@@ -141,14 +141,16 @@ function liveReplyDraft(chatId: string): AssistantMessageEvent | null {
 }
 
 /** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
- *  place; once the summary request is on the stream the rows carry it), then the reply the agent is still writing,
+ *  place; once the summary request or the landed switch is on the stream the rows carry it), then the reply the agent is still writing,
  *  while the window reaches the live end and no step is live to show it in. Not a row of its own: a draft changes a
  *  few times a second, and a row would re-walk the whole held transcript on every change. `opensStretch`: the nodes
  *  start a stretch of their own rather than carry on the last row's. */
 function renderAgentLiveTail(chatId: string, opensStretch: boolean, isReplyDraftInStep: boolean): m.Vnode[] {
+  const events = getEventsForChat(chatId);
+  const handoff = getChatById(chatId)?.handoff ?? null;
   const handoffNode = renderHandoffTailNode(
     chatId,
-    hasOpenHandoffRequest(getEventsForChat(chatId), getChatById(chatId)?.handoff ?? null),
+    hasOpenHandoffRequest(events, handoff) || hasLandedLiveSwitch(events, handoff),
   );
   const draft = isReplyDraftInStep ? null : liveReplyDraft(chatId);
   return [

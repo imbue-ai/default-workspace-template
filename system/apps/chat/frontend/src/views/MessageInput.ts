@@ -1737,8 +1737,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const isUninterruptibleCompaction =
         activityState === COMPACTING_STATE &&
         getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      // A handoff that has landed runs on its successor already: that agent's turn is stoppable like any other.
+      const isSwitchInTheWay = handoff !== null && !handoff.has_landed;
       const isStopButtonVisible =
-        (isAgentWorking || isConnecting) && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
+        (isAgentWorking || isConnecting) && !isInterruptInFlight && !isSwitchInTheWay && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
@@ -1799,16 +1801,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
                   // A switch off a room holds the message like any switch, so its wording comes first.
-                  placeholder:
-                    handoff !== null
-                      ? handoffComposerPlaceholder(handoff)
-                      : composerHint !== null
-                        ? composerHint
-                        : isRoomChat(chatId)
-                          ? "Message (tag @agent to ask the agent)"
-                          : isAgentWorking
-                            ? "Type to queue more messages..."
-                            : "Type a message...",
+                  placeholder: isSwitchInTheWay
+                    ? handoffComposerPlaceholder(handoff)
+                    : composerHint !== null
+                      ? composerHint
+                      : isRoomChat(chatId)
+                        ? "Message (tag @agent to ask the agent)"
+                        : isAgentWorking
+                          ? "Type to queue more messages..."
+                          : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,

@@ -48,6 +48,7 @@ from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReade
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.models import ActivityState
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
@@ -62,6 +63,7 @@ from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.mngr.utils.polling import wait_for
 
 _NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 _OPENAI_ACCOUNT = Account(id="acct-openai", lane="openai", seq=1, display="OpenAI")
@@ -1025,6 +1027,73 @@ def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_a
     assert workspace.broadcasts[0][1][0]["is_fresh_start"] is True
     assert finished.agents[-1].opening_message is None
     assert finished.agents[-1].is_fresh_start is True
+
+
+def _as_fresh_start(workspace: _FakeWorkspace) -> None:
+    """Make the workspace's handoff a fresh start: one off an agent that never received a user turn."""
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(to_update(current.handoff.field_ref().is_fresh_start, True))
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+
+
+def test_the_successor_is_created_while_the_retiring_agent_stops_and_measured_once_it_has(tmp_path: Path) -> None:
+    """The stop and the create overlap: a stop that returns only once the create has begun would time out if they
+    ran one after the other. The retiring agent is renamed first, since the successor takes the chat's name, and
+    its segment is measured only after the stop, once nothing more can be written to it."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    _as_fresh_start(workspace)
+    order: list[str] = []
+
+    def stop_once_the_create_has_begun(agent_info: AgentInfo) -> None:
+        wait_for(
+            lambda: any(line.startswith("create ") for line in workspace.argv_lines()),
+            timeout=5.0,
+            poll_interval=0.01,
+            error_message="the successor's create never began while the retiring agent was stopping",
+        )
+        order.append("stopped")
+        workspace.stop_agent(agent_info)
+
+    def measure(agent_info: AgentInfo) -> _EventsReader:
+        if agent_info.id == first:
+            order.append("measured")
+        return workspace.ensure_watcher(agent_info)
+
+    _runner(workspace, stop_agent=stop_once_the_create_has_begun, ensure_watcher=measure).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is None
+    assert [entry.agent_id for entry in record.agents] == [first, successor]
+    assert workspace.stopped == [first]
+    assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["rename", "create"]
+    assert order == ["stopped", "measured"]
+    assert record.agents[0].final_event_count == 3
+
+
+def test_a_refused_stop_fails_the_switch_once_the_create_is_over(tmp_path: Path) -> None:
+    """The stop's refusal is not lost on its thread: it fails the switch, after the create it overlapped."""
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    _as_fresh_start(workspace)
+
+    def refuse(agent_info: AgentInfo) -> None:
+        raise AgentStopError(f"Failed to stop agent '{agent_info.name}': host gone")
+
+    _runner(workspace, stop_agent=refuse).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+    assert record.handoff.error is not None and "host gone" in record.handoff.error
+    assert [entry.agent_id for entry in record.agents] == [first]
+    assert record.agents[0].final_event_count is None
 
 
 def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_typed() -> None:
