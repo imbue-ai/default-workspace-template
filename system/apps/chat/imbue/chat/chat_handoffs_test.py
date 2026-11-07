@@ -140,10 +140,11 @@ class _FakeWorkspace(MutableModel):
             handoff = record.handoff
             assert handoff is not None
             if handoff.held_sends:
-                remaining = handoff.model_copy_update(
-                    to_update(handoff.field_ref().held_sends, handoff.held_sends[1:])
+                self.store.write(
+                    record.model_copy_update(
+                        to_update(record.field_ref().handoff, handoff.with_oldest_held_send_delivered())
+                    )
                 )
-                self.store.write(record.model_copy_update(to_update(record.field_ref().handoff, remaining)))
                 return handoff.held_sends[0]
             self.store.write(record.model_copy_update(to_update(record.field_ref().handoff, None)))
             return None

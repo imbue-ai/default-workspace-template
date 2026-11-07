@@ -21,9 +21,10 @@
  */
 import m from "mithril";
 
-import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
-import type { DisplayDecision, HandoffState } from "./Chats";
+import { addChatsUpdatedListener, getChatById, isHandoffCancellable } from "./Chats";
+import type { ChatSnapshot, DisplayDecision, HandoffState, HeldSend } from "./Chats";
 import type { SendStatus } from "./Response";
+import { isChatBusyWithTurn } from "./activityState";
 
 export interface OutgoingMessage {
   id: string;
@@ -38,6 +39,9 @@ export interface OutgoingMessage {
   sentAt: number;
   /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
   displayDecision?: DisplayDecision;
+  /** Whether the send opens the agent's next turn, rather than waiting behind one already running: the status
+   *  row reporting that turn stays under it until it reaches the transcript. */
+  opensTurn: boolean;
 }
 
 /** Just the render decision a backend record carries, or undefined for a plain message. */
@@ -51,30 +55,32 @@ const byChat: Record<string, OutgoingMessage[]> = {};
 // Arrival ids already accounted for, per chat -- so a re-streamed transcript
 // event or a re-pushed queued snapshot does not drop a bubble twice.
 const seenArrivalIds: Record<string, Set<string>> = {};
-// For a chat whose switch has named its successor: how many of the successor's real user
-// items arrived while the snapshot still held the sends. The held sends come back as bubbles
-// only when the switch ends, so these arrivals consume them then, oldest first, as they would
-// have had the bubbles been standing when they landed.
-const successorArrivalsByChat = new Map<string, number>();
 // When the user sent each message that has reached the backend, by the id of the real item that
 // replaced its bubble: where the turn that message opened starts, as the user lived it.
 const sentAtByArrivalId = new Map<string, number>();
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
- *  so the caller can drop it on failure. */
+ *  so the caller can drop it on failure. A message sent while the chat is busy, or behind an earlier
+ *  send still on its way that opens the turn, waits behind that turn, so it opens none unless
+ *  ``opensTurn`` says otherwise. */
 export function addOutgoing(
   chatId: string,
   content: string,
   messageId?: string,
   displayDecision?: DisplayDecision,
+  opensTurn?: boolean,
 ): string {
   const id = `outgoing-${nextId++}`;
   const sentAt = Date.now();
-  (byChat[chatId] ??= []).push({
+  const chat = getChatById(chatId);
+  const pending = (byChat[chatId] ??= []);
+  const isTurnOpenedAhead = (chat !== undefined && isChatBusyWithTurn(chat)) || pending.some((sent) => sent.opensTurn);
+  pending.push({
     id,
     content,
     sentAt,
+    opensTurn: opensTurn ?? !isTurnOpenedAhead,
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
   });
@@ -176,10 +182,6 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
     // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
     // and drop the oldest bubble -- a no-op when there are none.
     seen.add(id);
-    const successorArrivals = successorArrivalsByChat.get(chatId);
-    if (successorArrivals !== undefined) {
-      successorArrivalsByChat.set(chatId, successorArrivals + 1);
-    }
     const oldest = byChat[chatId]?.[0];
     if (oldest !== undefined) {
       sentAtByArrivalId.set(id, oldest.sentAt);
@@ -194,6 +196,39 @@ interface HeldSnapshot {
   handoff: HandoffState;
 }
 
+/** Whether a switch hands its held sends to the agent as its next turn's own messages: a fresh start, or a rebind.
+ *  A handoff that carries the conversation over opens the successor's turn with its prompt instead. */
+export function opensTurnWithHeldSends(handoff: HandoffState): boolean {
+  return handoff.kind === "rebind" || handoff.is_fresh_start;
+}
+
+/** Counts the turns users' messages opened for an agent of a chat from a moment (ISO 8601) on, in the chat's loaded
+ *  transcript (``countSentTurnsSince`` in Response, which imports this module). */
+export type SentTurnsCounter = (chatId: string, agentId: string, since: string) => number;
+
+/** How many of the delivered held sends of a switch that began at ``startedAt`` the page already shows in their real
+ *  form: the user turns ``chat``'s agent has taken since, in its loaded transcript or in its queue. */
+export function countHeldSendsShownElsewhere(
+  chat: ChatSnapshot,
+  startedAt: string,
+  countSentTurnsSince: SentTurnsCounter,
+): number {
+  return (
+    countSentTurnsSince(chat.chat_id, chat.active_agent.agent_id, startedAt) + chat.active_agent.queued_messages.length
+  );
+}
+
+/** The listed held sends the page has no real form of, in order: the delivered ones stand down oldest first, one per
+ *  send ``shownElsewhere`` counts; a send the switch still holds always stays. */
+export function heldSendsStillToShow<T extends HeldSend>(heldSends: readonly T[], shownElsewhere: number): T[] {
+  let remaining = shownElsewhere;
+  return heldSends.filter((held) => {
+    if (held.is_delivered !== true || remaining === 0) return true;
+    remaining -= 1;
+    return false;
+  });
+}
+
 /**
  * Follow the agents store so a newly-queued message drops its "Sending…" bubble the instant
  * it becomes a real queued entry (no overlap). Deduped by queued_id, so re-pushed snapshots
@@ -201,15 +236,19 @@ interface HeldSnapshot {
  *
  * A chat switching harness holds its sends on the backend instead, and the snapshot lists them
  * (``handoff.held_sends``): a bubble whose id the list carries stands down for the snapshot's
- * own rendering. When the switch ends, the held messages leave the snapshot before their turns
- * reach the transcript, so they come back as bubbles here and drop by the arrivals that follow.
- * The successor's items that landed before then (the backend delivers the held sends before it
- * clears the switch) consume them at that point instead. A cancelled switch returns its
- * confirming message to the composer, so that one is skipped; so is a confirming message the
- * switch marker already shows (``isCarriedBySwitch``), whose turn is the marker itself.
+ * own rendering. When the switch ends, the messages it listed leave the snapshot, those it already
+ * delivered included, so they come back as bubbles here, all but the delivered ones the page already
+ * shows in their real form: oldest first, as many as the agent's turns since the switch began
+ * (``countSentTurnsSince``, read from the loaded transcript) and its queued messages. The arrivals
+ * that follow drop the rest. A cancelled switch returns its confirming message to the composer, so
+ * that one is skipped; so is a confirming message the switch marker already shows
+ * (``isCarriedBySwitch``), whose turn is the marker itself. Only the oldest of them opens the agent's
+ * next turn, when it comes back rather than having landed already, and only when the switch hands its
+ * held sends over as that turn's own messages.
  */
 export function trackBackendArrivals(
   isCarriedBySwitch: (chatId: string, messageId: string) => boolean = () => false,
+  countSentTurnsSince: SentTurnsCounter = () => 0,
 ): void {
   const heldByChat = new Map<string, HeldSnapshot>();
   addChatsUpdatedListener((chats) => {
@@ -218,13 +257,6 @@ export function trackBackendArrivals(
       // The retiring agent is the one the chat ran on when the switch began; the snapshot
       // names the successor before the switch ends, once it is created.
       const retiringAgentId = previous?.retiringAgentId ?? chat.active_agent.agent_id;
-      const isSuccessorNamed = chat.handoff !== null && chat.active_agent.agent_id !== retiringAgentId;
-      // A rebind keeps the agent, so its held sends land in the same agent's transcript before
-      // the switch clears; those arrivals consume the returned bubbles the same way.
-      const isRebinding = chat.handoff !== null && chat.handoff.kind === "rebind";
-      if ((isSuccessorNamed || isRebinding) && !successorArrivalsByChat.has(chat.chat_id)) {
-        successorArrivalsByChat.set(chat.chat_id, 0);
-      }
       const queuedIds = chat.active_agent.queued_messages.map((queued) => queued.queued_id);
       if (queuedIds.length > 0) {
         noteBackendArrivals(chat.chat_id, queuedIds);
@@ -237,20 +269,22 @@ export function trackBackendArrivals(
         heldByChat.set(chat.chat_id, { retiringAgentId, handoff: chat.handoff });
       } else if (previous !== undefined) {
         heldByChat.delete(chat.chat_id);
-        const consumedBySuccessor = successorArrivalsByChat.get(chat.chat_id) ?? 0;
-        successorArrivalsByChat.delete(chat.chat_id);
         // The agent alone does not tell a cancel from a completion: a page that first saw the
         // switch after the successor was named recorded that successor as the retiring agent.
         // A cancel is refused once switching begins, so the phase settles it.
         const isCancelled =
           isHandoffCancellable(previous.handoff) && previous.retiringAgentId === chat.active_agent.agent_id;
         const returning = previous.handoff.held_sends;
-        for (const held of isCancelled ? returning.slice(1) : returning) {
-          if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held));
-        }
-        for (let i = 0; i < consumedBySuccessor; i++) {
-          removeOldest(chat.chat_id);
+        // A cancel delivers them to the agent the chat stays on, behind whatever it is still doing.
+        const opensTurn = isCancelled ? !isChatBusyWithTurn(chat) : opensTurnWithHeldSends(previous.handoff);
+        const returned = (isCancelled ? returning.slice(1) : returning).filter(
+          (held) => !isCarriedBySwitch(chat.chat_id, held.message_id),
+        );
+        const shownElsewhere = countHeldSendsShownElsewhere(chat, previous.handoff.started_at, countSentTurnsSince);
+        for (const held of heldSendsStillToShow(returned, shownElsewhere)) {
+          // A first send that already landed opened the turn itself.
+          const isOpening = opensTurn && held === returned[0];
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), isOpening);
         }
       }
     }

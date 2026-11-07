@@ -7443,6 +7443,72 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         manager.stop()
 
 
+def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The switch takes each held send off its list as it delivers it, before its turn can reach the transcript, so
+    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done, and is pushed as each
+    send is taken, so the page knows which are delivered. A send that did not land has no turn to wait for, so it stops
+    being listed."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    chat_id = ChatId(first)
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    is_delivering_trigger = threading.Event()
+    is_follow_up_held = threading.Event()
+    is_delivering_last = threading.Event()
+    is_last_retried = threading.Event()
+    listed_while_delivering: dict[str, list[tuple[str, bool]]] = {}
+    q = broadcaster.register()
+    pushed: list[dict[str, Any]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        latest = _last_chats_updated(_drain(q))
+        if latest is not None:
+            pushed[:] = [latest]
+        [snapshot] = [chat for chat in pushed[0]["chats"] if chat["chat_id"] == chat_id]
+        listed_while_delivering[message_id] = [
+            (held["message_id"], held["is_delivered"]) for held in snapshot["handoff"]["held_sends"]
+        ]
+        if message_id == "m-1":
+            is_delivering_trigger.set()
+            is_follow_up_held.wait(timeout=10.0)
+        if message_id == "m-3":
+            is_delivering_last.set()
+            is_last_retried.wait(timeout=10.0)
+        sent.append((agent_info.id, text, message_id))
+        return SendOutcome.FAILED if message_id == "m-2" else SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader(["e-1"]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        wait_for(is_delivering_trigger.is_set, timeout=15.0)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_follow_up_held.set()
+        wait_for(is_delivering_last.is_set, timeout=15.0)
+        # A client retrying a send the switch has already taken to deliver does not have it delivered again.
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_last_retried.set()
+        _wait_until_settled(store, chat_id)
+        assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
+        assert listed_while_delivering == {
+            "m-1": [("m-1", True)],
+            "m-2": [("m-1", True), ("m-2", True), ("m-3", False)],
+            "m-3": [("m-1", True), ("m-3", True)],
+        }
+        assert manager.get_handoff_state(chat_id) is None
+    finally:
+        manager.stop()
+
+
 def test_a_held_background_task_report_carries_the_notice_it_renders_as(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

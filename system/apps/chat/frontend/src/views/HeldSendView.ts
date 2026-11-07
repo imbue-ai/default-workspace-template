@@ -4,22 +4,36 @@
  * They come from the chat's snapshot (``handoff.held_sends``), not from the page: the confirming
  * message first, then anything sent since. Each renders as the row the optimistic outgoing overlay
  * uses (the user bubble, or the notice a background-task report becomes), drawn as an ordinary
- * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). They stay
- * until the snapshot stops listing them, so a reloaded page shows them too; the confirming message
- * stands down earlier, once the switch marker that carries it is on the transcript (the
- * successor's opening turn is its real form).
+ * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). The snapshot
+ * keeps listing a send the switch has delivered until the switch is done, so a reloaded page shows
+ * them too; each stands down earlier once its real form is on the page: the confirming message once
+ * the switch marker that carries it is (the successor's opening turn), and the delivered others,
+ * oldest first, as the agent's turns for them land or queue (``heldSendsShownElsewhere``). A send the
+ * switch still holds always shows.
  */
 
 import m from "mithril";
 import { getChatById, getProvisionalChat } from "../models/Chats";
-import { getOutgoingMessages } from "../models/OutgoingMessages";
-import { isMessageCarriedBySwitch } from "../models/Response";
+import { countHeldSendsShownElsewhere, getOutgoingMessages, heldSendsStillToShow } from "../models/OutgoingMessages";
+import { countSentTurnsSince, isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
+
+/** How many of a switching chat's delivered held sends the page already shows in their real form: the user turns its
+ *  agent has taken since the switch began, in the transcript or in the agent's queue. Read from what any page loads,
+ *  so a page opened partway through the switch counts the same; 0 while the chat is not switching. */
+export function heldSendsShownElsewhere(chatId: string): number {
+  const chat = getChatById(chatId);
+  if (chat === undefined || chat.handoff === null) return 0;
+  return countHeldSendsShownElsewhere(chat, chat.handoff.started_at, countSentTurnsSince);
+}
 
 export function renderHeldSends(chatId: string): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
-  const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
+  const standing = heldSendsStillToShow(
+    chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id)),
+    heldSendsShownElsewhere(chatId),
+  );
   return standing.map((held) =>
     renderNotYetRealBubble({
       key: `held-${held.message_id}`,

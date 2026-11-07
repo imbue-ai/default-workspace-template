@@ -799,7 +799,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // own not-yet-delivered sends.
         ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
-        // The status row under the user's own send while it waits on the agent.
+        // The status row under the user's own send while it waits on the agent or opens the turn the row reports.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),
     ]);

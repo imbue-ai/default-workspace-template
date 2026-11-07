@@ -517,6 +517,13 @@ class HeldSendSnapshot(DisplayDecisionFields):
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
     text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
+    is_delivered: bool = Field(
+        default=False,
+        description=(
+            "Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue; "
+            "False while it is still held"
+        ),
+    )
 
 
 class HandoffState(FrozenModel):
@@ -539,8 +546,9 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
-            "too) keeps showing them until they land in the transcript"
+            "The messages sent during the switch, the confirming message first, those the switch has already "
+            "delivered included until it is done, so a page (a reloaded one too) keeps showing them until they "
+            "land in the transcript"
         ),
     )
     model_pick: ModelPick | None = Field(

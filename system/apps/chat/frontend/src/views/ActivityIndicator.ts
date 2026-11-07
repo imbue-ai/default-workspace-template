@@ -1,8 +1,8 @@
 /**
  * The status row at the live end of the transcript -- the harness-common shell. It sits where
  * the reply will appear, so it is where the user is already looking once they send: just under
- * their own message while that waits on the agent, and under the latest reply while the agent
- * works (``turnStatusPlacement`` says which).
+ * their own message while it waits on the agent or opens the agent's turn, and under the latest
+ * reply while the agent works on a turn already in the transcript (``turnStatusPlacement`` says which).
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
@@ -48,13 +48,14 @@
 import m from "mithril";
 import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/components/activityDot";
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
-import { COMPACTING_STATE } from "../models/activityState";
+import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
-import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
+import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
+import { heldSendsShownElsewhere } from "./HeldSendView";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 import { formatElapsed, latestTurnSpan, type TurnSpan } from "./turnTiming";
@@ -238,16 +239,23 @@ function oldestSendingAt(chatId: string): number | null {
 }
 
 /** Where the status row goes at the live end of the transcript: under the user's own sends while it
- *  stands for one (a send on its way, or waiting on the agent to come up), else under the latest
- *  turn, ahead of anything queued behind it. */
+ *  stands for one (a send on its way, or waiting on the agent to come up) or reports the turn one of
+ *  them opens, until that send reaches the transcript; else under the latest turn, ahead of anything
+ *  queued behind it. */
 export function turnStatusPlacement(chatId: string): "after-sends" | "after-turn" {
   const chat = getChatById(chatId);
-  const isWorking =
-    chat !== undefined &&
-    (chat.handoff !== null ||
-      (chat.active_agent.activity_state !== null && chat.active_agent.activity_state !== "IDLE"));
-  if (isWorking) return "after-turn";
-  return isChatConnecting(chatId) || getOutgoingMessages(chatId).length > 0 ? "after-sends" : "after-turn";
+  const outgoing = getOutgoingMessages(chatId);
+  if (chat !== undefined && chat.handoff !== null) {
+    // A switch that hands its held sends over as the agent's next turn reports that turn's start until the
+    // first of them lands; the rest wait behind that turn.
+    const isSendWaiting = chat.handoff.held_sends.length > 0 || outgoing.length > 0;
+    const isTurnOpening = opensTurnWithHeldSends(chat.handoff) && heldSendsShownElsewhere(chatId) === 0;
+    return isTurnOpening && isSendWaiting ? "after-sends" : "after-turn";
+  }
+  if (chat !== undefined && isWorkingActivityState(chat.active_agent.activity_state)) {
+    return outgoing.some((message) => message.opensTurn) ? "after-sends" : "after-turn";
+  }
+  return isChatConnecting(chatId) || outgoing.length > 0 ? "after-sends" : "after-turn";
 }
 
 // How long the wake-up strip may stand in for the agent after a verdict. Long

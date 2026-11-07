@@ -868,6 +868,24 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
         return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
 
 
+class HookedSendMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that runs each of ``during_send`` with the message while its send is in flight."""
+
+    during_send: list[Callable[[str], None]] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        for run in self.during_send:
+            run(message)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
 def scripted_send_mngr_messenger(
     failure_kinds: Sequence[SendFailureKind], sent: list[str], failure_reason: str = "no evidence of submission"
 ) -> MngrMessenger:

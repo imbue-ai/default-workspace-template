@@ -96,6 +96,9 @@ export interface HeldSend extends DisplayDecision {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
+  // Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue. Absent
+  // from a provisional chat's held sends and from an older backend's snapshot.
+  is_delivered?: boolean;
 }
 
 /** The in-progress switch a chat carries while it converges: a handoff or a rebind (spec 5, 6). */
@@ -111,7 +114,8 @@ export interface HandoffState {
   target_harness: string;
   // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
   target_label: string;
-  // The messages held for after the switch, the confirming one first.
+  // The messages sent during the switch, the confirming one first, those it has already delivered
+  // included until it is done.
   held_sends: HeldSend[];
   // The model the chat runs on once the switch lands, applied on the far side of the restart or
   // the create; null when none was picked. Read by a page that has no armed switch of its own to

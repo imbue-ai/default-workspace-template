@@ -126,7 +126,7 @@ class RebindDeps(FrozenModel):
     # Replace the record under the manager's lock, given the current record; raises
     # ``RebindCancelledError`` when the record no longer carries this rebind.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the rebind and return None when none remain; atomic with
+    # Move the next held send onto the delivered list, or clear the rebind and return None when none remain; atomic with
     # the message route's hold. Raises ``RebindCancelledError`` for another rebind.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
     get_agent_state: Callable[[str], AgentStateItem | None]
@@ -445,7 +445,8 @@ class RebindRunner:
 
         The rebind entry is cleared only once the held list is empty, inside the same lock the
         message route appends under, so a send that arrives during delivery is delivered by
-        this loop rather than overtaking one still held.
+        this loop rather than overtaking one still held. A send that does not land leaves the
+        delivered list again, so the page stops showing it.
         """
         agent_info = self._deps.get_agent_info(agent_id)
         if agent_info is None:
@@ -453,7 +454,10 @@ class RebindRunner:
                 f"agent {agent_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
-            deliver_held_send(self._deps.deliver, agent_info, held, chat_id)
+            if not deliver_held_send(self._deps.deliver, agent_info, held, chat_id):
+                self._update_rebind(
+                    chat_id, rebind_id, lambda current: current.without_delivered_send(held.message_id)
+                )
         logger.info(
             "Rebind of chat {}: agent {} is back on account {}",
             chat_id,
