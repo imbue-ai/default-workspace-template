@@ -107,7 +107,7 @@ export const OTHER_BUBBLE_CONTINUED_CLASS = OTHER_BUBBLE_BASE;
 const SPEAKER_LABEL_CLASS = "mb-1 text-(length:--font-size-helper) leading-[1.4] text-faint";
 
 /** "You", over the first of a run of the viewer's own bubbles. */
-export function renderOwnSpeakerLabel(): m.Vnode {
+function renderOwnSpeakerLabel(): m.Vnode {
   return m("div", { class: `message-you ${SPEAKER_LABEL_CLASS} pr-4` }, "You");
 }
 
