@@ -21,7 +21,7 @@ from chat_background_tasks.markers import TaskSource
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pids_by_agent_id
+from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.primitives import ParticipantKey
@@ -1727,7 +1727,7 @@ class AgentManager:
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
+            resolve_pids_by_chat_id=manager._resolve_active_pids_by_chat_id,
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1750,10 +1750,19 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
-        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
-        active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
+    def _resolve_active_pids_by_chat_id(self, chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        """The pids of the processes each chat runs on, for the OOM prioritizer, from one read of the pid registry.
+
+        A chat with no active agent, or whose agent has no live process, maps to an empty list.
+        """
+        pids_by_agent_id = live_pids_by_agent_id()
+        pids_by_chat_id: dict[ChatId, list[int]] = {}
+        for chat_id in chat_ids:
+            active_agent_id = self._active_agent_id_of_chat(chat_id)
+            pids_by_chat_id[chat_id] = (
+                [] if active_agent_id is None else sorted(pids_by_agent_id.get(active_agent_id, []))
+            )
+        return pids_by_chat_id
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
@@ -2755,8 +2764,9 @@ class AgentManager:
             )
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
-        """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
-        Studio app when the report is what made someone watch it."""
+        """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
+        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
+        watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
@@ -5729,8 +5739,7 @@ class AgentManager:
         # of a chat messaged outside the workspace UI (by mngr or another agent):
         # entering a running state is the observable consequence of such a message,
         # and it keeps a chat exempt from its staleness climb for the turn's
-        # duration. After the broadcast because it writes to /proc, which the UI
-        # update should not wait on.
+        # duration. After the broadcast so the UI update never waits on it.
         with self._lock:
             self._running_chat_ids = frozenset(
                 chat_id_by_agent_id[agent_id]
