@@ -19,7 +19,7 @@ _SECRETS = NekoSecrets(
     user_password=SecretStr("user-secret"), admin_password=SecretStr("admin-secret"), api_token=SecretStr("api-secret")
 )
 _DEFAULT = DisplaySettings()
-_AUTH_SANDBOX = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1360, height=864, rate=60))
+_AUTH_SANDBOX = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1288, height=806, rate=60))
 # neko writes a parameter as ``key=<value>`` with Go's ``%v`` of the gval result: a plain number is a float64, printed in
 # exponent form from a million up, which an encoder refuses.
 _GVAL_PLAIN_NUMBER = re.compile(r"^\d{1,6}$")
@@ -130,7 +130,7 @@ def test_every_encoder_parameter_survives_nekos_expression_printing() -> None:
 
 
 def test_a_fixed_size_is_the_display_neko_starts_at() -> None:
-    assert neko_config_document(_SECRETS, _AUTH_SANDBOX)["desktop"]["screen"] == "1360x864@60"
+    assert neko_config_document(_SECRETS, _AUTH_SANDBOX)["desktop"]["screen"] == "1288x806@60"
 
 
 def test_pulse_script_loads_the_null_sink_and_the_socket() -> None:

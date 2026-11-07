@@ -116,10 +116,11 @@ stream; a workspace sets none of them, and the auth sandbox sets all five
 
 - `SCREEN_VIDEO_CODEC`: `h264` (the default) or `vp8`, the codec neko encodes the three
   profiles in (see "Profiles, visibility and audio").
-- `SCREEN_FIXED_SIZE`: `WxH`, the display's one mode. It must already be a size a report could
-  produce (multiples of 16, or the cap, within 640x480 and 1920x1080). `xorg.conf` lists it
-  first, so the X server starts at it, `neko.yaml` names it as neko's screen, and
-  `POST /api/screen-size` no longer resizes; the viewer scales the picture to its frame.
+- `SCREEN_FIXED_SIZE`: `WxH`, the display's one mode: any size within 640x480 and 1920x1080 whose
+  width is a multiple of 8 (CVT's cell) and whose height is even (the encoders' I420), not only
+  one a report could produce. `xorg.conf` lists it first, so the X server starts at it,
+  `neko.yaml` names it as neko's screen, and `POST /api/screen-size` no longer resizes; the
+  viewer scales the picture to its frame.
 - `SCREEN_VIDEO_PROFILE`: unset (the default) or a profile's id, `idle`, `watch` or `control`, in
   any case. Set, every viewer is held on that profile whatever the lease and the input clock, from
   before the first stack start on; unset, the service chooses it (see "Profiles, visibility and

@@ -11,9 +11,14 @@ from screen.data_types import ScreenSize
 from screen.data_types import VideoCodec
 from screen.errors import InvalidScreenSizeError
 from screen.errors import ScreenConfigurationError
+from screen.primitives import MAX_HEIGHT
+from screen.primitives import MAX_WIDTH
+from screen.primitives import MIN_HEIGHT
+from screen.primitives import MIN_WIDTH
 from screen.primitives import VIDEO_IDS
 from screen.primitives import parse_size_argument
-from screen.sizing import quantize_screen_size
+from screen.xorg_config import CVT_CELL_GRANULARITY_PX
+from screen.xorg_config import MODE_REFRESH_HZ
 
 ENV_VIDEO_CODEC: Final[str] = "SCREEN_VIDEO_CODEC"
 ENV_FIXED_SIZE: Final[str] = "SCREEN_FIXED_SIZE"
@@ -21,6 +26,8 @@ ENV_VIDEO_PROFILE: Final[str] = "SCREEN_VIDEO_PROFILE"
 ENV_DESKTOP_PANEL: Final[str] = "SCREEN_DESKTOP_PANEL"
 ENV_ICE_LITE: Final[str] = "SCREEN_ICE_LITE"
 _SWITCH_VALUES: Final[dict[str, bool]] = {"on": True, "off": False}
+# Both encoders take I420, which halves the chroma rows, so a fixed height is a multiple of this.
+_FIXED_HEIGHT_MULTIPLE: Final[int] = 2
 
 
 @pure
@@ -36,21 +43,25 @@ def parse_video_codec(value: str) -> VideoCodec:
 
 @pure
 def parse_fixed_size(value: str) -> ScreenSize | None:
-    """``WxH``, which must already be a size a viewer's report could produce (multiples of 16, or the cap, within
-    640x480 and 1920x1080); empty is no fixed size."""
+    """``WxH`` within 640x480 and 1920x1080, its width a whole number of CVT's 8-pixel cells (the modeline keeps no
+    other width) and its height even; empty is no fixed size. Not only a size a viewer's report could produce, since
+    no report is applied while the size is fixed: the auth sandbox's display is exactly its sign-in window."""
     if not value:
         return None
     try:
         width, height = parse_size_argument(value)
     except InvalidScreenSizeError as e:
         raise ScreenConfigurationError(f"{ENV_FIXED_SIZE}: {e}") from e
-    size = quantize_screen_size(width, height)
-    if (size.width, size.height) != (width, height):
+    if not (MIN_WIDTH <= width <= MAX_WIDTH and MIN_HEIGHT <= height <= MAX_HEIGHT):
         raise ScreenConfigurationError(
-            f"{ENV_FIXED_SIZE} is {value!r}, which the Screen would take as {size.width}x{size.height}; "
-            "set that instead"
+            f"{ENV_FIXED_SIZE} is {value!r}, outside {MIN_WIDTH}x{MIN_HEIGHT} to {MAX_WIDTH}x{MAX_HEIGHT}"
         )
-    return size
+    if width % CVT_CELL_GRANULARITY_PX != 0 or height % _FIXED_HEIGHT_MULTIPLE != 0:
+        raise ScreenConfigurationError(
+            f"{ENV_FIXED_SIZE} is {value!r}; the width must be a multiple of {CVT_CELL_GRANULARITY_PX} "
+            "and the height even"
+        )
+    return ScreenSize(width=width, height=height, rate=MODE_REFRESH_HZ)
 
 
 @pure

@@ -2,8 +2,9 @@
 
 The image is the product ``system/Dockerfile`` with a workspace's first boot and the Screen's stack baked in,
 plus what a browser sign-in needs (the web latchkey auth sandbox spec, section 5.1): the pinned latchkey CLI
-checked, this library in its own environment, the template ``config.json`` naming the Fortress launcher, the
-sandbox's boot script and supervisord config at ``/opt/auth-sandbox/``, and the ``auth-sandbox-*`` commands on PATH. The steps themselves are
+checked, this library in its own environment, the template ``config.json`` naming the sign-in browser script
+(the Fortress launcher, its window at the display's corner), the sandbox's boot script and supervisord config at
+``/opt/auth-sandbox/``, and the ``auth-sandbox-*`` commands on PATH. The steps themselves are
 ``auth_sandbox.image_build`` (tested over a fake sandbox); this script runs them in a real Modal sandbox made
 from the product image and snapshots its filesystem.
 

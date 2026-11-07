@@ -218,7 +218,7 @@ The session runs as the workspace user with `HOME` the workspace home, so XFCE a
 - The service rounds width and height down to multiples of 16, clamps to `[640x480, 1920x1080]`, and if the size differs from the current one: adds a mode named `<w>x<h>_60` with `xrandr --newmode` (a `cvt`-computed modeline) and `--addmode` on the dummy output when it is not already there, then `POST /neko/api/room/screen` with it.
   Neko restarts the capture and broadcasts `screen/updated`; viewers letterbox the new aspect.
 - Added modes are kept for the stack's life; they cost nothing.
-- A Screen whose environment fixes its size (`SCREEN_FIXED_SIZE=WxH`, a size the rules above would produce; the auth sandbox's 1360x864, which fits latchkey's login window, Playwright's 1280x720 viewport) starts at that mode (`xorg.conf` lists it first and `neko.yaml` names it) and answers every report `{"applied": false, "reason": "fixed size"}` without resizing.
+- A Screen whose environment fixes its size (`SCREEN_FIXED_SIZE=WxH`, any size within the floor and the cap whose width is a multiple of 8, CVT's cell, and whose height is even, for the encoders' I420, since no report is applied to it; the auth sandbox's 1288x806, exactly latchkey's login window, Playwright's 1280x720 viewport in a 1288x805 window) starts at that mode (`xorg.conf` lists it first and `neko.yaml` names it) and answers every report `{"applied": false, "reason": "fixed size"}` without resizing.
 - Every viewer draws the video at its intrinsic aspect, centred, letterboxed in the stage.
 
 ## 8. Video profiles, visibility and audio

@@ -30,14 +30,16 @@ INSTALL_DIR: Final[Path] = Path("/opt/auth-sandbox")
 BOOT_SCRIPT_PATH: Final[Path] = INSTALL_DIR / "boot.sh"
 SUPERVISORD_CONF_PATH: Final[Path] = INSTALL_DIR / "supervisord.conf"
 # The template latchkey ``config.json``: minds' hidden built-ins and registered services, plus the browser entry
-# naming the Fortress launcher. The boot script copies it into the sandbox's latchkey directory.
+# naming the sign-in browser script. The boot script copies it into the sandbox's latchkey directory.
 TEMPLATE_CONFIG_PATH: Final[Path] = INSTALL_DIR / "config.json"
+# The browser latchkey launches for a sign-in: the Fortress launcher with its window at the display's corner.
+SIGN_IN_BROWSER_PATH: Final[Path] = INSTALL_DIR / "sign-in-browser.sh"
 # This library's own environment, synced from its own lock: no workspace venv carries it.
 VENV_DIRNAME: Final[str] = "venv"
 WORKSPACE_ROOT: Final[Path] = Path("/home/user/workspace")
 
 # The Fortress launcher the Screen's env.d unit installs (system/scripts/env.d/2000-screen.sh); latchkey launches
-# it through Playwright as its configured browser (D10).
+# it through Playwright, by way of the sign-in browser script, as its configured browser (D10).
 FORTRESS_LAUNCHER_PATH: Final[Path] = Path("/opt/fortress/tilion-fortress/tilion")
 
 # The Screen's display and audio, as system/apps/screen names them (``screen.primitives`` and

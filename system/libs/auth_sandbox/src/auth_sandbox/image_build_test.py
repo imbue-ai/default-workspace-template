@@ -13,6 +13,7 @@ from auth_sandbox.image_build import (
     CLAIM_WATCHER_COMMAND,
     COMMAND_NAMES,
     LIBRARY_SOURCE_DIR,
+    SIGN_IN_BROWSER_SOURCE,
     SIGN_IN_PACKAGES_CHECK,
     SUPERVISORD_CONF_SOURCE,
     ImageBuildSettings,
@@ -69,7 +70,12 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         f"install -m 0644 /home/user/workspace/{SUPERVISORD_CONF_SOURCE} /opt/auth-sandbox/supervisord.conf"
         in install
     )
+    assert (
+        f"install -m 0755 /home/user/workspace/{SIGN_IN_BROWSER_SOURCE} /opt/auth-sandbox/sign-in-browser.sh"
+        in install
+    )
     assert "bash -n /opt/auth-sandbox/boot.sh" in install
+    assert "bash -n /opt/auth-sandbox/sign-in-browser.sh" in install
     assert f"test -x /opt/auth-sandbox/venv/bin/{CLAIM_WATCHER_COMMAND}" in install
     for name in COMMAND_NAMES:
         assert (
@@ -78,7 +84,7 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         )
     assert commands[7] == (
         "/opt/auth-sandbox/venv/bin/auth-sandbox-render-config"
-        f" --browser-executable {FORTRESS_LAUNCHER_PATH} /opt/auth-sandbox/config.json"
+        " --browser-executable /opt/auth-sandbox/sign-in-browser.sh /opt/auth-sandbox/config.json"
     )
     assert "latchkey ensure-browser --source existing-config" in commands[8]
     assert "LATCHKEY_ENCRYPTION_KEY=" in commands[8]
@@ -86,7 +92,7 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
 
 
 def test_build_steps_install_files_this_library_ships() -> None:
-    for source in (BOOT_SCRIPT_SOURCE, SUPERVISORD_CONF_SOURCE):
+    for source in (BOOT_SCRIPT_SOURCE, SIGN_IN_BROWSER_SOURCE, SUPERVISORD_CONF_SOURCE):
         assert (_REPO_ROOT / source).is_file(), source
     assert (_REPO_ROOT / LIBRARY_SOURCE_DIR / "uv.lock").is_file()
 

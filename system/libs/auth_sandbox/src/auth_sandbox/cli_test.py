@@ -444,9 +444,9 @@ def test_render_config_writes_the_template_with_the_browser_entry(
     output = tmp_path / "opt" / "config.json"
     result = CliRunner().invoke(
         render_config_command,
-        [str(output), "--browser-executable", "/opt/fortress/tilion-fortress/tilion"],
+        [str(output), "--browser-executable", "/opt/auth-sandbox/sign-in-browser.sh"],
     )
     assert result.exit_code == 0, result.output
     config = json.loads(output.read_text())
-    assert config["browser"]["executablePath"] == "/opt/fortress/tilion-fortress/tilion"
+    assert config["browser"]["executablePath"] == "/opt/auth-sandbox/sign-in-browser.sh"
     assert config["browser"]["source"] == "system"

@@ -41,7 +41,7 @@ _IDENTITY = {"X-Imbue-Identity": json.dumps({"owner": True, "user_id": "u1", "em
 _VISITOR = {"X-Imbue-Identity": json.dumps({"owner": False, "user_id": "u2", "email": "mia@example.com"})}
 _AGENT_A = {"X-Mngr-Agent-Id": "chat-a", "X-Mngr-Agent-Name": "Alice"}
 _AGENT_B = {"X-Mngr-Agent-Id": "chat-b", "X-Mngr-Agent-Name": "Bob"}
-_FIXED_VP8 = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1360, height=864, rate=60))
+_FIXED_VP8 = DisplaySettings(video_codec=VideoCodec.VP8, fixed_size=ScreenSize(width=1288, height=806, rate=60))
 
 
 def _session(client: FlaskClient, headers: dict[str, str]) -> dict:
@@ -488,9 +488,9 @@ def test_a_fixed_size_is_rendered_at_start_and_no_report_resizes_it(
 ) -> None:
     start_service_stack(service)
     neko_yaml = yaml.safe_load((service.state_dir / "neko.yaml").read_text())
-    assert neko_yaml["desktop"]["screen"] == "1360x864@60"
+    assert neko_yaml["desktop"]["screen"] == "1288x806@60"
     assert neko_yaml["capture"]["video"]["codec"] == "vp8"
-    assert '    Modes "1360x864_60" ' in (service.state_dir / "xorg.conf").read_text()
+    assert '    Modes "1288x806_60" ' in (service.state_dir / "xorg.conf").read_text()
     session = _controlling_session(client, service)
     for body in ({"width": 704, "height": 480, "session_id": session["session_id"]}, {"width": 1024, "height": 768}):
         answer = client.post("/api/screen-size", json=body)

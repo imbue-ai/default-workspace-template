@@ -40,10 +40,10 @@ from auth_sandbox.primitives import (
     AUTHORIZED_KEYS_PATH,
     CLAIM_PATH,
     DEFAULT_LATCHKEY_BINARY,
-    FORTRESS_LAUNCHER_PATH,
     LATCHKEY_BINARY_ENV_VAR,
     LATCHKEY_GATEWAY_ENV_VAR,
     RUNTIME_DIR,
+    SIGN_IN_BROWSER_PATH,
 )
 from auth_sandbox.runtime_files import SandboxPaths, read_key
 from auth_sandbox.session import (
@@ -349,7 +349,7 @@ def await_claim_command(
 @click.option(
     "--browser-executable",
     type=click.Path(path_type=Path),
-    default=FORTRESS_LAUNCHER_PATH,
+    default=SIGN_IN_BROWSER_PATH,
     show_default=True,
     help="The browser latchkey launches for a sign-in.",
 )

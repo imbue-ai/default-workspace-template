@@ -8,7 +8,9 @@
 
 - `SCREEN_VIDEO_CODEC` (`h264`, the default, or `vp8`) picks the codec neko streams in. With `vp8` the three profiles keep their frame rates and bitrates as libvpx realtime CBR pipelines, which Firefox decodes without Cisco's OpenH264 plugin.
 
-- `SCREEN_FIXED_SIZE=WxH` (a size a viewer's report could produce) keeps the display at one mode: the X server and neko start at it, and `POST /api/screen-size` answers `{"applied": false, "reason": "fixed size"}` without resizing, as `screen size WxH` then says, exiting 1. A value the service cannot use stops it at start.
+- `SCREEN_FIXED_SIZE=WxH` (any size within 640x480 and 1920x1080 whose width is a multiple of 8 and whose height is even, such as the auth sandbox's 1288x806) keeps the display at one mode: the X server and neko start at it, and `POST /api/screen-size` answers `{"applied": false, "reason": "fixed size"}` without resizing, as `screen size WxH` then says, exiting 1. A value the service cannot use stops it at start.
+
+- A mode's CVT modeline takes `cvt`'s vertical sync width for every size: an aspect ratio counts only when the height is a whole multiple of its denominator, as `cvt` tests it, so a size such as 1288x806 or 656x496 no longer gets a 16:10 or 4:3 sync width `cvt` would not give it.
 
 - `SCREEN_VIDEO_PROFILE` (`idle`, `watch` or `control`, in any case) holds every viewer on that video profile whatever the lease and the input, from before the first stack start on; the state document and the viewer's stream use it throughout. Unset, the service chooses the profile as before. A value that names no profile stops the service at start.
 

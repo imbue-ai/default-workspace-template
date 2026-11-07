@@ -21,6 +21,7 @@ from auth_sandbox.primitives import (
     BOOT_SCRIPT_PATH,
     FORTRESS_LAUNCHER_PATH,
     INSTALL_DIR,
+    SIGN_IN_BROWSER_PATH,
     SUPERVISORD_CONF_PATH,
     TEMPLATE_CONFIG_PATH,
     VENV_DIRNAME,
@@ -37,12 +38,13 @@ COMMAND_NAMES: Final[tuple[str, ...]] = (
 )
 # The boot script runs it from this library's environment; owner-exec has no use for it, so it is not linked onto PATH.
 CLAIM_WATCHER_COMMAND: Final[str] = "auth-sandbox-await-claim"
-# This library's project, and where it keeps the boot script and the sandbox's supervisord config, relative to the
-# workspace root.
+# This library's project, and where it keeps the boot script, the sign-in browser script and the sandbox's
+# supervisord config, relative to the workspace root.
 LIBRARY_SOURCE_DIR: Final[Path] = Path("system/libs/auth_sandbox")
 SANDBOX_SOURCE_DIR: Final[Path] = LIBRARY_SOURCE_DIR / "sandbox"
 BOOT_SCRIPT_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "boot.sh"
 SUPERVISORD_CONF_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "supervisord.conf"
+SIGN_IN_BROWSER_SOURCE: Final[Path] = SANDBOX_SOURCE_DIR / "sign-in-browser.sh"
 # The pin ``system/scripts/setup_system.sh`` installs, in the shape ``: "${LATCHKEY_VERSION:=3.19.3}"``.
 _LATCHKEY_VERSION_PIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\$\{LATCHKEY_VERSION:=([0-9][0-9.]*)\}"
@@ -106,7 +108,8 @@ class ImageBuildSettings(FrozenModel):
         description="Where the boot script, its files and the library's environment land",
     )
     fortress_launcher: Path = Field(
-        default=FORTRESS_LAUNCHER_PATH, description="The browser latchkey launches"
+        default=FORTRESS_LAUNCHER_PATH,
+        description="The Fortress launcher the sign-in browser script runs",
     )
     snapshot_timeout_seconds: int = Field(
         default=DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, description="The snapshot's bound"
@@ -132,6 +135,7 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
     venv_bin = shlex.quote(str(venv_dir / "bin"))
     fortress = shlex.quote(str(settings.fortress_launcher))
     boot_script = shlex.quote(str(settings.install_dir / BOOT_SCRIPT_PATH.name))
+    sign_in_browser = shlex.quote(str(settings.install_dir / SIGN_IN_BROWSER_PATH.name))
     supervisord_conf = shlex.quote(
         str(settings.install_dir / SUPERVISORD_CONF_PATH.name)
     )
@@ -189,20 +193,25 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
-            description="install the boot script, the sandbox's supervisord config and the commands",
+            description=(
+                "install the boot script, the sign-in browser script, the sandbox's supervisord config and the"
+                " commands"
+            ),
             command=(
                 f"install -d {install_dir}"
                 f" && install -m 0755 {root}/{BOOT_SCRIPT_SOURCE} {boot_script}"
+                f" && install -m 0755 {root}/{SIGN_IN_BROWSER_SOURCE} {sign_in_browser}"
                 f" && install -m 0644 {root}/{SUPERVISORD_CONF_SOURCE} {supervisord_conf}"
                 f" && bash -n {boot_script}"
+                f" && bash -n {sign_in_browser}"
                 f" && test -x {venv_bin}/{CLAIM_WATCHER_COMMAND}"
                 f" && {link_commands}"
             ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
-            description="render the template config.json with the Fortress browser entry",
-            command=f"{venv_bin}/auth-sandbox-render-config --browser-executable {fortress} {config}",
+            description="render the template config.json with the sign-in browser entry",
+            command=f"{venv_bin}/auth-sandbox-render-config --browser-executable {sign_in_browser} {config}",
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(

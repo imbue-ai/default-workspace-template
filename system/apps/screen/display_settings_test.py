@@ -28,7 +28,7 @@ def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_at_control_drop
     settings = display_settings_from_environ(
         {
             "SCREEN_VIDEO_CODEC": "vp8",
-            "SCREEN_FIXED_SIZE": "1360x864",
+            "SCREEN_FIXED_SIZE": "1288x806",
             "SCREEN_VIDEO_PROFILE": "control",
             "SCREEN_DESKTOP_PANEL": "off",
             "SCREEN_ICE_LITE": "on",
@@ -36,7 +36,7 @@ def test_an_auth_sandboxs_environment_fixes_the_size_streams_vp8_at_control_drop
     )
     assert settings == DisplaySettings(
         video_codec=VideoCodec.VP8,
-        fixed_size=ScreenSize(width=1360, height=864, rate=60),
+        fixed_size=ScreenSize(width=1288, height=806, rate=60),
         is_desktop_panel_shown=False,
         is_ice_lite=True,
         pinned_video_id="control",
@@ -72,11 +72,16 @@ def test_the_video_profile_is_a_profiles_id_in_any_case_and_an_unknown_one_is_re
         display_settings_from_environ({"SCREEN_VIDEO_PROFILE": "fast"})
 
 
-def test_a_fixed_size_must_be_one_a_viewers_report_could_produce() -> None:
+def test_a_fixed_size_is_any_even_size_within_the_floor_and_the_cap_whose_width_is_whole_cvt_cells() -> None:
     assert parse_fixed_size("1920x1080") == ScreenSize(width=1920, height=1080, rate=60)
     assert parse_fixed_size("640X480") == ScreenSize(width=640, height=480, rate=60)
-    for unusable, taken_as in (("1366x768", "1360x768"), ("320x200", "640x480"), ("2560x1440", "1920x1080")):
-        with pytest.raises(ScreenConfigurationError, match=taken_as):
+    # Not a size a viewer's report could produce (multiples of 16): the auth sandbox's sign-in window.
+    assert parse_fixed_size("1288x806") == ScreenSize(width=1288, height=806, rate=60)
+    for outside in ("632x480", "640x478", "1928x1080", "1920x1082"):
+        with pytest.raises(ScreenConfigurationError, match="outside 640x480 to 1920x1080"):
+            parse_fixed_size(outside)
+    for unusable in ("1366x768", "1288x805"):
+        with pytest.raises(ScreenConfigurationError, match="multiple of 8 and the height even"):
             parse_fixed_size(unusable)
     for malformed in ("1360", "big", "1360x864x60"):
         with pytest.raises(ScreenConfigurationError, match="WIDTHxHEIGHT"):

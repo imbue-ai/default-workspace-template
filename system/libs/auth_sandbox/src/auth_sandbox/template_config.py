@@ -2,8 +2,9 @@
 
 ``imbue.mngr_latchkey.core.merge_minds_latchkey_config`` writes the hidden built-in services and the registered
 additional services, which is what every gateway that serves minds agents carries. The browser entry is
-latchkey's own shape (its ``BrowserConfigSchema``): the executable, how it was found, and when. ``source`` is
-``system`` because the launcher is a system-installed browser, not one Playwright found or downloaded.
+latchkey's own shape (its ``BrowserConfigSchema``): the executable (the sign-in browser script, which runs the
+Fortress launcher), how it was found, and when. ``source`` is ``system`` because the launcher is a system-installed
+browser, not one Playwright found or downloaded.
 
 The sign-in commands merge minds' part into the sandbox's copy again before they run latchkey, as the desktop's
 ``Latchkey.initialize`` does, but without its ``latchkey --version`` check: the image build pins and checks the

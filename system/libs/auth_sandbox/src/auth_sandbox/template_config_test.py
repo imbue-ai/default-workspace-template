@@ -14,12 +14,12 @@ from auth_sandbox.template_config import merge_minds_config, render_template_con
 
 def test_render_template_config_adds_latchkeys_browser_entry_to_minds_config() -> None:
     text = render_template_config(
-        Path("/opt/fortress/tilion-fortress/tilion"),
+        Path("/opt/auth-sandbox/sign-in-browser.sh"),
         datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc),
     )
     config = json.loads(text)
     assert config["browser"] == {
-        "executablePath": "/opt/fortress/tilion-fortress/tilion",
+        "executablePath": "/opt/auth-sandbox/sign-in-browser.sh",
         "source": "system",
         "discoveredAt": "2026-10-29T12:00:00Z",
     }
@@ -39,7 +39,7 @@ def test_merge_minds_config_keeps_the_browser_entry_and_refuses_a_config_that_is
     tmp_path: Path,
 ) -> None:
     template = render_template_config(
-        Path("/opt/fortress/tilion-fortress/tilion"),
+        Path("/opt/auth-sandbox/sign-in-browser.sh"),
         datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc),
     )
     config = json.loads(template)

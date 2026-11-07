@@ -11,17 +11,20 @@ import pytest
 from auth_sandbox.image_build import (
     BOOT_SCRIPT_SOURCE,
     CLAIM_WATCHER_COMMAND,
+    SIGN_IN_BROWSER_SOURCE,
     SUPERVISORD_CONF_SOURCE,
 )
 from auth_sandbox.primitives import (
     AUTHORIZED_KEYS_PATH,
     CHROME_ORIGIN_ENV_VAR,
     CONNECT_INFO_PATH,
+    FORTRESS_LAUNCHER_PATH,
     HOST_ID_ENV_VAR,
     INSTALL_DIR,
     RUNTIME_DIR,
     SCREEN_SERVICE_URL,
     SCREEN_TOKEN_SHA256_FILENAME,
+    SIGN_IN_BROWSER_PATH,
     VENV_DIRNAME,
     WORKSPACE_ROOT,
 )
@@ -121,10 +124,10 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
     assert f'export SCREEN_FRAME_ANCESTORS="${CHROME_ORIGIN_ENV_VAR}"' in exports
     assert f'readonly CONNECT_INFO_PATH="{CONNECT_INFO_PATH}"' in text
     assert 'export SCREEN_CONNECT_INFO_PATH="$CONNECT_INFO_PATH"' in exports
-    # The Screen's sign-in picture: every browser's codec, one display size, the control profile throughout, no
-    # panel, and neko as an ICE lite agent.
+    # The Screen's sign-in picture: every browser's codec, a display exactly the sign-in window (1288x805, plus a
+    # row for an even height), the control profile throughout, no panel, and neko as an ICE lite agent.
     assert 'export SCREEN_VIDEO_CODEC="vp8"' in exports
-    assert 'export SCREEN_FIXED_SIZE="1360x864"' in exports
+    assert 'export SCREEN_FIXED_SIZE="1288x806"' in exports
     assert 'export SCREEN_VIDEO_PROFILE="control"' in exports
     assert 'export SCREEN_DESKTOP_PANEL="off"' in exports
     assert 'export SCREEN_ICE_LITE="on"' in exports
@@ -138,6 +141,22 @@ def test_boot_script_hands_the_screen_and_owner_exec_their_sandbox_settings() ->
         f"printf 'export SHARE_CHROME_ORIGIN=%s\\n' \"${CHROME_ORIGIN_ENV_VAR}\""
         ' > "$REPO_ROOT/data/.secrets/share.env"' in text
     )
+
+
+def test_sign_in_browser_script_runs_the_fortress_launcher_with_its_window_at_the_corner() -> (
+    None
+):
+    script = _REPO_ROOT / SIGN_IN_BROWSER_SOURCE
+    assert os.access(script, os.X_OK)
+    assert SIGN_IN_BROWSER_PATH.name == script.name
+    text = script.read_text()
+    assert text.startswith("#!/bin/bash\n")
+    commands = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert commands == [f'exec {FORTRESS_LAUNCHER_PATH} --window-position=0,0 "$@"']
 
 
 def test_boot_script_runs_the_claim_watcher_and_ends_the_sandbox_with_it() -> None:
