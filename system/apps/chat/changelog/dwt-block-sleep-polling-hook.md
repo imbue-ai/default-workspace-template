@@ -1,0 +1,1 @@
+The tool-call policy contract (`harnesses/core-contracts/tool-call-policies.md`) gains P11: a command must not wait on a foreground `sleep` of 5 seconds or more. The state-of-things file records it as live on claude, codex, pi and agy.

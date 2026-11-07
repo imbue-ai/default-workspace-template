@@ -31,16 +31,22 @@
  *
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
- * its last-known state. A turn the agent did nothing in (two boundaries back to
- * back) keeps no copy, so the step shows once, under the later boundary.
+ * its last-known state. It belongs to the earlier request, so the new turn's
+ * prose does not join it until the agent works while it is open or moves a
+ * step, and a turn that never works in it or closes it does not draw it at all;
+ * the same holds for a step carried over a switch to another agent, whose
+ * successor starts on the message the user switched with. A turn the agent did
+ * nothing in (two boundaries back to back) keeps no copy either, so the step is
+ * drawn again at most once, under the later boundary.
  *
  * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
  * background task, a bash-mode command and its output) breaks the timeline the
  * same way, though it is not a turn the user took: it lands between two of the
  * agent's requests, so whatever the agent does next happens after it. The
- * section closes there, any open step carries over, and the chip heads the next
- * section. The reply the agent gave before it stays above it, and the work it
- * does after renders below it. The one exception is a chip landing inside an
+ * section closes there, any open step carries over (a step the turn before it
+ * never took up stays out of it and off its timeline), and the chip heads the
+ * next section. The reply the agent gave before it stays above it, and the work
+ * it does after renders below it. The one exception is a chip landing inside an
  * open handoff node, which stays in the handoff's turn.
  *
  * One message is never grouped under a step: an agent permission request, or a
@@ -52,8 +58,9 @@
  * notification user message. The walk reads its verdict onto the request's card
  * and treats the notification as a turn boundary (the agent blocked on the
  * request and is now resuming), so any open step carries over and continues in
- * the new turn rather than the same node resuming beneath the card. The raw text
- * isn't shown (its verdict is on the card). The notification carries the
+ * the new turn rather than the same node resuming beneath the card (as after a
+ * chip, a step the turn before it never took up stays off its timeline). The
+ * raw text isn't shown (its verdict is on the card). The notification carries the
  * resolved request's own id (see message-classification's resolutionRequestIdOf),
  * so a card looks up its verdict by that id rather than by arrival order: two
  * requests resolved out of the order they were created never swap their
@@ -202,6 +209,9 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
   /** Compactions that landed after the trailing reply, rendered below the timeline and reply. */
   trailing_status: CompactionPart[];
+  /** The step the agent's next words join, where a reply it is still writing shows: the live
+   *  frontier step, while no handoff node is taking its words. Null on every other section. */
+  live_step_id: string | null;
 }
 
 /** A status transition line printed by tk on every state change:
@@ -473,6 +483,14 @@ interface SectionBuilder {
    *  SectionEntry), used to assemble timeline items in transcript order. */
   entries: SectionEntry[];
   current_step_id: string | null;
+  /** A step carried over into a turn the user started (a message, or a switch to another
+   *  agent), which the agent has not taken up again in it: nothing the agent says joins it until
+   *  the agent works while it is open or moves a step. */
+  dormant_step_id: string | null;
+  /** Carried-over steps left off this section's timeline unless the agent takes them up in it
+   *  (they still show, frozen, in the turn they came from): all of them in a turn the user started,
+   *  and after a chip those the turn before it never took up. */
+  untaken_carryover_ids: Set<string>;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -486,6 +504,8 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     step_order: [],
     entries: [],
     current_step_id: null,
+    dormant_step_id: null,
+    untaken_carryover_ids: new Set(),
     open_handoff: null,
   };
 }
@@ -627,6 +647,16 @@ export function buildSections(
     builders.push(section);
     return section;
   };
+  // Close the current section, carrying its open steps over, and open the next. A turn the user
+  // started is a new request, so the carried-over steps wait until the agent takes them up again;
+  // any other break continues the request the closed section was answering.
+  const breakSection = (user_event: UserMessageEvent | null, key: string, isNewRequest: boolean): void => {
+    const previous = current;
+    carryover = previous === null ? [] : openStepsAtEnd(previous);
+    current = ensureSection(user_event, key);
+    if (isNewRequest) setCarryoverDormant(current);
+    else continueCarryover(previous, current);
+  };
 
   // The node a switch just closed, until the successor's first turn-making event: the handoff
   // prompt lands on it rather than in the successor's section. Hidden lines the successor's
@@ -656,8 +686,9 @@ export function buildSections(
         lastSwitched = { key: e.event_id, request: null, events: [], switch: e, prompt: null };
         current.entries.push({ kind: "handoff", node: lastSwitched });
       }
-      carryover = openStepsAtEnd(current);
-      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      // The successor starts on the message the user switched with, so a step the retiring
+      // agent left open does not take its answer unless it takes the step up.
+      breakSection(openingTurnOf(e), `section-switch-${e.event_id}`, /* isNewRequest */ true);
       continue;
     }
     if (e.type === "user_message") {
@@ -698,8 +729,7 @@ export function buildSections(
         lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
-        carryover = current === null ? [] : openStepsAtEnd(current);
-        current = ensureSection(null, `section-after-${e.event_id}`);
+        breakSection(null, `section-after-${e.event_id}`, /* isNewRequest */ false);
         continue;
       }
       // The chat app's notice that a secret card was answered: the same break as a
@@ -712,8 +742,7 @@ export function buildSections(
         if (requestId !== null) resolutionsByRequestId.set(requestId, secretResolution);
         const note = secretResolutionNoteOf(e);
         if (requestId !== null && note !== null) secretNotesByRequestId.set(requestId, note);
-        carryover = current === null ? [] : openStepsAtEnd(current);
-        current = ensureSection(null, `section-after-${e.event_id}`);
+        breakSection(null, `section-after-${e.event_id}`, /* isNewRequest */ false);
         continue;
       }
       if (
@@ -743,8 +772,7 @@ export function buildSections(
       // module docstring): close the prior section (carrying open steps) and open a new one
       // headed by the message.
       lastSwitched = null;
-      carryover = current === null ? [] : openStepsAtEnd(current);
-      current = ensureSection(e, `section-${e.event_id}`);
+      breakSection(e, `section-${e.event_id}`, isGenuineUserTurn(e));
       continue;
     }
     if (e.type === "assistant_message") {
@@ -756,6 +784,20 @@ export function buildSections(
         continue;
       }
       const parsed = parseMessage(e, toolResults);
+      // Only step records render in the timeline. A `tk start`/`tk close` on a
+      // regular ticket the agent picked up prints the same
+      // `Updated <id> -> <status>` line as a step does; skip it (it is neither
+      // a `-step-` id nor a known step) rather than mint a phantom node titled
+      // with the raw ticket id. Any work batched with that command stays in
+      // the step that was already open (or renders inline if none was).
+      const stepTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
+      if (
+        current.dormant_step_id !== null &&
+        ((parsed.render !== null && isWork(parsed.render)) || stepTransitions.length > 0)
+      ) {
+        current.current_step_id = current.dormant_step_id;
+        current.dormant_step_id = null;
+      }
       // Apply transitions in transcript order so each step node lands at its
       // real position -- a batched `tk close a && tk start b` must keep a's node
       // before b's. Then route this message's content to the step it belongs
@@ -764,14 +806,7 @@ export function buildSections(
       // message with a `tk close` -- it stays in the closing step).
       const stepBefore = current.current_step_id;
       let lastOpened: string | null = null;
-      for (const t of parsed.transitions) {
-        // Only step records render in the timeline. A `tk start`/`tk close` on a
-        // regular ticket the agent picked up prints the same
-        // `Updated <id> -> <status>` line as a step does; skip it (it is neither
-        // a `-step-` id nor a known step) rather than mint a phantom node titled
-        // with the raw ticket id. Any work batched with that command stays in
-        // the step that was already open (or renders inline if none was).
-        if (!isStepId(t.id) && !knownSteps.has(t.id)) continue;
+      for (const t of stepTransitions) {
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
@@ -843,6 +878,42 @@ function openStep(section: SectionBuilder, id: string, is_carryover: boolean): v
     existing.summary = null;
   }
   section.current_step_id = id;
+}
+
+/** Keep the step carried over into a new turn out of it until the agent takes it up again
+ *  (see SectionBuilder.dormant_step_id). */
+function setCarryoverDormant(section: SectionBuilder): void {
+  section.dormant_step_id = section.current_step_id;
+  section.current_step_id = null;
+  section.untaken_carryover_ids = new Set(section.step_order);
+}
+
+/** Open `next` on the same request `previous` was answering (after a chip, a notice, or a request's
+ *  verdict), which does not change what the agent is answering: a dormant step stays dormant, and
+ *  the carried-over steps `previous` never took up stay off `next`'s timeline. */
+function continueCarryover(previous: SectionBuilder | null, next: SectionBuilder): void {
+  if (previous === null) return;
+  if (previous.dormant_step_id !== null) {
+    setCarryoverDormant(next);
+    return;
+  }
+  next.untaken_carryover_ids = new Set(untakenCarryoverIds(previous));
+  if (next.current_step_id !== null && next.untaken_carryover_ids.has(next.current_step_id)) {
+    next.current_step_id = previous.current_step_id;
+  }
+}
+
+/** The steps in untaken_carryover_ids the agent has not taken up in the section so far. */
+function untakenCarryoverIds(section: SectionBuilder): string[] {
+  return section.step_order.filter((id) => {
+    const node = section.steps.get(id)!;
+    return (
+      section.untaken_carryover_ids.has(id) &&
+      node.status === "active" &&
+      node.events.length === 0 &&
+      id !== section.current_step_id
+    );
+  });
 }
 
 function applyTransition(section: SectionBuilder, t: { id: string; status: "in_progress" | "closed" }): void {
@@ -936,6 +1007,15 @@ function finalizeSection(
     section.entries = [];
     section.steps.clear();
     section.step_order = [];
+  }
+
+  // A step left open by an earlier request that the agent never took up in this turn is not part
+  // of it: showing it again here would read as the agent going back to it.
+  const untakenIds = new Set(untakenCarryoverIds(section));
+  if (untakenIds.size > 0) {
+    section.entries = section.entries.filter((entry) => entry.kind !== "step" || !untakenIds.has(entry.id));
+    section.step_order = section.step_order.filter((id) => !untakenIds.has(id));
+    for (const id of untakenIds) section.steps.delete(id);
   }
 
   // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
@@ -1101,5 +1181,12 @@ function finalizeSection(
     }
   }
 
-  return { user_event: section.user_event, key: section.key, items, trailing_reply, trailing_status };
+  return {
+    user_event: section.user_event,
+    key: section.key,
+    items,
+    trailing_reply,
+    trailing_status,
+    live_step_id: section.open_handoff === null ? frontierId : null,
+  };
 }

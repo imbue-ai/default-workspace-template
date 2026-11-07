@@ -17,8 +17,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
+from pydantic import SecretStr
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
@@ -61,6 +63,7 @@ from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -143,8 +146,10 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -161,6 +166,7 @@ from imbue.chat.testing import read_create_defaults_type
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
+from imbue.chat.testing import serve_app
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
@@ -7907,6 +7913,41 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_turn_closing", "has_background_task", "expected"),
+    [
+        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
+        # the harness names, while a marker exists only for the kinds this workspace records.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, True),
+        ("RUNNING_BACKGROUND", None, False, False, True),
+        # A marker alone carries a detached runner, which the harness never reports.
+        ("WAITING", ActivityState.IDLE, False, True, True),
+        # The transcript tail and the closing turn cover a turn the lifecycle has not caught.
+        ("WAITING", ActivityState.THINKING, False, False, True),
+        ("WAITING", ActivityState.IDLE, True, False, True),
+        # Nothing outstanding: the user is the next mover.
+        ("WAITING", ActivityState.IDLE, False, False, False),
+        ("STOPPED", None, False, False, False),
+    ],
+)
+def test_busy_means_the_agent_will_resume_on_its_own(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_turn_closing: bool,
+    has_background_task: bool,
+    expected: bool,
+) -> None:
+    assert (
+        resolve_is_busy(
+            activity_state=activity,
+            is_turn_closing=is_turn_closing,
+            lifecycle_state=lifecycle,
+            has_background_task=has_background_task,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
     ("lifecycle", "activity", "is_permission_pending", "is_busy", "is_turn_closing", "expected"),
     [
         ("RUNNING", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
@@ -7921,6 +7962,11 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
+        # An agent carrying work past its turn reaches this rule as busy, and a live turn or a
+        # permission prompt still outranks it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
+        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, False, ChatStatus.STOPPED),
@@ -9298,3 +9344,52 @@ def test_a_room_is_never_starred_or_fallen_to_as_the_main_chat(
         assert manager.get_main_chat_id() is None
     finally:
         manager.stop()
+
+
+def test_a_chat_refusing_turns_for_sign_in_notifies_the_app_once_per_run_naming_its_watchers() -> None:
+    """The first refused reply posts one notification as the chat's own agent, carrying the pages watching the chat;
+    the run's later refusals post nothing, and a refusal after a reply that went through posts again."""
+    gateway = RecordingGateway(status=200)
+    chat_id = ChatId("agent-5e1f00")
+    refused = [{"type": "assistant_message", "content": "Please run /login", "is_auth_error": True}]
+    with serve_app(gateway.application) as served:
+        manager = AgentManager.build(
+            WebSocketBroadcaster(),
+            imbue_studio_gateway=GatewayAccess(
+                base_url=served.http_url, password=SecretStr("gateway-password-6170"), permissions_override=None
+            ),
+        )
+        seed_agent_state(manager, str(chat_id), name="Trip planning", labels={"user_created": "true"})
+        try:
+            manager.record_presence(
+                chat_id,
+                PresenceReport(
+                    instance_id="page-7",
+                    client_id="client-1",
+                    state=PresenceState.VISIBLE,
+                    is_focused=True,
+                    sequence=1,
+                ),
+            )
+            manager.report_sign_in_failures(chat_id, refused)
+            manager.report_sign_in_failures(chat_id, refused)
+            manager.report_sign_in_failures(
+                chat_id, [{"type": "assistant_message", "content": "Done", "is_auth_error": False}]
+            )
+            manager.report_sign_in_failures(chat_id, refused)
+            # The client posts one call at a time in order, so once a later call settles every report has posted.
+            manager._imbue_studio_notifications.mark_chat_read(chat_id).result(timeout=15.0)
+        finally:
+            manager._imbue_studio_notifications.shutdown()
+
+    notifications = [received for received in gateway.received if received.path.endswith("/notifications")]
+    assert [received.path for received in notifications] == [
+        "/minds-api-proxy/api/v1/agents/agent-5e1f00/notifications",
+        "/minds-api-proxy/api/v1/agents/agent-5e1f00/notifications",
+    ]
+    assert notifications[0].body == {
+        "message": SIGN_IN_NEEDED_MESSAGE,
+        "title": "Sign in needed",
+        "destination": {"type": "minds:focus-chat", "chatId": "agent-5e1f00"},
+        "watched_by": ["page-7"],
+    }

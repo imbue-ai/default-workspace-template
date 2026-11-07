@@ -43,16 +43,10 @@ def _run(
         )
 
 
-# --- the shebang, which is a fork bomb if it is wrong -------------------------------------
-
-
 def test_the_shebang_is_absolute() -> None:
     """`#!/usr/bin/env bash` -- which every other script here uses -- would make `env` resolve
     `bash` back to this shim, forever, killing every command the agent runs."""
     assert _SHIM.read_text().splitlines()[0] == "#!/bin/bash"
-
-
-# --- the guards fire ----------------------------------------------------------------------
 
 
 def test_it_blocks_a_git_history_rewrite() -> None:
@@ -65,6 +59,12 @@ def test_it_blocks_a_pipe_into_head() -> None:
     result = _run("-c", "pytest | head -5")
     assert result.returncode == 2
     assert "tail or head" in result.stderr
+
+
+def test_it_blocks_a_foreground_sleep() -> None:
+    result = _run("-c", "sleep 240; cat /tmp/out.txt")
+    assert result.returncode == 2
+    assert "foreground `sleep`" in result.stderr
 
 
 def test_a_quote_in_the_command_does_not_defeat_a_guard() -> None:
@@ -100,9 +100,6 @@ def test_a_guard_that_writes_to_stderr_but_exits_zero_stays_silent(
     assert "No command found" not in result.stderr
 
 
-# --- the rewrite --------------------------------------------------------------------------
-
-
 _PROC_OOM = Path("/proc/self/oom_score_adj")
 
 
@@ -114,9 +111,6 @@ def test_the_oom_tag_is_applied() -> None:
     result = _run("-c", f"cat {_PROC_OOM}")
     assert result.returncode == 0
     assert result.stdout.strip() == "900"
-
-
-# --- transparency: it must be indistinguishable from bash ----------------------------------
 
 
 def test_it_preserves_the_exit_code() -> None:
@@ -147,9 +141,6 @@ def test_a_non_dash_c_invocation_passes_straight_through() -> None:
     assert "GNU bash" in result.stdout
 
 
-# --- scoping and the kill switch -----------------------------------------------------------
-
-
 def test_a_nested_invocation_is_not_guarded_again() -> None:
     """Policing the whole process tree would block third-party code the agent did not write
     (a build whose package script pipes into head), and re-apply the prefix at every level."""
@@ -165,9 +156,6 @@ def test_the_kill_switch_disables_every_guard() -> None:
     assert "git rebase" not in result.stderr
 
 
-# --- fail open ------------------------------------------------------------------------------
-
-
 def test_it_runs_the_command_when_the_guards_are_missing(tmp_path: Path) -> None:
     """A shim that dies takes the agent with it, which is worse than a skipped guard."""
     result = _run("-c", "echo still-runs", env={"MNGR_AGENT_WORK_DIR": str(tmp_path)})
@@ -180,9 +168,6 @@ def test_it_runs_the_command_when_the_guards_are_missing(tmp_path: Path) -> None
 )
 def test_quoting_forms_survive_the_round_trip(command: str) -> None:
     assert _run("-c", command).returncode == 0
-
-
-# --- the two SOFT policies, which reach agy only through this shim ------------------------
 
 
 def _with_open_step(tmp_path: Path) -> dict[str, str]:

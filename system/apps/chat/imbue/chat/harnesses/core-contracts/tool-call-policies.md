@@ -183,6 +183,26 @@ the card's password inputs from that echo in the same call's result. So the call
 for exactly the reasons P3 gives, and the same files enforce it -- the checker counts a run of
 the request script as a filing alongside a POST to the permission-requests host.
 
+### P11. A command must not wait on a foreground `sleep` of 5 seconds or more
+`agent_block_foreground_sleep.sh` -> `agent_block_foreground_sleep_check.py` -- **hard block.**
+
+A timed sleep is a guess at how long something else takes, and it holds the agent's turn for the
+whole guess: a message to the agent waits until it ends, and so does the agent when the thing it
+waits on finished early. The agent waits on the event instead -- a command run in the background
+(`run_in_background.py`) wakes it when it ends, and a state is checked with short sleeps
+(`until curl -sf URL; do sleep 1; done`). A sleep is judged wherever it runs as a command of its
+own, chained, alone, or in a loop or branch body; one under 5 seconds is allowed, and so is one
+in a list the command sends to the background with `&`, one that is only an argument (the command
+handed to `run_in_background.py`), or one in a call claude runs with `run_in_background`. A wait
+that really is about time belongs inside a background command. `AGENTS.md` carries the same rule
+as prose.
+
+The checker reads segments, not the shell's grouping, so it is a seatbelt with known gaps: a `;`
+inside a backgrounded group (`{ sleep 30; } &`) and a heredoc body holding a sleep are blocked, and
+a sleep behind a wrapper (`timeout`, `nohup`, `exec`, `env`), one with a non-literal duration, or
+one cleared by an inner `&` (`sleep 30 && (cmd &)`) gets through. The checker's docstring lists them
+all.
+
 ## The rule that keeps this honest
 
 **The logic lives once.** A harness that can execute the scripts runs the scripts. A harness
