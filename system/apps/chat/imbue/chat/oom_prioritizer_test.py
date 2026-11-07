@@ -41,6 +41,8 @@ class _Harness:
         self.process_started_at: dict[ChatId, float] = {}
         self.reports_sent = 0
         self.registry_reads = 0
+        # While set, every registry read raises it, as an unreadable registry directory would.
+        self.registry_error: OSError | None = None
         # ``time.monotonic()`` at each pass's registry read, for asserting how far apart passes are.
         self.pass_started_at: list[float] = []
         # A band write blocks here while a test holds the gate closed, so the test can act mid-pass.
@@ -74,6 +76,8 @@ class _Harness:
     def _resolve_pids_by_chat_id(self, chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
         self.registry_reads += 1
         self.pass_started_at.append(time.monotonic())
+        if self.registry_error is not None:
+            raise self.registry_error
         return {chat_id: self._pids_of(chat_id) for chat_id in chat_ids}
 
     def _pids_of(self, chat_id: ChatId) -> list[int]:
@@ -496,34 +500,17 @@ def test_passes_asked_for_in_quick_succession_are_at_least_the_minimum_interval_
 
 
 def test_a_pass_that_cannot_read_the_registry_is_retried_by_the_next_one() -> None:
-    writes: list[tuple[int, int]] = []
-    registry_reads: list[int] = []
-    is_registry_readable = threading.Event()
-    is_registry_readable.set()
-
-    def resolve_pids_by_chat_id(chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
-        registry_reads.append(len(registry_reads) + 1)
-        if not is_registry_readable.is_set():
-            raise OSError("registry unreadable")
-        return {chat_id: [10] for chat_id in chat_ids}
-
-    prioritizer = ChatOomPrioritizer(
-        list_chat_ids=lambda: [ChatId("a")],
-        resolve_pids_by_chat_id=resolve_pids_by_chat_id,
-        set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
-        resolve_process_started_at=lambda _cid: None,
-        min_pass_interval_seconds=0.0,
-    )
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
     try:
         # ``start`` runs its first pass on this thread; the failure is made to land on the pass thread.
-        prioritizer.start()
-        is_registry_readable.clear()
-        prioritizer.record_message(ChatId("a"))
-        assert poll_until(lambda: len(registry_reads) == 2)
-        assert len(writes) == 1
-        is_registry_readable.set()
-        prioritizer.record_message(ChatId("a"))
-        assert poll_until(lambda: len(writes) == 2)
-        assert writes[-1] == (10, _fresh(is_open=False, is_visible=False, recency_rank=0))
+        h.prioritizer.start()
+        h.registry_error = OSError("registry unreadable")
+        h.prioritizer.record_message(ChatId("a"))
+        assert poll_until(lambda: h.registry_reads == 2)
+        assert len(h.writes) == 1
+        h.registry_error = None
+        h.prioritizer.record_message(ChatId("a"))
+        assert poll_until(lambda: len(h.writes) == 2)
+        assert h.writes[-1] == (10, _fresh(is_open=False, is_visible=False, recency_rank=0))
     finally:
-        prioritizer.stop()
+        h.prioritizer.stop()
