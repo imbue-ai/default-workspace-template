@@ -1,6 +1,6 @@
 ---
 name: run-on-users-computer
-description: Running anything on the user's own computer (their laptop, their desktop, "my machine"), or telling them to run something there. Use before any plan that installs a tool, runs a script, reads a program, or runs a command on the user's computer rather than in this workspace. Covers the alternatives to try first, the one sanctioned way to run a command there yourself, and the things you must never build.
+description: Running anything on the user's own computer (their laptop, their desktop, "my machine"), or telling them to run something there. Use before any plan that installs a tool, runs a script, reads a program, or runs a command on the user's computer rather than in this workspace. Covers the alternatives to try first, the one sanctioned way to run a command there yourself (and how to ask for one program rather than everything), and the things you must never build.
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD) and the devices skill.
 metadata:
   author: imbue
@@ -61,20 +61,49 @@ Two refusals mean two different things:
   commands on this computer") and why you need it, then do something else or
   wait. Do not ask again in the same turn.
 - Latchkey's `Request not permitted by the user.` means the switch may be on
-  but this workspace has not been approved for that computer. File the request
-  below, in a tool call of its own with nothing else in it and its output
-  untouched, then end your turn and wait for the user's answer.
+  but this workspace has not been approved for that computer, or not for that
+  program. File the request below, in a tool call of its own with nothing else
+  in it and its output untouched, then end your turn and wait for the user's
+  answer. Do not route around a refusal by running the same thing through a
+  program you are allowed.
+
+**Ask for the narrowest program that does the job.** A request names either
+any command (`"payload": {}`) or one program (`"payload": {"program": "..."}`),
+and the user sees the difference: one program is a far easier thing to say yes
+to. The program is the command's first element, exactly as you will send it:
+
+- a bare name the user's shell would find (`rsync`, `gh`, `ffmpeg`): Imbue
+  Studio resolves it on their PATH and shows the user the file it found, or
+  that it is not installed;
+- a `~`-rooted or absolute path you already know, such as a script you wrote
+  through the `file-sharing` skill. By convention put such scripts under
+  `~/.studio/custom-scripts/`. You may ask before the file exists; the user
+  can approve it anyway and it runs once you have written it.
+
+You cannot list what is installed on their computer; ask the user, or name
+the common tool and let the request show whether it exists. A shell or a
+language runtime (`bash`, `python3`, `node`, `uv`, `npx`, ...) is shown to
+the user with the same warning as asking for any command, because it is one;
+ask for it only when you genuinely need everything.
+
+Writing a short script and asking to run just that script is a good way to
+get a narrow grant: the user can read it, and once it works they can take
+your write access to it away and keep the run grant. The script is still
+bound by section 3.
 
 ```bash
 latchkey curl -H "X-Latchkey-Device: <device id>" -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "remote-execution", "payload": {}, "rationale": "<one paragraph: what you need to run on the user'"'"'s computer and why nothing else will do>"}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "remote-execution", "payload": {"program": "~/.studio/custom-scripts/export-photos.sh"}, "rationale": "<one paragraph: what the program does on the user'"'"'s computer and why nothing else will do>"}'
 ```
 
-The header names one computer, never `*`: the grant is per computer, and a
-request sent to every one would have to be approved on each. A `400` from the
-gateway saying the type is unknown means the user's Imbue Studio predates this;
-tell them it needs updating.
+For any command, send `"payload": {}` instead and say in the rationale why
+one program is not enough. A grant is per computer and per program, so ask
+again for each new program; the user sees each as its own row they can turn
+off. The header names one computer, never `*`: a request sent to every one
+would have to be approved on each. A `400` from the gateway saying the type
+is unknown means the user's Imbue Studio predates this; tell them it needs
+updating.
 
 ## 5. How to run
 
@@ -85,11 +114,11 @@ latchkey curl -N -H "X-Latchkey-Device: <device id>" -H "X-Imbue-Studio-Agent: $
   -d '{"command": ["bash", "-lc", "uname -a && df -h ~"], "timeout_seconds": 60}'
 ```
 
-- `command` is an argv list run directly, not a shell line. Wrap a shell
-  command as `["bash", "-lc", "..."]`: the login shell gives it the PATH the
-  user has in a terminal. If a tool the user clearly has comes back "not
-  found", retry with `["zsh", "-lc", "..."]` (macOS users keep their PATH in
-  zsh files).
+- `command` is an argv list run directly, not a shell line. Its first element
+  is resolved on the user's login-shell PATH when it is a bare name, taken as
+  a file when it is a `~`-rooted or absolute path, and must be exactly the
+  program a program grant names. Under an any-command grant you may wrap a
+  shell command as `["bash", "-lc", "..."]`.
 - `cwd` is optional, absolute or `~`-rooted, and defaults to their home
   directory. `timeout_seconds` defaults to 600.
 - Send `X-Imbue-Studio-Agent` on every call: it is how the user's record of
