@@ -470,8 +470,9 @@ def test_once_started_a_report_returns_without_waiting_on_the_pass_that_writes_i
         # Released, the stuck pass finishes and one more pass covers the requests made meanwhile.
         h.write_gate.set()
         assert poll_until(lambda: h.registry_reads == 3)
-        assert poll_until(lambda: h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0))
-        assert h.latest_adj_by_pid()[20] == _fresh(is_open=False, is_visible=False, recency_rank=1)
+        # ``b``'s band is that pass's last write; the stuck pass already wrote ``a`` the same rank-0 band.
+        assert poll_until(lambda: h.latest_adj_by_pid()[20] == _fresh(is_open=False, is_visible=False, recency_rank=1))
+        assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0)
     finally:
         h.prioritizer.stop()
 
