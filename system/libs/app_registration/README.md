@@ -11,8 +11,11 @@ rule, the icon markup, the value types); its module docstring describes the rule
   their app starts, and that update-self and agents run by path to remove an app.
 - `app_manifest.registry.register_app` -- an app's entry point registering itself.
 - `system/apps/datalib/launch_datalib_http.py` -- Datalib's launcher.
+- `workspace_bare_scripts.wait_for_critical_path` -- reads the registry through
+  `load_apps` to find the system interface's and the chat app's URLs.
 - The isolated-instance, preview and scaffold code under `.agents/`.
 
-The stub and Datalib's launcher import this package under a bare `python3` (no
+The stubs and Datalib's launcher import this package under a bare `python3` (no
 virtualenv), via an explicit `sys.path` entry, which is why it is **stdlib-only**
-and must stay that way. Reading the registry is `app_manifest.registry`'s job.
+and must stay that way. Reading the registry is `app_manifest.registry`'s job;
+only bare code, which cannot import it, reads through `load_apps`.

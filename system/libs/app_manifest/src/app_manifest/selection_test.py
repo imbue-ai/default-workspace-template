@@ -25,6 +25,7 @@ from app_manifest.testing import write_supervisord_dropin
 _ALWAYS_RUN = " ".join(("uv", "run", "--no-sync", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"})))
 _FULL_ROOT = "uv run --no-sync pytest"
 _BAND_CHECK = "uv run --no-sync pytest system/services/oom_priority/bin/oom_tag_service_test.py"
+_CRITICAL_PATH_CHECK = "uv run --no-sync pytest system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py"
 _CHAT_WHOLE_WITHOUT_BROWSER = (
     "(cd system/apps/chat && uv run --no-sync pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
@@ -223,7 +224,7 @@ def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_ro
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
-def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace: Path) -> None:
+def test_a_supervisord_block_runs_the_app_it_starts_and_the_wiring_checks(workspace: Path) -> None:
     write_supervisord_dropin(workspace, "notes", ("program:notes",))
     commit_everything(workspace, "wire notes")
 
@@ -232,19 +233,20 @@ def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
         "uv run --no-sync pytest system/apps/notes",
+        _CRITICAL_PATH_CHECK,
         _BAND_CHECK,
     ]
     assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
 
 
-def test_a_supervisord_block_no_app_owns_runs_the_band_check(workspace: Path) -> None:
-    # A service's block: no manifest claims it, but it still has to name its OOM band.
+def test_a_supervisord_block_no_app_owns_runs_the_wiring_checks(workspace: Path) -> None:
+    # A service's block: no manifest claims it, but both checks that read every block still run.
     write_supervisord_dropin(workspace, "fetcher", ("program:fetcher",))
     commit_everything(workspace, "wire a service")
 
     selection = _select(workspace, ["system/supervisord.conf.d/fetcher.conf"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, _BAND_CHECK]
+    assert _command_lines(selection) == [_ALWAYS_RUN, _CRITICAL_PATH_CHECK, _BAND_CHECK]
     assert not selection.is_full_root
 
 
@@ -258,7 +260,11 @@ def test_a_named_test_file_inside_a_selected_whole_suite_runs_only_there(workspa
         ["system/supervisord.conf.d/fetcher.conf", "system/services/oom_priority/bin/oom_tag_service.py"],
     )
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/services/oom_priority"]
+    assert _command_lines(selection) == [
+        _ALWAYS_RUN,
+        _CRITICAL_PATH_CHECK,
+        "uv run --no-sync pytest system/services/oom_priority",
+    ]
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
@@ -304,8 +310,12 @@ def test_every_non_documentation_change_runs_the_always_run_set(workspace: Path)
     [
         ("system/scripts/provision_guard_test.py", "system/test_layout.py"),
         ("system/services/oom_priority/bin/oom_tag_service_test.py", "system/supervisord.conf.d/fetcher.conf"),
+        (
+            "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
+            "system/supervisord.conf.d/fetcher.conf",
+        ),
     ],
-    ids=["always-run", "wiring"],
+    ids=["always-run", "wiring-band", "wiring-critical-path"],
 )
 def test_a_listed_guard_git_does_not_track_fails_the_selection(workspace: Path, guard: str, changed_path: str) -> None:
     (workspace / guard).unlink()

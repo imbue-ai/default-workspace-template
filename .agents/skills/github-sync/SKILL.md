@@ -169,9 +169,10 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     # git wiring fresh and re-verifies the sync repo stays private (the
     # post-commit hook does the pushing). See system/libs/github_sync/README.md.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
-    # system/services/oom_priority).
+    # system/services/oom_priority); wait_for_critical_path.py holds each start
+    # until the system interface and the chat app serve.
     [program:github-sync]
-    command=python3 system/services/oom_priority/bin/oom_tag_service.py github-sync bash -c "uv sync --all-packages --frozen && exec .venv/bin/github-sync run"
+    command=python3 system/services/oom_priority/bin/oom_tag_service.py github-sync python3 system/scripts/wait_for_critical_path.py bash -c "uv sync --all-packages --frozen && exec .venv/bin/github-sync run"
     directory=/home/user/workspace
     autostart=true
     autorestart=true

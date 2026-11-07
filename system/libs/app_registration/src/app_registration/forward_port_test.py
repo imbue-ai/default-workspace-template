@@ -1451,7 +1451,7 @@ def test_a_registry_whose_apps_are_not_tables_is_refused_by_name(
     apps_file.write_text("apps = [1]\n")
 
     with pytest.raises(ValueError, match="element that is not a table") as excinfo:
-        forward_port._load_apps(apps_file)
+        forward_port.load_apps(apps_file)
     assert isinstance(excinfo.value, forward_port.MalformedRegistryError)
     assert str(apps_file) in str(excinfo.value)
 

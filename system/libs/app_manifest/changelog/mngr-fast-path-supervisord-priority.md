@@ -1,0 +1,1 @@
+`select-tests` runs `system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py` beside the OOM band check for any change to `system/supervisord.conf` or a `system/supervisord.conf.d/` file, since it reads every program block to check that neither the system interface's nor the chat app's program waits on the critical path.

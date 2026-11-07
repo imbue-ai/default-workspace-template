@@ -5,7 +5,8 @@ runs that unit's suite, plus the suites of the packages (workspace members and u
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
 manifests reference it (``[[references]]``); a package the root project depends on also runs
 the full root suite, the root project's own tests. A supervisord block runs the app whose
-program it holds and the check that every block names its OOM band. ``uv.lock`` selects the
+program it holds and the checks that read every block: that each names its OOM band, and that
+no critical-path app's program waits on the critical path. ``uv.lock`` selects the
 members that depend on what it upgraded. A change inside the frontend of an app with its own
 pytest root runs only the app's tests marked ``browser`` or ``frontend``; any other app runs
 whole. A small always-run set guards the repo-wide
@@ -87,7 +88,10 @@ _GUARD_DIRECTORY: Final[str] = "system"
 _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
 # The checks outside the always-run set that read every real supervisord program block.
-_WIRING_GUARDS: Final[tuple[str, ...]] = ("system/services/oom_priority/bin/oom_tag_service_test.py",)
+_WIRING_GUARDS: Final[tuple[str, ...]] = (
+    "system/services/oom_priority/bin/oom_tag_service_test.py",
+    "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
+)
 # The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
 # and the checks that read every skill's prose, which a change to any one skill can break.
 ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
@@ -660,8 +664,8 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
     is_root_dependency = False
 
     if path == _SUPERVISORD_CONF or PurePosixPath(path).parent.as_posix() == _SUPERVISORD_DROPIN_DIRECTORY:
-        # The always-run set checks the layout, and the wiring guards every block's OOM band;
-        # the apps whose blocks the file holds run too.
+        # The always-run set checks the layout, and the wiring guards every block's OOM band and
+        # critical-path wait; the apps whose blocks the file holds run too.
         classes.append(ChangedPathClass.WIRING)
         for guard in _WIRING_GUARDS:
             if guard not in layout.tracked_files:

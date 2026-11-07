@@ -530,7 +530,13 @@ def dump_registry(apps: list[dict[str, object]]) -> str:
     return "\n".join(chunks)
 
 
-def _load_apps(path: Path) -> list[dict[str, object]]:
+def load_apps(path: Path) -> list[dict[str, object]]:
+    """The registry's ``[[apps]]`` tables; empty while the file does not exist.
+
+    Raises ``MalformedRegistryError`` for a top-level shape other than ``[[apps]]``
+    tables, and lets ``tomllib.TOMLDecodeError``, ``UnicodeDecodeError`` (a file that is
+    not UTF-8) and ``OSError`` through.
+    """
     if not path.exists():
         return []
     with open(path, "rb") as f:
@@ -920,7 +926,7 @@ def _upsert(
     every manifest-owned key the same way: each is set to the manifest's value
     or removed when the manifest omits it.
     """
-    apps = _load_apps(path)
+    apps = load_apps(path)
     manifest_owned = _manifest_owned_values(
         manifest_fields,
         internal=internal,
@@ -996,13 +1002,13 @@ def _manifest_owned_values(
 
 
 def _has_entry(path: Path, name: str) -> bool:
-    return any(app.get("name") == name for app in _load_apps(path))
+    return any(app.get("name") == name for app in load_apps(path))
 
 
 def _remove(path: Path, name: str) -> None:
     if not path.exists():
         return
-    apps = _load_apps(path)
+    apps = load_apps(path)
     remaining = [app for app in apps if app.get("name") != name]
     if len(remaining) != len(apps):
         _save_apps(path, remaining)
