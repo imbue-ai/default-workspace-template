@@ -1,0 +1,1 @@
+The README's account of how the chat app's prioritizer re-tags chats now matches the prioritizer: a presence report asks for a pass only when it changes whether the chat is open or showing, passes run one at a time on the prioritizer's own thread at most once every two seconds, and each reads the pid registry once for every chat.
