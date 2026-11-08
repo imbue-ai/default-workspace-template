@@ -99,7 +99,7 @@ def test_the_probe_sends_the_rest_credentials_as_basic_auth() -> None:
     assert opener.timeouts == [USAGE_PROBE_TIMEOUT_SECONDS]
     # Cloudflare refuses urllib's default User-Agent with a 403 ahead of the Worker.
     assert request.get_header("User-agent") == USAGE_PROBE_USER_AGENT
-    assert not request.get_header("User-agent").startswith("Python-urllib")
+    assert not USAGE_PROBE_USER_AGENT.startswith("Python-urllib")
 
 
 def test_credentials_in_the_repository_url_are_moved_into_the_header() -> None:
