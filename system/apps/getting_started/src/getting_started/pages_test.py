@@ -7,7 +7,7 @@ from flask.testing import FlaskClient
 
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
-from getting_started.pages import TEMPLATES_CATALOG_PATH
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from getting_started.pages import build_pages_app
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
@@ -120,15 +120,4 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
     app_schema.request_guard)."""
-    client = _client(tmp_path)
-    cross_site = client.get(TEMPLATES_CATALOG_PATH, headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"})
-    assert cross_site.status_code == 403
-    rebound = client.get("/api/health", base_url="http://rebound.example:8070")
-    assert rebound.status_code == 403
-    # A proxied request carries the header, whatever Host the proxy kept.
-    proxied = client.get(
-        "/api/health",
-        headers={"X-Imbue-Identity": '{"owner":true}'},
-        base_url="http://getting-started-x.agent-1.localhost:8421",
-    )
-    assert proxied.status_code == 200
+    assert_request_guard_refuses_unknown_provenance(_client(tmp_path), "GET", "/api/health")

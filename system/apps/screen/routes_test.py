@@ -36,6 +36,10 @@ from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
 from workspace_layout.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from workspace_layout.testing import LoopbackShell
 
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
+from app_schema.testing import REBOUND_BASE_URL
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+
 _OWNER: Final[dict[str, str]] = {
     "X-Imbue-Identity": json.dumps({"owner": True, "user_id": "u1", "email": "josh@imbue.com"})
 }
@@ -143,10 +147,10 @@ def test_a_page_of_another_origin_on_the_workspaces_own_browser_is_refused(
     """The browser on the Screen is on loopback too: a page it shows reaches the service as an in-container caller
     would, so one its browser marks as another origin's is refused before any gate reads it, and so is a header-less
     request under a Host that is not loopback (a rebound name)."""
-    cross_site = client.open(path, method=method, headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"})
+    cross_site = client.open(path, method=method, headers=CROSS_SITE_FETCH_HEADERS)
     assert cross_site.status_code == 403
     assert cross_site.get_json()["detail"] == OTHER_ORIGIN_REFUSAL
-    rebound = client.open(path, method=method, base_url="http://rebound.example:8090")
+    rebound = client.open(path, method=method, base_url=REBOUND_BASE_URL)
     assert rebound.status_code == 403
     assert rebound.get_json()["detail"] == UNTRUSTED_LOOPBACK_REFUSAL
 
@@ -156,9 +160,7 @@ def test_the_viewers_own_requests_and_the_shells_frame_pass_the_request_guard(cl
     assert client.get("/api/state", headers={**_OWNER, **own_origin}).status_code == 200
     framed = client.get("/", headers={**_OWNER, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"})
     assert framed.status_code == 200
-    # Over the desktop forward the Host is the shell's origin and the header is stamped: read by the header.
-    forwarded = client.get("/api/state", headers=_OWNER, base_url="http://screen-x.agent-1.localhost:8421")
-    assert forwarded.status_code == 200
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/state")
 
 
 def test_a_present_identity_header_that_does_not_parse_is_refused_rather_than_read_as_the_owner(

@@ -9,10 +9,13 @@ from workspace_layout.identity import (
 )
 
 from app_schema.request_guard import install_request_guard
+from app_schema.testing import (
+    CROSS_SITE_FETCH_HEADERS,
+    OWNER_IDENTITY_HEADERS,
+    assert_request_guard_refuses_unknown_provenance,
+)
 
 _PUBLIC_MODULE_RULE = "/_static/module.js"
-_CROSS_SITE_FETCH = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
-_OWNER = {IDENTITY_HEADER: '{"owner":true}'}
 
 
 def _guarded_app() -> Flask:
@@ -60,7 +63,9 @@ def test_an_in_container_caller_and_a_proxied_request_reach_their_route(
     assert guarded.post("/act").get_data(as_text=True) == "acted"
     # A proxied request carries the header, whatever Host the proxy kept.
     stamped = guarded.post(
-        "/act", headers=_OWNER, base_url="http://screen-x.agent-1.localhost:8421"
+        "/act",
+        headers=OWNER_IDENTITY_HEADERS,
+        base_url="http://screen-x.agent-1.localhost:8421",
     )
     assert stamped.get_data(as_text=True) == "acted"
     # The viewer's own page calls its own origin.
@@ -68,20 +73,25 @@ def test_an_in_container_caller_and_a_proxied_request_reach_their_route(
         "/act", headers={"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"}
     )
     assert own.get_data(as_text=True) == "acted"
+    # The probes every app's own test runs are the same three.
+    assert_request_guard_refuses_unknown_provenance(guarded, "POST", "/act")
 
 
 def test_a_page_of_another_origin_is_refused_before_any_other_hook_runs(
     guarded: FlaskClient,
 ) -> None:
-    refused = guarded.post("/act", headers=_CROSS_SITE_FETCH)
+    refused = guarded.post("/act", headers=CROSS_SITE_FETCH_HEADERS)
     assert refused.status_code == 403
     assert refused.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
     assert guarded.application.extensions["hook_order"] == []
     # Nor does a stamped header let it through, nor a path with no route.
     assert (
-        guarded.post("/act", headers={**_CROSS_SITE_FETCH, **_OWNER}).status_code == 403
+        guarded.post(
+            "/act", headers={**CROSS_SITE_FETCH_HEADERS, **OWNER_IDENTITY_HEADERS}
+        ).status_code
+        == 403
     )
-    assert guarded.post("/nowhere", headers=_CROSS_SITE_FETCH).status_code == 403
+    assert guarded.post("/nowhere", headers=CROSS_SITE_FETCH_HEADERS).status_code == 403
 
 
 def test_a_get_navigation_from_another_origin_and_a_public_module_are_admitted(
@@ -91,9 +101,9 @@ def test_a_get_navigation_from_another_origin_and_a_public_module_are_admitted(
         "/page", headers={"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"}
     )
     assert framed.status_code == 200
-    imported = guarded.get(_PUBLIC_MODULE_RULE, headers=_CROSS_SITE_FETCH)
+    imported = guarded.get(_PUBLIC_MODULE_RULE, headers=CROSS_SITE_FETCH_HEADERS)
     assert imported.status_code == 200
-    assert guarded.get("/page", headers=_CROSS_SITE_FETCH).status_code == 403
+    assert guarded.get("/page", headers=CROSS_SITE_FETCH_HEADERS).status_code == 403
 
 
 def test_a_header_less_request_is_admitted_from_loopback_alone_under_a_loopback_host(

@@ -68,6 +68,11 @@ the one shape every route answers a refusal or a failure with.
   that does not parse with a 400 on every route. Every built-in app installs it.
 - `app_schema.api_schema.build_openapi_document(app, title, description, version, route_table, excluded_endpoints)`:
   the document itself, for a caller that wants it without the route.
+- `app_schema.testing.assert_request_guard_refuses_unknown_provenance(client, method, path)`:
+  what an app's own test asserts about the guard ahead of one of its free reads (a 403
+  for a page of another origin's fetch and for a header-less request under a Host that
+  is not loopback, a 200 for a request a proxy stamped), with `CROSS_SITE_FETCH_HEADERS`
+  and `OWNER_IDENTITY_HEADERS` for the probes an app writes itself.
 - `app_schema.testing.assert_api_schema_describes_app(client, manifest_path)` (an app's
   tests depend on `app-schema[testing]` for it; the runtime needs `app-schema` alone):
   what every app's own tests assert: the route the manifest names answers a

@@ -4,6 +4,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from style_guide_app.server import create_app
 from workspace_themes.testing import write_standard_theme
 
@@ -108,9 +109,6 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
     app_schema.request_guard); the catalog's frame of the sample page is a navigation and passes."""
-    cross_site = client.get("/api/health", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"})
-    assert cross_site.status_code == 403
-    rebound = client.get("/api/health", base_url="http://rebound.example:8060")
-    assert rebound.status_code == 403
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/health")
     framed = client.get("/", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"})
     assert framed.status_code == 200

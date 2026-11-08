@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import (
+    CROSS_SITE_FETCH_HEADERS,
+    assert_api_schema_describes_app,
+    assert_request_guard_refuses_unknown_provenance,
+)
 from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
@@ -426,19 +430,7 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
     """The workspace's own browser is on loopback too, so the pages read a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
     app_schema.request_guard): such a page cannot open a terminal."""
-    cross_site = pages_client.post(
-        NEW_PATH,
-        json={},
-        headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"},
-    )
+    assert_request_guard_refuses_unknown_provenance(pages_client, "GET", "/")
+    cross_site = pages_client.post(NEW_PATH, json={}, headers=CROSS_SITE_FETCH_HEADERS)
     assert cross_site.status_code == 403
     assert fake_tmux.creates() == []
-    rebound = pages_client.get("/", base_url="http://rebound.example:7681")
-    assert rebound.status_code == 403
-    # A proxied request carries the header, whatever Host the proxy kept.
-    proxied = pages_client.get(
-        "/",
-        headers={"X-Imbue-Identity": '{"owner":true}'},
-        base_url="http://terminal-x.agent-1.localhost:8421",
-    )
-    assert proxied.status_code == 200

@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from imbue.imbue_common.model_update import to_update
 from routines.data_types import CurrentRun
 from routines.mock_chat_app_test import ScriptedChatApp
@@ -301,17 +303,7 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
     app_schema.request_guard)."""
-    cross_site = client.post(
-        f"/api/routines/{sync_routine}/run", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
-    )
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/routines")
+    cross_site = client.post(f"/api/routines/{sync_routine}/run", headers=CROSS_SITE_FETCH_HEADERS)
     assert cross_site.status_code == 403
     assert service.detail(sync_routine).runs == ()
-    rebound = client.get("/api/routines", base_url="http://rebound.example:8050")
-    assert rebound.status_code == 403
-    # A proxied request carries the header, whatever Host the proxy kept.
-    proxied = client.get(
-        "/api/routines",
-        headers={"X-Imbue-Identity": '{"owner":true}'},
-        base_url="http://routines-x.agent-1.localhost:8421",
-    )
-    assert proxied.status_code == 200

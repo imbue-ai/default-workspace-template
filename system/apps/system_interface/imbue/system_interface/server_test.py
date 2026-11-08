@@ -15,13 +15,13 @@ from unittest.mock import patch
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
 from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from workspace_layout.primitives import ClientId
 
 from imbue.mngr.utils.polling import wait_for
@@ -219,20 +219,9 @@ def test_the_shell_refuses_a_page_of_another_origin_and_a_header_less_request_of
     under a loopback Host, and a request the browser marks as another origin's never reaches a route; the shell's
     frame of its own page is a navigation and passes, as does a request a proxy stamped."""
     assert client.get("/api/health").status_code == 200
-    cross_site = client.post(
-        "/api/presence/heartbeat", json={}, headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
-    )
-    assert cross_site.status_code == 403
-    assert cross_site.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
-    rebound = client.get("/api/health", base_url="http://rebound.example:8000")
-    assert rebound.status_code == 403
-    assert rebound.get_json() == {"detail": UNTRUSTED_LOOPBACK_REFUSAL}
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/health")
     framed = client.get("/api/health", headers={"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"})
     assert framed.status_code == 200
-    proxied = client.get(
-        "/api/health", headers=identity_headers(ANONYMOUS_OWNER), base_url="http://agent-1.localhost:8421"
-    )
-    assert proxied.status_code == 200
     unreadable = client.post("/api/presence/heartbeat", json={}, headers={"X-Imbue-Identity": "{not json"})
     assert unreadable.status_code == 400
     assert "X-Imbue-Identity" in unreadable.get_json()["detail"]
@@ -253,9 +242,7 @@ def test_the_shell_serves_its_browser_side_modules_for_the_stub_pages(tmp_path: 
     assert response.headers["Access-Control-Allow-Origin"] == "*"
     assert b"built" in response.data
     # Meant for a stub page of another origin: the one kind of cross-origin request the shell admits.
-    imported = test_client.get(
-        f"/_static/{basename}", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
-    )
+    imported = test_client.get(f"/_static/{basename}", headers=CROSS_SITE_FETCH_HEADERS)
     assert imported.status_code == 200
 
 
