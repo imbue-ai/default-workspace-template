@@ -209,3 +209,26 @@ def test_the_stop_endpoint_runs_the_request_and_relays_a_refusal(
     assert empty.status_code == 400
     # Only well-formed requests reach the action.
     assert asked == [("chat", "chat-123"), ("app", "chat")]
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(
+    client: FlaskClient,
+) -> None:
+    """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard): such a page cannot stop a chat's agent."""
+    cross_site = client.post(
+        "/api/stop",
+        json={"kind": "chat", "id": "chat-1"},
+        headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"},
+    )
+    assert cross_site.status_code == 403
+    rebound = client.get("/health", base_url="http://rebound.example:8040")
+    assert rebound.status_code == 403
+    # A proxied request carries the header, whatever Host the proxy kept.
+    proxied = client.get(
+        "/health",
+        headers={"X-Imbue-Identity": '{"owner":true}'},
+        base_url="http://system-monitor-x.agent-1.localhost:8421",
+    )
+    assert proxied.status_code == 200

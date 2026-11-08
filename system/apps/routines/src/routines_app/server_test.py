@@ -293,3 +293,25 @@ def test_a_schedule_body_the_model_refuses_is_a_bad_request(
         assert refused.status_code == 400, body
         assert refused.get_json()["detail"]
     assert service.detail(sync_routine).row.schedule_text == "Every hour"
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(
+    client: FlaskClient, service: RoutinesService, sync_routine: RoutineId
+) -> None:
+    """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard)."""
+    cross_site = client.post(
+        f"/api/routines/{sync_routine}/run", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
+    )
+    assert cross_site.status_code == 403
+    assert service.detail(sync_routine).runs == ()
+    rebound = client.get("/api/routines", base_url="http://rebound.example:8050")
+    assert rebound.status_code == 403
+    # A proxied request carries the header, whatever Host the proxy kept.
+    proxied = client.get(
+        "/api/routines",
+        headers={"X-Imbue-Identity": '{"owner":true}'},
+        base_url="http://routines-x.agent-1.localhost:8421",
+    )
+    assert proxied.status_code == 200

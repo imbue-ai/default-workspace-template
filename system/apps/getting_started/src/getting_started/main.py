@@ -13,7 +13,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import register_app
 from getting_started.config import Config
 from getting_started.config import load_config
-from getting_started.pages import build_pages_blueprint
+from getting_started.pages import build_pages_app
 from getting_started.serving import app_url_port
 from getting_started.serving import serve_in_background
 from getting_started.serving import wait_for_shutdown_signal
@@ -44,18 +44,16 @@ class GettingStartedArguments(FrozenModel):
     )
 
 
-def build_pages_app(arguments: GettingStartedArguments) -> Flask:
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_pages_blueprint(
-            static_directory=arguments.static_directory,
-            catalog=build_template_catalog_store(
-                catalog_url=arguments.catalog_url, state_directory=arguments.state_dir, fetcher=None
-            ),
-            contract_path=SHELL_APP_CONTRACT_PATH,
-        )
+def build_live_pages_app(arguments: GettingStartedArguments) -> Flask:
+    """The pages app with the live wiring: the catalog store fetching for real, and the shell's built contract
+    module."""
+    return build_pages_app(
+        static_directory=arguments.static_directory,
+        catalog=build_template_catalog_store(
+            catalog_url=arguments.catalog_url, state_directory=arguments.state_dir, fetcher=None
+        ),
+        contract_path=SHELL_APP_CONTRACT_PATH,
     )
-    return app
 
 
 def run_getting_started_app(arguments: GettingStartedArguments, wait_for_shutdown: Callable[[], int]) -> int:
@@ -65,7 +63,7 @@ def run_getting_started_app(arguments: GettingStartedArguments, wait_for_shutdow
     live row at the preview. The app opens no window of its own: a new workspace opens on the welcome
     chat, and the desktop's tour introduces the apps.
     """
-    with serve_in_background(arguments.host, app_url_port(arguments.app_url), build_pages_app(arguments)):
+    with serve_in_background(arguments.host, app_url_port(arguments.app_url), build_live_pages_app(arguments)):
         if arguments.is_registered:
             with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
                 register_app(arguments.manifest_path, arguments.app_url)
