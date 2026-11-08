@@ -8,6 +8,7 @@ import urllib.request
 
 from host_backup.usage import (
     USAGE_PROBE_TIMEOUT_SECONDS,
+    USAGE_PROBE_USER_AGENT,
     StoreUsage,
     read_store_usage,
     usage_probe_url,
@@ -96,6 +97,9 @@ def test_the_probe_sends_the_rest_credentials_as_basic_auth() -> None:
     # base64("agent-abc:tok")
     assert request.get_header("Authorization") == "Basic YWdlbnQtYWJjOnRvaw=="
     assert opener.timeouts == [USAGE_PROBE_TIMEOUT_SECONDS]
+    # Cloudflare refuses urllib's default User-Agent with a 403 ahead of the Worker.
+    assert request.get_header("User-agent") == USAGE_PROBE_USER_AGENT
+    assert not request.get_header("User-agent").startswith("Python-urllib")
 
 
 def test_credentials_in_the_repository_url_are_moved_into_the_header() -> None:

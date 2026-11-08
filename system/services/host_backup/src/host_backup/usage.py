@@ -24,6 +24,10 @@ USAGE_PROBE_SUFFIX: Final[str] = "_usage"
 # The probe is one small JSON answer; a store that takes longer than this is
 # treated as unreachable, and the tick goes on without quota information.
 USAGE_PROBE_TIMEOUT_SECONDS: Final[float] = 15.0
+# Cloudflare answers urllib's default ``Python-urllib/3.x`` User-Agent with a
+# 403 before the Worker runs (restic's own ``restic/x.y`` and curl pass), so the
+# probe names itself the way restic does.
+USAGE_PROBE_USER_AGENT: Final[str] = "host-backup/1.0"
 
 OpenUrlFn = Callable[[urllib.request.Request, float], bytes]
 
@@ -86,7 +90,9 @@ def _strip_userinfo(url: str) -> str:
     parts = urllib.parse.urlsplit(url)
     if "@" not in parts.netloc:
         return url
-    return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
+    return urllib.parse.urlunsplit(
+        parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1])
+    )
 
 
 def _open_url(request: urllib.request.Request, timeout_seconds: float) -> bytes:
@@ -117,6 +123,7 @@ def read_store_usage(
         if authorization is not None:
             request.add_header("Authorization", authorization)
         request.add_header("Accept", "application/json")
+        request.add_header("User-Agent", USAGE_PROBE_USER_AGENT)
         body = open_url(request, USAGE_PROBE_TIMEOUT_SECONDS)
     except urllib.error.HTTPError as e:
         if e.code == 404:
