@@ -26,7 +26,6 @@ from flask import Response
 from flask import request
 from flask import send_from_directory
 from loguru import logger
-from workspace_layout.errors import InvalidIdentityHeaderError
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import parse_identity_header
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
@@ -235,16 +234,12 @@ def create_app(
     def keybindings_me() -> Response:
         """The requesting user's resolved chords for the Files actions."""
         workspace_root = Path.cwd()
-        try:
-            identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
-        except InvalidIdentityHeaderError as error:
-            return error_response(str(error), 400)
         return model_response(
             resolve_keybindings_me_response(
                 FILES_APP_NAME,
                 files_keybinding_actions(),
                 snapshot=load_workspace_profile_snapshot(workspace_root),
-                identity=identity,
+                identity=parse_identity_header(request.headers.get(IDENTITY_HEADER)),
                 workspace_root=workspace_root,
             )
         )
