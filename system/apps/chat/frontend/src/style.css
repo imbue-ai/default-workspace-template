@@ -220,6 +220,67 @@
   cursor: zoom-in;
 }
 
+/* Keeps an image's space while it loads: a picture outline under a slow sweep of light. The
+   outline is faded as one group, so its crossing strokes do not darken where they overlap. The box
+   takes the image's own width and height when the image carries them (markdown.ts sets them for an
+   upload), and it fades in over the box once loaded. */
+.markdown-content img.is-loading {
+  border-radius: var(--radius-lg, 12px);
+  background-color: var(--c-fill-hover);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg opacity='0.45' fill='none' stroke='%23808080' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2.5'/%3E%3Ccircle cx='8.5' cy='9.5' r='1.6'/%3E%3Cpath d='M21 16l-5-5-9 9'/%3E%3C/g%3E%3C/svg%3E"),
+    linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.6) 50%, transparent 70%);
+  background-size:
+    36px 36px,
+    250% 100%;
+  background-position:
+    center,
+    120% 0;
+  background-repeat: no-repeat;
+  animation: image-loading-sweep 1.6s ease-in-out infinite;
+}
+
+/* An image whose size is unknown (no width and height of its own) holds a fixed shape. */
+.markdown-content img.is-loading:not([width]) {
+  width: 240px;
+  aspect-ratio: 4 / 3;
+}
+
+@keyframes image-loading-sweep {
+  0% {
+    background-position:
+      center,
+      120% 0;
+  }
+  100% {
+    background-position:
+      center,
+      -20% 0;
+  }
+}
+
+/* The box's shade stays behind the image while it fades in, so nothing flashes empty. */
+.markdown-content img.is-arriving {
+  background-color: var(--c-fill-hover);
+  animation: image-arrive 320ms ease-out;
+}
+
+@keyframes image-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-content img.is-loading,
+  .markdown-content img.is-arriving {
+    animation: none;
+  }
+}
+
 .markdown-content .tool-call-block {
   cursor: pointer;
   margin-top: 0.75em;

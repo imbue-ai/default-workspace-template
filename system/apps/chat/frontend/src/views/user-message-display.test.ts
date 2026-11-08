@@ -115,7 +115,8 @@ describe("user-message-display status messages", () => {
 
 describe("user-message-display prompt bubbles", () => {
   const SEED_BLOCK = "<chat-seed-context>\nthe conversation the chat opened on\n</chat-seed-context>";
-  const ATTACHMENT = "See attachment here: ![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT_MARKDOWN = "![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT = `See attachment here: ${ATTACHMENT_MARKDOWN}`;
 
   function wrappedSend(spoken: string): UserMessageEvent {
     return {
@@ -141,7 +142,7 @@ describe("user-message-display prompt bubbles", () => {
     const inner = renderBubble(wrappedSend(`here you go\n\n${ATTACHMENT}`));
 
     expect(allText(inner)).toBe("here you go");
-    expect(markdownContents(inner)).toEqual([ATTACHMENT]);
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
   });
 });
 
