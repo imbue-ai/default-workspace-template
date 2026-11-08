@@ -33,6 +33,7 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -3119,6 +3120,9 @@ def create_application(state: ChatAppState) -> Flask:
     """
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
+    # Ahead of every other hook: a page of another origin, and a header-less request from anywhere but loopback
+    # under a loopback Host, never reach a route (workspace_layout.identity).
+    install_request_guard(application, exempt_rules=frozenset())
     attach_state(application, state)
     # A message's markdown embeds images from anywhere, and passes raw HTML through the sanitizer,
     # whose default tag list admits <video> and <audio> as it does <img>; the sanitizer decides

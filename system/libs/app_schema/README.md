@@ -58,6 +58,14 @@ the one shape every route answers a refusal or a failure with.
   `ErrorResponse` needs no entry.
 - `app_schema.routes.error_response(detail, status)`: a refusal or a failure
   as the `ErrorResponse`.
+- `app_schema.request_guard.install_request_guard(app, exempt_rules)`: who may
+  call the app at all, installed ahead of every other request hook. It refuses
+  with a 403 `ErrorResponse` any request the provenance check of
+  `workspace_layout.identity` does not admit (a page of another origin, or a
+  request with no `X-Imbue-Identity` header from anywhere but loopback under a
+  loopback `Host`), skipping the Flask rules in `exempt_rules` (a module served
+  to other origins with a CORS header), and answers a present identity header
+  that does not parse with a 400 on every route. Every built-in app installs it.
 - `app_schema.api_schema.build_openapi_document(app, title, description, version, route_table, excluded_endpoints)`:
   the document itself, for a caller that wants it without the route.
 - `app_schema.testing.assert_api_schema_describes_app(client, manifest_path)` (an app's

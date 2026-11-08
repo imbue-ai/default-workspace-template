@@ -312,6 +312,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
+    { name = "workspace-layout" },
 ]
 
 [package.optional-dependencies]
@@ -333,6 +334,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
     { name = "openapi-spec-validator", marker = "extra == 'testing'", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 provides-extras = ["testing"]
 

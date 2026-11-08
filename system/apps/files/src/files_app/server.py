@@ -40,6 +40,7 @@ from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from files_app.connections import Connections
@@ -130,6 +131,9 @@ def create_app(
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
+    # Ahead of every other hook: a page of another origin, and a header-less request from anywhere but loopback
+    # under a loopback Host, never reach a route (workspace_layout.identity).
+    install_request_guard(app, exempt_rules=frozenset())
     register_workspace_theme_route(app)
     register_api_schema_route(
         app, f"{API_PREFIX}/schema", title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
