@@ -1,15 +1,16 @@
 """The request-side checks the routes share (docs/system/specs/screen/spec.md sections 6.3 and 10.1): who the
-request is (the identity header, a header-less request being the owner), which session it speaks for, and whether
-the lease lets that session act."""
+request is (the identity header, a header-less request being the owner once the app's request guard admitted it),
+which session it speaks for, and whether the lease lets that session act."""
 
 from typing import Final
 
 from flask import request
 
-from screen.identity import IDENTITY_HEADER
-from screen.identity import parse_identity_header
 from screen.primitives import NekoSessionId
 from screen.service import ScreenService
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import parse_identity_header
 
 SESSION_ID_FIELD: Final[str] = "session_id"
 VISITOR_REFUSAL: Final[str] = "this route is the workspace owner's"
@@ -18,8 +19,15 @@ CONTROLLER_REFUSAL: Final[str] = "only the session in control of the Screen may 
 _FORM_MIMETYPES: Final[frozenset[str]] = frozenset({"multipart/form-data", "application/x-www-form-urlencoded"})
 
 
+def request_identity() -> RequestIdentity:
+    """Who the request is: the identity its header vouches for, the anonymous owner without one (the request guard
+    has admitted a header-less request from loopback alone); a present header that does not parse raises
+    ``InvalidIdentityHeaderError``, which the guard answers with a 400."""
+    return parse_identity_header(request.headers.get(IDENTITY_HEADER))
+
+
 def is_owner_request() -> bool:
-    return parse_identity_header(request.headers.get(IDENTITY_HEADER)).owner
+    return request_identity().owner
 
 
 def session_id_from_request() -> NekoSessionId | None:

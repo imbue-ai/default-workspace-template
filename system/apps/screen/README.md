@@ -18,8 +18,15 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
-Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
-owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
+Identity comes from `X-Imbue-Identity`, read as every app reads it (`workspace_layout.identity`;
+a present header that does not parse is refused with 400). A header-less request is the owner's,
+but only once the request guard every app installs ahead of its routes (`app_schema.request_guard`)
+has admitted it: the browser on the Screen is on loopback too, so a header-less request counts
+only from loopback under a loopback `Host` (a page reaching the service through a rebound name
+names that host instead), and a request a browser marks as a page of another origin's
+(`Sec-Fetch-Site`, other than a GET or HEAD navigation such as the shell's frame) is refused with
+403 whatever it carries. Agents' clients send no fetch metadata and use a loopback host, so they
+are unaffected. A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`,
 `/api/ws`, `/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
 `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
@@ -67,7 +74,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 - `POST /api/start`: start the stack (the stopped overlay's Start button).
 - `POST /api/session`: a neko session for the requester's identity (`X-Imbue-Identity`;
   a header-less request is the owner): the service logs the human in to neko with the
-  user password and a display name from the identity and answers
+  user password and a display name from the identity (the email's local part, else
+  Owner or Guest) and answers
   `{"session_id", "token", "name", "is_owner"}`; the viewer uses the token under `/neko/`.
 - `POST /api/control/take` and `POST /api/control/return`, body `{"session_id"}`: the
   human verbs for that session.

@@ -177,10 +177,12 @@ The service subscribes to neko's `control/host` and `session/*` events on an adm
 ### 6.3 Sessions and identity
 
 Neko runs the `multiuser` member provider with a user password and an admin password the service generates at each stack start and holds in memory and in neko's config file (mode 600, under `data/.state/screen/`).
-Humans never see them: the viewer calls `POST /api/session` on the service, which reads `X-Imbue-Identity`, logs the human in to neko with the user password and a display name from the identity (the owner's name or email local part, "Guest" for an identity without one), and answers the neko session token the viewer then uses for `/neko/...`.
+Humans never see them: the viewer calls `POST /api/session` on the service, which reads `X-Imbue-Identity`, logs the human in to neko with the user password and a display name from the identity (the email's local part, "Owner" or "Guest" for an identity without one), and answers the neko session token the viewer then uses for `/neko/...`.
 The viewer logs its session out (`POST /neko/api/logout`) on `pagehide`, and neko drops a `multiuser` session on logout, so sessions do not accumulate across page loads; the service also deletes any session that has been disconnected for ten minutes.
 The service's own admin session and REST calls use `session.api_token`, generated the same way.
 A request with no identity header is the owner: the gateway and the forwarder both stamp one, so a header-less request can only have come over loopback, from an agent or a test.
+But the browser on the Screen is on loopback too, so the request guard every app installs ahead of its routes (`app_schema.request_guard`, over `workspace_layout.identity`) admits a header-less request only from loopback under a loopback `Host` (a page reaching the service through a rebound name names that host instead), and refuses with 403 any request a browser marks as a page of another origin's (`Sec-Fetch-Site`), other than a GET or HEAD navigation, which is how the shell frames the viewer.
+Agents' clients send no fetch metadata and use a loopback host, so nothing changes for them; a present header that does not parse is refused with 400 rather than read as the owner's.
 
 ### 6.4 Agents
 
@@ -305,7 +307,7 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `GET /api/schema` | the OpenAPI document of this API (the manifest's `api_schema_path`, the workspace app model's contracts section 2), built from the routes and the route table of `api_models.py` |
 
 A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size`, `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403; a paste and a drop need the session in control, and a cancel the session in control or the owner), and `/neko/...`.
-Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the rest of the `/browsers` API, answers a visitor 403; a request with no header is the owner (section 6.3), so agents and the shell, which reach the service over loopback, are not affected.
+Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the rest of the `/browsers` API, answers a visitor 403; a request with no header is the owner once the request guard of section 6.3 has admitted it (loopback, under a loopback `Host`, and not a page of another origin), so agents and the shell, which reach the service over loopback, are not affected.
 
 ### 10.2 Events to viewers
 

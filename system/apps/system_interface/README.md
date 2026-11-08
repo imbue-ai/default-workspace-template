@@ -340,7 +340,12 @@ Every request that reaches the shell carries the requester's identity in the
 workspace the account's `user_id` and `email`, and for a visiting agent its
 `agent_id`, `agent_name`, and `granter`. A present header that does not
 parse is refused with 400 on every route; only a missing or blank one reads as
-the owner of a workspace that has not shared. Nothing more: what to call an
+the owner of a workspace that has not shared, and only from loopback under a
+loopback `Host`, since the workspace's own browser is on loopback too; a
+request a browser marks as a page of another origin's is refused with 403
+before any route runs, other than a GET or HEAD navigation and the two browser-side
+modules served to other origins on purpose (the request guard every app
+installs, `app_schema.request_guard`). Nothing more: what to call an
 account and what it looks like is its profile, which the shell fetches from
 imbue_cloud (below). The shell page posts `/api/presence/heartbeat` every 30
 seconds while the tab is visible, once immediately when it becomes visible,

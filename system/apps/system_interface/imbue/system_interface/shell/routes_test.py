@@ -8,6 +8,7 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
@@ -53,6 +54,9 @@ from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
+# A page's request as a proxy delivers it: the identity header stamped, which is what admits a request from anywhere
+# but loopback (workspace_layout.identity).
+_PAGE_HEADERS = identity_headers(ANONYMOUS_OWNER)
 _BOB_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
 
@@ -547,8 +551,13 @@ def test_a_client_stored_on_a_desktop_that_does_not_exist_is_listed_on_the_first
 
 
 def _record_shown(client: FlaskClient, client_id: str, window_id: str | None) -> Any:
-    # From an address other than loopback: the phone's own page posts it.
-    return client.post(f"/api/clients/{client_id}/shown", json={"window_id": window_id}, environ_base=_NOT_LOOPBACK)
+    # From an address other than loopback, through a proxy: the phone's own page posts it.
+    return client.post(
+        f"/api/clients/{client_id}/shown",
+        json={"window_id": window_id},
+        headers=_PAGE_HEADERS,
+        environ_base=_NOT_LOOPBACK,
+    )
 
 
 def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_it(
@@ -596,7 +605,12 @@ def test_a_client_records_its_backdrop_size_and_the_listing_and_the_inventory_ca
     _register_client(app, "c1", "home")
     _record_client(app, "c2", "home")
 
-    answer = client.post("/api/clients/c1/viewport", json={"width": 1440, "height": 823.5}, environ_base=_NOT_LOOPBACK)
+    answer = client.post(
+        "/api/clients/c1/viewport",
+        json={"width": 1440, "height": 823.5},
+        headers=_PAGE_HEADERS,
+        environ_base=_NOT_LOOPBACK,
+    )
     assert answer.status_code == 200
     assert answer.get_json()["viewport"] == {"width": 1440.0, "height": 823.5}
     listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
@@ -2164,6 +2178,7 @@ def test_a_page_shows_a_path_for_its_own_client_through_the_show_route(
     shown = client.post(
         "/api/clients/c1/show",
         json={"app": "buddy", "path": _SHOW_PATH, "repoint": [_REPOINTABLE_PAGE]},
+        headers=_PAGE_HEADERS,
         environ_base=_NOT_LOOPBACK,
     )
 
