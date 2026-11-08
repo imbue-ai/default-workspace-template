@@ -27,8 +27,8 @@ import type { SendStatus } from "./Response";
 
 export interface OutgoingMessage {
   id: string;
-  /** The text its sender typed, not the attachment-expanded form; the bubble shows the body
-   *  ``displayDecision`` gives it, and the text itself without one. */
+  /** The message as sent, attachments included (drawn as the delivered turn draws it unless
+   *  ``displayDecision`` makes it a notice). */
   content: string;
   /** The send-time message_id (contract A4) when the caller minted one. A backend record that
    *  carries the same id (a message held while the chat switches harness) replaces this bubble

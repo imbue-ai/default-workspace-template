@@ -2,6 +2,7 @@
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { buildMessageWithAttachments } from "../models/attachments";
 import { addOutgoing } from "../models/OutgoingMessages";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
@@ -22,6 +23,19 @@ describe("the optimistic outgoing bubble", () => {
     expect(row?.querySelector(".message-user-bubble")?.textContent).toBe("hello there");
     // Named like the turn it becomes, which opens a run of the viewer's own.
     expect(row?.querySelector(".message-you")?.textContent).toBe("You");
+  });
+
+  it("draws a sent attachment the way the delivered turn will, without the label it carries to the agent", () => {
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    const path = "/code/uploads/abc/photo.png";
+    addOutgoing(chatId, buildMessageWithAttachments("", [path]));
+    const root = document.createElement("div");
+
+    m.render(root, renderOutgoingMessages(chatId));
+
+    const bubble = root.querySelector(".message-user-bubble");
+    expect(bubble?.textContent).not.toContain("See attachment here:");
+    expect(bubble?.querySelector(".markdown-content img")?.getAttribute("src")).toBe(path);
   });
 
   it("keeps the committed user row's spacing, so consecutive sends stand apart", () => {

@@ -41,6 +41,7 @@ import {
   authorOfTurn,
   renderNoticeRow,
   renderUserBubble,
+  renderUserBubbleContent,
   userMessageRowClass,
 } from "./user-message-display";
 import { classifyDecidedMessage } from "./message-classification";
@@ -142,10 +143,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean, run: Pend
   return m(
     "div",
     { class: `${userMessageRowClass(author)} queued-message`, key: `queued-${queued.queued_id}` },
-    renderUserBubble(author, [m("div", { class: "message-content whitespace-pre-wrap" }, cls.body)], {
-      isContinued,
-      bubbleExtraClass: "opacity-85",
-    }),
+    renderUserBubble(author, renderUserBubbleContent(cls.body), { isContinued, bubbleExtraClass: "opacity-85" }),
   );
 }
 

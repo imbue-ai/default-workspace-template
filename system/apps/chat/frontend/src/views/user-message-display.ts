@@ -197,6 +197,20 @@ export function renderNotice(label: string, body: string): m.Vnode {
   ]);
 }
 
+/** What a user bubble holds: the words as typed, then any attachments drawn as markdown (images
+ *  inline, other files as links that open in Files). */
+export function renderUserBubbleContent(content: string, requestedAt?: string): m.Children[] {
+  const { visibleText, attachmentBlock } = parseMessageAttachments(content);
+  const children: m.Children[] = [];
+  if (visibleText.length > 0) {
+    children.push(m("div", { class: "message-content whitespace-pre-wrap" }, visibleText));
+  }
+  if (attachmentBlock !== null) {
+    children.push(m(MarkdownContent, { content: attachmentBlock, requestedAt }));
+  }
+  return children;
+}
+
 /** A notice that is not on the transcript yet, as a row of its own on the bubbles' text edge, where the notice it
  *  becomes sits in its stretch. */
 export function renderNoticeRow(key: string, rowClass: string, cls: UserMessageClass): m.Vnode {
@@ -232,12 +246,10 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
       // message the backend wrapped, the two differ and the bubble owes the user their words.
       //
       // The trailing "See attachment here: <markdown>" block is delivered to the
-      // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as links that open in Files. The backend classifier
+      // agent; the bubble shows its values without the label. The backend classifier
       // strips the block before its detectors run (harnesses/message_display.py),
       // so an appended attachment never changes the kind here either, and puts it back on the
       // body it hands a prompt, so splitting it off here still finds it.
-      const { visibleText, attachmentBlock } = parseMessageAttachments(cls.body);
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
@@ -246,14 +258,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
         return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);
       }
 
-      const bubbleChildren: m.Children[] = [];
-      if (visibleText.length > 0) {
-        bubbleChildren.push(m("div", { class: "message-content whitespace-pre-wrap" }, visibleText));
-      }
-      if (attachmentBlock !== null) {
-        bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
-      }
-      return renderUserBubble(author, bubbleChildren, { isContinued });
+      return renderUserBubble(author, renderUserBubbleContent(cls.body, event.timestamp), { isContinued });
     },
   };
 }

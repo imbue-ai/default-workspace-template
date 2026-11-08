@@ -959,7 +959,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // the send too, so a chat app that holds the message while the chat switches
         // harness can name it back and the bubble stands down for that rendering.
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         let priorTurnIds: ReadonlySet<string> = new Set();
 
@@ -1118,7 +1118,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const pick = getPendingPick(chatId)?.identity ?? null;
         setSwitchSending(chatId, true);
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         try {
           await whenChatRegistered(chatId);
@@ -1418,7 +1418,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
         const messageId = recovery.messageId;
-        const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
+        const outgoingId = addOutgoing(recovery.chatId, recovery.sentText, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {
           refuseSendToFailedChat(recovery.chatId);

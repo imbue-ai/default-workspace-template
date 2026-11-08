@@ -20,6 +20,7 @@ import {
   isSameSpeaker,
   renderNoticeRow,
   renderUserBubble,
+  renderUserBubbleContent,
   userMessageRowClass,
 } from "./user-message-display";
 import type { TurnAuthor } from "./user-message-display";
@@ -33,7 +34,8 @@ const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 export interface NotYetRealBubble {
   key: string;
-  /** The message's text; the bubble shows the body ``displayDecision`` gives it, and the text itself without one. */
+  /** The message's text, shown verbatim (its attachments drawn as the delivered turn draws them) unless
+   *  ``displayDecision`` draws it as a notice. */
   content: string;
   /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
    *  carries no bottom margin of its own. */
@@ -92,7 +94,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble, run: PendingBub
   return m(
     "div",
     { class: rowClass, key: bubble.key },
-    renderUserBubble(author, [m("div", { class: "message-content whitespace-pre-wrap" }, cls.body)], { isContinued }),
+    renderUserBubble(author, renderUserBubbleContent(cls.body), { isContinued }),
   );
 }
 
