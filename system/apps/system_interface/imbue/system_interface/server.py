@@ -919,9 +919,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static_folder=None disables Flask's default /static route; the shell serves its own
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
-    # Ahead of every other hook: a page of another origin, and a header-less request from anywhere but loopback
-    # under a loopback Host, never reach a route (workspace_layout.identity). The two browser-side modules are
-    # served to other origins on purpose (a CORS header below), so they are left out.
+    # The two browser-side modules are served to other origins on purpose (a CORS header below).
     install_request_guard(application, exempt_rules=frozenset({APP_CONTRACT_ROUTE, CONTEXT_MENU_ROUTE}))
     attach_state(application, state)
     attach_document_policy(application, {"img-src": f"'self' data: blob: {ONBOARDING_MEDIA_ORIGIN}"})

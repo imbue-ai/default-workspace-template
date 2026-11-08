@@ -167,7 +167,6 @@ def test_a_present_identity_header_that_does_not_parse_is_refused_rather_than_re
     refused = client.post("/api/session", headers={"X-Imbue-Identity": "{not json"})
     assert refused.status_code == 400
     assert "X-Imbue-Identity" in refused.get_json()["detail"]
-    # The owner gate reads the header too, ahead of the view.
     assert (
         client.post("/api/run", json={"command": ["xterm"]}, headers={"X-Imbue-Identity": "[false]"}).status_code
         == 400

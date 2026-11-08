@@ -208,8 +208,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
     sock = Sock(app)
 
-    # the request guard, ahead of every other hook: a page of another origin, and a header-less request from
-    # anywhere but loopback under a loopback Host, never reach a route
     install_request_guard(app, exempt_rules=frozenset())
 
     # the owner gate

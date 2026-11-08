@@ -131,8 +131,6 @@ def create_app(
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
-    # Ahead of every other hook: a page of another origin, and a header-less request from anywhere but loopback
-    # under a loopback Host, never reach a route (workspace_layout.identity).
     install_request_guard(app, exempt_rules=frozenset())
     register_workspace_theme_route(app)
     register_api_schema_route(
