@@ -30,12 +30,7 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequest
 
 import { buildMessageWithAttachments } from "../models/attachments";
 import { renderQueuedMessages } from "./QueuedMessageView";
-import {
-  OTHER_BUBBLE_CLASS,
-  OTHER_BUBBLE_CONTINUED_CLASS,
-  USER_BUBBLE_CLASS,
-  USER_BUBBLE_CONTINUED_CLASS,
-} from "./user-message-display";
+import { OTHER_BUBBLE_CLASS, OTHER_BUBBLE_CONTINUED_CLASS, USER_BUBBLE_CONTINUED_CLASS } from "./user-message-display";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -122,7 +117,7 @@ describe("renderQueuedMessages", () => {
     const path = "/code/uploads/abc/photo.png";
     mocks.queued = [queuedMessage("q1", buildMessageWithAttachments("look at this", [path]))];
 
-    const bubble = findByClass(renderQueuedMessages("agent-1"), USER_BUBBLE_CLASS);
+    const bubble = findByClass(renderQueuedMessages("agent-1"), USER_BUBBLE_CONTINUED_CLASS);
 
     expect(renderedText(bubble)).toContain("look at this");
     expect(renderedText(bubble)).not.toContain("See attachment here:");
