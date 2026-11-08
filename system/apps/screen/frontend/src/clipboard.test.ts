@@ -152,7 +152,9 @@ describe("ClipboardBridge", () => {
 
 describe("nekoRouteWithToken", () => {
   it("carries the session token in the query string, encoded, and leaves a token-less route alone", () => {
-    expect(nekoRouteWithToken("/neko/api/room/clipboard", "abc/+=")).toBe("/neko/api/room/clipboard?token=abc%2F%2B%3D");
+    expect(nekoRouteWithToken("/neko/api/room/clipboard", "abc/+=")).toBe(
+      "/neko/api/room/clipboard?token=abc%2F%2B%3D",
+    );
     expect(nekoRouteWithToken("/neko/api/room/clipboard", null)).toBe("/neko/api/room/clipboard");
   });
 });
