@@ -256,14 +256,21 @@ session alone and with text only, so the directions are:
   (`{"kind": "image"}`) on `/api/ws` and the controller's viewer fetches
   `GET /neko/api/room/clipboard/image.png` and writes it. A write that fails for want of
   focus runs on the next focus.
-- Local to remote: on focus and on paste, while this viewer holds control, the viewer
-  reads the local clipboard; text and HTML go to neko's `POST /api/room/clipboard` (its
-  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image` as this
-  session, which the service accepts from the session in control alone (a visitor in control
-  included). A paste chord (Ctrl+V, Cmd+V) is
-  left to the browser so its `paste` event carries the data; once the remote clipboard
-  holds it the viewer taps V with Ctrl held on the remote, and a paste that did not cross
-  says so in the strip. What was just received is never echoed back, by content hash.
+- Local to remote: on paste, while this viewer holds control, the paste event's data goes
+  across; text and HTML to neko's `POST /api/room/clipboard` (its `clipboard/set` message
+  drops the HTML), an image to `POST /api/clipboard/image` as this session, which the
+  service accepts from the session in control alone (a visitor in control included). A
+  paste chord (Ctrl+V, Cmd+V) is left to the browser so its `paste` event carries the data;
+  once the remote clipboard holds it the viewer taps V with Ctrl held on the remote, and a
+  paste that did not cross says so in the strip. The viewer never reads the local clipboard
+  on its own (a programmatic read makes Safari and Firefox show a "Paste" button and Chrome
+  a permission prompt on every click into the Screen). What was just received is never
+  echoed back, by content hash.
+- The viewer's calls to neko's routes (`/neko/api/room/clipboard`, the image, the screencast,
+  the logout) carry the session token in the `token` query parameter, as its WebSocket does,
+  never as an `Authorization: Bearer` header: the share gateway reads such a header as a
+  visiting agent's admission token and refuses the request, and strips it from what it
+  forwards, so a bearer never reaches neko over a share.
 - `keyboard/map` goes once per neko connection and again when this session takes
   control (only the host may set it), with the layout `navigator.language` suggests,
   `us` by default.

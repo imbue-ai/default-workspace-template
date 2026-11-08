@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ClipboardBridge } from "./clipboard";
+import { ClipboardBridge, nekoRouteWithToken } from "./clipboard";
 import type { ClipboardTransport, LocalClipboard } from "./clipboard";
 
 interface Harness {
@@ -53,6 +53,11 @@ function build(isRemoteRefusing = false): Harness {
   return { bridge, remote, local, log };
 }
 
+/** A paste event's data carrying one plain-text string. */
+function textPaste(text: string): DataTransfer {
+  return { items: [], getData: (type: string) => (type === "text/plain" ? text : "") } as unknown as DataTransfer;
+}
+
 describe("ClipboardBridge", () => {
   it("brings remote text and html to the local clipboard on neko's update", async () => {
     const { bridge, remote, local } = build();
@@ -70,11 +75,19 @@ describe("ClipboardBridge", () => {
     expect(local.image).toBe(remote.image);
   });
 
-  it("sends the local clipboard to the Screen on focus, once per content", async () => {
+  it("leaves the local clipboard unread on focus: only a paste crosses", () => {
     const { bridge, remote, local, log } = build();
     local.text = "from laptop";
-    await bridge.onFocus();
-    await bridge.onFocus();
+    bridge.onFocus();
+    expect(remote.text).toBe("");
+    expect(log).toEqual([]);
+  });
+
+  it("sends a pasted text to the Screen, once per content", async () => {
+    const { bridge, remote, log } = build();
+    const paste = textPaste("from laptop");
+    expect(await bridge.onPaste(paste)).toBe(true);
+    expect(await bridge.onPaste(paste)).toBe(true);
     expect(remote.text).toBe("from laptop");
     expect(log.filter((entry) => entry.startsWith("remote-text"))).toHaveLength(1);
   });
@@ -84,7 +97,7 @@ describe("ClipboardBridge", () => {
     remote.text = "copied remotely";
     await bridge.onRemoteTextUpdated();
     expect(local.text).toBe("copied remotely");
-    await bridge.onFocus();
+    expect(await bridge.onPaste(textPaste("copied remotely"))).toBe(true);
     expect(log.filter((entry) => entry.startsWith("remote-text"))).toHaveLength(0);
   });
 
@@ -100,8 +113,8 @@ describe("ClipboardBridge", () => {
     expect(remote.text).toBe("");
   });
 
-  it("reports a paste the Screen refused, and keeps the focus sweep quiet", async () => {
-    const { bridge, local, log } = build(true);
+  it("reports a paste the Screen refused", async () => {
+    const { bridge, log } = build(true);
     const file = new File([new Uint8Array(16)], "shot.png", { type: "image/png" });
     const imagePaste = {
       items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
@@ -109,16 +122,8 @@ describe("ClipboardBridge", () => {
     } as unknown as DataTransfer;
     expect(await bridge.onPaste(imagePaste)).toBe(false);
     expect(log).toContain("status:The image could not be pasted on the Screen");
-    const textPaste = {
-      items: [],
-      getData: (type: string) => (type === "text/plain" ? "hello" : ""),
-    } as unknown as DataTransfer;
-    expect(await bridge.onPaste(textPaste)).toBe(false);
+    expect(await bridge.onPaste(textPaste("hello"))).toBe(false);
     expect(log).toContain("status:The text could not be pasted on the Screen");
-    log.length = 0;
-    local.image = file;
-    await bridge.onFocus();
-    expect(log.filter((entry) => entry.startsWith("status:"))).toEqual([]);
   });
 
   it("does nothing while this viewer does not control", async () => {
@@ -127,8 +132,7 @@ describe("ClipboardBridge", () => {
     remote.text = "secret";
     await bridge.onRemoteTextUpdated();
     expect(local.text).toBe("");
-    local.text = "mine";
-    await bridge.onFocus();
+    expect(await bridge.onPaste(textPaste("mine"))).toBe(false);
     expect(remote.text).toBe("secret");
   });
 
@@ -140,7 +144,15 @@ describe("ClipboardBridge", () => {
     expect(local.text).toBe("");
     expect(log.some((entry) => entry.startsWith("status:Copied; click"))).toBe(true);
     local.isFocused = true;
-    await bridge.onFocus();
+    bridge.onFocus();
+    await Promise.resolve();
     expect(local.text).toBe("later");
+  });
+});
+
+describe("nekoRouteWithToken", () => {
+  it("carries the session token in the query string, encoded, and leaves a token-less route alone", () => {
+    expect(nekoRouteWithToken("/neko/api/room/clipboard", "abc/+=")).toBe("/neko/api/room/clipboard?token=abc%2F%2B%3D");
+    expect(nekoRouteWithToken("/neko/api/room/clipboard", null)).toBe("/neko/api/room/clipboard");
   });
 });

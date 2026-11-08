@@ -1,6 +1,6 @@
 ---
 name: run-on-users-computer
-description: Running anything on the user's own computer (their laptop, their desktop, "my machine"), or telling them to run something there. Use before any plan that installs a tool, runs a script, reads a program, or runs a command on the user's computer rather than in this workspace. Covers the alternatives to try first, the one sanctioned way to run a command there yourself (and how to ask for one program rather than everything), and the things you must never build.
+description: Use only when the user explicitly asks for something to run on their own physical computer, outside this workspace -- "on my laptop", "on my Mac", "on my local machine", "on my desktop computer", "not in the workspace" -- or when a plan would have you tell them to run a command there. Everything else runs in this workspace, so a bare "my computer", "my machine", or "here" means the workspace, as do "the desktop" (the workspace's windowed desktop) and "the screen" (the workspace's Linux desktop). Covers the alternatives to try first, the one sanctioned way to run a command on their computer yourself (and how to ask for one program rather than everything), and the things you must never build.
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD) and the devices skill.
 metadata:
   author: imbue
@@ -13,6 +13,19 @@ user. It is the most dangerous thing you can be allowed to do: the command runs
 with everything the user can reach, and the user cannot see it before it runs.
 So it is a last resort, it is off until the user turns it on and approves this
 workspace, and this skill is as much about not using it as about using it.
+
+## 0. Is this even about their computer?
+
+Everything runs in this workspace unless the user explicitly says otherwise.
+The workspace is a computer too, and it is the one the user is looking at: it
+has a terminal, a Linux desktop (the Screen, with a browser), and a windowed
+desktop of its own, so "run it on my computer", "install it on my machine",
+"open it on my desktop", or "do it here" all mean the workspace. Only an
+explicit pointer at their own hardware ("on my laptop", "on my Mac", "on my
+local machine", "on the computer I'm typing on", "not in the workspace") sends
+you to the rest of this skill. When it is genuinely unclear, do it in the
+workspace and say that is where you did it; the user will correct you if they
+meant their laptop, and nothing dangerous has happened.
 
 ## 1. Prefer something else
 

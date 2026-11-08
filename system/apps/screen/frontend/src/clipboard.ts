@@ -2,12 +2,14 @@
  * The clipboard across the boundary (docs/system/specs/screen/spec.md section 13), while this viewer holds
  * control. Remote to local: neko's ``clipboard/updated`` reaches the host session, and the viewer then reads text
  * and HTML from neko's clipboard route and writes them locally; the service's ``clipboard`` event says an image is
- * there, which the viewer fetches from neko's image route and writes. Local to remote: on focus and on paste the
- * viewer reads the local clipboard; text and HTML go to neko's clipboard route (its ``clipboard/set`` message
- * carries text alone), an image to the service's ``/api/clipboard/image`` as this session, which the service
- * accepts from the session in control alone (a visitor in control included). A paste that does not cross says so
- * in the strip; the focus sweep stays quiet. A local write needs a focused document, so one that fails is kept for
- * the next focus.
+ * there, which the viewer fetches from neko's image route and writes. Local to remote: on paste, while this viewer
+ * holds control, the paste event's data goes across; text and HTML to neko's clipboard route (its
+ * ``clipboard/set`` message carries text alone), an image to the service's ``/api/clipboard/image`` as this
+ * session, which the service accepts from the session in control alone (a visitor in control included). Nothing
+ * reads the local clipboard on its own: a programmatic read makes Safari and Firefox pop a "Paste" button and
+ * Chrome a permission prompt on every click into the Screen, while the paste event carries its data with no
+ * permission at all. A paste that does not cross says so in the strip. A local write needs a focused document, so
+ * one that fails is kept for the next focus.
  */
 
 export const CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024;
@@ -26,33 +28,36 @@ export interface LocalClipboard {
   read(): Promise<{ text: string; html: string; image: Blob | null } | null>;
 }
 
+/** neko's route with the session token in the query string, as the WebSocket carries it. A bearer header
+ *  would never reach neko over a share: the share gateway reads any ``Authorization: Bearer`` as a visiting
+ *  agent's admission token and refuses the request, and strips the header from what it forwards. */
+export function nekoRouteWithToken(path: string, token: string | null): string {
+  return token === null ? path : `${path}?token=${encodeURIComponent(token)}`;
+}
+
 /** The transport over the service's origin: neko's routes under ``/neko/`` with the session's token, and the
  *  service's image route as the session's id. */
 export function serviceClipboardTransport(
   token: () => string | null,
   sessionId: () => string | null,
 ): ClipboardTransport {
-  const headers = (): HeadersInit => {
-    const bearer = token();
-    return bearer ? { Authorization: `Bearer ${bearer}` } : {};
-  };
   return {
     async readRemoteText() {
-      const response = await fetch("/neko/api/room/clipboard", { headers: headers() });
+      const response = await fetch(nekoRouteWithToken("/neko/api/room/clipboard", token()));
       if (!response.ok) return null;
       const body = (await response.json()) as { text?: string; html?: string };
       return { text: body.text ?? "", html: body.html ?? "" };
     },
     async readRemoteImage() {
-      const response = await fetch("/neko/api/room/clipboard/image.png", { headers: headers() });
+      const response = await fetch(nekoRouteWithToken("/neko/api/room/clipboard/image.png", token()));
       if (!response.ok) return null;
       const blob = await response.blob();
       return blob.size > 0 ? blob : null;
     },
     async writeRemoteText(text, html) {
-      const response = await fetch("/neko/api/room/clipboard", {
+      const response = await fetch(nekoRouteWithToken("/neko/api/room/clipboard", token()), {
         method: "POST",
-        headers: { ...headers(), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, html }),
       });
       return response.ok;
@@ -160,13 +165,10 @@ export class ClipboardBridge {
     await this.writeLocally(() => this.local.write({ image }), "Image copied from the Screen");
   }
 
-  /** The document got focus: whatever the local clipboard holds goes to the Screen, once per content. */
-  async onFocus(): Promise<void> {
+  /** The document got focus: a local write that failed for want of focus runs now. The local clipboard is not
+   *  read: that is the paste event's job (see the module comment). */
+  onFocus(): void {
     this.flushPendingLocalWrite();
-    if (!this.isActive) return;
-    const contents = await this.local.read().catch(() => null);
-    if (contents === null) return;
-    await this.sendToRemote(contents.text, contents.html, contents.image, false);
   }
 
   /** A paste event: its data is readable at once, with no permission, so it is the surest path to the Screen. */
@@ -179,11 +181,11 @@ export class ClipboardBridge {
         break;
       }
     }
-    return this.sendToRemote(data.getData("text/plain"), data.getData("text/html"), image, true);
+    return this.sendToRemote(data.getData("text/plain"), data.getData("text/html"), image);
   }
 
-  /** Sends the content once per hash; ``isPaste`` is the user's own paste, whose failure the strip reports. */
-  private async sendToRemote(text: string, html: string, image: Blob | null, isPaste: boolean): Promise<boolean> {
+  /** Sends the content once per hash; a failure to cross is reported in the strip. */
+  private async sendToRemote(text: string, html: string, image: Blob | null): Promise<boolean> {
     if (image !== null) {
       if (image.size > CLIPBOARD_MAX_BYTES) {
         this.onStatus("The image is too large to paste");
@@ -193,7 +195,7 @@ export class ClipboardBridge {
       if (hash === this.lastSentHash || hash === this.lastReceivedHash) return true;
       const isSent = await this.transport.writeRemoteImage(image).catch(() => false);
       if (isSent) this.lastSentHash = hash;
-      else if (isPaste) this.onStatus("The image could not be pasted on the Screen");
+      else this.onStatus("The image could not be pasted on the Screen");
       return isSent;
     }
     if (text === "" && html === "") return false;
@@ -201,7 +203,7 @@ export class ClipboardBridge {
     if (hash === this.lastSentHash || hash === this.lastReceivedHash) return true;
     const isSent = await this.transport.writeRemoteText(text, html).catch(() => false);
     if (isSent) this.lastSentHash = hash;
-    else if (isPaste) this.onStatus("The text could not be pasted on the Screen");
+    else this.onStatus("The text could not be pasted on the Screen");
     return isSent;
   }
 
