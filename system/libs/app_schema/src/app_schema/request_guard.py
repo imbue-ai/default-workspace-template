@@ -17,9 +17,9 @@ from workspace_layout.identity import (
     describe_provenance_refusal,
 )
 
+from app_schema.api_schema import HTTP_BAD_REQUEST
 from app_schema.routes import error_response
 
-HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_FORBIDDEN: Final[int] = 403
 
 
