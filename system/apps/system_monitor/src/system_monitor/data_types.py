@@ -219,11 +219,12 @@ class DiskScan(FrozenModel):
 class BackupSummary(FrozenModel):
     """The backup service's state, read from its events and settings (``backups.summarize``)."""
 
-    state: Literal["not_configured", "running", "up_to_date", "stale", "failing"] = (
-        Field(
-            description="not_configured: no repository; running: a backup is in progress; up_to_date: the last backup is "
-            "recent; stale: it is older than expected; failing: the last backup failed"
-        )
+    state: Literal[
+        "not_configured", "running", "up_to_date", "stale", "failing", "out_of_storage"
+    ] = Field(
+        description="not_configured: no repository; running: a backup is in progress; up_to_date: the last backup is "
+        "recent; stale: it is older than expected; failing: the last backup failed; out_of_storage: the "
+        "account is over its backup storage quota, so backups are paused while space is freed"
     )
     last_success_at: str | None = Field(
         description="When the last backup completed, ISO 8601; null for none"

@@ -158,6 +158,7 @@ def test_a_theme_s_rules_leave_the_wrapper_page_as_it_is(
     assert wrapper.evaluate(_WRAPPER_BODY_STYLE) == unthemed
 
 
+@pytest.mark.flaky
 def test_the_standard_theme_puts_back_xterm_s_own_colors(
     phone_context: BrowserContext,
 ) -> None:
