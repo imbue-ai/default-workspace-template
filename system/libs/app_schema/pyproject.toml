@@ -11,6 +11,8 @@ dependencies = [
     "imbue-common",
     "loguru>=0.7",
     "pydantic>=2.0",
+    # The request guard reads the identity header and the provenance rules every app shares.
+    "workspace-layout",
 ]
 
 [project.optional-dependencies]

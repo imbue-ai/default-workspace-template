@@ -12,7 +12,7 @@ from getting_started.config import Config
 from getting_started.main import GettingStartedArguments
 from getting_started.main import MANIFEST_PATH
 from getting_started.main import arguments_from_config
-from getting_started.main import build_pages_app
+from getting_started.main import build_live_pages_app
 from getting_started.main import run_getting_started_app
 
 
@@ -44,7 +44,7 @@ def test_arguments_come_from_the_config_and_the_flags(tmp_path: Path) -> None:
 def test_the_page_app_serves_the_health_probe_and_the_catalog(tmp_path: Path) -> None:
     arguments = _arguments(tmp_path, port=8123, is_registered=True)
 
-    app = build_pages_app(arguments)
+    app = build_live_pages_app(arguments)
     assert app.test_client().get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
     assert app.test_client().get("/api/templates-catalog").get_json() == {"catalog": None, "is_stale": False}
 

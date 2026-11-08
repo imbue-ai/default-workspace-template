@@ -299,22 +299,45 @@ readonly _FORTRESS_STABLE_LINK="${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion"
 # store and SPKI blocklist exclude these keys (158.0.8115.0 or later).
 readonly _CHROMIUM_POLICY_DIR="/etc/chromium/policies/managed"
 readonly _DISTRUST_POLICY="${_CHROMIUM_POLICY_DIR}/distrust-compromised-emudhra-intermediates.json"
+readonly _LOCAL_NETWORK_POLICY="${_CHROMIUM_POLICY_DIR}/deny-local-network-access.json"
 
-_install_distrust_policy() {
-    # main() calls this behind `||`, which turns off `set -e` in here, so every
-    # step checks its own result.
+# Install one managed policy file, its JSON on stdin, at the path given: staged in the
+# parent directory (Chromium parses every file in managed/, whatever its name, so a
+# half-written temp file must never sit there), and left alone when it is already in
+# place. main() calls the installers behind `||`, which turns off `set -e` in here, so
+# every step checks its own result.
+_install_policy_file() {
+    local policy_path="$1"
+    local policy_name="$2"
     if ! mkdir -p "$_CHROMIUM_POLICY_DIR"; then
         _log "policy: could not create $_CHROMIUM_POLICY_DIR; the next converge retries"
         return 1
     fi
-    # Staged in the parent directory: Chromium parses every file in managed/,
-    # whatever its name, so a half-written temp file must never sit there.
     local tmp
-    if ! tmp="$(mktemp "$(dirname "$_CHROMIUM_POLICY_DIR")/.distrust-policy.XXXXXX")"; then
-        _log "policy: could not stage the distrusted CA policy; the next converge retries"
+    if ! tmp="$(mktemp "$(dirname "$_CHROMIUM_POLICY_DIR")/.policy.XXXXXX")"; then
+        _log "policy: could not stage the $policy_name policy; the next converge retries"
         return 1
     fi
-    if ! cat > "$tmp" <<'POLICY'
+    if ! cat > "$tmp"; then
+        rm -f "$tmp"
+        _log "policy: could not write the $policy_name policy; the next converge retries"
+        return 1
+    fi
+    if cmp -s "$tmp" "$policy_path"; then
+        rm -f "$tmp"
+        _log "policy: $policy_name policy already in place, satisfied"
+        return 0
+    fi
+    if ! { chmod 0644 "$tmp" && mv -f "$tmp" "$policy_path"; }; then
+        rm -f "$tmp"
+        _log "policy: could not install the $policy_name policy; the next converge retries"
+        return 1
+    fi
+    _log "policy: wrote the $policy_name policy to $policy_path"
+}
+
+_install_distrust_policy() {
+    _install_policy_file "$_DISTRUST_POLICY" "distrusted CA" <<'DISTRUST_POLICY'
 {
   "CADistrustedCertificates": [
     "MIIDaDCCAu6gAwIBAgIPWIsuPCu4zaE+GhIJJUMhMAoGCCqGSM49BAMDMFYxCzAJBgNVBAYTAklOMSUwIwYDVQQKDBxlTXVkaHJhIFRlY2hub2xvZ2llcyBMaW1pdGVkMSAwHgYDVQQDDBdlbVNpZ24gUm9vdCBUTFMgQ0EgLSBHMzAeFw0yNTA0MzAxNTM1MDlaFw00MDA0MjgxODMwMDBaMEAxCzAJBgNVBAYTAlVTMRQwEgYDVQQKDAtlTXVkaHJhIEluYzEbMBkGA1UEAwwSRU0gRFYgVExTIENBIC0gRzNDMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEOnp4YsjETTJN3WkDOmeCwO/u/kBV5ooSP6A3G6O9kZRRTuFypDPjYw8CvRiAN9nlFJ+bd9uUooHfmHsv6oiLdL3+j9pMEJnubKGVZv4+8OX2sJpVbMyLpQVh3xsqRB0Bo4IBljCCAZIwHwYDVR0jBBgwFoAU4TqrIXzx401UrtRyt/2LWUIgkFQwHQYDVR0OBBYEFK5+EFw8KZbBqEcnBVnx4D3U5QrzMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjBdBgNVHSAEVjBUMDkGCysGAQQBg44hAQABMCowKAYIKwYBBQUHAgEWHGh0dHA6Ly9yZXBvc2l0b3J5LmVtc2lnbi5jb20wDQYLKwYBBAGDjiEBAmQwCAYGZ4EMAQIBMHUGCCsGAQUFBwEBBGkwZzAkBggrBgEFBQcwAYYYaHR0cDovL29jc3AtYy5lbXNpZ24uY29tMD8GCCsGAQUFBzAChjNodHRwOi8vcmVwb3NpdG9yeS5lbXNpZ24uY29tL2NlcnRzL0VNRFZUTFNDQUczQy5wN2MwNwYDVR0fBDAwLjAsoCqgKIYmaHR0cDovL2NybC5lbXNpZ24uY29tLz9yb290dGxzY2FnMy5jcmwwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwCgYIKoZIzj0EAwMDaAAwZQIxAMEN2HWMocbuWdy1d33pH6JpMvP/V/DIS5PtZbv1Q7TXEbxrcyxgyuddOJscYDJJlAIwB4sH1BpbScDzkdD4tJBSwrG/1Mx82vb8YaySehNuu1+1oXNdAEKwaJ0mVzScy2+6",
@@ -327,23 +350,23 @@ _install_distrust_policy() {
     "MIIDWzCCAuCgAwIBAgIPeBiTP4+FtGGaKzX7qD0KMAoGCCqGSM49BAMDMFUxCzAJBgNVBAYTAklOMSUwIwYDVQQKDBxlTXVkaHJhIFRlY2hub2xvZ2llcyBMaW1pdGVkMR8wHQYDVQQDDBZlbVNpZ24gUm9vdCBDUyBDQSAtIEczMB4XDTI1MDQzMDE2MDgyN1oXDTQwMDQyODE4MzAwMFowPjELMAkGA1UEBhMCTkwxEzARBgNVBAoMCmVNdWRocmEgQlYxGjAYBgNVBAMMEUVNIE9WIENTIENBIC0gRzNCMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqrsPsGZqz88B+tUr/P1MK/LLPDSX3nOVDlgZth/mlQmHQcjEkUObNKBDHK/+W/m0wcjorgAB+fTcitgsWfNjnpbNbD1NsM7+wmw9YlF7N3YTcnQ/jordd7EAZPKr5eBQo4IBizCCAYcwHwYDVR0jBBgwFoAUaHQD+IXKjVRQVx0W4MjeRQ2rzS0wHQYDVR0OBBYEFHn66OzP2w11jaRY1p+27dx8Sd7mMBMGA1UdJQQMMAoGCCsGAQUFBwMDMF4GA1UdIARXMFUwOQYLKwYBBAGDjiEBAAEwKjAoBggrBgEFBQcCARYcaHR0cDovL3JlcG9zaXRvcnkuZW1zaWduLmNvbTAOBgwrBgEEAYOOIQECgUgwCAYGZ4EMAQQBMHQGCCsGAQUFBwEBBGgwZjAkBggrBgEFBQcwAYYYaHR0cDovL29jc3AtYi5lbXNpZ24uY29tMD4GCCsGAQUFBzAChjJodHRwOi8vcmVwb3NpdG9yeS5lbXNpZ24uY29tL2NlcnRzL0VNT1ZDU0NBRzNCLnA3YzA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vY3JsLmVtc2lnbi5jb20vP3Jvb3Rjc2NhZzMuY3JsMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMAoGCCqGSM49BAMDA2kAMGYCMQC/zr03YEELsNKqzUtH2dVFi4BaKFdyrr/6G1dIWp8KAVgsw2/u4lyyboUDaC9jDvICMQC9HTxku84tNX9dmHOtH7aC2Nu/JM0jTf6KjZAvovCJzzv1IFWSZpVLZibynMLXOrM="
   ]
 }
-POLICY
-    then
-        rm -f "$tmp"
-        _log "policy: could not write the distrusted CA policy; the next converge retries"
-        return 1
-    fi
-    if cmp -s "$tmp" "$_DISTRUST_POLICY"; then
-        rm -f "$tmp"
-        _log "policy: distrusted CA policy already in place, satisfied"
-        return 0
-    fi
-    if ! { chmod 0644 "$tmp" && mv -f "$tmp" "$_DISTRUST_POLICY"; }; then
-        rm -f "$tmp"
-        _log "policy: could not install $_DISTRUST_POLICY; the next converge retries"
-        return 1
-    fi
-    _log "policy: wrote $_DISTRUST_POLICY"
+DISTRUST_POLICY
+}
+
+# Deny every site the browser's Local Network Access permission: the workspace's services
+# listen on loopback and read a header-less request as the owner's (their own provenance
+# check, workspace_layout.identity, admits it from loopback alone), and Chromium gates a
+# public page's requests to loopback behind a prompt that this policy answers for the user,
+# so no page the Screen's browser shows can ask to be let through. A page on loopback
+# reaching loopback (a user's own app) is not a local network request, so it is untouched.
+_install_local_network_policy() {
+    _install_policy_file "$_LOCAL_NETWORK_POLICY" "local network access" <<'LOCAL_NETWORK_POLICY'
+{
+  "LocalNetworkAccessBlockedForUrls": [
+    "*"
+  ]
+}
+LOCAL_NETWORK_POLICY
 }
 
 _install_fortress() {
@@ -522,6 +545,7 @@ main() {
     _install_screen_packages || rc=$?
     _install_neko || rc=$?
     _install_distrust_policy || rc=$?
+    _install_local_network_policy || rc=$?
     _install_fortress || rc=$?
     _install_browser_command || rc=$?
     # Extensions are a nice-to-have: a failure here must not fail the unit, because a

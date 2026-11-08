@@ -1,7 +1,10 @@
 """The request identity every request into the workspace carries: the ``X-Imbue-Identity`` header a proxy stamps
 (the share identity spec, section 4.2; the share gateway README, "Request identity"), parsed once, and the
-participant key it names (the multiplayer spec, section 4.1), read the same way by the shell and the apps."""
+participant key it names (the multiplayer spec, section 4.1), read the same way by the shell and the apps; and the
+provenance check that decides whether a request is read at all (below), installed ahead of every app's routes by
+``app_schema.request_guard``."""
 
+import urllib.parse
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -93,3 +96,73 @@ def visiting_user_id(identity: RequestIdentity) -> UserId | None:
     if identity.owner or identity.user_id is None:
         return None
     return UserId(identity.user_id)
+
+
+# Where a request with no proxy header may come from. The services bind loopback and read a header-less request as
+# the owner's, since only an in-container caller (an agent's command, the shell, a script) reaches them without a
+# proxy in front. But the workspace's own browser (the Screen's Chromium) is on loopback too, and a page it shows
+# would be read the same way, so a header-less request is the owner's only under a loopback ``Host``: a page that
+# reaches loopback through a name of its own (a rebound or wildcard DNS name) names that host instead. And a browser
+# marks a request made by a page of another origin with fetch metadata, which no in-container client sends, so such a
+# request is refused whatever it carries, other than a GET or HEAD navigation (the shell framing an app's page).
+LOOPBACK_ADDRESSES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1"})
+LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
+FETCH_SITE_HEADER: Final[str] = "Sec-Fetch-Site"
+FETCH_MODE_HEADER: Final[str] = "Sec-Fetch-Mode"
+_OWN_ORIGIN_FETCH_SITES: Final[frozenset[str]] = frozenset({"same-origin", "none"})
+_NAVIGATE_FETCH_MODE: Final[str] = "navigate"
+_NAVIGATION_METHODS: Final[frozenset[str]] = frozenset({"GET", "HEAD"})
+
+OTHER_ORIGIN_REFUSAL: Final[str] = "only a page of this origin may call it"
+UNTRUSTED_LOOPBACK_REFUSAL: Final[str] = (
+    f"a request with no {IDENTITY_HEADER} header is admitted from loopback alone, under a loopback Host"
+)
+
+
+class RequestProvenance(FrozenModel):
+    """What a request says about where it came from: the facts the provenance check reads, as the server saw them."""
+
+    method: str = Field(description="The HTTP method")
+    identity_header: str | None = Field(description="The X-Imbue-Identity header as sent, or None")
+    fetch_site: str | None = Field(description="The Sec-Fetch-Site header a browser sends, or None")
+    fetch_mode: str | None = Field(description="The Sec-Fetch-Mode header a browser sends, or None")
+    host: str = Field(description="The Host header, with or without its port")
+    remote_address: str | None = Field(description="The peer address the connection came from")
+
+
+@pure
+def is_loopback_address(remote_address: str | None) -> bool:
+    return remote_address in LOOPBACK_ADDRESSES
+
+
+@pure
+def is_loopback_host(host: str) -> bool:
+    """Whether a ``Host`` (with or without its port) names loopback by address or as ``localhost``."""
+    try:
+        hostname = urllib.parse.urlsplit(f"//{host}").hostname
+    except ValueError:
+        return False
+    return hostname in LOOPBACK_HOSTNAMES
+
+
+@pure
+def is_from_another_origin(method: str, fetch_site: str | None, fetch_mode: str | None) -> bool:
+    """Whether the browser marks the request as made by a page of another origin, other than a GET or HEAD
+    navigation. A request without fetch metadata (a client that is not a browser) is not judged here."""
+    if fetch_site is None or fetch_site in _OWN_ORIGIN_FETCH_SITES:
+        return False
+    return not (fetch_mode == _NAVIGATE_FETCH_MODE and method in _NAVIGATION_METHODS)
+
+
+@pure
+def describe_provenance_refusal(provenance: RequestProvenance) -> str | None:
+    """Why the request may not be read at all, or None when it may: a page of another origin is refused whatever it
+    carries; a request a proxy stamped is then read by its header; one with no header is admitted from loopback
+    alone, under a loopback ``Host``."""
+    if is_from_another_origin(provenance.method, provenance.fetch_site, provenance.fetch_mode):
+        return OTHER_ORIGIN_REFUSAL
+    if provenance.identity_header is not None and provenance.identity_header.strip():
+        return None
+    if is_loopback_address(provenance.remote_address) and is_loopback_host(provenance.host):
+        return None
+    return UNTRUSTED_LOOPBACK_REFUSAL

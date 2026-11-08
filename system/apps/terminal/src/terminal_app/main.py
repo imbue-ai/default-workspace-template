@@ -19,7 +19,7 @@ from terminal_app.dispatch import (
     build_session_command,
     warn_if_oom_tag_script_is_missing,
 )
-from terminal_app.pages import build_pages_blueprint
+from terminal_app.pages import build_pages_app
 from terminal_app.primitives import Workdir
 from terminal_app.serving import (
     app_url_port,
@@ -73,7 +73,9 @@ class TerminalAppArguments(FrozenModel):
     )
 
 
-def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) -> TmuxSessionSource:
+def build_session_source(
+    arguments: TerminalAppArguments, paths: TerminalPaths
+) -> TmuxSessionSource:
     # The command bakes the directory in, so it is anchored here rather than left to the cwd of
     # every shell tmux spawns.
     oom_tag_script = arguments.oom_tag_script.absolute()
@@ -97,17 +99,15 @@ def build_window_sweeper(source: TmuxSessionSource) -> WindowSweeper:
     )
 
 
-def build_pages_app(source: TmuxSessionSource, sweeper: WindowSweeper) -> Flask:
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_pages_blueprint(
-            source=source,
-            registry_path=registry_path(),
-            contract_path=SHELL_APP_CONTRACT_PATH,
-            on_window_closed=sweeper.request_sweep,
-        )
+def build_live_pages_app(source: TmuxSessionSource, sweeper: WindowSweeper) -> Flask:
+    """The pages app with the live wiring: the workspace's registry, the shell's built contract module, and the
+    sweeper to tell of closed windows."""
+    return build_pages_app(
+        source=source,
+        registry_path=registry_path(),
+        contract_path=SHELL_APP_CONTRACT_PATH,
+        on_window_closed=sweeper.request_sweep,
     )
-    return app
 
 
 def run_terminal_app(arguments: TerminalAppArguments) -> int:
@@ -126,12 +126,18 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     if arguments.is_registered and arguments.agent_state_dir is not None:
         with log_span("Writing the discovery event for {}", arguments.app_url):
-            write_server_registered_event(arguments.agent_state_dir, APP_NAME, arguments.app_url)
+            write_server_registered_event(
+                arguments.agent_state_dir, APP_NAME, arguments.app_url
+            )
     source = build_session_source(arguments, paths)
     with log_span("Recreating the remembered terminal sessions"):
         source.recreate_remembered_sessions()
     sweeper = build_window_sweeper(source)
-    with serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source, sweeper)):
+    with serve_in_background(
+        PAGES_HOST,
+        app_url_port(arguments.app_url),
+        build_live_pages_app(source, sweeper),
+    ):
         if arguments.is_registered:
             sweeper.start()
         try:
@@ -206,7 +212,9 @@ def main(
         store_path=store_path,
         oom_tag_script=oom_tag_script,
         agent_state_dir=Path(agent_state_dir) if agent_state_dir else None,
-        agent_session_prefix=os.environ.get(ENV_AGENT_SESSION_PREFIX, DEFAULT_AGENT_SESSION_PREFIX),
+        agent_session_prefix=os.environ.get(
+            ENV_AGENT_SESSION_PREFIX, DEFAULT_AGENT_SESSION_PREFIX
+        ),
         is_registered=not is_unregistered,
     )
     sys.exit(run_terminal_app(arguments))
