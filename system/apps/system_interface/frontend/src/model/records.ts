@@ -209,7 +209,9 @@ export interface AppRecord {
   readonly stop_when_no_windows: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
-  readonly default_shortcut: DefaultShortcut | null;
+  /** The shortcuts a new desktop is seeded with, as the app declares them; none for an app that leaves the choice to
+   *  the shell. */
+  readonly default_shortcuts: readonly DefaultShortcut[];
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
   /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
@@ -594,8 +596,7 @@ function parseAppParams(raw: unknown): AppParams | null {
   };
 }
 
-function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
-  if (raw === null || raw === undefined) return null;
+function parseDefaultShortcut(raw: unknown): DefaultShortcut {
   const record = asObject(raw, "default_shortcut");
   return {
     launch: asString(record.launch, "default_shortcut.launch"),
@@ -638,7 +639,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
-    default_shortcut: parseDefaultShortcut(record.default_shortcut),
+    default_shortcuts: asArray(record.default_shortcuts ?? [], "app.default_shortcuts").map(parseDefaultShortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
     pin: parsePin(record.pin),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),

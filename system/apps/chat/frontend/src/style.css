@@ -12,6 +12,12 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
+/* A turn's face (TURN_FACE_SIZE_PX, 24px) and the 8px gap beside it: a turn's bubble starts this far in
+   (views/participant-picture.ts). */
+:root {
+  --width-face-gutter: 32px;
+}
+
 /* The chat root's list (root/ChatRail.ts): a chat that is working wears a dot that breathes,
    so the eye finds the live one without reading. Reduced motion holds it steady. */
 @keyframes chat-rail-pulse {
@@ -87,42 +93,16 @@
    rather than a resizing spacer. The app only writes scrollTop for the discrete
    tail-follow and jump pins. */
 
-/* The agent's prose stops short of the column's right edge (--width-agent-gutter),
-   left-aligned, so a reply reads as one side of a conversation rather than as
-   full-bleed text. A contextual rule rather than a utility: the prose element is
-   MarkdownContent's own div, shared with the user bubble and every other render
-   site, so the cap has to come from the context it sits in. The timeline's task
-   rows carry the same inset as a utility (see ProgressBlock / handoff-node).
-
-   A chip row is read like the prose it sits with -- a line saying what the
-   agent did -- so it wraps on the same edge; left to the full width it would
-   run past the text above it and stop looking like part of the same message.
-   Tool BLOCKS are chrome and still keep the full width.
-
-   `.pv-ungrouped` is the inline run inside a progress block -- work or prose
-   that happened with no step open. Everything else on that thread already
-   stops at the gutter (the task rows by their utility, the final reply by the
-   line below), so without this it was the one place a reply ran the full
-   column and read as a wider kind of text than the same words elsewhere. */
-.message-assistant .message-content.markdown-content,
-.message-assistant .tool-chip-group,
-.pv-ungrouped .message-content.markdown-content,
-.pv-ungrouped .tool-chip-group,
-.pv-final .message-content.markdown-content {
-  max-width: calc(100% - var(--width-agent-gutter));
-}
-
-/* Inside a machine bubble the prose IS the bubble's content: the bubble already stops at its own
-   max-width, and the gutter cap would instead squeeze the text by the gutter width inside an
-   intrinsically sized bubble (every short bubble wraps). Same specificity, so order carries it. */
-.machine-bubble .message-content.markdown-content {
-  max-width: none;
-}
-
 .markdown-content {
   line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
+}
+
+/* The agent's prose bubble sets its text a little looser than the transcript's markdown elsewhere, as a person's
+   bubble does. */
+.machine-bubble .markdown-content {
+  line-height: 1.5;
 }
 
 .markdown-content p {
@@ -643,7 +623,7 @@
    the one thing being worked on right now pulses as a unit rather than as two
    parts. A moving highlight over the text colour; the title's own colour
    utility is the fallback where background-clip:text is unsupported. */
-.pv-tl-title--current,
+.pv-tl-title--current > .pv-tl-title-text,
 .pv-tl-narration {
   /* #bcbcbc: the highlight, deliberately lighter than --c-text-faint. A
      design-system-exception -- it is one end of a moving gradient, not a text
@@ -662,13 +642,6 @@
   100% {
     background-position: -100% 0;
   }
-}
-
-/* The expand chevron is an affordance, not narration: it takes back a solid
-   fill inside the shimmering title, which would otherwise sweep it too and
-   leave the one clickable thing on the row flickering. */
-.pv-tl-title--current .pv-chev {
-  -webkit-text-fill-color: currentColor;
 }
 
 /* Static (settled) narration: an unclosed step that went idle still shows

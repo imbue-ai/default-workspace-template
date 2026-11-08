@@ -293,10 +293,10 @@
 
   <div class="view" id="view-disk" hidden>
     <section>
-      <div class="big"><span id="disk-used">--</span> <small>of <span id="disk-total">--</span> used on the machine's disk</small></div>
+      <div class="big"><span id="disk-used">--</span> <small>of <span id="disk-total">--</span> used</small></div>
       <div class="bar"><span class="disk" id="disk-bar"></span></div>
       <div class="row"><span id="disk-pct"></span><span id="disk-free"></span></div>
-      <p class="hint" style="margin-top:4px">The whole disk of the machine this workspace runs on, shared with everything else on it.</p>
+      <p class="hint" style="margin-top:4px">The disk of the machine this workspace runs on. Free is what this workspace can still store there: on a cloud machine, its share of the disk can run out before the disk does.</p>
     </section>
     <section>
       <h2>What's using the disk</h2>
@@ -633,7 +633,7 @@
     button.textContent = { scanning: "Measuring…", done: "Measure again", failed: "Try again" }[scan.state] || "See what's using the disk";
     if (scan.state === "done") {
       note.textContent = `As of ${clock(new Date(scan.scanned_at))}.`;
-      const shades = { workspace: "#7096b7", uploads: "#8eafcb", apps: "#aac3d9", caches: "#c6d7e5", other: "#cfcdc7" };
+      const shades = { workspace: "#7096b7", uploads: "#8eafcb", apps: "#aac3d9", caches: "#c6d7e5", home: "#dbe5ee", other: "#cfcdc7" };
       $("disk-table").hidden = false;
       $("disk-table").querySelector("tbody").innerHTML = scan.rows.map((row) => {
         const items = row.items.map((i) => `<tr><td class="sub">${esc(i.name)}${i.hint ? ` <span class="tag">${esc(i.hint)}</span>` : ""}</td><td class="num sub">${size(i.bytes)}</td></tr>`).join("");

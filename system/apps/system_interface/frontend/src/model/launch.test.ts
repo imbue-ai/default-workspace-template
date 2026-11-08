@@ -4,7 +4,7 @@ import {
   appChatLaunchOf,
   appChatParams,
   appLaunchesOf,
-  appShortcutOf,
+  appShortcutsOf,
   fillParamOf,
   freeTextParams,
   freeTextRowsOf,
@@ -15,7 +15,7 @@ import {
   orderAppLaunches,
   textRowDisabledReason,
 } from "./launch";
-import { appRecord, launchPathRecord } from "../testing/records";
+import { appRecord, launchPathRecord, screenAppRecord } from "../testing/records";
 
 const docs = appRecord("docs", {
   launcher_rank: 20,
@@ -65,11 +65,11 @@ describe("app launches", () => {
     // Every row of an app whose default shortcut focuses (a one-window app) lands in its one window.
     expect(launchRowKindOf(plain, plain.launch_paths[0])).toBe("one");
     const manyWindowed = appRecord("many", {
-      default_shortcut: { launch: "open", mode: "new" },
+      default_shortcuts: [{ launch: "open", mode: "new" }],
       launch_paths: plain.launch_paths,
     });
     expect(launchRowKindOf(manyWindowed, manyWindowed.launch_paths[0])).toBe("new");
-    const undeclared = appRecord("undeclared", { default_shortcut: null, launch_paths: plain.launch_paths });
+    const undeclared = appRecord("undeclared", { default_shortcuts: [], launch_paths: plain.launch_paths });
     expect(launchRowKindOf(undeclared, undeclared.launch_paths[0])).toBe("new");
     expect(launchRowKindOf(docs, docs.launch_paths[0])).toBe("text");
   });
@@ -88,34 +88,44 @@ describe("launch paths of an app", () => {
     expect(launchPathOf(docs, "other")).toBeNull();
   });
 
-  it("gives an app one desktop shortcut by the shell's seeding rule, preferring a launch path taking no text", () => {
-    expect(appShortcutOf(notes)).toEqual({ launch: "new", mode: "focus" });
+  it("gives an app its desktop shortcuts by the shell's seeding rule, preferring a launch path taking no text", () => {
+    expect(appShortcutsOf(notes)).toEqual([{ launch: "new", mode: "focus" }]);
     // A declared default shortcut stands even when its launch path takes text; one the app does not offer gives none.
-    expect(appShortcutOf(appRecord("chatty", { launch_paths: docs.launch_paths }))).toEqual({
-      launch: "new",
-      mode: "focus",
+    expect(appShortcutsOf(appRecord("chatty", { launch_paths: docs.launch_paths }))).toEqual([
+      { launch: "new", mode: "focus" },
+    ]);
+    expect(appShortcutsOf(appRecord("gone", { default_shortcuts: [{ launch: "missing", mode: "new" }] }))).toEqual([]);
+    // An app declaring several keeps each it offers, in its order.
+    const screen = screenAppRecord({
+      default_shortcuts: [
+        { launch: "screen", mode: "focus" },
+        { launch: "missing", mode: "new" },
+        { launch: "browser", mode: "focus" },
+      ],
     });
-    expect(appShortcutOf(appRecord("gone", { default_shortcut: { launch: "missing", mode: "new" } }))).toBeNull();
+    expect(appShortcutsOf(screen)).toEqual([
+      { launch: "screen", mode: "focus" },
+      { launch: "browser", mode: "focus" },
+    ]);
     // A path that takes a mention or is about an app is never the shortcut, as the shell seeds it.
     const marked = appRecord("marked", {
       program: "marked",
-      default_shortcut: null,
+      default_shortcuts: [],
       launch_paths: [
         launchPathRecord({ id: "m", mention_param: "m", params: ["m"] }),
         launchPathRecord({ id: "a", params: ["x", "y"], app_params: { name: "x", display_name: "y" } }),
         launchPathRecord({ id: "plain", path: "/plain" }),
       ],
     });
-    expect(appShortcutOf(marked)).toEqual({ launch: "plain", mode: "focus" });
-    const undeclared = { default_shortcut: null, launch_paths: buddy.launch_paths };
-    expect(appShortcutOf(appRecord("own", undeclared))).toEqual({ launch: "root", mode: "focus" });
+    expect(appShortcutsOf(marked)).toEqual([{ launch: "plain", mode: "focus" }]);
+    const undeclared = { default_shortcuts: [], launch_paths: buddy.launch_paths };
+    expect(appShortcutsOf(appRecord("own", undeclared))).toEqual([{ launch: "root", mode: "focus" }]);
     // With no declared default and every launch path taking text, the first is still the app's shortcut.
-    expect(appShortcutOf(appRecord("asker", { default_shortcut: null, launch_paths: docs.launch_paths }))).toEqual({
-      launch: "new",
-      mode: "focus",
-    });
-    expect(appShortcutOf(appRecord("preview-1", { ...undeclared, program: "" }))).toBeNull();
-    expect(appShortcutOf(hidden)).toBeNull();
+    expect(appShortcutsOf(appRecord("asker", { default_shortcuts: [], launch_paths: docs.launch_paths }))).toEqual([
+      { launch: "new", mode: "focus" },
+    ]);
+    expect(appShortcutsOf(appRecord("preview-1", { ...undeclared, program: "" }))).toEqual([]);
+    expect(appShortcutsOf(hidden)).toEqual([]);
   });
 });
 

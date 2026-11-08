@@ -3,12 +3,16 @@
  *
  * Both views render the same way: a single in-order walk of the transcript
  * (buildSections) into turn sections, flattened into the virtualized list's
- * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
- * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
- * node, a trailing wrap-up reply, or the chip row of a compaction that followed
- * it. Sharing it here means a subagent's "View conversation"
- * gets the real progress view -- step timeline, statuses, summaries -- and the
- * same windowed virtualization as the main chat, with zero rendering drift.
+ * top-level rows (buildRows): a person's message, or a stretch of the agent's
+ * output -- everything from the first thing it does after a person speaks until
+ * the next person speaks or another agent takes over -- under the agent's name
+ * and face, threaded by one line (see machine-bubbles). A stretch's parts are a
+ * whole ProgressBlock for a turn that has tk steps, an ungrouped assistant
+ * message, a system chip or notice, a handoff node, a trailing wrap-up reply, or
+ * the chip row of a compaction that followed it. Sharing it here means a subagent's "View
+ * conversation" gets the real progress view -- step timeline, statuses,
+ * summaries -- and the same windowed virtualization as the main chat, with zero
+ * rendering drift.
  *
  * Structure and decoration both come from the transcript walk (tk prints its
  * step decoration on stdout, which buildSections parses); there is no
@@ -21,22 +25,24 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent, ToolResultEvent, UserMessageEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
   renderAssistantRunRow,
   isChipOnlyEvent,
   renderPermissionItem,
+  rendersAsChip,
   buildToolResultsWithSkillExpansions,
   type RunPart,
 } from "./message-renderers";
 import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
-import { isHiddenUserMessage } from "./message-classification";
+import { isHiddenUserMessage, isPersonsChipMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
-import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
+import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
-import { renderHandoffNode } from "./handoff-node";
+import { renderFramedHandoffNode } from "./handoff-node";
+import { renderAgentTurn } from "./machine-bubbles";
 import type { ResentTurns } from "../models/ResentSends";
 
 // Per-type fallback row heights, used until a row has been measured (live or
@@ -59,13 +65,53 @@ export interface RowDescriptor {
   key: string;
   estimate: number;
   // The transcript event this row starts at, for mapping a row anchor to a
-  // global event index (scroll persistence and fill-planner focus). Null only
-  // for a turn section with no opening user message; consumers fall back to the
-  // previous row's event.
+  // global event index (scroll persistence and fill-planner focus): a stretch's
+  // first part that has one. Null when none of its parts does (the compaction
+  // running now, a step block whose section opened with no user message);
+  // consumers fall back to the previous row's event.
   anchorEventId: string | null;
-  // m.Children (not m.Vnode) because a row can be a component vnode
-  // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
+  /** Whether the agent's output past the rows continues this row's stretch: the last row, when it is a stretch of
+   *  the agent's output that no switch to another agent has ended. */
+  takesLiveTail: boolean;
+  /** The calls this row shows as chips on its stretch's line (not those inside a step's work), so the page can tell
+   *  whether the call the agent is running shows there. Empty for a person's row. */
+  chipCallIds: ReadonlySet<string>;
+  /** The person's turn a person's row shows, which the next person's turn may carry on the run of; null for a stretch
+   *  of the agent's output and for a bash-mode command. */
+  speakerTurn: UserMessageEvent | null;
+}
+
+/** The agent's output past the transcript's rows (a handoff the transcript does not show yet, the reply still being
+ *  written, the status row), read when the row it lands in renders. */
+export type LiveTail = () => m.Children[];
+
+/** One piece of a stretch of the agent's output: a message, a chip run, a turn's progress block, a card, a notice. */
+interface TurnPart {
+  key: string;
+  estimate: number;
+  anchorEventId: string | null;
+  /** `isStretchHead` when the part opens its stretch. */
+  render: (isStretchHead: boolean) => m.Children;
+  chipCallIds: readonly string[];
+}
+
+/** The calls among `events` that show as chips. */
+function chipCallIdsOf(events: readonly RunPart[], toolResults: Map<string, ToolResultEvent>): string[] {
+  return events.flatMap((event) =>
+    event.type === "compaction"
+      ? []
+      : event.tool_calls.filter((call) => rendersAsChip(call, toolResults)).map((call) => call.tool_call_id),
+  );
+}
+
+/** A stretch of the agent's output as one row: its parts under the agent's name and face. */
+export function renderAgentTurnRow(key: string, parts: m.Children[]): m.Vnode {
+  return m(
+    "div",
+    { id: key, key, class: "message-agent-turn mb-5" },
+    renderAgentTurn(parts.filter((part) => part !== null && part !== undefined)),
+  );
 }
 
 /** A run of consecutive rows to render, `[startIndex, endIndex)`, or a spacer
@@ -113,37 +159,92 @@ function buildRows(
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
   resentTurnIds: ReadonlySet<string>,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
+  liveTail: LiveTail | null,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
-  // The compactions that landed after a turn's reply: one chip row of their own below it.
-  const pushTrailingCompactionRow = (parts: CompactionPart[]): void => {
+  // A stretch of the agent's output runs until a person speaks or another agent takes over; the system chips and
+  // notices among it are part of it.
+  let parts: TurnPart[] = [];
+  // The person's turn on the last row, when the last row is one: the next person's turn may carry on its run.
+  let previousPersonTurn: UserMessageEvent | null = null;
+  // Whether the agent's output past the rows would extend the last stretch: false once a person speaks or another
+  // agent takes over, until that agent's first part.
+  let isLastTurnOpen = false;
+  const endTurn = (): void => {
+    isLastTurnOpen = false;
     if (parts.length === 0) return;
-    rows.push({
-      key: parts[0].event_id,
+    const turnParts = parts;
+    parts = [];
+    const key = `turn-${turnParts[0].key}`;
+    const row: RowDescriptor = {
+      key,
+      estimate: turnParts.reduce((sum, part) => sum + part.estimate, 0),
+      anchorEventId: turnParts.find((part) => part.anchorEventId !== null)?.anchorEventId ?? null,
+      render: () => {
+        const tail = liveTail !== null && row.takesLiveTail ? liveTail() : [];
+        return renderAgentTurnRow(key, [...turnParts.map((part, index) => part.render(index === 0)), ...tail]);
+      },
+      takesLiveTail: false,
+      chipCallIds: new Set(turnParts.flatMap((part) => part.chipCallIds)),
+      speakerTurn: null,
+    };
+    rows.push(row);
+    previousPersonTurn = null;
+  };
+  const addPart = (part: TurnPart): void => {
+    parts.push(part);
+    isLastTurnOpen = true;
+  };
+  // The compactions that landed after a turn's reply: a chip run of their own below it.
+  const addTrailingCompactions = (compactions: CompactionPart[]): void => {
+    if (compactions.length === 0) return;
+    addPart({
+      key: compactions[0].event_id,
       estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
-      anchorEventId: runAnchorEventId(parts[0]),
-      render: () => renderAssistantRunRow(parts, toolResults, chatId),
+      anchorEventId: runAnchorEventId(compactions[0]),
+      render: (isStretchHead) => renderAssistantRunRow(compactions, toolResults, chatId, isStretchHead),
+      chipCallIds: [],
     });
   };
   for (const section of sections) {
+    if (section.is_after_switch) endTurn();
     const userEvent = section.user_event;
     if (userEvent !== null && !isHiddenUserMessage(userEvent)) {
-      rows.push({
-        key: userEvent.event_id,
-        estimate: ESTIMATED_USER_HEIGHT_PX,
-        anchorEventId: userEvent.event_id,
-        render: () => renderUserMessage(userEvent, resentTurnIds.has(userEvent.event_id)) as m.Vnode,
-      });
+      if (isGenuineUserTurn(userEvent) || isPersonsChipMessage(userEvent)) {
+        endTurn();
+        const previousTurn = previousPersonTurn;
+        // A bash-mode command is the person's, but not words of theirs: it breaks the run of their turns.
+        const speakerTurn = isPersonsChipMessage(userEvent) ? null : userEvent;
+        rows.push({
+          key: userEvent.event_id,
+          estimate: ESTIMATED_USER_HEIGHT_PX,
+          anchorEventId: userEvent.event_id,
+          render: () => renderUserMessage(userEvent, resentTurnIds.has(userEvent.event_id), previousTurn) as m.Vnode,
+          takesLiveTail: false,
+          chipCallIds: new Set(),
+          speakerTurn,
+        });
+        previousPersonTurn = speakerTurn;
+      } else {
+        addPart({
+          key: userEvent.event_id,
+          estimate: ESTIMATED_USER_HEIGHT_PX,
+          anchorEventId: userEvent.event_id,
+          render: () => renderUserMessage(userEvent),
+          chipCallIds: [],
+        });
+      }
     }
 
     const hasSteps = section.items.some((i) => i.kind === "step");
     if (hasSteps) {
       const key = `progress-${section.key}`;
-      rows.push({
+      addPart({
         key,
         estimate: ESTIMATED_PROGRESS_HEIGHT_PX,
         anchorEventId: userEvent?.event_id ?? null,
-        render: () =>
+        render: (isStretchHead) =>
           m(ProgressBlock, {
             id: key,
             key,
@@ -151,9 +252,23 @@ function buildRows(
             trailing_reply: section.trailing_reply,
             toolResults,
             chatId,
+            isStretchHead,
+            liveStepId: section.live_step_id,
+            replyDraft: replyDraft ?? undefined,
           }),
+        // The calls on the timeline's own line: those of its ungrouped runs, its permission requests' messages and
+        // its wrap-up, not a step's.
+        chipCallIds: chipCallIdsOf(
+          [
+            ...section.items.flatMap((item) =>
+              item.kind === "ungrouped" ? item.events : item.kind === "permission" ? [item.event] : [],
+            ),
+            ...section.trailing_reply,
+          ],
+          toolResults,
+        ),
       });
-      pushTrailingCompactionRow(section.trailing_status);
+      addTrailingCompactions(section.trailing_status);
       continue;
     }
 
@@ -161,7 +276,7 @@ function buildRows(
     // blocks inline, the same as assistant messages outside a progress section.
     for (const item of section.items) {
       if (item.kind === "ungrouped") {
-        // A row is a RUN: one head event plus every chip-only event that
+        // A part is a RUN: one head event plus every chip-only event that
         // follows it, so a turn the harness split across several events lays
         // out as the one message it is (see renderAssistantRunRow).
         let i = 0;
@@ -179,24 +294,23 @@ function buildRows(
           // renderer -- nothing was merged, so there is nothing to gain by
           // giving up the memo.
           if (run.length === 1 && head.type === "assistant_message" && !isChipOnlyEvent(head, toolResults)) {
-            rows.push({
+            addPart({
               key: head.event_id,
               estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
               anchorEventId: head.event_id,
-              render: () => renderAssistantMessage(head, toolResults, chatId),
+              render: (isStretchHead) => renderAssistantMessage(head, toolResults, chatId, isStretchHead),
+              chipCallIds: chipCallIdsOf(run, toolResults),
             });
             continue;
           }
-          // Keyed and anchored on the run's head: the row stands where that
-          // event does in the transcript, which is what scroll persistence and
-          // the fill planner resolve a row by.
-          rows.push({
+          addPart({
             key: head.event_id,
             estimate: isChipOnlyEvent(head, toolResults)
               ? ESTIMATED_CHIP_ROW_HEIGHT_PX
               : ESTIMATED_ASSISTANT_HEIGHT_PX,
             anchorEventId: runAnchorEventId(head),
-            render: () => renderAssistantRunRow(run, toolResults, chatId),
+            render: (isStretchHead) => renderAssistantRunRow(run, toolResults, chatId, isStretchHead),
+            chipCallIds: chipCallIdsOf(run, toolResults),
           });
         }
       } else if (item.kind === "permission") {
@@ -205,71 +319,58 @@ function buildRows(
         const permissionEvent = item.event;
         const resolutionsByRequestId = item.resolutionsByRequestId;
         const secretNotesByRequestId = item.secretNotesByRequestId;
-        const permKey = `perm-${permissionEvent.event_id}`;
-        rows.push({
-          key: permKey,
+        addPart({
+          key: `perm-${permissionEvent.event_id}`,
           estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
           anchorEventId: permissionEvent.event_id,
-          // Pass the row key as the DOM id so the measured height is cached under
-          // the same key the window math looks up (see renderPermissionItem).
-          render: () =>
+          render: (isStretchHead) =>
             renderPermissionItem(
               permissionEvent,
               toolResults,
               chatId,
               resolutionsByRequestId,
-              permKey,
               secretNotesByRequestId,
+              isStretchHead,
             ),
+          chipCallIds: chipCallIdsOf([permissionEvent], toolResults),
         });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
-          rows.push({
+          addPart({
             key: chipEvent.event_id,
             estimate: ESTIMATED_USER_HEIGHT_PX,
             anchorEventId: chipEvent.event_id,
-            render: () => renderUserMessage(chipEvent) as m.Vnode,
+            render: () => renderUserMessage(chipEvent),
+            chipCallIds: [],
           });
         }
       } else if (item.kind === "handoff") {
-        // The handoff node as a row of its own: the same timeline node a progress block
-        // draws, in its own thread-less frame. The row's id is the node's key so the
-        // virtualized list can measure it.
         const node = item.node;
         const key = `handoff-${node.key}`;
-        rows.push({
+        addPart({
           key,
           estimate: ESTIMATED_USER_HEIGHT_PX,
           anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
-          render: () =>
-            m(
-              "div",
-              {
-                id: key,
-                key,
-                class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
-              },
-              m("div.pv.pv--timeline.relative", [
-                m(
-                  "div.pv-timeline-nodes",
-                  renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
-                ),
-              ]),
-            ),
+          render: () => renderFramedHandoffNode(node, chatId, toolResults, { key, expansionKey: key }),
+          chipCallIds: [],
         });
       }
     }
     for (const event of section.trailing_reply) {
-      rows.push({
+      addPart({
         key: event.event_id,
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
         anchorEventId: event.event_id,
-        render: () => renderAssistantMessage(event, toolResults, chatId),
+        render: (isStretchHead) => renderAssistantMessage(event, toolResults, chatId, isStretchHead),
+        chipCallIds: chipCallIdsOf([event], toolResults),
       });
     }
-    pushTrailingCompactionRow(section.trailing_status);
+    addTrailingCompactions(section.trailing_status);
   }
+  const isTailOpen = isLastTurnOpen;
+  endTurn();
+  if (isTailOpen) rows[rows.length - 1].takesLiveTail = true;
   return rows;
 }
 
@@ -287,7 +388,9 @@ function runAnchorEventId(head: RunPart): string | null {
  * which steps exist, their order, grouping, titles, summaries -- come purely
  * from the transcript walk. ``resentTurns`` (the main chat's own, see
  * models/ResentSends) puts "Sent again" under the messages the chat app sent a
- * second time and folds their second copies into it.
+ * second time and folds their second copies into it. ``liveTail`` is the agent's
+ * output past the transcript, drawn at the end of the last row when that row is a
+ * stretch of the agent's output.
  */
 export function buildConversationRows(
   chatId: string,
@@ -295,13 +398,38 @@ export function buildConversationRows(
   isTailSettled: boolean,
   liveCompaction: LiveCompaction | null = null,
   resentTurns: ResentTurns | null = null,
+  liveTail: LiveTail | null = null,
 ): RowDescriptor[] {
+  return buildConversationView(chatId, events, isTailSettled, liveCompaction, resentTurns, null, liveTail).rows;
+}
+
+/** The rows, and whether the reply the agent is still writing shows inside them. */
+export interface ConversationView {
+  rows: RowDescriptor[];
+  /** True when a step is live at the tail: the draft shows in it (read at draw time through
+   *  ``replyDraft``), as the words would once they land, rather than in the live tail. */
+  isReplyDraftInStep: boolean;
+}
+
+/** ``buildConversationRows`` for a chat that streams a reply draft (see models/ReplyDrafts). */
+export function buildConversationView(
+  chatId: string,
+  events: TranscriptEvent[],
+  isTailSettled: boolean,
+  liveCompaction: LiveCompaction | null,
+  resentTurns: ResentTurns | null,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
+  liveTail: LiveTail | null = null,
+): ConversationView {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   for (const eventId of resentTurns?.foldedTurnIds ?? []) hiddenEventIds.add(eventId);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
-  return buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set());
+  return {
+    rows: buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), replyDraft, liveTail),
+    isReplyDraftInStep: sections.some((section) => section.live_step_id !== null),
+  };
 }
 
 /**

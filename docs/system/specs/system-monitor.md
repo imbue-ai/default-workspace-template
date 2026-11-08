@@ -44,7 +44,9 @@ Facts this design builds on, as of `main` at `2cf9763de7` (2026-10-20).
 6. The available cores are the cgroup's `cpu.max` quota where it exists (runc), else `os.cpu_count()` (gVisor reports the quota there).
    Load average is not used: it reads as zero under gVisor.
 7. The overview carries no per-group disk figures, and nothing walks the disk on a timer.
-   The disk view shows the disk's total, used and free from one `disk_usage` call, said to be the machine's whole disk: a local docker workspace's volume has no quota of its own, so the figure is the laptop's disk, and a cloud machine's is its data disk, shared with the container engine's own store.
+   The disk view shows the disk's total, used and free as the workspace can use them (`disk_headroom`).
+   A local docker workspace's volume has no quota of its own, so the figures are the laptop's whole disk.
+   A cloud machine counts everything the workspace writes against a disk quota that statfs inside cannot see, and the quota or the disk can run out first: used is the quota's usage, free the smaller of the quota's room and the disk's own free space, and total their sum.
    It walks the disk only when the user asks ("See what's using the disk"), reporting when it ran.
 8. The page's views are real paths (`/`, `/cpu`, `/memory`, `/disk`) served by the same page, so the shell restores a window on the view it was on.
    The manifest declares no launch paths: the shell keeps synthesizing `open` at `/`, and the views are reached inside the app, so the launcher does not gain three rows for one app.
@@ -211,7 +213,7 @@ Each view is drawn from the readings above.
 - **CPU.** The headline, the usage bar, the process count; a chart with 10 min, 1 h and 24 h spans (10 min from the overview reading, longer from `/api/history`); "What's using the CPU", the groups sorted by share with the note that a chat's share includes what it runs; "Busy stretches" from the events.
   No per-core graphs (the sampler does not read them) and no load average (it does not exist under gVisor).
 - **Memory.** Everything the shipped page shows, with the 90% guard mark on the bar and the chart and the span switch: the headline, the warning note from 80% with its advice, the breakdown with the temporary-files tooltip, and the stops with their Details toggles.
-- **Disk.** The headline and bar from `disk_usage`, worded as the machine's whole disk (decision 7); then "What's using the disk" with a "See what's using the disk" button that posts to `/api/disk/scan`, polls `/api/disk` while scanning, and then shows the rows with "as of" the scan's time and a button to run it again; then the Backups section.
+- **Disk.** The headline and bar from `disk_headroom` (decision 7); then "What's using the disk" with a "See what's using the disk" button that posts to `/api/disk/scan`, polls `/api/disk` while scanning, and then shows the rows with "as of" the scan's time and a button to run it again; then the Backups section.
   A row that lists nothing and holds nothing (Code checkers, Your apps) is left out of every breakdown until something runs under it.
 
 Under 480 px the tiles stack, each a row with the number on the left and the sparkline on the right, and the breakdown hides its grey hints.
@@ -227,11 +229,12 @@ Each bucket is one `du -sk` (GNU, the container is Linux), bounded at 120 s:
 | Workspace files | the top-level entries of `/home/user/workspace` in one `du`, less app data and uploads (`du --exclude`) | its folders, largest first, up to eight, with a hint for the ones a user would not know (`.venv`, `.git`, `system`) |
 | Uploads | `data/uploads` | nothing |
 | App data | `data/.apps` | one item per app directory |
-| Package caches | `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.local/share/pnpm`, those that exist | each cache |
-| Everything else | the disk's used bytes less the rows above, never below 0 | the machine's system software (`/` less the home tree, the kernel and memory filesystems, and the container engines' stores) and whatever else is on the disk |
+| Package caches | `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.local/share/pnpm`, and `/var/cache/user` (where `XDG_CACHE_HOME`, `UV_CACHE_DIR` and `npm_config_cache` point), those that exist; one of `~/.cache` and `/var/cache/user` links to the other, and `du` does not follow a link it is handed, so the caches count once; less the venvs at `/var/cache/user/venvs`, which every `.venv` links to and which are measured first in the same `du`, so the packages they hardlink from the uv cache count as theirs | each cache |
+| Chats, logs and settings | the top-level entries of `/home/user` in one `du`, less the workspace and the caches (entries, because on imbue_cloud `/home/user` is itself a link `du` would not follow) | its folders, largest first, up to eight, with a hint for the ones a user would not know (`worktrees`, `.mngr`, `.minds`) |
+| Everything else | the disk's used bytes less the rows above, never below 0 | the machine's system software (`/` less the home tree, `/var/cache/user`, the kernel and memory filesystems, and the container engines' stores, plus the venvs) and whatever else is on the disk, which is not part of the workspace and cannot be freed from it; neither when the system walk fails or the system software is larger than the row (`/` is on another disk, as lima's boot disk is), and only the system software when a row above could not be measured |
 
 The result is kept in memory with its time; the app stopping forgets it, which is fine for a figure the user asked for once.
-A `du` that fails or times out leaves its row out and the response says which rows are missing.
+A `du` that fails or times out, or a home folder that cannot be listed, leaves its row out and the response says which rows are missing.
 A walk that cannot read the disk at all ends in a `failed` state with no rows, so the button offers to try again rather than staying disabled.
 
 ### 4.5 Backups

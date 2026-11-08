@@ -1,5 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { QueuedMessage } from "../models/Chats";
+import { setParticipantsForTesting } from "../models/Participants";
+import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 
 // vi.mock factories are hoisted, so shared state comes from vi.hoisted. Mithril
 // itself is NOT mocked (its hyperscript builds the vnodes these tests inspect).
@@ -28,7 +30,12 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequest
 
 import { buildMessageWithAttachments } from "../models/attachments";
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { USER_BUBBLE_CLASS } from "./user-message-display";
+import {
+  OTHER_BUBBLE_CLASS,
+  OTHER_BUBBLE_CONTINUED_CLASS,
+  USER_BUBBLE_CLASS,
+  USER_BUBBLE_CONTINUED_CLASS,
+} from "./user-message-display";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -62,6 +69,15 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => {
     const attrs = vnode.attrs ?? {};
     return [attrs.class, attrs.className].some((v) => typeof v === "string" && v.includes(className));
+  });
+}
+
+/** The first vnode wearing exactly the class `className`, which a substring search would confuse with a longer
+ *  class that starts the same way (`message-author` against the picture's `message-author-picture`). */
+function findByExactClass(node: unknown, className: string): AnyVnode | undefined {
+  return flatten(node).find((vnode) => {
+    const attrs = vnode.attrs ?? {};
+    return [attrs.class, attrs.className].some((v) => typeof v === "string" && v.split(/\s+/).includes(className));
   });
 }
 
@@ -136,7 +152,7 @@ describe("renderQueuedMessages", () => {
     expect(renderedText(notice)).toContain("Wait for the worker (finished)");
     expect(renderedText(nodes)).not.toContain("<background-task-report>");
     // The user's own queued message is still a verbatim bubble beside it.
-    expect(renderedText(findByClass(nodes, USER_BUBBLE_CLASS))).toContain("my own words");
+    expect(renderedText(findByClass(nodes, USER_BUBBLE_CONTINUED_CLASS))).toContain("my own words");
   });
 
   it("draws a report the backend is sending like the transcript notice it becomes, and a parked one muted", () => {
@@ -279,5 +295,64 @@ describe("renderQueuedMessages", () => {
     expect(renderedText(rendered)).toContain("Queued messages");
     // Inside the group the group's own gap spaces the bubbles, the sending one included.
     expect(String(findByClass(rendered, "outgoing-message--sending")?.attrs?.className)).not.toContain("mb-5");
+  });
+});
+
+describe("renderQueuedMessages in a shared workspace", () => {
+  const roster = ownerAndVisitorRosterFixture();
+  // A visitor's message is queued as the agent was handed it; the backend joins its sender and decides its body.
+  const glennsMessage = (queued_id: string, is_sending: boolean): QueuedMessage => ({
+    ...queuedMessage(queued_id, "[from: glenn] hi", is_sending),
+    display: "prompt_with_context",
+    display_body: "hi",
+    author: "user:glenn-2",
+    author_name: "glenn",
+  });
+
+  beforeEach(() => {
+    mocks.queued = [];
+    mocks.available = true;
+  });
+
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("names another person once over a run of their queued messages, in their words alone, and the viewer never", () => {
+    setParticipantsForTesting("user:owner-1", roster);
+    mocks.queued = [glennsMessage("q1", false), glennsMessage("q2", false), queuedMessage("q3", "and mine")];
+
+    const rendered = renderQueuedMessages("agent-1");
+
+    const [glennsFirst, glennsSecond, owners] = allByClass(rendered, "queued-message");
+    expect(String(glennsFirst?.attrs?.className)).toContain("message-other");
+    expect(renderedText(findByExactClass(glennsFirst, "message-author")).trim()).toBe("Glenn");
+    expect(renderedText(findByClass(glennsFirst, OTHER_BUBBLE_CLASS)).trim()).toBe("hi");
+    expect(renderedText(rendered)).not.toContain("[from:");
+    // Further down Glenn's run: the bubble alone, as his second turn would be.
+    expect(String(glennsSecond?.attrs?.className)).toContain("message-other");
+    expect(findByExactClass(glennsSecond, "message-author")).toBeUndefined();
+    expect(findByClass(glennsSecond, "message-user-bubble")?.attrs?.className).toBe(
+      `${OTHER_BUBBLE_CONTINUED_CLASS} opacity-85`,
+    );
+    // The group's header names the viewer's own, so it wears no "You" even after another person's run.
+    expect(String(owners?.attrs?.className)).not.toContain("message-other");
+    expect(findByExactClass(owners, "message-you")).toBeUndefined();
+    expect(renderedText(findByClass(owners, USER_BUBBLE_CONTINUED_CLASS)).trim()).toBe("and mine");
+  });
+
+  it("draws the sender's own queued message as theirs, and one being sent under its sender too", () => {
+    setParticipantsForTesting("user:glenn-2", roster);
+    mocks.queued = [glennsMessage("q1", false)];
+    const own = renderQueuedMessages("agent-1");
+    expect(findByExactClass(own, "message-author")).toBeUndefined();
+    expect(renderedText(findByClass(own, USER_BUBBLE_CONTINUED_CLASS)).trim()).toBe("hi");
+
+    setParticipantsForTesting("user:owner-1", roster);
+    mocks.queued = [glennsMessage("q1", true)];
+    const sending = renderQueuedMessages("agent-1");
+    expect(String(findByClass(sending, "outgoing-message--sending")?.attrs?.className)).toContain("message-other");
+    expect(renderedText(findByExactClass(sending, "message-author")).trim()).toBe("Glenn");
+    expect(renderedText(sending)).not.toContain("[from:");
   });
 });

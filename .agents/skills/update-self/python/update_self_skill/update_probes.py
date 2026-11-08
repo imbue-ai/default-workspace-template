@@ -40,6 +40,7 @@ from update_self_skill.update_runtime import (
 
 # The shared post-change refresh motion, repo-relative. It owns *how* a changed
 # interface is pushed to whoever is looking; this script only decides *when*.
+# own-process: other-tree -- update-self runs the refresh of whichever tree it lands on, an older release's after a rollback
 _REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
 
 _REFRESH_TIMEOUT_SECONDS = 120.0

@@ -303,8 +303,9 @@ const PRIMARY_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
 
 /** How often at most the page reports input (``shell:input``): activity is measured in minutes, so a report every
- *  20 seconds loses nothing and keeps the message traffic negligible. */
-const INPUT_REPORT_INTERVAL_MS = 20_000;
+ *  20 seconds loses nothing and keeps the message traffic negligible. The shell's page driver throttles its focus
+ *  fallback for a page that binds no contract by the same interval. */
+export const INPUT_REPORT_INTERVAL_MS = 20_000;
 
 /** The link a click landed in, if any (through shadow roots too). */
 function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | null {

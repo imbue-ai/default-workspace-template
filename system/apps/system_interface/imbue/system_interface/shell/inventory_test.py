@@ -43,7 +43,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "app_params": None,
         }
     ]
-    assert serialized[0]["default_shortcut"] == {"launch": "new", "mode": "new"}
+    assert serialized[0]["default_shortcuts"] == [{"launch": "new", "mode": "new"}]
     # An app declaring no launch path offers the synthesized ``open`` at its root.
     assert serialized[1]["launch_paths"] == [
         {
@@ -70,7 +70,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "critical",
         "stop_when_no_windows",
         "launch_paths",
-        "default_shortcut",
+        "default_shortcuts",
         "launcher_rank",
         "pin",
         "message_handlers",
