@@ -70,7 +70,8 @@ Two refusals mean two different things:
 **Ask for the narrowest program that does the job.** A request names either
 any command (`"payload": {}`) or one program (`"payload": {"program": "..."}`),
 and the user sees the difference: one program is a far easier thing to say yes
-to. The program is the command's first element, exactly as you will send it:
+to. The program is what you will put in the `program` query parameter when you
+run it (section 5), exactly as you will send it:
 
 - a bare name the user's shell would find (`rsync`, `gh`, `ffmpeg`): Imbue
   Studio resolves it on their PATH and shows the user the file it found, or
@@ -109,16 +110,22 @@ updating.
 
 ```bash
 latchkey curl -N -H "X-Latchkey-Device: <device id>" -H "X-Imbue-Studio-Agent: ${MINDS_CHAT_ID:-$MNGR_AGENT_ID}" -XPOST \
-  http://latchkey-self.invalid/minds-api-proxy/api/v1/remote-execution/<device id> \
+  "http://latchkey-self.invalid/minds-api-proxy/api/v1/remote-execution/<device id>?program=bash" \
   -H 'Content-Type: application/json' \
-  -d '{"command": ["bash", "-lc", "uname -a && df -h ~"], "timeout_seconds": 60}'
+  -d '{"args": ["-lc", "uname -a && df -h ~"], "timeout_seconds": 60}'
 ```
 
-- `command` is an argv list run directly, not a shell line. Its first element
-  is resolved on the user's login-shell PATH when it is a bare name, taken as
-  a file when it is a `~`-rooted or absolute path, and must be exactly the
-  program a program grant names. Under an any-command grant you may wrap a
-  shell command as `["bash", "-lc", "..."]`.
+- The program goes in the URL's `program` query parameter, percent-encoded
+  (`python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' '~/.studio/custom-scripts/x.sh'`
+  prints the encoded form; a bare name such as `rsync` needs no encoding),
+  given exactly once. It is resolved on the user's login-shell PATH when it is
+  a bare name, taken as a file when it is a `~`-rooted or absolute path, and
+  must be exactly the program a program grant names: the gateway matches the
+  URL, so a different program is refused before it reaches the user's
+  computer. Under an any-command grant you may name `bash` and pass a shell
+  command in `args` as `["-lc", "..."]`.
+- `args` is the list of arguments after the program, passed directly, not a
+  shell line; it may be left out for a program that takes none.
 - `cwd` is optional, absolute or `~`-rooted, and defaults to their home
   directory. `timeout_seconds` defaults to 600.
 - Send `X-Imbue-Studio-Agent` on every call: it is how the user's record of
