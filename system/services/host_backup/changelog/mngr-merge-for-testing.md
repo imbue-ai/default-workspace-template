@@ -1,0 +1,1 @@
+Testing branch merging `mngr/avoid-api-key-limits` and `mngr/remote-execution`. For host_backup it carries the backup-store branch's storage-quota handling unchanged, beside main's in-process env-converge capture; see that branch's entry.

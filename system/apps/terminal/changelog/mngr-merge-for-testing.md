@@ -1,0 +1,1 @@
+Testing branch merging `mngr/avoid-api-key-limits` and `mngr/remote-execution`. For the terminal app it carries only the backup-store branch's flaky mark on the standard-theme browser test, on top of main's own frame-lookup fix; nothing about the terminal app itself changes.

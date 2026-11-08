@@ -1,0 +1,1 @@
+Testing branch merging `mngr/avoid-api-key-limits` and `mngr/remote-execution`. For the chat app it carries the "This computer" permission card title unchanged; see the remote-execution branch's entry.
