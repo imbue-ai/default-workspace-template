@@ -1,6 +1,6 @@
 import pytest
-from flask import Flask
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from flask import Flask
 from workspace_layout.identity import IDENTITY_HEADER
 
 from imbue.chat.identity import UnreadableIdentityHeaderError
