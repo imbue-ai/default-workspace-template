@@ -106,6 +106,12 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
+- Notifications on a phone (see that section): the page that turns them on
+  for a device (`/notifications`, `/notifications.js`), the service worker
+  that shows them (`/sw.js`), the signing key (`GET /api/web-push/key`), the
+  owner's devices (`GET` and `POST /api/web-push/devices`,
+  `DELETE /api/web-push/devices/<id>`, `POST .../<id>/test`), and the
+  loopback-only send (`POST /api/web-push/send`).
 - Presence (`/api/presence`, `/api/presence/heartbeat`) and the roster
   (`/api/roster`): who is connected right now, with their identity and
   profile, and everyone who may be here (see "Who is here").
@@ -134,7 +140,8 @@ Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.js
 offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
-`avatar_selection.json`, and the client-activity
+`avatar_selection.json`, `web_push/` (the Web Push signing key and the
+owner's devices, see "Notifications on a phone"), and the client-activity
 event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
@@ -648,6 +655,46 @@ first desktop, placed minimized for itself alone, and it follows the `show`,
 `open`, and `focus` ops an agent aims at it. Only the shown window's page and
 the pinned chat window's are mounted (`pages/livePages.ts`, the `shown` mount
 policy).
+
+### Notifications on a phone
+
+A phone with the workspace on its home screen (or any browser that opened a
+share link directly) can get a notification when an agent has something for
+the owner, with the Imbue Studio app closed. It is standard Web Push: the
+shell's origin is the one a phone saves, so the shell holds a VAPID signing key
+(`data/.state/system_interface/web_push/vapid_private_key.pem`, made on first
+use, readable by its user alone) and the push subscription of each device the
+owner turned notifications on for (`web_push/devices.json`, at most 20, the
+oldest dropped first).
+
+- **Turning it on.** The launcher's "Notifications on this device" row
+  (offered only where the shell is the top-level page, never inside the Imbue
+  Studio app's frame, whose own notifications already reach the user) goes to
+  `/notifications`. Its button asks for permission on the tap itself, which
+  Safari requires, subscribes through the service worker at `/sw.js` (scope:
+  the shell's root), and registers the subscription. The page lists every
+  device, removes any of them, sends this one a test, and shows the push
+  service's raw answer. Only the owner registers, lists, removes or tests a
+  device: what agents send is the owner's. On iPhone and iPad (iOS 16.4 or
+  later) Web Push works only in the home-screen app, which the page says when
+  opened in Safari.
+- **Sending.** `POST /api/web-push/send` with `{"title", "body", "path",
+  "tag"}` shows one notification on every registered device. `path` is the
+  page a tap opens, under the shell's root (a deep link such as
+  `/?open=chat:/?chat=<id>`); a later notification with the same `tag`
+  replaces the earlier one and still alerts. A notification over the 3993
+  bytes of JSON a push service takes is refused (400) before any post. It is
+  loopback-only and refuses a request a share's proxy stamped, so only the
+  workspace's own agents and apps send. It answers each push service's status;
+  a device whose service says the subscription is gone (404, 410) is
+  forgotten. The `notify-user` skill posts here after it notifies the Imbue
+  Studio app, unless a page is watching the chat.
+- **Showing.** The service worker shows every push it receives (a browser
+  that sees a silent one withdraws the permission), with the avatar's icon,
+  and on a tap focuses an open window of the workspace and navigates it to
+  `path`, or opens one. It handles no fetches.
+- A preview shell refuses every verb here but the reads: its state is a copy
+  of the live one, key and devices included.
 
 ## Running and developing
 

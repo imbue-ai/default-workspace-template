@@ -17,6 +17,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 _SAVE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^save-[0-9a-f]{16}$")
 _REPORT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^report-[0-9a-f]{16}$")
 _PAGE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^page-[0-9a-f]{16}$")
+_PUSH_DEVICE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{16}$")
 _MINTED_ID_BYTES: Final[int] = 8
 
 # How many glyphs a desktop's ``glyph`` may index: the record keeps the field (the multiplayer spec, S7), though
@@ -61,6 +62,19 @@ class PageId(NonEmptyStr):
     def __new__(cls, value: str) -> Self:
         if not _PAGE_ID_PATTERN.fullmatch(value):
             raise InvalidShellValueError(f"invalid page id {value!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return _string_schema(cls, handler)
+
+
+class PushDeviceId(NonEmptyStr):
+    """A device that turned notifications on: the first 16 hex digits of the SHA-256 of its push endpoint."""
+
+    def __new__(cls, value: str) -> Self:
+        if not _PUSH_DEVICE_ID_PATTERN.fullmatch(value):
+            raise InvalidShellValueError(f"invalid push device id {value!r}")
         return super().__new__(cls, value)
 
     @classmethod

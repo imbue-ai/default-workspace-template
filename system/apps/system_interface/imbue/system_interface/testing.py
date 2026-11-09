@@ -30,6 +30,7 @@ from xmlrpc.server import SimpleXMLRPCRequestHandler
 import simple_websocket
 from app_manifest.registry_location import registry_path
 from flask import Flask
+from py_vapid import Vapid
 from pydantic import Field
 from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 
@@ -50,6 +51,9 @@ from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.web_push import BrowserPushSubscription
+from imbue.system_interface.shell.web_push import PushProviderAnswer
+from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -176,6 +180,28 @@ def is_e2e_browser_installed() -> bool:
 _MINTED_SHELL_STATE_DIRECTORIES: Final[list[tempfile.TemporaryDirectory[str]]] = []
 
 
+class PostedPush(FrozenModel):
+    """One message a ``RecordingPushTransport`` was asked to post."""
+
+    endpoint: str = Field(description="The push endpoint it was addressed to")
+    payload: str = Field(description="The JSON the service worker would read")
+
+
+class RecordingPushTransport(PushTransportInterface):
+    """Records every post and answers each with the status its endpoint is given (201, the push services' "taken",
+    unless said otherwise), reaching no push service."""
+
+    posted: list[PostedPush] = Field(default_factory=list, description="Every post, in order")
+    status_code_by_endpoint: dict[str, int | None] = Field(
+        default_factory=dict, description="The status a post to an endpoint answers; None for no answer at all"
+    )
+
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
+        self.posted.append(PostedPush(endpoint=subscription.endpoint, payload=payload))
+        status_code = self.status_code_by_endpoint.get(subscription.endpoint, 201)
+        return PushProviderAnswer(status_code=status_code, detail="" if status_code is not None else "unreachable")
+
+
 def _fresh_shell_state_directory() -> Path:
     directory = tempfile.TemporaryDirectory(prefix="si-shell-state-")
     _MINTED_SHELL_STATE_DIRECTORIES.append(directory)
@@ -201,6 +227,7 @@ def build_test_state(
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
     workspace_environ: Mapping[str, str] | None = None,
+    push_transport: PushTransportInterface | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -225,6 +252,8 @@ def build_test_state(
     is started, and a POST launch wakes a stopped app (off by default, so no test parks a port or starts a
     program by accident), with the grace period and idle sweep interval given. ``workspace_environ`` is the
     environment the workspace's name is read from (none by default, so no test reads the machine's mngr records).
+    ``push_transport`` is how a notification reaches a push service (a recording one that reaches nothing by default,
+    so no test posts to a real push service).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (
@@ -263,6 +292,7 @@ def build_test_state(
         is_lifecycle_enabled=is_lifecycle_enabled,
         no_windows_grace_seconds=no_windows_grace_seconds,
         idle_sweep_interval_seconds=idle_sweep_interval_seconds,
+        push_transport=push_transport if push_transport is not None else RecordingPushTransport(),
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     workspace_name = workspace_name_source(

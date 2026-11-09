@@ -53,8 +53,15 @@ Have them open the link and sign in first, then:
 
 Other browsers have the same option under a similar name in their share or main menu.
 
+## 4. Turn on notifications (optional)
+
+With this, the phone gets a notification when an agent finishes something or needs an answer, even with the computer off (for a workspace on Imbue Cloud).
+Have them, on the phone, open the workspace (on an iPhone or iPad: from the Home Screen icon, since notifications work only there, on iOS 16.4 or later), tap the plus at the bottom right, choose "Notifications on this device", tap "Turn on notifications", and allow them.
+"Send a test notification" on that page checks that it works.
+
 ## When it does not work
 
 - The link does not open: sharing is off, or still being set up. Have them check the Share panel, which says which.
 - The Share panel says links shared before no longer work: the address changed, so old links and home-screen icons are stale. Send a fresh link and re-add the icon.
 - A workspace that runs on their own computer is reachable only while that computer is on and awake. One on Imbue Cloud stays reachable either way.
+- No notifications arrive: on the notifications page, "Send a test notification" shows whether the phone's push service took it. If it did, the phone's settings, Focus or Do Not Disturb are holding it back; if the page says notifications are blocked, they have to be allowed again in the phone's settings for the workspace's icon (or the browser).
