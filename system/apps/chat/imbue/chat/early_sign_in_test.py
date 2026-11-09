@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask.testing import FlaskClient
 
 from imbue.chat.accounts import account_dir
@@ -30,6 +31,12 @@ def _client(tmp_path: Path) -> tuple[FlaskClient, Path]:
         commit_account=early_sign_in.commit_account,
     )
     return build_early_sign_in_application(early_sign_in, auth_flows, static).test_client(), staging
+
+
+def test_the_request_guard_is_ahead_of_the_routes(tmp_path: Path) -> None:
+    client, _staging = _client(tmp_path)
+
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/early-sign-in")
 
 
 def test_a_key_signed_in_on_the_page_is_moved_into_the_live_store(tmp_path: Path) -> None:

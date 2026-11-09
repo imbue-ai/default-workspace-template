@@ -19,7 +19,8 @@ Studio's side of the contract: once the page is served on ``127.0.0.1:<port>`` t
 one line, ``early-sign-in: {"port": <port>}``, and it ends when its stdin closes, which is Studio
 hanging up, or after ``MAX_LIFETIME_SECONDS``. ``GET /api/early-sign-in`` says whether a sign-in
 is under way and whether the user is done with the chooser; the page reports the latter with
-``POST /api/early-sign-in/done``.
+``POST /api/early-sign-in/done``. Studio stamps every request ``X-Imbue-Identity`` as the owner's
+proxy, which the request guard ahead of these routes admits.
 """
 
 import argparse
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.content_security_policy import attach_document_policy
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
@@ -148,6 +150,7 @@ def build_early_sign_in_application(
 ) -> Flask:
     """The chooser page, its assets and theme, the account routes, and the status routes."""
     application = Flask(__name__, static_folder=None)
+    install_request_guard(application, exempt_rules=frozenset())
     application.config[_EARLY_SIGN_IN_CONFIG_KEY] = early_sign_in
     application.config[_AUTH_FLOWS_CONFIG_KEY] = auth_flows
     application.config[_STATIC_DIRECTORY_CONFIG_KEY] = static_directory
