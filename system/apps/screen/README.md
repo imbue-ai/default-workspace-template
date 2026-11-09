@@ -265,8 +265,10 @@ session alone and with text only, so the directions are:
   `GET /neko/api/room/clipboard/image.png` and writes it. A write that fails for want of
   focus runs on the next focus.
 - Local to remote: on paste, while this viewer holds control, the paste event's data goes
-  across; text and HTML to neko's `POST /api/room/clipboard` (its `clipboard/set` message
-  drops the HTML), an image to `POST /api/clipboard/image` as this session, which the
+  across; the plain text to neko's `POST /api/room/clipboard` (neko writes one X clipboard
+  target and keeps only the HTML when both are sent, which leaves a URL bar or a terminal
+  nothing to paste, so the HTML goes only when there is no text), an image to
+  `POST /api/clipboard/image` as this session, which the
   service accepts from the session in control alone (a visitor in control included). A
   paste chord (Ctrl+V, Cmd+V) is left to the browser so its `paste` event carries the data;
   once the remote clipboard holds it the viewer taps V with Ctrl held on the remote, and a

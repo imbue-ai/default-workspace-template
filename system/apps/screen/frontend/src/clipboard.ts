@@ -3,9 +3,10 @@
  * control. Remote to local: neko's ``clipboard/updated`` reaches the host session, and the viewer then reads text
  * and HTML from neko's clipboard route and writes them locally; the service's ``clipboard`` event says an image is
  * there, which the viewer fetches from neko's image route and writes. Local to remote: on paste, while this viewer
- * holds control, the paste event's data goes across; text and HTML to neko's clipboard route (its
- * ``clipboard/set`` message carries text alone), an image to the service's ``/api/clipboard/image`` as this
- * session, which the service accepts from the session in control alone (a visitor in control included). Nothing
+ * holds control, the paste event's data goes across; the plain text to neko's clipboard route (neko writes one X
+ * target and would keep only the HTML if both were sent, so the HTML goes only when there is no text), an image to
+ * the service's ``/api/clipboard/image`` as this session, which the service accepts from the session in control
+ * alone (a visitor in control included). Nothing
  * reads the local clipboard on its own: a programmatic read makes Safari and Firefox pop a "Paste" button and
  * Chrome a permission prompt on every click into the Screen, while the paste event carries its data with no
  * permission at all. A paste that does not cross says so in the strip. A local write needs a focused document, so
@@ -55,10 +56,13 @@ export function serviceClipboardTransport(
       return blob.size > 0 ? blob : null;
     },
     async writeRemoteText(text, html) {
+      // neko writes one X clipboard target and prefers the HTML when both are sent, which leaves a URL bar or a
+      // terminal on the Screen nothing to paste; the plain text goes alone, and the HTML only when there is no text.
+      const body = text !== "" ? { text, html: "" } : { text: "", html };
       const response = await fetch(nekoRouteWithToken("/neko/api/room/clipboard", token()), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, html }),
+        body: JSON.stringify(body),
       });
       return response.ok;
     },

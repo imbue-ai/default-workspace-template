@@ -83,6 +83,24 @@ describe("ClipboardBridge", () => {
     expect(log).toEqual([]);
   });
 
+  it("sends only the plain text of a rich paste, and the html alone when there is no text", async () => {
+    const { bridge, remote } = build();
+    const rich = {
+      items: [],
+      getData: (type: string) => (type === "text/plain" ? "ls -la" : "<pre>ls -la</pre>"),
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(rich)).toBe(true);
+    expect(remote.text).toBe("ls -la");
+    expect(remote.html).toBe("");
+    const htmlOnly = {
+      items: [],
+      getData: (type: string) => (type === "text/html" ? "<img src='x'>" : ""),
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(htmlOnly)).toBe(true);
+    expect(remote.text).toBe("");
+    expect(remote.html).toBe("<img src='x'>");
+  });
+
   it("sends a pasted text to the Screen, once per content", async () => {
     const { bridge, remote, log } = build();
     const paste = textPaste("from laptop");
