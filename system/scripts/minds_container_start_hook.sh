@@ -10,14 +10,15 @@
 # (`minds-outer-autostart.sh`) covers a VM reboot; this covers a restart of the
 # container alone, and needs no desktop app.
 #
-# On the container's very first start the services agent does not exist yet
-# (`mngr create` is about to make it), so there is nothing to relaunch and the
-# hook exits. Otherwise it records the start in the agent's events (the user's
-# record of what happened to their workspace; the hook cannot tell docker's own
-# restart from a `mngr start` of a stopped workspace, which re-runs the
-# entrypoint too) and hands over to the shared start script, which sources the
-# host and agent env and runs `mngr start` (idempotent and flock-serialized, so
-# racing the desktop client or the VM boot unit is safe).
+# The entrypoint runs the hook only once the host is provisioned, so a host whose
+# services agent does not exist yet (a container restarted between its
+# provisioning and `mngr create`, or whose agent was removed) has nothing to
+# relaunch, and the hook exits. Otherwise it records the start in the agent's
+# events (the user's record of what happened to their workspace; the hook cannot
+# tell docker's own restart from a `mngr start` of a stopped workspace, which
+# re-runs the entrypoint too) and hands over to the shared start script, which
+# sources the host and agent env and runs `mngr start` (idempotent and
+# flock-serialized, so racing the desktop client or the VM boot unit is safe).
 set -euo pipefail
 
 HOST_DIR=/home/user/.mngr
