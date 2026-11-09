@@ -12,6 +12,8 @@ import {
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
+import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
+import { isShortcutRecording } from "../model/shortcutRecording";
 import type { DesktopStore, ImmersiveBridge } from "./DesktopStore";
 
 /** The shell's side of the immersive conversation: every ask goes to the embedding chrome. */
@@ -19,8 +21,18 @@ export const immersiveBridge: ImmersiveBridge = {
   requestImmersive: (windowId, isOn) => sendToEmbedder(IMMERSIVE_REQUEST, { windowId, on: isOn }),
 };
 
-/** Register the handlers for the chrome's capabilities and its immersive-mode changes, feeding ``store``. */
+/** The chrome's close-tab chord: close the focused window, unless a shortcut recorder is listening for keys. */
+export function closeFocusedWindowUnlessRecording(closeFocusedWindow: () => void): void {
+  if (isShortcutRecording()) return;
+  closeFocusedWindow();
+}
+
+/** Register the handlers for the chrome's capabilities, its close-tab chord, and its immersive-mode changes,
+ *  feeding ``store``. */
 export function connectEmbedderToStore(store: DesktopStore): void {
+  setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () =>
+    closeFocusedWindowUnlessRecording(() => void store.closeFocusedWindow()),
+  );
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     store.setCanPopOut(message.canPopOut === true);
     store.setOutsideLinkCapabilities({

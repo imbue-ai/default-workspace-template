@@ -267,7 +267,12 @@ def test_an_everywhere_save_without_a_gateway_stays_unsent(tmp_path: Path) -> No
     # ...the catalog offers the discard...
     catalog = client.get("/api/keybindings/catalog").get_json()
     assert catalog["unsent"] == [
-        {"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"]}
+        {
+            "app": "system_interface",
+            "action": "launcher-secondary-send",
+            "chords": ["alt+enter"],
+            "restored_chords": ["ctrl+enter", "meta+enter"],
+        }
     ]
     # ...and discarding drops both layers.
     discarded = client.post(

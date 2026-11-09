@@ -2,7 +2,7 @@
  * The keyboard shortcuts page, served at `/keyboard-shortcuts`: the Keyboard settings section on a page of its own,
  * which Imbue Studio's Workspace settings frames. The page tells Imbue Studio its height, which the frame takes so
  * the settings pane scrolls it with everything else, and whether its recorder is listening, while which Imbue
- * Studio leaves the keys it would act on itself (Escape, the close-window chord) to the recorder. Its first word
+ * Studio acts on neither Escape (closing the settings) nor the close-window chord. Its first word
  * also says the page has loaded, which tells a workspace that serves the page from one too old to (whose shell
  * answers the path with the desktop).
  */

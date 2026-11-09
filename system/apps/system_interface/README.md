@@ -92,9 +92,13 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - Keyboard shortcuts (the user-profile-state spec in the mngr repo, sections 9
   and 10): the requester's resolved chords for the shell's own actions
   (`/api/keybindings/me`, the route every built-in app with keybindings
-  serves), the catalog the Keyboard shortcuts dialog lists: every app's
+  serves), the catalog the keyboard shortcuts screen lists: every app's
   `[[keybindings]]`, read from its registry row so an app that is stopped is
-  listed all the same, resolved for the requester (`/api/keybindings/catalog`),
+  listed all the same, resolved for the requester, with what a reset or a
+  discard of each change would restore (`/api/keybindings/catalog`), the
+  screen as a page of its own (`/keyboard-shortcuts`, which Imbue Studio's
+  Workspace settings frames; it reports its height and whether its recorder
+  is listening with `minds:keyboard-shortcuts-page`),
   and the save, reset, discard, and retry flows (`POST /api/keybindings`,
   `.../reset`, `.../discard`, `.../deliver`). A save lands in the profile
   files under `data/system/profile/` (the requester's override file; for the
@@ -483,7 +487,10 @@ click on the bare backdrop closes it. The backdrop's own context menu offers
 wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
 became: a desktop's colour and glyph are no longer shown or edited), "Change
 theme...", which opens the theme chooser (`ThemeChooserDialog.ts`), and
-"Keyboard shortcuts...", which opens the viewer's keyboard shortcuts
+"Keyboard shortcuts...", which opens the viewer's keyboard shortcuts: in
+Imbue Studio's Workspace settings when the chrome announced
+`opensKeyboardShortcuts` (`minds:open-keyboard-shortcuts`), which shows where
+they live, and otherwise (a plain browser) in a dialog
 (`KeyboardShortcutsDialog.ts` around `KeyboardSettingsSection.ts`; the
 user-profile-state spec, section 10.3). A person's
 tray card lists the desktops they own, and a click on one of somebody else's

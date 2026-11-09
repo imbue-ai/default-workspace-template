@@ -212,6 +212,8 @@ def resolve_app_keybindings(
     workspace_root: Path,
     # False answers what the requester's own override in this workspace would leave: what a reset of it restores.
     is_user_override_applied: bool = True,
+    # False, with the override also left out, answers what discarding an undelivered "everywhere" save restores.
+    is_unsent_applied: bool = True,
 ) -> dict[str, list[str]]:
     """The chords of each declared action for this request, by the spec's per-assignment order."""
     user_id = resolve_request_user_id(identity, snapshot)
@@ -220,7 +222,9 @@ def resolve_app_keybindings(
         if user_id is not None and is_user_override_applied
         else {}
     )
-    unsent_by_key: Mapping[str, object] = load_unsent_change_values(workspace_root) if identity.owner else {}
+    unsent_by_key: Mapping[str, object] = (
+        load_unsent_change_values(workspace_root) if identity.owner and is_unsent_applied else {}
+    )
     snapshot_by_key: Mapping[str, object] = (
         snapshot.value_by_key if identity.owner and snapshot is not None else {}
     )

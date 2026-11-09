@@ -10,7 +10,6 @@ import {
   KeyboardSettingsSection,
   actionsSharingShortcuts,
   clashesOf,
-  conflictingAction,
   reservedChordNotice,
   unsentEntryLabel,
 } from "./KeyboardSettingsSection";
@@ -73,20 +72,23 @@ function catalogOf(overrides: Partial<KeybindingsCatalog> = {}): KeybindingsCata
   };
 }
 
-describe("conflictingAction", () => {
-  it("finds another action of the same app holding the chord, and never the action itself", () => {
-    expect(conflictingAction(APP, "rename", "ctrl+backspace")?.id).toBe("delete");
-    expect(conflictingAction(APP, "delete", "ctrl+backspace")).toBeNull();
-    expect(conflictingAction(APP, "rename", "ctrl+n")).toBeNull();
+describe("clashesOf", () => {
+  it("finds every other action holding a chord, and never the action itself", () => {
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"]).map((entry) => entry.otherAction.id)).toEqual(["delete"]);
+    expect(clashesOf(APP, "delete", ["ctrl+backspace"])).toEqual([]);
+    expect(
+      clashesOf(APP_SHARING_F2, "new-folder", ["f2"]).map((entry) => [entry.chord, entry.otherAction.id]),
+    ).toEqual([
+      ["f2", "rename"],
+      ["f2", "delete"],
+    ]);
   });
 
   it("reads an action's chords from the edits made so far, ahead of what it was loaded with", () => {
     const afterReplace = new Map([["delete", ["delete"]]]);
-    expect(conflictingAction(APP, "rename", "ctrl+backspace", afterReplace)).toBeNull();
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"], afterReplace)).toEqual([]);
   });
-});
 
-describe("clashesOf", () => {
   it("lists each of the chords another action uses, with the action that has it", () => {
     const entries = clashesOf(APP_AFTER_REPLACE, "rename", ["f2", "ctrl+x"]);
     expect(entries.map((entry) => [entry.chord, entry.otherAction.id])).toEqual([["f2", "delete"]]);
@@ -115,10 +117,12 @@ describe("reservedChordNotice", () => {
 describe("unsentEntryLabel", () => {
   it("names an unsent save by its app's display name and its action's label, falling back to the ids", () => {
     const loaded = catalogOf();
-    expect(unsentEntryLabel(loaded, { app: "files", action: "rename", chords: [] })).toBe(
+    expect(unsentEntryLabel(loaded, { app: "files", action: "rename", chords: [], restored_chords: [] })).toBe(
       "Files: Rename the selected entry",
     );
-    expect(unsentEntryLabel(loaded, { app: "gone", action: "old", chords: [] })).toBe("gone: old");
+    expect(unsentEntryLabel(loaded, { app: "gone", action: "old", chords: [], restored_chords: [] })).toBe(
+      "gone: old",
+    );
   });
 });
 
@@ -387,6 +391,60 @@ describe("editing a shortcut", () => {
     ]);
   });
 
+  it("takes a recorded shortcut off every action holding it on Replace", async () => {
+    const posted = stubFetch(catalogOf({ apps: [APP_SHARING_F2] }));
+    const root = await mountSection();
+
+    click(row(root, "new-folder").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "F2" });
+
+    const clashText = root.querySelector(".keybinding-clash")?.textContent ?? "";
+    expect(clashText).toContain('"Rename the selected entry"');
+    expect(clashText).toContain('"Delete the selection"');
+    click(root.querySelector(".keybinding-replace"));
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "rename", chords: [], scope: "workspace" } },
+      { url: "/api/keybindings", body: { app: "files", action: "delete", chords: ["delete"], scope: "workspace" } },
+      { url: "/api/keybindings", body: { app: "files", action: "new-folder", chords: ["f2"], scope: "workspace" } },
+    ]);
+  });
+
+  it("shows what the server holds after a save that fails partway", async () => {
+    const posted: string[] = [];
+    let catalogReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as { action: string };
+          posted.push(body.action);
+          if (body.action === "delete") return { ok: false, status: 500, json: async () => ({ detail: "disk full" }) };
+          return { ok: true, status: 200, json: async () => ({ chords: [], delivery: null }) };
+        }
+        catalogReads += 1;
+        return { ok: true, status: 200, json: async () => catalogOf() };
+      }),
+    );
+    const root = await mountSection();
+    const readsBeforeSave = catalogReads;
+
+    click(row(root, "delete").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "F2" });
+    click(root.querySelector(".keybinding-replace"));
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual(["rename", "delete"]);
+    expect(catalogReads).toBe(readsBeforeSave + 1);
+    expect(root.querySelector(".keybinding-editor")).toBeNull();
+    expect(root.querySelector(".keybinding-pending")).toBeNull();
+  });
+
   it("drops a clashing shortcut on Cancel", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
@@ -465,7 +523,34 @@ describe("the unsent saves' retry", () => {
     vi.unstubAllGlobals();
   });
 
-  const catalogWithUnsent = catalogOf({ unsent: [{ app: "files", action: "rename", chords: ["ctrl+r"] }] });
+  const catalogWithUnsent = catalogOf({
+    unsent: [{ app: "files", action: "rename", chords: ["ctrl+r"], restored_chords: ["f2"] }],
+  });
+
+  it("asks before a discard brings back a shortcut another action uses, and on Replace takes it from there", async () => {
+    const posted = stubFetch(
+      catalogOf({
+        apps: [APP_AFTER_REPLACE],
+        unsent: [{ app: "files", action: "rename", chords: [], restored_chords: ["f2"] }],
+      }),
+    );
+    const root = await mountSection();
+
+    click(root.querySelector(".keybinding-discard"));
+
+    expect(posted).toEqual([]);
+    expect(root.querySelector("[data-keybinding-unsent] .keybinding-clash")?.textContent).toContain(
+      'Discarding brings back F2, which "Delete the selection" uses now.',
+    );
+    expect(row(root, "rename").querySelector(".keybinding-clash")).toBeNull();
+    click(root.querySelector(".keybinding-replace"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "delete", chords: ["delete"], scope: "workspace" } },
+      { url: "/api/keybindings/discard", body: { app: "files", action: "rename" } },
+    ]);
+  });
 
   it("shows why a retry left the saves unsent", async () => {
     stubFetch(catalogWithUnsent, {

@@ -1,6 +1,6 @@
 /**
- * Whether a keyboard shortcut recorder is listening for a new shortcut. While one is, the keys Imbue Studio
- * relays into the workspace (the close-window chord) belong to the recorder, so the shell does not act on them.
+ * Whether a keyboard shortcut recorder is listening for a new shortcut. While one is, the shell does not act on
+ * the close-window chord Imbue Studio relays into the workspace, so recording closes no window.
  */
 
 let isRecording = false;

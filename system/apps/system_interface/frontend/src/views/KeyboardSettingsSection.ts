@@ -40,37 +40,25 @@ import {
 import { setShortcutRecording } from "../model/shortcutRecording";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 
-/** The other action of the same app already using the chord, if any (conflicts are per app). */
-export function conflictingAction(
-  app: KeybindingAppView,
-  actionId: string,
-  chord: string,
-  chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
-): KeybindingActionView | null {
-  return (
-    app.actions.find(
-      (action) => action.id !== actionId && (chordsByActionId.get(action.id) ?? action.chords).includes(chord),
-    ) ?? null
-  );
-}
-
 /** One shortcut a step would bring to an action that another action of the app uses now. */
 export interface ClashEntry {
   readonly chord: string;
   readonly otherAction: KeybindingActionView;
 }
 
-/** Every shortcut among `chords` that another action of the app uses now. */
+/** Every other action of the app using one of `chords` now, once per chord it uses (conflicts are per app). An
+ *  action's chords are read from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved. */
 export function clashesOf(
   app: KeybindingAppView,
   actionId: string,
   chords: readonly string[],
   chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
 ): ClashEntry[] {
-  return chords.flatMap((chord) => {
-    const otherAction = conflictingAction(app, actionId, chord, chordsByActionId);
-    return otherAction === null ? [] : [{ chord, otherAction }];
-  });
+  return chords.flatMap((chord) =>
+    app.actions
+      .filter((action) => action.id !== actionId && (chordsByActionId.get(action.id) ?? action.chords).includes(chord))
+      .map((otherAction) => ({ chord, otherAction })),
+  );
 }
 
 /** The other actions of the app sharing one of this action's shortcuts, by the chords each row shows. */
@@ -142,8 +130,9 @@ export function areChordListsEqual(left: readonly string[], right: readonly stri
   return left.length === right.length && left.every((chord, index) => chord === right[index]);
 }
 
-/** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, or a reset of a change. */
-type ClashCause = "record" | "restore-default" | "reset";
+/** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, a reset of this
+ *  workspace's change, or a discard of an undelivered "everywhere" save. */
+type ClashCause = "record" | "restore-default" | "reset" | "discard";
 
 /** Shortcuts a step would bring in that other actions use, until the person replaces or cancels. */
 interface PendingClash {
@@ -161,8 +150,8 @@ interface ActionEditor {
   clash: PendingClash | null;
 }
 
-/** A reset whose restored shortcuts other actions use, waiting on Replace or Cancel on the row. */
-interface PendingReset {
+/** A reset or a discard whose restored shortcuts other actions use, waiting on Replace or Cancel. */
+interface PendingRevert {
   readonly app: KeybindingAppView;
   readonly action: KeybindingActionView;
   readonly clash: PendingClash;
@@ -189,14 +178,15 @@ function clashSentence(cause: ClashCause, entry: ClashEntry, isApple: boolean): 
   if (cause === "restore-default") {
     return `The default includes ${shortcut}, which "${entry.otherAction.label}" uses now.`;
   }
-  return `Resetting brings back ${shortcut}, which "${entry.otherAction.label}" uses now.`;
+  const step = cause === "reset" ? "Resetting" : "Discarding";
+  return `${step} brings back ${shortcut}, which "${entry.otherAction.label}" uses now.`;
 }
 
 export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAttrs> {
   let catalog: KeybindingsCatalog | null = null;
   let loadError: string | null = null;
   let editor: ActionEditor | null = null;
-  let pendingReset: PendingReset | null = null;
+  let pendingRevert: PendingRevert | null = null;
   let notice: string | null = null;
   let isBusy = false;
   let isRecorderListening = false;
@@ -231,7 +221,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   function startEditing(app: KeybindingAppView, action: KeybindingActionView): void {
     closeEditor();
-    pendingReset = null;
+    pendingRevert = null;
     editor = {
       app,
       action,
@@ -314,7 +304,10 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       closeEditor();
       await load();
     } catch (error) {
+      // Some saves may have landed before the one that failed: show what the server holds now.
       notice = (error as Error).message;
+      closeEditor();
+      await load();
     }
     isBusy = false;
     m.redraw();
@@ -327,26 +320,37 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       await load();
     } catch (error) {
       notice = (error as Error).message;
+      await load();
     }
     isBusy = false;
     m.redraw();
   }
 
-  function reset(appView: KeybindingAppView, action: KeybindingActionView): void {
-    const entries = clashesOf(appView, action.id, action.reset_chords);
+  /** Undo a change (a reset of this workspace's, or a discard of an unsent "everywhere" save), asking first when
+   *  what it brings back is another action's now. */
+  function revert(
+    appView: KeybindingAppView,
+    action: KeybindingActionView,
+    cause: "reset" | "discard",
+    restoredChords: readonly string[],
+  ): void {
+    const entries = clashesOf(appView, action.id, restoredChords);
     if (entries.length > 0) {
-      pendingReset = { app: appView, action, clash: { cause: "reset", entries } };
+      pendingRevert = { app: appView, action, clash: { cause, entries } };
       return;
     }
-    void act(async () => {
-      await resetKeybinding(appView.app, action.id);
-      savedActionKeys.add(actionKey(appView.app, action.id));
-    });
+    void act(() => runRevert(appView.app, action.id, cause));
   }
 
-  /** Take the restored shortcuts off the actions that have them now, in this workspace, then reset. */
-  function replaceAndReset(current: PendingReset): void {
-    pendingReset = null;
+  async function runRevert(app: string, actionId: string, cause: ClashCause): Promise<void> {
+    if (cause === "discard") await discardKeybinding(app, actionId);
+    else await resetKeybinding(app, actionId);
+    savedActionKeys.add(actionKey(app, actionId));
+  }
+
+  /** Take the restored shortcuts off the actions that have them now, in this workspace, then revert. */
+  function replaceAndRevert(current: PendingRevert): void {
+    pendingRevert = null;
     void act(async () => {
       const remainingChordsByActionId = new Map<string, string[]>();
       for (const entry of current.clash.entries) {
@@ -360,9 +364,24 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         await saveKeybinding(current.app.app, otherActionId, otherChords, "workspace");
         savedActionKeys.add(actionKey(current.app.app, otherActionId));
       }
-      await resetKeybinding(current.app.app, current.action.id);
-      savedActionKeys.add(actionKey(current.app.app, current.action.id));
+      await runRevert(current.app.app, current.action.id, current.clash.cause);
     });
+  }
+
+  /** A pending revert's Replace / Cancel box, where it was asked for. */
+  function pendingRevertView(current: PendingRevert, isApple: boolean): m.Children {
+    return m(
+      "div",
+      { class: "mb-3" },
+      clashView(
+        current.clash,
+        isApple,
+        () => replaceAndRevert(current),
+        () => {
+          pendingRevert = null;
+        },
+      ),
+    );
   }
 
   /** Each shortcut its own keycap, with "or" between the alternatives. */
@@ -590,8 +609,11 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     const chords = shownChords(appView, action);
     const isPendingReplace = !isEditing && chords !== action.chords;
     const resetClash =
-      pendingReset !== null && pendingReset.app.app === appView.app && pendingReset.action.id === action.id
-        ? pendingReset
+      pendingRevert !== null &&
+      pendingRevert.clash.cause === "reset" &&
+      pendingRevert.app.app === appView.app &&
+      pendingRevert.action.id === action.id
+        ? pendingRevert
         : null;
     return m("div", { key: action.id, "data-keybinding-action": `${appView.app}.${action.id}` }, [
       m("div", { class: "flex min-h-10 items-center gap-3 border-b border-default py-2" }, [
@@ -609,9 +631,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                   sm: true,
                   variant: "ghost",
                   extra: "keybinding-reset",
-                  disabled: isBusy || editor !== null || pendingReset !== null,
+                  disabled: isBusy || editor !== null || pendingRevert !== null,
                   ...hoverTooltipAttrs("Undo your change in this workspace"),
-                  onclick: () => reset(appView, action),
+                  onclick: () => revert(appView, action, "reset", action.reset_chords),
                 },
                 "Reset",
               )
@@ -622,27 +644,14 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
               sm: true,
               variant: "ghost",
               extra: "keybinding-edit",
-              disabled: isBusy || isEditing || pendingReset !== null,
+              disabled: isBusy || isEditing || pendingRevert !== null,
               onclick: () => startEditing(appView, action),
             },
             "Edit",
           ),
         ]),
       ]),
-      resetClash === null
-        ? null
-        : m(
-            "div",
-            { class: "mb-3" },
-            clashView(
-              resetClash.clash,
-              isApple,
-              () => replaceAndReset(resetClash),
-              () => {
-                pendingReset = null;
-              },
-            ),
-          ),
+      resetClash === null ? null : pendingRevertView(resetClash, isApple),
       isEditing && editor !== null ? editorView(editor, isApple) : null,
     ]);
   }
@@ -682,7 +691,17 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
-  function unsentBanner(loaded: KeybindingsCatalog): m.Children {
+  function discard(loaded: KeybindingsCatalog, entry: UnsentKeybindingView): void {
+    const appView = loaded.apps.find((candidate) => candidate.app === entry.app);
+    const action = appView?.actions.find((candidate) => candidate.id === entry.action);
+    if (appView === undefined || action === undefined) {
+      void act(() => discardKeybinding(entry.app, entry.action));
+      return;
+    }
+    revert(appView, action, "discard", entry.restored_chords);
+  }
+
+  function unsentBanner(loaded: KeybindingsCatalog, isApple: boolean): m.Children {
     if (loaded.unsent.length === 0) return null;
     return m("div", { class: "mb-4 rounded-md bg-warning-surface p-3", "data-keybinding-unsent": true }, [
       m(
@@ -692,21 +711,32 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           ? "Waiting for your approval in Imbue Studio; these apply in this workspace meanwhile."
           : "Not yet saved to your account; these apply in this workspace meanwhile.",
       ),
-      ...loaded.unsent.map((entry) =>
-        m("div", { class: "mt-1 flex items-center justify-between gap-2" }, [
-          m("span", { class: "type-helper min-w-0 truncate text-secondary" }, unsentEntryLabel(loaded, entry)),
-          m(
-            Button,
-            {
-              sm: true,
-              variant: "ghost",
-              disabled: isBusy,
-              onclick: () => void act(() => discardKeybinding(entry.app, entry.action)),
-            },
-            "Discard",
-          ),
-        ]),
-      ),
+      ...loaded.unsent.map((entry) => {
+        const discardClash =
+          pendingRevert !== null &&
+          pendingRevert.clash.cause === "discard" &&
+          pendingRevert.app.app === entry.app &&
+          pendingRevert.action.id === entry.action
+            ? pendingRevert
+            : null;
+        return m("div", { "data-keybinding-unsent-entry": `${entry.app}.${entry.action}` }, [
+          m("div", { class: "mt-1 flex items-center justify-between gap-2" }, [
+            m("span", { class: "type-helper min-w-0 truncate text-secondary" }, unsentEntryLabel(loaded, entry)),
+            m(
+              Button,
+              {
+                sm: true,
+                variant: "ghost",
+                extra: "keybinding-discard",
+                disabled: isBusy || pendingRevert !== null,
+                onclick: () => discard(loaded, entry),
+              },
+              "Discard",
+            ),
+          ]),
+          discardClash === null ? null : pendingRevertView(discardClash, isApple),
+        ]);
+      }),
       m(
         Button,
         {
@@ -739,7 +769,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       const isApple = vnode.attrs.isApple ?? isApplePlatform();
       const loaded = catalog;
       return m("div", { "data-keyboard-settings": true }, [
-        unsentBanner(loaded),
+        unsentBanner(loaded, isApple),
         notice !== null ? m("p", { class: "keybinding-notice type-helper mb-3 text-secondary" }, notice) : null,
         m(
           "div",

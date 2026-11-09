@@ -122,6 +122,8 @@ export interface UnsentKeybindingView {
   app: string;
   action: string;
   chords: string[];
+  /** What a discard of this save leaves: the resolution without it and without the override it wrote. */
+  restored_chords: string[];
 }
 
 /** Everything the Keyboard settings renders (user-profile-state spec, section 10.3). */
