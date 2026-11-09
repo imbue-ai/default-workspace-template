@@ -75,6 +75,7 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.claude.model import claude_launch_settings
 from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
@@ -91,6 +92,7 @@ from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReade
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.main import _create_quick_change_chat
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
@@ -1726,6 +1728,46 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
         third.stop()
 
 
+def _create_quick_change_chat_on_a_recording_mngr(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, RecordingMngrMessenger]:
+    """Create the quick-change chat through the chat app's own path and let its create land and settle; returns
+    the ``mngr`` argv line it ran and the messenger every message to the agent (a ``/model`` included) goes to."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    messenger = RecordingMngrMessenger()
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, argv_log = _handoff_manager(broadcaster, tmp_path, sent, messenger=messenger)
+    try:
+        chat_id = _create_quick_change_chat(manager, "Quick changes", "Make the header blue", {})
+        outcome = manager.wait_for_chat_creation(ChatId(chat_id), timeout=10.0)
+        assert outcome is not None and outcome.is_created
+    finally:
+        manager.stop()
+    (argv_line,) = argv_log.read_text().splitlines()
+    return argv_line, messenger
+
+
+def test_the_quick_change_chat_launches_on_the_fast_tiers_model_and_effort(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv_line, _messenger = _create_quick_change_chat_on_a_recording_mngr(broadcaster, tmp_path, monkeypatch)
+    tokens = argv_line.split(" ")
+    settings = [tokens[i + 1] for i, tok in enumerate(tokens) if tok == "-S"]
+    assert settings == [
+        "agent_types.claude.settings_overrides.model=sonnet[1m]",
+        "agent_types.claude.settings_overrides.effortLevel=medium",
+    ]
+
+
+def test_the_quick_change_chat_is_sent_no_model_switch_once_it_is_up(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``/model`` sent to a claude saves the model as the account's default for every new session."""
+    _argv_line, messenger = _create_quick_change_chat_on_a_recording_mngr(broadcaster, tmp_path, monkeypatch)
+    assert not any(message.startswith("/model") for _agent, message in messenger.sent)
+
+
 def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
@@ -2754,6 +2796,14 @@ def test_chat_create_argv_carries_a_callers_labels() -> None:
     assert_mngr_argv_valid(argv)
     labels = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--label"]
     assert labels[-2:] == ["auto_open=true", "assist=true"]
+
+
+def test_chat_create_argv_carries_launch_settings_the_live_cli_accepts() -> None:
+    """A create's own settings ride as ``-S`` pairs, which is how a chat's agent launches on a set model."""
+    settings = claude_launch_settings("sonnet[1m]", "medium")
+    argv = _chat_create_argv(settings=settings)
+    assert_mngr_argv_valid(argv)
+    assert [argv[i + 1] for i, tok in enumerate(argv) if tok == "-S"] == list(settings)
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:

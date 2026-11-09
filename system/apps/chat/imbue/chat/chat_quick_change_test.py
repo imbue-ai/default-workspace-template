@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from imbue.chat.chat_quick_change import JEV_MODEL
 from imbue.chat.chat_quick_change import JEV_ROUTE_PATH
@@ -29,6 +30,8 @@ from imbue.chat.chat_quick_change import QuickChangeDeliveryError
 from imbue.chat.chat_quick_change import QuickChangeRouter
 from imbue.chat.chat_quick_change import ROUTING_LOG_FILENAME
 from imbue.chat.chat_quick_change import RoutingDecision
+from imbue.chat.chat_quick_change import SIDE_AGENT_MODEL_BY_TIER
+from imbue.chat.chat_quick_change import SideAgentTier
 from imbue.chat.chat_quick_change import ask_jev
 from imbue.chat.chat_quick_change import build_recent_conversation
 from imbue.chat.chat_quick_change import decide_routing
@@ -39,6 +42,8 @@ from imbue.chat.chat_quick_change import read_chat_jev_credentials
 from imbue.chat.chat_quick_change import read_openrouter_jev_credentials
 from imbue.chat.chat_quick_change import read_probability
 from imbue.chat.chat_quick_change import resolve_jev_credentials
+from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
+from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.primitives import ChatId
 
 _CHAT_ID = ChatId("agent-00000000000000000000000000000001")
@@ -580,3 +585,10 @@ def test_routing_end_to_end_over_a_stubbed_openrouter_endpoint(tmp_path: Path) -
     router.forward(_CHAT_ID, result)
 
     assert result.is_routed and len(created) == 1
+
+
+@pytest.mark.parametrize("tier", list(SideAgentTier))
+def test_every_side_agent_tier_names_a_model_and_effort_the_claude_catalog_accepts(tier: SideAgentTier) -> None:
+    """A tier the catalog refused would launch the quick-change agent on a model the model bar cannot show."""
+    model_id, effort = SIDE_AGENT_MODEL_BY_TIER[tier]
+    assert validate_model_pick(CLAUDE_CATALOG.options, model_id, effort, fast=False).id == model_id

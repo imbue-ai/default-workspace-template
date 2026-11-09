@@ -87,8 +87,21 @@ QUICK_CHANGE_SKILL: Final[str] = "quick-look-and-feel-change"
 QUICK_CHANGE_CHAT_NAME: Final[str] = "Quick look-and-feel changes"
 # The label the quick-change chat carries, so it can be found in `mngr list`.
 QUICK_CHANGE_LABEL: Final[str] = "quick_change_agent"
-# The model the quick-change chat runs on: the claude harness's Sonnet option id.
-QUICK_CHANGE_MODEL_ID: Final[str] = "sonnet[1m]"
+
+
+class SideAgentTier(LowerCaseStrEnum):
+    """How capable a model the quick-change chat runs on."""
+
+    FAST = auto()
+    CAREFUL = auto()
+
+
+# Each tier's claude model option id and effort, which the quick-change chat's agent launches on.
+SIDE_AGENT_MODEL_BY_TIER: Final[Mapping[SideAgentTier, tuple[str, str]]] = {
+    SideAgentTier.FAST: ("sonnet[1m]", "medium"),
+    SideAgentTier.CAREFUL: ("opus[1m]", "medium"),
+}
+SIDE_AGENT_DEFAULT_TIER: Final[SideAgentTier] = SideAgentTier.FAST
 
 JEV_ROUTE_PATH: Final[str] = "/jev/v1/systemone"
 # A file in the chat app's data folder holding an OpenRouter key, which sends Jev calls to

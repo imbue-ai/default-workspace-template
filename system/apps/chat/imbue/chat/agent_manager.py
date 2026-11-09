@@ -357,6 +357,7 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
+    settings: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -415,6 +416,9 @@ def _build_chat_create_command(
     # caller's own labels against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
+    # Config settings for this create alone (``-S``), such as the model a chat's agent launches on.
+    for setting in settings:
+        cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness. A create that has a model to apply first withholds
     # its message and sends it afterwards, so it passes none here.
@@ -3848,6 +3852,7 @@ class AgentManager:
         message: str = "",
         labels: Mapping[str, str] | None = None,
         model_pick: ModelPick | None = None,
+        launch_settings: Sequence[str] = (),
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
 
@@ -3899,6 +3904,11 @@ class AgentManager:
         with a pick the create is silent and the message is delivered afterwards through the
         send path, the way a handoff's successor gets its prompt; a pick the agent refuses is
         logged and the chat runs on its harness's default.
+
+        ``launch_settings`` are ``mngr create -S`` settings for this create alone: a model set
+        there (``claude_launch_settings``) is the one the agent starts on, with no switch after
+        start. They are not kept on the provisional record, so a relaunch by ``chat_id`` runs
+        without them unless its caller passes them again.
         """
         extra_labels = dict(labels or {})
         try:
@@ -4051,6 +4061,7 @@ class AgentManager:
             account_args,
             initial_message="" if deferred_message else launch_message,
             extra_labels=create_labels,
+            settings=launch_settings,
         )
 
         self._broadcast_provisional(provisional)

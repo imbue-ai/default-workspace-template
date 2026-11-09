@@ -222,6 +222,21 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     native_atomic_shoulder_tap_possible=True,
 )
 
+def claude_launch_settings(model_id: str, effort: str) -> tuple[str, ...]:
+    """The ``mngr create -S`` settings that start a claude agent on ``model_id`` at ``effort``.
+
+    They land in the agent's own launch settings (the ``--settings`` overlay mngr passes claude,
+    which also seeds ``model_state.json`` from them), so they hold for that agent alone. A ``/model``
+    switch after start would instead save the model as the account's default for every new session.
+    They target ``claude`` for the reason ``.mngr/settings.toml`` gives at ``fastMode``, and are
+    inert on any other harness.
+    """
+    return (
+        f"agent_types.claude.settings_overrides.model={model_id}",
+        f"agent_types.claude.settings_overrides.effortLevel={effort}",
+    )
+
+
 # The statusline writes model_state.json at the agent state-dir root; the registry
 # wires this as the harness's model_state_relative_path (the shared reader reads there).
 CLAUDE_STATE_RELATIVE_PATH: Path = Path(".")

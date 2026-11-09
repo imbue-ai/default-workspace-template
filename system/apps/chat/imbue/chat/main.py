@@ -25,9 +25,11 @@ from imbue.chat.background_tasks import BACKGROUND_TASKS_DIRNAME
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_quick_change import OPENROUTER_KEY_FILENAME
-from imbue.chat.chat_quick_change import QUICK_CHANGE_MODEL_ID
 from imbue.chat.chat_quick_change import QuickChangeDeliveryError
 from imbue.chat.chat_quick_change import QuickChangeRouter
+from imbue.chat.chat_quick_change import SIDE_AGENT_DEFAULT_TIER
+from imbue.chat.chat_quick_change import SIDE_AGENT_MODEL_BY_TIER
+from imbue.chat.chat_quick_change import SideAgentTier
 from imbue.chat.chat_quick_change import ask_jev
 from imbue.chat.chat_quick_change import read_chat_jev_credentials
 from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
@@ -40,6 +42,7 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.claude.model import claude_launch_settings
 from imbue.chat.harnesses.registry import build_one_shot_completion
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
@@ -47,7 +50,6 @@ from imbue.chat.main_chat import MainChatStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.models import AgentNameConflictError
-from imbue.chat.models import ModelPick
 from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
@@ -238,20 +240,33 @@ def build_production_state(
     return state
 
 
-def _create_quick_change_chat(agent_manager: AgentManager, name: str, message: str, labels: dict[str, str]) -> str:
-    """Create the quick-change chat on Sonnet; a name already taken (a chat left from an earlier record) gets a number."""
-    model_pick = ModelPick(model_id=QUICK_CHANGE_MODEL_ID)
+def _create_quick_change_chat(
+    agent_manager: AgentManager,
+    name: str,
+    message: str,
+    labels: dict[str, str],
+    tier: SideAgentTier = SIDE_AGENT_DEFAULT_TIER,
+) -> str:
+    """Create the quick-change chat on the tier's model; a name already taken (a chat left from an earlier record)
+    gets a number.
+
+    The model rides the create's launch settings rather than a model pick: a pick is applied with ``/model``
+    once the agent is up, which saves the model as the account's default for every new session.
+    """
+    launch_settings = claude_launch_settings(*SIDE_AGENT_MODEL_BY_TIER[tier])
     for number in range(1, _QUICK_CHANGE_NAME_ATTEMPTS + 1):
         requested_name = name if number == 1 else f"{name} {number}"
         try:
             created = agent_manager.create_chat(
-                requested_name=requested_name, message=message, labels=labels, model_pick=model_pick
+                requested_name=requested_name, message=message, labels=labels, launch_settings=launch_settings
             )
         except AgentNameConflictError:
             continue
         return str(created.chat_id)
     # Every numbered name is taken: let the chat app mint the next free "Chat N".
-    created = agent_manager.create_chat(requested_name="", message=message, labels=labels, model_pick=model_pick)
+    created = agent_manager.create_chat(
+        requested_name="", message=message, labels=labels, launch_settings=launch_settings
+    )
     return str(created.chat_id)
 
 
