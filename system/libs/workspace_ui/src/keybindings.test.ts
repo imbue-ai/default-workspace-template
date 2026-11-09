@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
+  chordDisplayLabel,
   chordFromKeydown,
   chordKeycapLabels,
   chordSpokenLabel,
@@ -52,6 +53,19 @@ describe("chordKeycapLabels", () => {
     expect(chordKeycapLabels("ctrl+[", true)).toEqual(["⌃", "["]);
     expect(chordKeycapLabels("meta+plus", true)).toEqual(["⌘", "+"]);
     expect(chordKeycapLabels("escape", true)).toEqual(["Esc"]);
+  });
+});
+
+describe("chordDisplayLabel", () => {
+  it("runs Apple's symbols together, the way a Mac menu writes a shortcut", () => {
+    expect(chordDisplayLabel("shift+meta+n", true)).toBe("⇧⌘N");
+    expect(chordDisplayLabel("meta+enter", true)).toBe("⌘↩");
+    expect(chordDisplayLabel("f2", true)).toBe("F2");
+  });
+
+  it("joins the names with plus signs elsewhere", () => {
+    expect(chordDisplayLabel("ctrl+shift+n", false)).toBe("Ctrl+Shift+N");
+    expect(chordDisplayLabel("alt+arrowup", false)).toBe("Alt+↑");
   });
 });
 

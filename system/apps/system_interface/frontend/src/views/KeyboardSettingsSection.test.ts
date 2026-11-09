@@ -4,6 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KeybindingAppView, KeybindingsCatalog, KeybindingsDeliveryOutcome } from "../model/api";
+import { isShortcutRecording } from "../model/shortcutRecording";
 import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
@@ -220,17 +221,56 @@ describe("editing a shortcut", () => {
     ]);
   });
 
-  it("cancels the recorder on Escape without adding anything", async () => {
-    stubFetch(catalogOf());
+  it("records Escape like any other key, since an action may be bound to it", async () => {
+    const posted = stubFetch(catalogOf());
     const root = await mountSection();
 
     click(row(root, "rename").querySelector(".keybinding-edit"));
     click(root.querySelector(".keybinding-add"));
     pressInRecorder(root, { key: "Escape" });
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual([
+      {
+        url: "/api/keybindings",
+        body: { app: "files", action: "rename", chords: ["f2", "escape"], scope: "workspace" },
+      },
+    ]);
+  });
+
+  it("stops listening on the recorder's own Cancel without adding anything", async () => {
+    stubFetch(catalogOf());
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    click(root.querySelector(".keybinding-recorder-cancel"));
 
     expect(root.querySelector(".keybinding-recorder")).toBeNull();
     expect(root.querySelectorAll(".keybinding-staged")).toHaveLength(1);
     expect(buttonNamed(root, "Only in this workspace").disabled).toBe(true);
+  });
+
+  it("says when the recorder starts and stops listening, to its host and to the shell", async () => {
+    stubFetch(catalogOf());
+    const changes: boolean[] = [];
+    const root = mountView(() =>
+      m(KeyboardSettingsSection, {
+        isApple: true,
+        onRecordingChange: (isRecording: boolean) => changes.push(isRecording),
+      }),
+    );
+    await flush();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    const isRecordingWhileListening = isShortcutRecording();
+    pressInRecorder(root, { key: "r", ctrlKey: true });
+
+    expect(changes).toEqual([true, false]);
+    expect(isRecordingWhileListening).toBe(true);
+    expect(isShortcutRecording()).toBe(false);
   });
 
   it("moves a chord another action holds once Replace is chosen, saving both actions", async () => {
@@ -244,6 +284,12 @@ describe("editing a shortcut", () => {
     expect(root.querySelector(".keybinding-clash")?.textContent).toContain('already runs "Rename the selected entry"');
     expect(buttonNamed(root, "Only in this workspace").disabled).toBe(true);
     click(root.querySelector(".keybinding-replace"));
+
+    expect(row(root, "rename").querySelector(".keybinding-off")?.textContent).toBe("Off");
+    expect(row(root, "rename").querySelector(".keybinding-pending")?.textContent).toBe("Changes when you save");
+    expect(root.querySelector(".keybinding-replaced")?.textContent).toBe(
+      'F2 will be removed from "Rename the selected entry".',
+    );
     click(buttonNamed(root, "Only in this workspace"));
     await flush();
 

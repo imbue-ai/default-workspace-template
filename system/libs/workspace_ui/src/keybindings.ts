@@ -141,6 +141,15 @@ export function chordKeycapLabels(chord: string, isApple: boolean): string[] {
   });
 }
 
+/**
+ * One canonical chord as a single label, the way a menu writes a shortcut: Apple's symbols run together on an
+ * Apple platform ("⇧⌘N", the grammar's modifier order being Apple's own), the names joined with `+` elsewhere
+ * ("Ctrl+Shift+N").
+ */
+export function chordDisplayLabel(chord: string, isApple: boolean): string {
+  return chordKeycapLabels(chord, isApple).join(isApple ? "" : "+");
+}
+
 /** One canonical chord in words ("Command+Shift+N"), for tooltips, screen readers, and messages. */
 export function chordSpokenLabel(chord: string, isApple: boolean): string {
   return chord
