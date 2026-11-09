@@ -99,6 +99,10 @@ from share_gateway.turn import TurnCredentialCache
 POLL_INTERVAL_SECONDS = 10
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
+# How often a running stack restamps its "up" status, so a reader can tell a live
+# "up" from one a runner wrote before it died with its container (the Imbue Studio
+# desktop disbelieves an "up" stamped more than five minutes ago).
+STATUS_HEARTBEAT_INTERVAL = timedelta(minutes=1)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -206,6 +210,7 @@ class ShareStack:
         self.last_caddyfile_text = ""
         self.last_assignment_fetch = time.monotonic()
         self.last_renewal_check = datetime.now(timezone.utc)
+        self.last_status_heartbeat = datetime.now(timezone.utc)
 
     def render_current_caddyfile(self) -> str:
         return render_caddyfile(
@@ -382,16 +387,21 @@ def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetrySt
         )
         return None
     retry_state.reset()
+    _write_up_status(materials.workspace_domain, utc_now())
+    return stack
+
+
+def _write_up_status(workspace_domain: str, now: datetime) -> None:
+    """Write the "up" status document, stamped ``now``; the heartbeat rewrites this same document."""
     write_gateway_status(
         materials_module.GATEWAY_STATUS_FILE,
         state=STATUS_UP,
-        workspace_domain=materials.workspace_domain,
+        workspace_domain=workspace_domain,
         failed_attempt_count=0,
         last_error="",
         next_retry_in_seconds=None,
-        now=utc_now(),
+        now=now,
     )
-    return stack
 
 
 def _stop_stack(stack: ShareStack | None) -> None:
@@ -432,8 +442,20 @@ def _repoll_assignment(stack: ShareStack) -> None:
     _converge_frpc_processes(stack)
 
 
+def _is_status_heartbeat_due(last_status_heartbeat: datetime, now: datetime) -> bool:
+    return now - last_status_heartbeat >= STATUS_HEARTBEAT_INTERVAL
+
+
+def _heartbeat_gateway_status(stack: ShareStack, now: datetime) -> None:
+    """Rewrite the "up" status with a fresh stamp once per heartbeat interval."""
+    if not _is_status_heartbeat_due(stack.last_status_heartbeat, now):
+        return
+    stack.last_status_heartbeat = now
+    _write_up_status(stack.materials.workspace_domain, now)
+
+
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
-    """Periodic upkeep for a running stack: restart dead children, re-render configs, renew the cert."""
+    """Periodic upkeep for a running stack: restart dead children, re-render configs, restamp the status, renew the cert."""
     if stack.caddy_process is not None and stack.caddy_process.poll() is not None:
         _log(f"caddy exited with {stack.caddy_process.returncode}; restarting the stack")
         _stop_stack(stack)
@@ -463,6 +485,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
                 _log(f"Reloaded frpc[{relay_id}] for a service-registry change")
 
     now = datetime.now(timezone.utc)
+    _heartbeat_gateway_status(stack, now)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:
         stack.last_renewal_check = now
         cert_before = materials_module.TLS_CERT_FILE.read_text() if materials_module.TLS_CERT_FILE.exists() else ""
