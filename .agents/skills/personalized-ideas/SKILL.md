@@ -54,7 +54,7 @@ That offer states everything step 2 requires, so do not make it again:
 
 Make the offer once, as this exact message, word for word, with nothing added before or after it:
 
-> **Not sure what to build?** I can look you up on public web pages by the name on your account, then suggest things that fit you. I’ll show you what I find so you can tell me what’s really you, and remember only that, in this workspace, for future chats. You can ask me to forget it anytime. Just say yes if you’d like that.
+> **Not sure what to build?** I can look you up on public web pages by the name on your account, using an outside search service, then suggest things that fit you. I’ll show you what I find so you can tell me what’s really you, and remember only that, in this workspace, for future chats. You can ask me to forget it anytime. Just say yes if you’d like that.
 
 It is the same message Imbue Studio's welcome uses (`LOOKUP_OFFER` in mngr-internal's `apps/minds/frontend/src/models/creationTranscript.ts`), and it is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
 Do not reword it, shorten it, personalize it, or mention anything about the user in it; change it only in both places at once.
@@ -89,15 +89,55 @@ Never take a name from anywhere else, such as a file, a commit author, or an ema
 
 ## 4. Search
 
-Search the public web for the name with your web search tool, then read the most promising pages.
-Use the name alone first; add a detail (a city, an employer, a field) only when the user gave you one.
-Stay on public pages: do not sign in to anything, do not use the user's connected accounts, and do not look for contact details, addresses, family, finances, or health.
+Search through [treg](https://treg.to/), a service that passes each request on to one of many public web search engines and bills the user's treg account per call.
+Use only these two treg tools, and nothing else from its catalog:
 
-Save every result and page you use to `sources.json` as you go, with its URL and the date fetched.
+- `treg.web.search`: search the open web. `POST https://treg.to/call/treg.web.search` with `{"q": "<query>", "limit": 10}`; the rows are in `output.results`.
+- `treg.web.extract`: read one public page from the results. `POST https://treg.to/call/treg.web.extract` with `{"url": "<url>"}`; the content is in `output.pages`.
+
+Never call treg's people or company enrichment tools (Hunter, Lusha, People Data Labs, Apollo, LeadMagic, Diffbot's knowledge graph, and the like), even when one would answer faster; see "Why only web search" below.
+
+**Connecting treg.**
+The first time, ask the user to connect their treg account.
+The request goes in a tool call of its own; then end your turn:
+
+```bash
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service",
+       "payload": {"domain": "treg.to", "scheme": "https", "header": "X-Treg-Token: {token}",
+                   "credential_instructions": "Sign in at treg.to (new accounts start with $1 of free calls) and copy your API token. It starts with trg_live_."},
+       "rationale": "To look you up on the public web, as you asked, I search through your treg account. Each search costs a fraction of a cent."}'
+```
+
+When the user declines, has no treg account and does not want one, or the request cannot be filed, do not search with anything else: say so, and go to step 6 with what they tell you about themselves.
+
+**Searching.**
+Search for the name alone first; add a detail (a city, an employer, a field) only when the user gave you one.
+Keep a lookup to at most 3 searches and 5 page reads, and cap each call's cost:
+
+```bash
+latchkey curl -XPOST https://treg.to/call/treg.web.search \
+  -H 'Content-Type: application/json' -H 'X-Treg-Route-Max-Cost: 0.05' \
+  -d '{"q": "<the name>", "limit": 10}'
+```
+
+Read only pages that are public: do not sign in to anything, do not use the user's other connected accounts, and do not look for contact details, addresses, family, finances, or health, even when a page offers them.
+
+Save every result and page you use to `sources.json` as you go, with its URL, the date fetched, and the search engine that answered (treg names it in the `X-Treg-Served-By` response header).
 
 Most names belong to many people.
 Group what you found into the distinct people it seems to describe.
 Keep nothing yet.
+
+### Why only web search
+
+treg also sells access to people and company enrichment providers: sales-lead databases that return work emails, phone numbers, social profiles and employment history for a name.
+This skill does not use them, on purpose:
+
+- **It would seem creepy.** The offer promises a look at public web pages. Being shown your own phone number or email history from a database you never gave it to is the opposite of what the user agreed to, and the reason the offer is worded as it is.
+- **It is often wrong.** treg says a found email or phone is "the provider's best match, not a confirmed one", so it attaches another person's details to the user as easily as their own.
+- **It is data you must not collect.** Contact details are excluded above, and gathering them about a person from brokers carries notice duties (for example GDPR Article 14) that a public search with the user watching does not.
 
 ## 5. Confirm
 
