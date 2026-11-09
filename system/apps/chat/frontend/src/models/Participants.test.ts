@@ -113,6 +113,37 @@ describe("ensureParticipants again", () => {
   });
 });
 
+describe("ensureParticipantsKnowAuthors", () => {
+  it("reads the roster again for a turn whose author the page does not know or calls by another name", async () => {
+    vi.useFakeTimers();
+    try {
+      const participants = await loadParticipants();
+      answerRequests("user:owner-1", ROSTER);
+      await participants.ensureParticipants();
+      await vi.advanceTimersByTimeAsync(participants.PARTICIPANTS_FRESH_MS);
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+
+      // Every author already named as the turns name them, and the owner under either key: nothing to read.
+      participants.ensureParticipantsKnowAuthors([
+        { author: "user:bob-2", author_name: "Bob" },
+        { author: "owner", author_name: "Owner" },
+        { author: "user:owner-1", author_name: "Joshua" },
+        {},
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+
+      answerRequests("user:owner-1", [...ROSTER, personFixture("user:carol-3", "Carol")]);
+      participants.ensureParticipantsKnowAuthors([{ author: "user:carol-3", author_name: "Carol" }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+      expect(participants.getParticipant("user:carol-3")?.display_name).toBe("Carol");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("isOwnerKey", () => {
   it("knows the owner under the unshared key and under the account the roster marks, and no one else", async () => {
     const participants = await loadParticipants();

@@ -133,6 +133,29 @@ export function ensureParticipants(): Promise<void> {
   return loading;
 }
 
+/** What a turn says of who wrote it: the author's key and the name the chat app called them by. */
+export interface TurnAuthorship {
+  author?: string;
+  author_name?: string;
+}
+
+/**
+ * Read the roster again when an arriving turn names its author differently than the page's copy does, or names one
+ * the copy lacks: the page loaded it before that person arrived, or before they were renamed, and it is otherwise
+ * read again only on a focus, a visibility change, or a mentions push. The owner's keys are left out, since an
+ * owner's turn is named from the owner's entry whatever key it carries.
+ */
+export function ensureParticipantsKnowAuthors(turns: readonly TurnAuthorship[]): void {
+  const isAnyAuthorUnknown = turns.some(
+    (turn) =>
+      turn.author !== undefined &&
+      turn.author_name !== undefined &&
+      !isOwnerKey(turn.author) &&
+      getParticipant(turn.author)?.display_name !== turn.author_name,
+  );
+  if (isAnyAuthorUnknown) void ensureParticipants();
+}
+
 /** Make the page a given participant's, over a given roster, without a request. Test-only. */
 export function setParticipantsForTesting(own: string | null, roster: Participant[]): void {
   ownParticipant = own;

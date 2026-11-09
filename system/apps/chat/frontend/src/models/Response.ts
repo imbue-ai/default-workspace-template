@@ -8,6 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
+import { ensureParticipantsKnowAuthors } from "./Participants";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -800,6 +801,7 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  ensureParticipantsKnowAuthors(newEvents.filter(isSentUserTurn));
   // A switch marker is the real form of the message it carries (the successor's opening
   // bubble), so it stands that message's bubble down by id: a bubble the switch's end
   // brought back before the marker landed goes here, and one the marker preceded is
