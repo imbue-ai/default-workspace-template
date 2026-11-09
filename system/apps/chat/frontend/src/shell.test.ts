@@ -7,6 +7,7 @@
  * three-part subagent key's path for a sub-agent view.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
@@ -207,14 +208,21 @@ describe("reportChatOnScreenOnce", () => {
     return parent.postMessage.mock.calls.map(([data]) => data).filter((data) => data.type === CHAT_ON_SCREEN);
   }
 
-  /** Give the document the height a laid-out page has (jsdom lays nothing out). */
-  function layOutDocument(): void {
-    vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height: 900 } as DOMRect);
+  let layoutSpy: MockInstance | null = null;
+
+  /** Give the document a height (jsdom lays nothing out). */
+  function layOutDocument(height: number): void {
+    layoutSpy = vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height } as DOMRect);
   }
+
+  afterEach(() => {
+    layoutSpy?.mockRestore();
+    layoutSpy = null;
+  });
 
   it("reports a framed chat once it is both shown and loaded, and only once", async () => {
     const parent = framed();
-    layOutDocument();
+    layOutDocument(900);
     const { connectChatToShell, reportChatOnScreenOnce } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
 
@@ -235,7 +243,7 @@ describe("reportChatOnScreenOnce", () => {
 
   it("does not count a page whose frame is not laid out", async () => {
     const parent = framed();
-    vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height: 0 } as DOMRect);
+    layOutDocument(0);
     const { connectChatToShell, reportChatOnScreenOnce } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
     window.dispatchEvent(new MessageEvent("message", { source: parent as unknown as Window, data: HANDSHAKE }));
