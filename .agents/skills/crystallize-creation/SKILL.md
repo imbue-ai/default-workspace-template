@@ -248,8 +248,7 @@ sub-workers it split its pass across are already gone with it):
   (`uv run --no-sync workspace-layout refresh --app <app-name>`; for an app
   `build-app` made, `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which
   reloads its mock frame while one is up and its own windows otherwise), then
-  close the ticket. If the `done` report's `Sharing:` line left routes for the
-  user to decide, ask them now, as `lead-proxy.md`'s `name: done` says.
+  close the ticket.
 - **service**: it has no window -- restart its programs (`supervisorctl
   restart <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. Then close the ticket.

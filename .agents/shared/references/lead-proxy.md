@@ -275,13 +275,9 @@ On `type: status`:
   `Flaky tests:`, the worker left them unfixed: a test of a built-in suite is
   a built-in defect and goes in that same report; a test of a creation the
   workspace built goes in a regular ticket (`tk create`), so it is fixed later
-  rather than lost with the report. If its `Phone:` line names something the
-  worker could not fix, that goes in a regular ticket the same way. If its
-  `Sharing:` line names routes left for the user to decide, ask the user
-  after the go-live, in their terms, whether people they share the app with
-  should be able to do those things ("Should people you share the tracker
-  with be able to delete entries, or only you?"), and make the change they
-  choose through `update-app`.
+  rather than lost with the report. If its `Phone:` or `Sharing:` line names
+  something the worker could not fix, that goes in a regular ticket the same
+  way.
   Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>

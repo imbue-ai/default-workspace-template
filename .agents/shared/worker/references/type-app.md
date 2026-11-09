@@ -153,42 +153,63 @@ app do; it comes with `app-schema`. Use `parse_identity_header`,
 `user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
 the test client exercises all of this without turning sharing on.
 
-- **The API.** Go through every route the app's API document lists and decide
-  what a visitor may do with it. Reading what the app shows is usually what
-  sharing is for. Look harder at a route that reveals a secret, a credential,
-  or the owner's data beyond what the pages show; spends the owner's money (a
-  Claude call, a paid API); changes or deletes data; or runs a command or
-  touches files outside the app's own data. A route that hands a visitor a
-  secret or a credential is a defect: make it owner-only, answering a visitor
-  403 the way the chat app's `system/apps/chat/imbue/chat/identity.py` does.
-  Whether visitors may see the owner's data beyond what the pages show,
-  change, delete, spend, or run a command or touch files outside the app's
-  data is the user's call, not yours: unless the task file says, keep the
-  behavior and name each such route in your report. The API
-  document is what a visiting agent reads to learn the app (`build-app`'s
-  "The app describes its own API"), so a route's description says when it is
-  owner-only.
-- **Who did what.** When the app stores something a person or an agent made
-  or changed (an edit, a submission, a comment), store the requester's
-  participant key with it; `email` and `agent_name` are for display only,
-  never the key.
-- **The access log.** When visitors can change anything, the app keeps a log
-  of who did it: one line per request that changed something, with the time,
-  the participant key, whether it was the owner, and the route. Keep it under
-  the app's data directory and bound it like any other store ("Bound disk
-  growth" in `harden-creation.md`). Log reads too only when the app shows data
-  the owner would want to know was seen. The share gateway's own access log
-  (its README, "The access log") records every request but never who made it,
-  so it does not replace this one.
+What an app can enforce is narrow, so neither the app nor your report claims
+more:
 
-Cover each with a test through the test client, sending a person's header
-(`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
+- Sharing grants decide who gets in; there are no read or edit roles. By
+  default anyone admitted can do whatever the app's API allows.
+- Hiding a control is not access control: a visitor can call any route from
+  the browser console. Treat the UI as affordance only.
+- A route is owner-only only if the server refuses visitors, by
+  `X-Imbue-Identity`. The proxies strip any copy a client sends and inject the
+  real one, so a page cannot forge it.
+- That refusal holds only against someone admitted to this one app. A
+  whole-workspace visitor or visiting agent can message the chat agents or
+  edit files, so no app-level check limits them.
+- A request from inside the container has no identity header and reads as the
+  owner, so a change a chat agent makes for a visitor is attributed to the
+  owner, and a direct edit to a file is not logged. The access log covers
+  requests made through the app, not everything.
+
+Go through every route the app's API document lists, and check:
+
+1. **Secrets.** A route that reveals a secret or a credential answers visitors
+   403 on the server, the way the chat app's
+   `system/apps/chat/imbue/chat/identity.py` does, and no other route reaches
+   the same thing, including one that runs a command or touches files outside
+   the app's data.
+2. **Saved content.** Content a visitor can save is rendered safely, so it
+   cannot run script in the owner's browser and act as the owner.
+3. **Controls.** Controls a visitor should not casually use are hidden or
+   de-emphasized for visitors where that makes sense, without claiming that
+   protects anything.
+4. **Who did what.** A change made through the app stores the requester's
+   participant key; `email` and `agent_name` are for display only, never the
+   key. When visitors can change anything, the app keeps an access log: one
+   line per request that changed something, with the time, the participant
+   key, whether it was the owner, and the route. Keep it under the app's data
+   directory and bound it like any other store ("Bound disk growth" in
+   `harden-creation.md`). The share gateway's own access log (its README, "The
+   access log") records every request but never who made it, so it does not
+   replace this one.
+5. **Claims.** The API document is what a visiting agent reads to learn the
+   app (`build-app`'s "The app describes its own API"), so a route's
+   description says when it is owner-only. Neither it nor your report claims
+   more protection than the above.
+
+If the task file or the user explicitly asks to restrict visitors, do it on
+the server and say plainly that it holds only for people given that one app,
+not a whole-workspace share.
+
+Cover the server-side checks with tests through the test client, sending a
+person's header (`{"owner": false, "user_id": "...", "email": "..."}`) and a
+visiting agent's
 (`{"owner": false, "agent_id": "...", "agent_name": "...", "granter": "..."}`):
 an owner-only route answers both 403 and still works for the owner and for a
 request with no header, a route that reads the identity answers 400 to a
-header that does not parse, a change records the visitor's participant key,
-and the access log gains its line.
-Assert the guard with `app_schema.testing`'s
+header that does not parse, saved markup comes back inert, a change records
+the visitor's participant key, and the access log gains its line. Assert the
+guard with `app_schema.testing`'s
 `assert_request_guard_refuses_unknown_provenance` on one of the app's reads.
 
 ## Critical apps

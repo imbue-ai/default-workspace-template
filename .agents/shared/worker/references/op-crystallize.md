@@ -143,7 +143,7 @@ Committed on branch `<branch-name>`. Ready to merge.
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 - Phone: <what you fixed for a phone and what you could not, or "nothing needed">
-- Sharing: <routes made owner-only; each route that lets a visitor see the owner's data beyond what the pages show, change, delete, spend, or run a command or touch files outside the app's data, left as it was for the user to decide; the access log, or "none, visitors can only read">
+- Sharing: <routes made owner-only; the access log, or "none, visitors can only read"; anything the review found but could not fix>
 ```
 
 The `Phone:` and `Sharing:` lines are an app's; leave them out for any other
