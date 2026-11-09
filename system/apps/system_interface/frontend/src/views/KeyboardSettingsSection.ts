@@ -1,17 +1,23 @@
 /**
  * The Keyboard settings section (user-profile-state spec, section 10.3): every app's actions from their
- * manifests, grouped by app, each with its shortcuts drawn as keycaps. It is the body of the Keyboard shortcuts
- * dialog (opened from the backdrop's context menu) and of the `/keyboard-shortcuts` page that Imbue Studio's
- * Workspace settings frames.
+ * manifests, grouped by app, each with its shortcuts drawn as keycaps. It is the body of the `/keyboard-shortcuts`
+ * page that Imbue Studio's Workspace settings frames, and of the Keyboard shortcuts dialog a plain browser opens
+ * from the backdrop's context menu.
  *
  * Editing one action opens its editor below the row: the shortcuts it will have, each removable, a recorder that
  * adds one more, and the save surfaces. The recorder takes every key, Escape included (it has a Cancel of its own),
- * and says when it is listening, so whatever frames it can leave those keys alone. A shortcut another action of the
- * same app already uses is offered to be moved here (Replace) or not (Cancel); a replaced shortcut leaves the other
- * action's row at once, marked as changing on save. A shortcut Imbue Studio or the browser keeps for itself is saved
- * with a warning. The owner saves "only in this workspace" (the override file) or "everywhere" (the account,
- * through the delivery flow); a visitor's save is always their own override here. An "everywhere" save the
- * account has not taken yet shows as waiting, with retry and discard.
+ * and says when it is listening, so whatever frames it can leave those keys alone.
+ *
+ * No step leaves one shortcut on two actions of an app without asking: recording a shortcut another action uses,
+ * restoring the defaults, and resetting a change each offer Replace (take it from the other action, saved together)
+ * or Cancel when what they would bring in is in use. A replaced shortcut leaves the other action's row at once,
+ * marked as changing on save; a shortcut that still ends up on two actions (from layers this screen does not edit)
+ * is flagged on both rows. A shortcut Imbue Studio or the browser keeps for itself is saved with a warning.
+ *
+ * The owner saves "only in this workspace" (the override file) or "everywhere" (the account, through the delivery
+ * flow); a visitor's save is always their own override here. A saved or reset action is marked as such until the
+ * section is opened again. An "everywhere" save the account has not taken yet shows as waiting, with retry and
+ * discard.
  */
 
 import m from "mithril";
@@ -45,6 +51,39 @@ export function conflictingAction(
     app.actions.find(
       (action) => action.id !== actionId && (chordsByActionId.get(action.id) ?? action.chords).includes(chord),
     ) ?? null
+  );
+}
+
+/** One shortcut a step would bring to an action that another action of the app uses now. */
+export interface ClashEntry {
+  readonly chord: string;
+  readonly otherAction: KeybindingActionView;
+}
+
+/** Every shortcut among `chords` that another action of the app uses now. */
+export function clashesOf(
+  app: KeybindingAppView,
+  actionId: string,
+  chords: readonly string[],
+  chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
+): ClashEntry[] {
+  return chords.flatMap((chord) => {
+    const otherAction = conflictingAction(app, actionId, chord, chordsByActionId);
+    return otherAction === null ? [] : [{ chord, otherAction }];
+  });
+}
+
+/** The other actions of the app sharing one of this action's shortcuts, by the chords each row shows. */
+export function actionsSharingShortcuts(
+  app: KeybindingAppView,
+  actionId: string,
+  chordsOfAction: (action: KeybindingActionView) => readonly string[],
+): KeybindingActionView[] {
+  const own = app.actions.find((action) => action.id === actionId);
+  if (own === undefined) return [];
+  const ownChords = chordsOfAction(own);
+  return app.actions.filter(
+    (action) => action.id !== actionId && chordsOfAction(action).some((chord) => ownChords.includes(chord)),
   );
 }
 
@@ -103,17 +142,13 @@ export function areChordListsEqual(left: readonly string[], right: readonly stri
   return left.length === right.length && left.every((chord, index) => chord === right[index]);
 }
 
-// Where a changed action's shortcuts come from, said on hover over its "Changed" marker.
-const CHANGED_SOURCE_DESCRIPTIONS: Record<string, string> = {
-  workspace: "Changed for you in this workspace",
-  unsent: "Changed here; waiting to be saved to your account",
-  account: "Changed for your account, in every workspace",
-};
+/** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, or a reset of a change. */
+type ClashCause = "record" | "restore-default" | "reset";
 
-/** A recorded chord another action of the same app already uses, until the person replaces or cancels. */
+/** Shortcuts a step would bring in that other actions use, until the person replaces or cancels. */
 interface PendingClash {
-  readonly chord: string;
-  readonly otherAction: KeybindingActionView;
+  readonly cause: ClashCause;
+  readonly entries: readonly ClashEntry[];
 }
 
 /** The one action being edited: the chords it will have, and the chords Replace left its app's other actions. */
@@ -126,6 +161,13 @@ interface ActionEditor {
   clash: PendingClash | null;
 }
 
+/** A reset whose restored shortcuts other actions use, waiting on Replace or Cancel on the row. */
+interface PendingReset {
+  readonly app: KeybindingAppView;
+  readonly action: KeybindingActionView;
+  readonly clash: PendingClash;
+}
+
 export interface KeyboardSettingsSectionAttrs {
   /** Whether chords read with the Mac's symbols; the browser's platform when omitted. */
   readonly isApple?: boolean;
@@ -136,15 +178,32 @@ export interface KeyboardSettingsSectionAttrs {
 const SECTION_HEADER_CLASS =
   "keybinding-app-header flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left hover:bg-fill-hover";
 
+function actionKey(app: string, actionId: string): string {
+  return `${app}.${actionId}`;
+}
+
+/** The sentence a clash box opens with: which shortcut, what has it now, and what the step would do with it. */
+function clashSentence(cause: ClashCause, entry: ClashEntry, isApple: boolean): string {
+  const shortcut = chordSpokenLabel(entry.chord, isApple);
+  if (cause === "record") return `${shortcut} already runs "${entry.otherAction.label}".`;
+  if (cause === "restore-default") {
+    return `The default includes ${shortcut}, which "${entry.otherAction.label}" uses now.`;
+  }
+  return `Resetting brings back ${shortcut}, which "${entry.otherAction.label}" uses now.`;
+}
+
 export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAttrs> {
   let catalog: KeybindingsCatalog | null = null;
   let loadError: string | null = null;
   let editor: ActionEditor | null = null;
+  let pendingReset: PendingReset | null = null;
   let notice: string | null = null;
   let isBusy = false;
   let isRecorderListening = false;
   let onRecordingChange: ((isRecording: boolean) => void) | undefined;
   const collapsedApps = new Set<string>();
+  // The actions saved or reset since this section opened, marked until it is opened again.
+  const savedActionKeys = new Set<string>();
 
   async function load(): Promise<void> {
     try {
@@ -172,6 +231,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   function startEditing(app: KeybindingAppView, action: KeybindingActionView): void {
     closeEditor();
+    pendingReset = null;
     editor = {
       app,
       action,
@@ -191,8 +251,6 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   function addChord(current: ActionEditor, chord: string): void {
     if (!current.stagedChords.includes(chord)) current.stagedChords = [...current.stagedChords, chord];
-    current.clash = null;
-    setRecording(current, false);
   }
 
   function onRecorderKeydown(current: ActionEditor, event: KeyboardEvent): void {
@@ -200,22 +258,35 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     event.stopPropagation();
     const chord = chordFromKeydown(event);
     if (chord === null) return;
-    const other = conflictingAction(current.app, current.action.id, chord, current.replacedChordsByActionId);
-    if (other === null) {
-      addChord(current, chord);
-      return;
-    }
-    current.clash = { chord, otherAction: other };
+    const entries = clashesOf(current.app, current.action.id, [chord], current.replacedChordsByActionId);
+    if (entries.length === 0) addChord(current, chord);
+    else current.clash = { cause: "record", entries };
     setRecording(current, false);
   }
 
-  function replaceClash(current: ActionEditor, clash: PendingClash): void {
-    const otherChords = current.replacedChordsByActionId.get(clash.otherAction.id) ?? [...clash.otherAction.chords];
-    current.replacedChordsByActionId.set(
-      clash.otherAction.id,
-      otherChords.filter((chord) => chord !== clash.chord),
+  function restoreDefaults(current: ActionEditor): void {
+    const entries = clashesOf(
+      current.app,
+      current.action.id,
+      current.action.default_chords,
+      current.replacedChordsByActionId,
     );
-    addChord(current, clash.chord);
+    if (entries.length === 0) current.stagedChords = [...current.action.default_chords];
+    else current.clash = { cause: "restore-default", entries };
+  }
+
+  /** Take every clashing shortcut off the action that has it now (saved with the edit), then finish the step. */
+  function replaceClash(current: ActionEditor, clash: PendingClash): void {
+    for (const entry of clash.entries) {
+      const otherChords = current.replacedChordsByActionId.get(entry.otherAction.id) ?? [...entry.otherAction.chords];
+      current.replacedChordsByActionId.set(
+        entry.otherAction.id,
+        otherChords.filter((chord) => chord !== entry.chord),
+      );
+    }
+    if (clash.cause === "restore-default") current.stagedChords = [...current.action.default_chords];
+    else for (const entry of clash.entries) addChord(current, entry.chord);
+    current.clash = null;
   }
 
   /** The chords a row shows: what is saved, or what Replace has left another action of the app being edited. */
@@ -235,8 +306,10 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       let lastDelivery: KeybindingsDeliveryOutcome | null = null;
       for (const [otherActionId, otherChords] of current.replacedChordsByActionId) {
         lastDelivery = (await saveKeybinding(current.app.app, otherActionId, otherChords, scope)).delivery;
+        savedActionKeys.add(actionKey(current.app.app, otherActionId));
       }
       lastDelivery = (await saveKeybinding(current.app.app, current.action.id, current.stagedChords, scope)).delivery;
+      savedActionKeys.add(actionKey(current.app.app, current.action.id));
       notice = noticeOfDelivery(lastDelivery);
       closeEditor();
       await load();
@@ -259,6 +332,39 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     m.redraw();
   }
 
+  function reset(appView: KeybindingAppView, action: KeybindingActionView): void {
+    const entries = clashesOf(appView, action.id, action.reset_chords);
+    if (entries.length > 0) {
+      pendingReset = { app: appView, action, clash: { cause: "reset", entries } };
+      return;
+    }
+    void act(async () => {
+      await resetKeybinding(appView.app, action.id);
+      savedActionKeys.add(actionKey(appView.app, action.id));
+    });
+  }
+
+  /** Take the restored shortcuts off the actions that have them now, in this workspace, then reset. */
+  function replaceAndReset(current: PendingReset): void {
+    pendingReset = null;
+    void act(async () => {
+      const remainingChordsByActionId = new Map<string, string[]>();
+      for (const entry of current.clash.entries) {
+        const otherChords = remainingChordsByActionId.get(entry.otherAction.id) ?? [...entry.otherAction.chords];
+        remainingChordsByActionId.set(
+          entry.otherAction.id,
+          otherChords.filter((chord) => chord !== entry.chord),
+        );
+      }
+      for (const [otherActionId, otherChords] of remainingChordsByActionId) {
+        await saveKeybinding(current.app.app, otherActionId, otherChords, "workspace");
+        savedActionKeys.add(actionKey(current.app.app, otherActionId));
+      }
+      await resetKeybinding(current.app.app, current.action.id);
+      savedActionKeys.add(actionKey(current.app.app, current.action.id));
+    });
+  }
+
   /** Each shortcut its own keycap, with "or" between the alternatives. */
   function shortcutsView(chords: readonly string[], isApple: boolean): m.Children {
     if (chords.length === 0) return m("span", { class: "keybinding-off type-helper text-faint" }, "Off");
@@ -273,28 +379,19 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     );
   }
 
-  function clashView(current: ActionEditor, clash: PendingClash, isApple: boolean): m.Children {
+  function clashView(clash: PendingClash, isApple: boolean, onReplace: () => void, onCancel: () => void): m.Children {
     return m("div", { class: "keybinding-clash mt-3 rounded-md bg-warning-surface p-3" }, [
+      ...clash.entries.map((entry) =>
+        m("p", { class: "type-helper text-primary" }, clashSentence(clash.cause, entry, isApple)),
+      ),
       m(
         "p",
-        { class: "type-helper text-primary" },
-        `${chordSpokenLabel(clash.chord, isApple)} already runs "${clash.otherAction.label}". ` +
-          "Replace moves it here and removes it from there.",
+        { class: "type-helper mt-1 text-secondary" },
+        clash.entries.length === 1 ? "Replace removes it from there." : "Replace removes them from there.",
       ),
       m("div", { class: "mt-2 flex gap-2" }, [
-        m(Button, { sm: true, extra: "keybinding-replace", onclick: () => replaceClash(current, clash) }, "Replace"),
-        m(
-          Button,
-          {
-            sm: true,
-            variant: "ghost",
-            extra: "keybinding-clash-cancel",
-            onclick: () => {
-              current.clash = null;
-            },
-          },
-          "Cancel",
-        ),
+        m(Button, { sm: true, extra: "keybinding-replace", disabled: isBusy, onclick: onReplace }, "Replace"),
+        m(Button, { sm: true, variant: "ghost", extra: "keybinding-clash-cancel", onclick: onCancel }, "Cancel"),
       ]),
     ]);
   }
@@ -425,9 +522,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
               sm: true,
               variant: "ghost",
               extra: "keybinding-restore-default ml-auto",
-              onclick: () => {
-                current.stagedChords = [...current.action.default_chords];
-              },
+              disabled: current.clash !== null,
+              onclick: () => restoreDefaults(current),
             },
             "Restore default",
           ),
@@ -438,10 +534,20 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     const reservedNotices = current.stagedChords
       .map((chord) => reservedChordNotice(chord, isApple))
       .filter((reserved): reserved is string => reserved !== null);
+    const clash = current.clash;
     return m("div", { class: "keybinding-editor mt-1 mb-3 rounded-lg border border-default p-3" }, [
       stagedShortcutsView(current, isApple),
       recorderView(current),
-      current.clash === null ? null : clashView(current, current.clash, isApple),
+      clash === null
+        ? null
+        : clashView(
+            clash,
+            isApple,
+            () => replaceClash(current, clash),
+            () => {
+              current.clash = null;
+            },
+          ),
       replacementNotes(current, isApple),
       ...reservedNotices.map((reserved) =>
         m("p", { class: "keybinding-reserved type-helper mt-2 text-warning" }, reserved),
@@ -457,19 +563,25 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
-  function changedMarker(action: KeybindingActionView, isPendingReplace: boolean): m.Children {
+  function rowMarker(appView: KeybindingAppView, action: KeybindingActionView, isPendingReplace: boolean): m.Children {
     if (isPendingReplace) {
       return m("span", { class: "keybinding-pending type-helper shrink-0 text-secondary" }, "Changes when you save");
     }
-    const description = action.source === "default" ? undefined : CHANGED_SOURCE_DESCRIPTIONS[action.source];
-    if (description === undefined) return null;
+    if (!savedActionKeys.has(actionKey(appView.app, action.id))) return null;
+    return m("span", { class: "keybinding-saved inline-flex shrink-0 items-center gap-1 type-helper text-success" }, [
+      m.trust(icon("check", { size: 12 })),
+      "Saved",
+    ]);
+  }
+
+  function sharedShortcutWarning(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
+    const sharing = actionsSharingShortcuts(appView, action.id, (candidate) => shownChords(appView, candidate));
+    if (sharing.length === 0) return null;
+    const names = sharing.map((other) => `"${other.label}"`).join(", ");
     return m(
-      "span",
-      {
-        class: "keybinding-changed inline-flex shrink-0 items-center gap-1 type-helper text-accent",
-        ...hoverTooltipAttrs(description),
-      },
-      [m("span", { class: "h-1.5 w-1.5 rounded-full bg-accent" }), "Changed"],
+      "p",
+      { class: "keybinding-shared type-helper mt-0.5 text-warning" },
+      `Shares a shortcut with ${names}; edit one of them so each shortcut runs one thing.`,
     );
   }
 
@@ -477,10 +589,17 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     const isEditing = editor !== null && editor.app.app === appView.app && editor.action.id === action.id;
     const chords = shownChords(appView, action);
     const isPendingReplace = !isEditing && chords !== action.chords;
+    const resetClash =
+      pendingReset !== null && pendingReset.app.app === appView.app && pendingReset.action.id === action.id
+        ? pendingReset
+        : null;
     return m("div", { key: action.id, "data-keybinding-action": `${appView.app}.${action.id}` }, [
       m("div", { class: "flex min-h-10 items-center gap-3 border-b border-default py-2" }, [
-        m("span", { class: "type-body min-w-0 flex-1 text-primary" }, action.label),
-        changedMarker(action, isPendingReplace),
+        m("div", { class: "min-w-0 flex-1" }, [
+          m("span", { class: "type-body text-primary" }, action.label),
+          sharedShortcutWarning(appView, action),
+        ]),
+        rowMarker(appView, action, isPendingReplace),
         m("span", { class: "shrink-0" }, shortcutsView(chords, isApple)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
           action.source === "workspace"
@@ -490,9 +609,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                   sm: true,
                   variant: "ghost",
                   extra: "keybinding-reset",
-                  disabled: isBusy || editor !== null,
+                  disabled: isBusy || editor !== null || pendingReset !== null,
                   ...hoverTooltipAttrs("Undo your change in this workspace"),
-                  onclick: () => void act(() => resetKeybinding(appView.app, action.id)),
+                  onclick: () => reset(appView, action),
                 },
                 "Reset",
               )
@@ -503,13 +622,27 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
               sm: true,
               variant: "ghost",
               extra: "keybinding-edit",
-              disabled: isBusy || isEditing,
+              disabled: isBusy || isEditing || pendingReset !== null,
               onclick: () => startEditing(appView, action),
             },
             "Edit",
           ),
         ]),
       ]),
+      resetClash === null
+        ? null
+        : m(
+            "div",
+            { class: "mb-3" },
+            clashView(
+              resetClash.clash,
+              isApple,
+              () => replaceAndReset(resetClash),
+              () => {
+                pendingReset = null;
+              },
+            ),
+          ),
       isEditing && editor !== null ? editorView(editor, isApple) : null,
     ]);
   }

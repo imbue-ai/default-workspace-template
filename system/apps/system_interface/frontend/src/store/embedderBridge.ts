@@ -28,6 +28,7 @@ export function connectEmbedderToStore(store: DesktopStore): void {
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
     store.setOpensLocalFiles(message.opensLocalFiles === true);
+    store.setOpensKeyboardShortcuts(message.opensKeyboardShortcuts === true);
     store.setCanImmerse(message.immersive === true);
     store.setEmbedderPresent(true);
   });

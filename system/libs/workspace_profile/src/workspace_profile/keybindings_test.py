@@ -147,6 +147,27 @@ def test_resolution_order_for_the_owner(tmp_path: Path) -> None:
     assert resolved_with_override == {"send-message": ["alt+enter"]}
 
 
+def test_resolution_without_the_override_answers_what_a_reset_restores(tmp_path: Path) -> None:
+    defaults = {"send-message": ["enter"]}
+    snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
+    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"chat": {"send-message": ["alt+enter"]}}})
+
+    without_override = resolve_app_keybindings(
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+        is_user_override_applied=False,
+    )
+    with_override = resolve_app_keybindings(
+        "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert with_override == {"send-message": ["alt+enter"]}
+    assert without_override == {"send-message": ["ctrl+enter"]}
+
+
 def test_a_visitor_never_sees_the_owners_account_or_unsent_values(tmp_path: Path) -> None:
     defaults = {"send-message": ["enter"]}
     snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})

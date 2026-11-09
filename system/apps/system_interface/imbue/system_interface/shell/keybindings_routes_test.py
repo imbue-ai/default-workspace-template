@@ -137,9 +137,24 @@ def test_the_catalog_lists_a_stopped_apps_declared_actions_from_its_registry_row
             "label": "Save the note",
             "default_chords": ["ctrl+s", "meta+s"],
             "chords": ["ctrl+s", "meta+s"],
+            "reset_chords": ["ctrl+s", "meta+s"],
             "source": "default",
         }
     ]
+
+
+def test_the_catalog_answers_what_a_reset_restores_beside_the_override_in_force(tmp_path: Path) -> None:
+    client = _client(tmp_path, _STOPPED_NOTES_ROW)
+    client.post(
+        "/api/keybindings",
+        json={"app": "notes", "action": "save-note", "chords": ["ctrl+shift+s"], "scope": "workspace"},
+    )
+
+    (action,) = client.get("/api/keybindings/catalog").get_json()["apps"][1]["actions"]
+
+    assert action["chords"] == ["ctrl+shift+s"]
+    assert action["reset_chords"] == ["ctrl+s", "meta+s"]
+    assert action["source"] == "workspace"
 
 
 def test_a_save_for_a_stopped_apps_action_is_accepted(tmp_path: Path) -> None:

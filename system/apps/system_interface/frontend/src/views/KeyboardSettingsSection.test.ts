@@ -8,6 +8,8 @@ import { isShortcutRecording } from "../model/shortcutRecording";
 import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
+  actionsSharingShortcuts,
+  clashesOf,
   conflictingAction,
   reservedChordNotice,
   unsentEntryLabel,
@@ -22,6 +24,7 @@ const APP: KeybindingAppView = {
       label: "Rename the selected entry",
       default_chords: ["f2"],
       chords: ["f2"],
+      reset_chords: ["f2"],
       source: "default",
     },
     {
@@ -29,6 +32,7 @@ const APP: KeybindingAppView = {
       label: "Delete the selection",
       default_chords: ["delete"],
       chords: ["delete", "ctrl+backspace"],
+      reset_chords: ["delete"],
       source: "workspace",
     },
     {
@@ -36,9 +40,26 @@ const APP: KeybindingAppView = {
       label: "New folder",
       default_chords: ["ctrl+shift+n"],
       chords: [],
+      reset_chords: [],
       source: "account",
     },
   ],
+};
+
+/** Rename's F2 moved to Delete in this workspace: resetting Rename would bring F2 back while Delete has it. */
+const APP_AFTER_REPLACE: KeybindingAppView = {
+  ...APP,
+  actions: [
+    { ...APP.actions[0], chords: [], source: "workspace" },
+    { ...APP.actions[1], chords: ["delete", "f2"] },
+    APP.actions[2],
+  ],
+};
+
+/** F2 on both Rename and Delete, as layers this screen does not edit could leave it. */
+const APP_SHARING_F2: KeybindingAppView = {
+  ...APP,
+  actions: [APP.actions[0], { ...APP.actions[1], chords: ["delete", "f2"] }, APP.actions[2]],
 };
 
 function catalogOf(overrides: Partial<KeybindingsCatalog> = {}): KeybindingsCatalog {
@@ -62,6 +83,23 @@ describe("conflictingAction", () => {
   it("reads an action's chords from the edits made so far, ahead of what it was loaded with", () => {
     const afterReplace = new Map([["delete", ["delete"]]]);
     expect(conflictingAction(APP, "rename", "ctrl+backspace", afterReplace)).toBeNull();
+  });
+});
+
+describe("clashesOf", () => {
+  it("lists each of the chords another action uses, with the action that has it", () => {
+    const entries = clashesOf(APP_AFTER_REPLACE, "rename", ["f2", "ctrl+x"]);
+    expect(entries.map((entry) => [entry.chord, entry.otherAction.id])).toEqual([["f2", "delete"]]);
+    expect(clashesOf(APP, "rename", ["ctrl+x"])).toEqual([]);
+  });
+});
+
+describe("actionsSharingShortcuts", () => {
+  it("names the other actions that share one of the action's shortcuts", () => {
+    const chordsOf = (action: { chords: string[] }): readonly string[] => action.chords;
+    expect(actionsSharingShortcuts(APP_SHARING_F2, "rename", chordsOf).map((action) => action.id)).toEqual(["delete"]);
+    expect(actionsSharingShortcuts(APP_SHARING_F2, "new-folder", chordsOf)).toEqual([]);
+    expect(actionsSharingShortcuts(APP, "rename", chordsOf)).toEqual([]);
   });
 });
 
@@ -145,7 +183,7 @@ describe("the shortcut list", () => {
     vi.unstubAllGlobals();
   });
 
-  it("draws each chord as keycaps, an action with none as Off, and marks the changed ones", async () => {
+  it("draws each shortcut as a keycap and an action with none as Off, with no marker before any save", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -153,13 +191,12 @@ describe("the shortcut list", () => {
       chord.getAttribute("aria-label"),
     );
     expect(deleteKeycaps).toEqual(["Forward Delete", "Control+Delete"]);
+    expect(row(root, "delete").textContent).toContain("or");
     expect(row(root, "new-folder").querySelector(".keybinding-off")?.textContent).toBe("Off");
-    expect(row(root, "rename").querySelector(".keybinding-changed")).toBeNull();
-    expect(row(root, "delete").querySelector(".keybinding-changed")).not.toBeNull();
-    expect(row(root, "new-folder").querySelector(".keybinding-changed")).not.toBeNull();
+    expect(root.querySelector(".keybinding-saved")).toBeNull();
   });
 
-  it("offers Reset only for a change made in this workspace, and resets through its route", async () => {
+  it("resets a change in this workspace through its route when nothing else uses what it restores", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -169,6 +206,48 @@ describe("the shortcut list", () => {
     await flush();
 
     expect(posted).toEqual([{ url: "/api/keybindings/reset", body: { app: "files", action: "delete" } }]);
+    expect(row(root, "delete").querySelector(".keybinding-saved")?.textContent).toBe("Saved");
+  });
+
+  it("asks before a reset brings back a shortcut another action uses, and on Replace takes it from there", async () => {
+    const posted = stubFetch(catalogOf({ apps: [APP_AFTER_REPLACE] }));
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-reset"));
+
+    expect(posted).toEqual([]);
+    expect(row(root, "rename").querySelector(".keybinding-clash")?.textContent).toContain(
+      'Resetting brings back F2, which "Delete the selection" uses now.',
+    );
+    click(row(root, "rename").querySelector(".keybinding-replace"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "delete", chords: ["delete"], scope: "workspace" } },
+      { url: "/api/keybindings/reset", body: { app: "files", action: "rename" } },
+    ]);
+  });
+
+  it("leaves everything as it was when a clashing reset is cancelled", async () => {
+    const posted = stubFetch(catalogOf({ apps: [APP_AFTER_REPLACE] }));
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-reset"));
+    click(row(root, "rename").querySelector(".keybinding-clash-cancel"));
+
+    expect(posted).toEqual([]);
+    expect(root.querySelector(".keybinding-clash")).toBeNull();
+  });
+
+  it("flags both rows when one shortcut still runs two actions", async () => {
+    stubFetch(catalogOf({ apps: [APP_SHARING_F2] }));
+    const root = await mountSection();
+
+    expect(row(root, "rename").querySelector(".keybinding-shared")?.textContent).toContain('"Delete the selection"');
+    expect(row(root, "delete").querySelector(".keybinding-shared")?.textContent).toContain(
+      '"Rename the selected entry"',
+    );
+    expect(row(root, "new-folder").querySelector(".keybinding-shared")).toBeNull();
   });
 
   it("collapses an app's section from its header", async () => {
@@ -188,7 +267,7 @@ describe("editing a shortcut", () => {
     vi.unstubAllGlobals();
   });
 
-  it("saves the chords left after removing one, in this workspace", async () => {
+  it("saves the shortcuts left after removing one, and marks the action Saved until the section reopens", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -201,9 +280,13 @@ describe("editing a shortcut", () => {
       { url: "/api/keybindings", body: { app: "files", action: "delete", chords: ["delete"], scope: "workspace" } },
     ]);
     expect(root.querySelector(".keybinding-editor")).toBeNull();
+    expect(row(root, "delete").querySelector(".keybinding-saved")?.textContent).toBe("Saved");
+    unmountViews();
+    const reopened = await mountSection();
+    expect(reopened.querySelector(".keybinding-saved")).toBeNull();
   });
 
-  it("adds a recorded chord and saves it everywhere", async () => {
+  it("adds a recorded shortcut and saves it everywhere", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -273,7 +356,7 @@ describe("editing a shortcut", () => {
     expect(isShortcutRecording()).toBe(false);
   });
 
-  it("moves a chord another action holds once Replace is chosen, saving both actions", async () => {
+  it("moves a shortcut another action holds once Replace is chosen, showing the removal at once", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -281,7 +364,9 @@ describe("editing a shortcut", () => {
     click(root.querySelector(".keybinding-add"));
     pressInRecorder(root, { key: "F2" });
 
-    expect(root.querySelector(".keybinding-clash")?.textContent).toContain('already runs "Rename the selected entry"');
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'F2 already runs "Rename the selected entry".',
+    );
     expect(buttonNamed(root, "Only in this workspace").disabled).toBe(true);
     click(root.querySelector(".keybinding-replace"));
 
@@ -302,7 +387,7 @@ describe("editing a shortcut", () => {
     ]);
   });
 
-  it("drops a clashing chord on Cancel", async () => {
+  it("drops a clashing shortcut on Cancel", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -315,7 +400,27 @@ describe("editing a shortcut", () => {
     expect(root.querySelectorAll(".keybinding-staged")).toHaveLength(2);
   });
 
-  it("warns when a staged chord is one Imbue Studio or the browser takes", async () => {
+  it("asks before restoring defaults another action uses, and on Replace takes them from there", async () => {
+    const posted = stubFetch(catalogOf({ apps: [APP_AFTER_REPLACE] }));
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-restore-default"));
+
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'The default includes F2, which "Delete the selection" uses now.',
+    );
+    click(root.querySelector(".keybinding-replace"));
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "delete", chords: ["delete"], scope: "workspace" } },
+      { url: "/api/keybindings", body: { app: "files", action: "rename", chords: ["f2"], scope: "workspace" } },
+    ]);
+  });
+
+  it("warns when a staged shortcut is one Imbue Studio or the browser takes", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -326,7 +431,7 @@ describe("editing a shortcut", () => {
     expect(root.querySelector(".keybinding-reserved")?.textContent).toContain("Command+W");
   });
 
-  it("restores an action's default chords", async () => {
+  it("restores an action's default shortcuts when nothing else uses them", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();
 

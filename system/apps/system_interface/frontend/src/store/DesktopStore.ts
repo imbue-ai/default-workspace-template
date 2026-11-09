@@ -571,6 +571,8 @@ export class DesktopStore {
   private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
   /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
   private opensLocalFiles = false;
+  /** Whether the embedder shows the keyboard shortcuts in its own settings; off until it says so. */
+  private opensKeyboardShortcuts = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -700,6 +702,16 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether "Keyboard shortcuts..." asks the embedder for its Workspace settings rather than opening the dialog. */
+  getOpensKeyboardShortcuts(): boolean {
+    return this.opensKeyboardShortcuts;
+  }
+
+  /** The embedder said whether it shows the keyboard shortcuts in its settings (``minds:embedder-capabilities``). */
+  setOpensKeyboardShortcuts(opensKeyboardShortcuts: boolean): void {
+    this.opensKeyboardShortcuts = opensKeyboardShortcuts;
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */

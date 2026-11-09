@@ -50,6 +50,7 @@ declare module "@minds/embed-contract" {
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
   // The keyboard shortcuts page's state (contract v15). Probed like the ones above.
   export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page";
+  export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

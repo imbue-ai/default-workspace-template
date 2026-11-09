@@ -1,0 +1,1 @@
+`resolve_app_keybindings` takes `is_user_override_applied` (true by default). Passed false, it resolves without the requester's own override in this workspace, which is what a reset of that override restores; the shell's keyboard shortcuts catalog uses it to answer each action's `reset_chords`.

@@ -20,6 +20,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
+import { OPEN_KEYBOARD_SHORTCUTS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
@@ -827,8 +828,11 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "keyboard-shortcuts",
         label: "Keyboard shortcuts...",
+        // Imbue Studio keeps the shortcuts in its Workspace settings, so opening them there teaches where they
+        // live; a plain browser (a share link) has no such settings and gets the dialog.
         onSelect: () => {
-          isKeyboardShortcutsDialogOpen = true;
+          if (current.getOpensKeyboardShortcuts()) sendToEmbedder(OPEN_KEYBOARD_SHORTCUTS);
+          else isKeyboardShortcutsDialogOpen = true;
         },
       },
     ];

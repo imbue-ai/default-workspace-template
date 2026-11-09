@@ -107,6 +107,8 @@ export interface KeybindingActionView {
   label: string;
   default_chords: string[];
   chords: string[];
+  /** What a reset leaves: the resolution without the requester's own override in this workspace. */
+  reset_chords: string[];
   source: "default" | "account" | "unsent" | "workspace";
 }
 
