@@ -1,6 +1,6 @@
 ---
 name: personalized-ideas
-description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"). Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, and then suggests a few things to build. Skip when the user already has something in mind.
+description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or says yes to the welcome's offer to look them up online. Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, and then suggests a few things to build. Skip when the user already has something in mind.
 metadata:
   author: imbue
 ---
@@ -14,11 +14,15 @@ With their permission, you can learn about them from what is public about them o
 The lookup is something the user opts into, never something you do on your own.
 Everything in this skill serves that: ask before searching, search only for what they agreed to, use only what they confirm is them, and keep what you learn where they can see and delete it.
 
-State for this skill lives in `data/.skills/personalized-ideas/`:
+What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
+The skill's own state lives in `data/.skills/personalized-ideas/`:
 
 - `consent.json`: the user's answer, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>"}`.
-- `about-me.md`: what you learned, with a link to every source.
-- `sources.json`: the raw search results and pages you used, each with its URL.
+- `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
+
+The memory it writes:
+
+- `~/workspace/data/memories/user-public-profile.md`: a `user` memory holding what you learned about the confirmed person, each fact followed by the link it came from, plus its one-line pointer in `MEMORY.md`.
 
 ## 1. Decide whether to offer
 
@@ -29,7 +33,17 @@ Do not offer the lookup, and go straight to step 6 with general ideas, when any 
 - The workspace is shared (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell). The person in the chat may not be the account's owner, and what you save would be visible to others.
 - The user has already told you enough about themselves to suggest from.
 
-If `consent.json` says `"yes"` and `about-me.md` exists, skip to step 6 and suggest from it.
+If `consent.json` says `"yes"` and `user-public-profile.md` is in your memory, skip to step 6 and suggest from it.
+
+## The welcome's offer
+
+A new workspace's first chat opens on the conversation from Imbue Studio's start flow, which you receive ahead of the user's first message.
+When the account has a name, its closing welcome already makes this offer ("**Not sure what to build?** I can look you up on public web pages by the name on your account...").
+That offer states everything step 2 requires, so do not make it again:
+
+- A clear yes to it is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3.
+- A clear no is a no: write it.
+- Anything else (most often, describing something that annoys them) is not an answer to the offer. Help with what they said, and write nothing to `consent.json`, so you can still offer later if they get stuck.
 
 ## 2. Ask
 
@@ -39,11 +53,12 @@ The offer must cover all of these:
 - You would search the public web for their name.
 - Only to suggest things for them to build.
 - You would show them what you found and use only what they confirm is them.
-- What you keep stays in this workspace, with links to where it came from, and they can ask you to delete it at any time.
+- You would remember what they confirm for future chats, not only for these ideas.
+- What you keep stays in this workspace, with links to where it came from, and they can ask you to forget it at any time.
 
 For example:
 
-> I can suggest ideas that fit you better if I know a bit about you. Want me to look you up online by your name? I'd search public pages only, show you what I find so you can tell me what's really you, and keep a short note in your workspace that you can ask me to delete anytime. Or just tell me a little about what you do and I'll go from there.
+> I can suggest ideas that fit you better if I know a bit about you. Want me to look you up online by your name? I'd search public pages only, show you what I find so you can tell me what's really you, and remember that in your workspace for future chats. You can ask me to forget it anytime. Or just tell me a little about what you do and I'll go from there.
 
 Then end your turn and wait.
 Only a clear yes is a yes.
@@ -99,7 +114,11 @@ End your turn and wait.
 Keep only what they confirm.
 When none is them, either search once more with the detail they give, or drop the lookup and go to step 6 with what they have told you.
 
-Write `about-me.md` from the confirmed person only: a few lines on what they do and care about, each fact followed by the link it came from.
+Write `user-public-profile.md` in your memory directory from the confirmed person only, in the memory format `CLAUDE.md` sets up (frontmatter with `name: user-public-profile`, a one-line `description`, `type: user`).
+The body is a few lines on what they do and care about, each fact followed by the link it came from, and a last line saying the facts came from a web lookup the user asked for on that date.
+Add its pointer to `MEMORY.md`.
+Keep every fact from the lookup in this one memory, not spread across others, so forgetting it is complete.
+Things the user tells you about themselves directly are ordinary memories, as in any chat.
 Delete the unconfirmed entries from `sources.json`.
 
 ## 6. Suggest
@@ -109,9 +128,9 @@ Prefer things that can be built in this workspace in one sitting.
 Ask which one they want, and take it from there with the skill that fits the choice.
 
 Do not recite what you learned about them back at length; the ideas should show it.
-Mention once, in passing, that the note is in their workspace, linked by its path, so they know where it is.
+Mention once, in passing, that you will remember this for future chats and where the memory is, linked by its path.
 
 ## Deleting
 
-When the user asks you to forget what you found, delete `about-me.md` and `sources.json` and say you did.
+When the user asks you to forget what you found, delete `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`, then check your other memories for any fact that came from the lookup (one citing a link in `sources.json`) and remove it too. Say what you deleted.
 When they say not to look them up again, also set `consent.json` to `"no"`.
