@@ -18,6 +18,7 @@ _HOOK = Path(__file__).resolve().parent / "agent_quick_change_notes.sh"
 _CHAT = "chat-main"
 _OTHER_CHAT = "chat-other"
 _QUICK_CHAT = "chat-quick"
+_CAREFUL_CHAT = "chat-quick-careful"
 
 
 def _chat_data_dir(root: Path) -> Path:
@@ -165,6 +166,55 @@ def test_the_quick_change_agent_gets_no_note(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     assert completed.stdout == ""
+
+
+def _write_per_tier_agent_record(root: Path) -> None:
+    record = {
+        "fast": {"chat_id": _QUICK_CHAT, "created_at": "2026-11-09T09:00:00+00:00"},
+        "careful": {
+            "chat_id": _CAREFUL_CHAT,
+            "created_at": "2026-11-09T09:30:00+00:00",
+        },
+    }
+    _chat_data_dir(root).mkdir(parents=True, exist_ok=True)
+    (_chat_data_dir(root) / "quick_change_agent.json").write_text(
+        json.dumps(record), encoding="utf-8"
+    )
+
+
+def test_the_careful_quick_change_agent_in_a_per_tier_record_gets_no_note(
+    tmp_path: Path,
+) -> None:
+    _routed_and_reported(tmp_path, "r1", _CAREFUL_CHAT)
+    _write_per_tier_agent_record(tmp_path)
+
+    completed = _run(tmp_path, chat_id=_CAREFUL_CHAT)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_the_fast_quick_change_agent_in_a_per_tier_record_gets_no_note(
+    tmp_path: Path,
+) -> None:
+    _routed_and_reported(tmp_path, "r1", _QUICK_CHAT)
+    _write_per_tier_agent_record(tmp_path)
+
+    completed = _run(tmp_path, chat_id=_QUICK_CHAT)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_a_main_chat_beside_a_per_tier_record_still_gets_its_note(
+    tmp_path: Path,
+) -> None:
+    _routed_and_reported(tmp_path, "r1", _CHAT)
+    _write_per_tier_agent_record(tmp_path)
+
+    completed = _run(tmp_path)
+
+    assert "Todo: header is now dark blue" in _context(completed)
 
 
 def test_a_worker_with_no_chat_gets_no_note(tmp_path: Path) -> None:

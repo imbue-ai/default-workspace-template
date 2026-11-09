@@ -28,7 +28,9 @@ chat_data_dir="${repo_root}/data/.apps/chat"
 log="${chat_data_dir}/quick_changes.jsonl"
 [[ -f "$log" ]] || exit 0
 
-# The quick-change agent is a chat the chat app created too; its id is recorded beside the log.
+# The quick-change agents are chats the chat app created too, one per tier; their ids are recorded
+# beside the log, keyed by tier ({"fast": {"chat_id": ...}, "careful": {...}}), or as one top-level
+# chat_id in a record from before tiers. A quoted match anywhere in the file covers both shapes.
 agent_record="${chat_data_dir}/quick_change_agent.json"
 if [[ -f "$agent_record" ]] && [[ "$(<"$agent_record")" == *"\"${chat_id}\""* ]]; then
     exit 0
