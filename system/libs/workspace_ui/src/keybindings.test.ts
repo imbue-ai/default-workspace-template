@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { chordFromKeydown, keydownMatchesAction, keydownMatchesChords } from "./keybindings";
+import {
+  chordFromKeydown,
+  chordKeycapLabels,
+  chordSpokenLabel,
+  keydownMatchesAction,
+  keydownMatchesChords,
+} from "./keybindings";
 
 function keydown(key: string, modifiers: Partial<KeyboardEventInit> = {}): KeyboardEvent {
   return new KeyboardEvent("keydown", { key, ...modifiers });
@@ -24,6 +30,37 @@ describe("chordFromKeydown", () => {
     expect(chordFromKeydown(keydown("Control", { ctrlKey: true }))).toBeNull();
     expect(chordFromKeydown(keydown("Shift", { shiftKey: true }))).toBeNull();
     expect(chordFromKeydown(keydown("MediaPlayPause"))).toBeNull();
+  });
+});
+
+describe("chordKeycapLabels", () => {
+  it("draws the modifiers as Apple's symbols in the grammar's order on an Apple platform", () => {
+    expect(chordKeycapLabels("ctrl+alt+shift+meta+n", true)).toEqual(["⌃", "⌥", "⇧", "⌘", "N"]);
+    expect(chordKeycapLabels("meta+enter", true)).toEqual(["⌘", "↩"]);
+    expect(chordKeycapLabels("meta+backspace", true)).toEqual(["⌘", "⌫"]);
+  });
+
+  it("spells the modifiers out elsewhere", () => {
+    expect(chordKeycapLabels("ctrl+shift+n", false)).toEqual(["Ctrl", "Shift", "N"]);
+    expect(chordKeycapLabels("meta+enter", false)).toEqual(["Meta", "Enter"]);
+    expect(chordKeycapLabels("ctrl+backspace", false)).toEqual(["Ctrl", "Backspace"]);
+  });
+
+  it("draws function, arrow, punctuation, and named keys on every platform", () => {
+    expect(chordKeycapLabels("f2", false)).toEqual(["F2"]);
+    expect(chordKeycapLabels("alt+arrowup", false)).toEqual(["Alt", "↑"]);
+    expect(chordKeycapLabels("ctrl+[", true)).toEqual(["⌃", "["]);
+    expect(chordKeycapLabels("meta+plus", true)).toEqual(["⌘", "+"]);
+    expect(chordKeycapLabels("escape", true)).toEqual(["Esc"]);
+  });
+});
+
+describe("chordSpokenLabel", () => {
+  it("names each key in words, joined with plus signs", () => {
+    expect(chordSpokenLabel("shift+meta+n", true)).toBe("Shift+Command+N");
+    expect(chordSpokenLabel("alt+arrowleft", true)).toBe("Option+Left Arrow");
+    expect(chordSpokenLabel("ctrl+enter", false)).toBe("Ctrl+Enter");
+    expect(chordSpokenLabel("delete", false)).toBe("Delete");
   });
 });
 

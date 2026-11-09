@@ -20,6 +20,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
+import { isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
@@ -189,11 +190,6 @@ export interface AppAttrs {
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
-}
-
-/** Whether the secondary chord reads as Cmd+Enter: the browser runs on an Apple platform. */
-function isApplePlatform(): boolean {
-  return /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent);
 }
 
 export function App(): m.Component<AppAttrs> {
