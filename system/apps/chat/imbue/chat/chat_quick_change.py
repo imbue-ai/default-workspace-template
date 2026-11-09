@@ -111,13 +111,15 @@ OPENROUTER_JEV_URL: Final[str] = "https://openrouter.ai/api/v1/systemone"
 JEV_MODEL: Final[str] = "typesafe/jev-1.13"
 # The longest a send waits for Jev before it is delivered to the chat's agent unrouted.
 ROUTING_TIMEOUT_SECONDS: Final[float] = 3.0
-# Messages of recent conversation (user and agent, newest last) Jev reads beside the new message.
-CONTEXT_MESSAGE_COUNT: Final[int] = 6
+# Messages of recent conversation (user and agent, newest last) Jev reads beside the new message. Enough
+# to reach the requests that are still unfinished, which the blocked question turns on.
+CONTEXT_MESSAGE_COUNT: Final[int] = 20
 # Each context message is cut to its last this-many words, so one long reply cannot crowd out the rest.
 _CONTEXT_MESSAGE_WORD_LIMIT: Final[int] = 300
-# The newest transcript events read to find those messages; events are payload-free, so this many
-# comfortably holds CONTEXT_MESSAGE_COUNT messages between tool calls.
-_CONTEXT_TAIL_EVENT_LIMIT: Final[int] = 200
+# The newest transcript events read to find those messages. CONTEXT_MESSAGE_COUNT messages span about
+# half as many agent turns, and one turn can carry dozens of tool events; events are payload-free and
+# read from memory, so a generous limit is cheap.
+_CONTEXT_TAIL_EVENT_LIMIT: Final[int] = 1000
 # How likely Jev must judge a yes before the message is routed.
 _YES_CUTOFF: Final[float] = 0.5
 # A just-created quick-change chat is not taking messages until its agent is up.
