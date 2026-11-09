@@ -3980,7 +3980,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.isStopViewingFailed()).toBe(false);
   });
 
-  it("stop viewing that cannot reach the shell says it could not leave", async () => {
+  it("stop viewing that cannot reach the shell says it could not leave until the window moves off", async () => {
     api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
     setOwnIdentityForTesting({
       owner: false,
@@ -3995,6 +3995,13 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
     expect(store.isStopViewingFailed()).toBe(true);
+
+    // Viewing that desktop again after the window went elsewhere is a fresh viewing: no stop has failed on it.
+    api.refusal = null;
+    await store.switchDesktop("bob");
+    await store.switchDesktop("home");
+    expect(store.viewedDesktop()?.id).toBe("home");
+    expect(store.isStopViewingFailed()).toBe(false);
   });
 
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {

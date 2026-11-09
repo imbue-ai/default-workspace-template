@@ -516,7 +516,8 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
-  /** The viewed desktop a "Stop viewing" last found no way off, so the chip says so and offers to try again. */
+  /** The viewed desktop a "Stop viewing" last found no way off, so the chip says so and offers to try again; any
+   *  switch off it forgets it. */
   private stopViewingFailedOn: string | null = null;
   /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
   private themePreview: { readonly desktopId: string; readonly choice: string | null } | null = null;
@@ -1542,7 +1543,6 @@ export class DesktopStore {
       this.redraw();
       return;
     }
-    this.stopViewingFailedOn = null;
     await this.switchDesktop(target);
   }
 
@@ -2213,6 +2213,7 @@ export class DesktopStore {
     if (previous === desktopId) return;
     this.cancelGesture();
     this.closeOverview();
+    this.stopViewingFailedOn = null;
     this.rememberReturnDesktop(previous, desktopId);
     // The size the desktop left was arranged in says nothing about the next one; its own read brings its own.
     this.viewedViewport = null;
