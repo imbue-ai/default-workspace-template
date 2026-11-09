@@ -1679,7 +1679,7 @@ add in your report. Never edit this test to let a site through.
 """
 
 
-@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
     assert not sites, (
@@ -1727,7 +1727,7 @@ def _marker_problems(repo_root: Path) -> list[str]:
     return problems
 
 
-@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_every_marker_keeps_a_site_for_a_named_reason() -> None:
     assert _marker_problems(REPO_ROOT) == []
 
