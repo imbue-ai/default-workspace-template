@@ -26,7 +26,12 @@ The memory it writes:
 
 ## 1. Decide whether to offer
 
-Do not offer the lookup, and go straight to step 6 with general ideas, when any of these holds:
+Never offer the lookup to a user who has an idea of what to build: one who has described something to build or a problem to solve, or who has said they have an idea, even one they have not described yet (then ask what it is).
+This holds anywhere in the conversation, not just in the message in front of you, and for the rest of the chat once they have.
+Leave this skill and help them with their idea instead; do not suggest other ideas either.
+If they later say they are stuck or ask for ideas, the steps below apply again.
+
+Otherwise, do not offer the lookup, and go straight to step 6 with general ideas, when any of these holds:
 
 - `consent.json` says `"no"`. The user already declined; do not ask again unless they bring it up.
 - The message came from someone other than the owner (it starts with `[from: <name>]`). The name on the account is the owner's, not theirs.
@@ -41,9 +46,9 @@ A new workspace's first chat opens on the conversation from Imbue Studio's start
 When the account has a name, its closing welcome already makes this offer ("**Not sure what to build?** I can look you up on public web pages by the name on your account...").
 That offer states everything step 2 requires, so do not make it again:
 
-- A clear yes to it is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3.
+- A clear yes to it is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3. A yes that comes with an idea ("yes, but I want to build a budget tracker") is not a yes to the lookup: they have an idea, so step 1 says to help with it instead.
 - A clear no is a no: write it.
-- Anything else (most often, describing something that annoys them) is not an answer to the offer. Help with what they said, and write nothing to `consent.json`, so you can still offer later if they get stuck.
+- Anything else (most often, describing something that annoys them, or saying they already have an idea) is not an answer to the offer. Help with what they said, do not bring the offer up again, and write nothing to `consent.json`, so it can still be offered if they later say they are stuck.
 
 ## 2. Ask
 
