@@ -144,48 +144,45 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
         "type": "noul",
         "instructions": (
             "A user sent new_message to an AI agent that builds and runs apps on their computer. Is new_message a "
-            "quick, bounded change to the front end of an existing app that a side agent could finish in a few "
-            "minutes, even if it needs some design judgement?"
+            "one-off, self-contained and bounded change to an existing app that a side agent could finish in a "
+            "few minutes?"
         ),
         "criteria": {
             "true": (
-                "A change to how existing parts of the app look or behave on screen that touches only the front end: "
-                "restyling a page, an element or the whole app (colours, colour scheme, fonts, layout, spacing, "
-                "visual style); a design or taste choice about how something should look; changing text with given or "
-                "obvious wording; showing, hiding, moving or reordering elements; or a small, clearly described "
-                "addition to the interface such as a setting or a toggle."
+                "A self-contained, one-off change: restyling a page, an element or the whole app (colours, colour "
+                "scheme, fonts, layout, spacing, visual style); a design or taste choice about how something should "
+                "look; changing text with given or obvious wording; showing, hiding, moving or reordering elements; "
+                "or a small, clearly described addition such as a setting or a toggle."
             ),
             "false": (
-                "Anything that is not quick and bounded or not front-end only: server, data or storage work; "
-                "connecting or switching services or data sources; research or investigating a problem whose cause "
-                "must be found; exploring large amounts of code or data; architectural decisions; a large new "
-                "feature; writing content the agent must come up with for many items; a complaint where it is unclear "
-                "what is wrong or where; building a new app; questions, thanks or other messages that ask for no "
-                "change; or several requests where any part is not quick."
+                "Anything that applies to many pieces of data or needs large, coordinated changes: writing or "
+                "changing content for many items; changing how data is stored, loaded or processed; server or service "
+                "work; research or investigating a problem whose cause must be found; exploring large amounts of code "
+                "or data; architectural decisions; a feature that spans several parts of the app; a complaint where "
+                "it is unclear what is wrong or where; building a new app; messages that ask for no change; or "
+                "several requests where any part is not a one-off."
             ),
         },
     },
     PENDING_WORK_QUESTION: {
         "type": "noul",
         "instructions": (
-            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. First name "
-            "the part of the app that new_message changes. Then answer: is that part something the user earlier "
-            "asked the agent to add, build or change, which no later agent reply says is done, live or added?"
+            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. Is "
+            "new_message blocked because the code it would change does not exist yet: does it change, style or "
+            "depend on something that a specific earlier request asked the agent to build, which no later agent "
+            "reply says is done?"
         ),
         "criteria": {
             "true": (
-                "The part new_message changes was itself requested earlier and is not reported done. That "
-                "includes: a part the agent's latest reply says it is adding, building, drawing or working on, or "
-                "has only acknowledged ('On it', 'Building it now', 'Making the chart now', 'Got it', 'Will do' "
-                "all mean not done yet); any piece of such a part (the label of a chart still being made, the "
-                "background of a shelf still being built); restyling a whole app that is still being built; and a "
-                "revision of an earlier change request whose result the agent has not reported done (for example a "
-                "different colour for a background the user asked to recolour a moment ago)."
+                "The change needs code that does not exist yet: a specific earlier request asked the agent to build "
+                "that part, and the agent has not said it is done. Replies like 'On it', 'Building it now' or 'Got "
+                "it' mean not done."
             ),
             "false": (
-                "The part new_message changes already exists in the app, or the agent has said it is done. A part "
-                "the user only described, pointed at or complained about earlier counts as existing. The agent "
-                "building other, different things at the same time does not matter."
+                "The code the change needs already exists in the app, or the agent has said the request that builds "
+                "it is done. Announcements of upcoming changes, earlier requests about other parts of the app, the "
+                "agent being busy, and earlier unfinished requests about the same existing part do not make it "
+                "blocked."
             ),
         },
     },
@@ -198,14 +195,14 @@ JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
         "criteria": {
             "true": (
                 "Getting it right depends on subtle reasoning: tricky logic or edge cases in a behaviour change "
-                "(saving and restoring state, timers, limits enforced in several places), keeping many parts of "
-                "the app consistent (restyling the whole app), or a taste call on a colour scheme or overall look "
-                "that is easy to get slightly wrong."
+                "(saving and restoring state, timers, limits enforced in several places), keeping many parts of the "
+                "app consistent (restyling the whole app), or a taste call on a colour scheme or overall look that is "
+                "easy to get slightly wrong."
             ),
             "false": (
                 "A direct edit where the message says exactly what to change: a colour, size, font or spacing on "
-                "specific elements, text with the wording given, showing, hiding or moving something, a sort "
-                "order, or a simple setting."
+                "specific elements, text with the wording given, showing, hiding or moving something, a sort order, "
+                "or a simple setting."
             ),
         },
     },
