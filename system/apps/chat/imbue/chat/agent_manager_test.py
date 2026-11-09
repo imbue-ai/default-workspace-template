@@ -21,6 +21,7 @@ from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import SecretStr
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
@@ -63,7 +64,10 @@ from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -2450,6 +2454,7 @@ class _RecordingSwitchAgentManager(AgentManager):
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         self.switches.append((str(chat_id), account_id, message, model_pick))
         return TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING, ""
@@ -3164,13 +3169,15 @@ def test_an_automatic_title_is_shown_over_a_chat_being_created_until_it_is_clear
     broadcast = json.loads(q.get_nowait() or "")
     assert broadcast["type"] == "provisional_chat_created"
     assert broadcast["name"] == "Rome trip: plan five days"
-    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == ["Rome trip: plan five days"]
+    assert [shown.chat.name for shown in agent_manager.get_provisional_chats_as_shown()] == [
+        "Rome trip: plan five days"
+    ]
     # Shown, not given: the chat still wears its minted name, so the rename that follows may replace it
     assert agent_manager.has_placeholder_name(minted.chat_id)
 
     agent_manager.clear_automatic_title(minted.chat_id)
 
-    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == [minted.name]
+    assert [shown.chat.name for shown in agent_manager.get_provisional_chats_as_shown()] == [minted.name]
 
 
 def test_renaming_a_chat_drops_the_automatic_title_shown_over_it(
@@ -4193,7 +4200,10 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
 
 def _plain_queued_wire(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The wire shape of queued entries whose content gets no render decision."""
-    return [{**entry, "display": None, "display_label": None, "display_body": None} for entry in snapshot]
+    return [
+        {**entry, "display": None, "display_label": None, "display_body": None, "author": None, "author_name": None}
+        for entry in snapshot
+    ]
 
 
 _QUEUED_BACKGROUND_TASK_REPORT = (
@@ -4257,6 +4267,49 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
         assert queued["display"] == DisplayKind.NOTICE.value
         assert queued["display_label"] == "Background task"
         assert queued["display_body"] == "Wait for the worker (finished)"
+    finally:
+        agent_manager.stop()
+
+
+def test_a_queued_message_is_listed_under_its_sender_without_the_prefix(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The harness queues the text it was handed, a visitor's with the author prefix on it; the snapshot lists each
+    queued message as its transcript turn will read: the sender joined from the chat's annotations (none for the
+    owner's), and the words behind the prefix as the body."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    visitors_text = author_prefix("Bob") + "and one more thing"
+    bob = ParticipantKey("user:user-bob-4471")
+    agent_manager.set_author_annotations_reader(
+        lambda chat_id: (new_author_annotation("m-1", bob, "Bob", visitors_text),) if chat_id == "agent-1" else ()
+    )
+
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages(
+            "agent-1",
+            [
+                {"queued_id": "q1", "content": visitors_text, "timestamp": "2026-08-07T00:00:01.000Z"},
+                {"queued_id": "q2", "content": "mine", "timestamp": "2026-08-07T00:00:02.000Z"},
+            ],
+        )
+
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        assert [
+            {key: queued[key] for key in ("content", "author", "author_name", "display_body")}
+            for queued in latest["chats"][0]["active_agent"]["queued_messages"]
+        ] == [
+            {
+                "content": "[from: Bob] and one more thing",
+                "author": "user:user-bob-4471",
+                "author_name": "Bob",
+                "display_body": "and one more thing",
+            },
+            {"content": "mine", "author": None, "author_name": None, "display_body": None},
+        ]
     finally:
         agent_manager.stop()
 
@@ -5417,7 +5470,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     writes: list[tuple[int, int]] = []
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=manager._read_active_process_started_at,
     )
@@ -6512,19 +6565,19 @@ def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_agai
 
 
 @pytest.mark.parametrize(
-    ("sent", "recorded"),
+    ("sent", "recorded", "display"),
     [
-        pytest.param("/model opus", "/model opus", id="a-machine-line"),
-        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", id="a-bash-mode-command"),
+        pytest.param("/model opus", "/model opus", DisplayKind.HIDDEN, id="a-machine-line"),
+        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", DisplayKind.PERSON_CHIP, id="a-bash-mode-command"),
     ],
 )
 def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
-    broadcaster: WebSocketBroadcaster, sent: str, recorded: str
+    broadcaster: WebSocketBroadcaster, sent: str, recorded: str, display: DisplayKind
 ) -> None:
     chat = _LostSendChat(broadcaster)
     try:
         chat.send(sent)
-        chat.transcript._events.append(_typed_turn(recorded, display="chip", at=_recorded_at(time.time())))
+        chat.transcript._events.append(_typed_turn(recorded, display=display.value, at=_recorded_at(time.time())))
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()
@@ -7912,6 +7965,41 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_turn_closing", "has_background_task", "expected"),
+    [
+        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
+        # the harness names, while a marker exists only for the kinds this workspace records.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, True),
+        ("RUNNING_BACKGROUND", None, False, False, True),
+        # A marker alone carries a detached runner, which the harness never reports.
+        ("WAITING", ActivityState.IDLE, False, True, True),
+        # The transcript tail and the closing turn cover a turn the lifecycle has not caught.
+        ("WAITING", ActivityState.THINKING, False, False, True),
+        ("WAITING", ActivityState.IDLE, True, False, True),
+        # Nothing outstanding: the user is the next mover.
+        ("WAITING", ActivityState.IDLE, False, False, False),
+        ("STOPPED", None, False, False, False),
+    ],
+)
+def test_busy_means_the_agent_will_resume_on_its_own(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_turn_closing: bool,
+    has_background_task: bool,
+    expected: bool,
+) -> None:
+    assert (
+        resolve_is_busy(
+            activity_state=activity,
+            is_turn_closing=is_turn_closing,
+            lifecycle_state=lifecycle,
+            has_background_task=has_background_task,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
     ("lifecycle", "activity", "is_permission_pending", "is_busy", "is_turn_closing", "expected"),
     [
         ("RUNNING", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
@@ -7926,6 +8014,11 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
+        # An agent carrying work past its turn reaches this rule as busy, and a live turn or a
+        # permission prompt still outranks it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
+        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, False, ChatStatus.STOPPED),

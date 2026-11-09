@@ -96,23 +96,6 @@ class ConnectInfo(FrozenModel):
         }
 
 
-class RequestIdentity(FrozenModel):
-    """The requester a proxy vouched for in ``X-Imbue-Identity``: the owner flag always, the account when shared."""
-
-    # The header is cross-version wire data from the proxies; a field this build does not know must never make
-    # it unreadable.
-    model_config = ConfigDict(extra="ignore")
-
-    owner: bool = Field(description="Whether the requester is the workspace's owner")
-    user_id: str | None = Field(default=None, description="The account's user id (absent for an unshared workspace)")
-    email: str | None = Field(
-        default=None, description="The account's verified email, present exactly when user_id is"
-    )
-    name: str | None = Field(
-        default=None, description="A display name an older proxy stamps; absent from current ones"
-    )
-
-
 class NekoSecrets(FrozenModel):
     """What neko is configured with at a stack start and what the service keeps to speak to it."""
 

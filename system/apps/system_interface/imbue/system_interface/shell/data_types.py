@@ -30,6 +30,7 @@ from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopLayout
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
+from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
@@ -114,8 +115,9 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: fr
         program=row.program or "",
         critical=row.critical,
         stop_when_no_windows=row.stop_when_no_windows,
+        uses_microphone=row.uses_microphone,
         launch_paths=effective_launch_paths(row),
-        default_shortcut=row.default_shortcut,
+        default_shortcuts=row.default_shortcuts,
         launcher_rank=row.launcher_rank,
         pin=row.pin,
         message_handlers=row.message_handlers,
@@ -241,12 +243,21 @@ class ThemeChoices(FrozenModel):
 
 
 class DefaultShortcutsOfferedDocument(FrozenModel):
-    """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
+    """The whole of ``default_shortcuts_offered.json``: the default shortcuts the shell has offered."""
 
     version: int = Field(description="The file format version")
-    apps: tuple[AppName, ...] = Field(
-        description="Every app whose default shortcut the shell has put on a desktop or found there, sorted"
+    targets: tuple[ShortcutTarget, ...] = Field(
+        description="The target of every default shortcut the shell has put on a desktop or found there, sorted"
     )
+
+
+# CLEANUP: drop ``AppsOfferedDocument`` and its read in ``DesktopStore._read_offered_unlocked`` once every workspace
+# has taken the release after minds-v0.10.0; the first shell read after that update rewrites the record.
+class AppsOfferedDocument(FrozenModel):
+    """``default_shortcuts_offered.json`` as it was while an app had at most one default shortcut: the apps offered."""
+
+    version: int = Field(description="The file format version")
+    apps: tuple[AppName, ...] = Field(description="Every app whose one default shortcut the shell had offered")
 
 
 class PlacementsSaveRequest(FrozenModel):

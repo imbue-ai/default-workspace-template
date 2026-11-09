@@ -38,7 +38,6 @@ from screen.data_types import Controller
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
-from screen.data_types import RequestIdentity
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
 from screen.data_types import XWindow
@@ -76,6 +75,7 @@ from screen.windows import find_file_manager_window
 from screen.xclipboard import ClipboardContents
 from screen.xclipboard import ClipboardMonitor
 from screen.xclipboard import XClipboard
+from workspace_layout.identity import RequestIdentity
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
 SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)

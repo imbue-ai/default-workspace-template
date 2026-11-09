@@ -47,6 +47,11 @@ DISABLED_COMPONENTS: Final[tuple[str, ...]] = (
     "ExtensionManifestV2Unsupported",
 )
 
+# Chromium features that must stay on, kept as data so the reason is greppable: a page of another origin reaching
+# a loopback service (the Screen's own, the chat's) is gated by the browser's Local Network Access checks, the first
+# layer in front of the services' own provenance check (workspace_layout.identity).
+NEVER_DISABLED_FEATURES: Final[tuple[str, ...]] = ("LocalNetworkAccessChecks",)
+
 # Playwright default switches that must never be emitted, kept as data so the reason is greppable.
 STRIPPED_FROM_PLAYWRIGHT: Final[tuple[str, ...]] = (
     # Sets navigator.webdriver=true, which defeats Fortress's whole purpose.
@@ -162,4 +167,18 @@ def launch_args(
     if is_sandbox_disabled:
         arguments.append("--no-sandbox")
     assert not (set(arguments) & set(STRIPPED_FROM_PLAYWRIGHT)), "a Playwright anti-stealth switch leaked in"
+    assert not disabled_features(arguments) & set(NEVER_DISABLED_FEATURES), "a feature that must stay on is disabled"
     return arguments
+
+
+@pure
+def disabled_features(arguments: Sequence[str]) -> set[str]:
+    """Every feature name the ``--disable-features=`` arguments turn off."""
+    prefix = "--disable-features="
+    return {
+        name
+        for argument in arguments
+        if argument.startswith(prefix)
+        for name in argument.removeprefix(prefix).split(",")
+        if name
+    }

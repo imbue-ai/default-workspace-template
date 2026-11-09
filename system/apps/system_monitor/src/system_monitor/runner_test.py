@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import (
+    CROSS_SITE_FETCH_HEADERS,
+    assert_api_schema_describes_app,
+    assert_request_guard_refuses_unknown_provenance,
+)
 from flask.testing import FlaskClient
 
 from system_monitor import actions, disk, runner, stats
@@ -209,3 +213,18 @@ def test_the_stop_endpoint_runs_the_request_and_relays_a_refusal(
     assert empty.status_code == 400
     # Only well-formed requests reach the action.
     assert asked == [("chat", "chat-123"), ("app", "chat")]
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(
+    client: FlaskClient,
+) -> None:
+    """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard): such a page cannot stop a chat's agent."""
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/health")
+    cross_site = client.post(
+        "/api/stop",
+        json={"kind": "chat", "id": "chat-1"},
+        headers=CROSS_SITE_FETCH_HEADERS,
+    )
+    assert cross_site.status_code == 403

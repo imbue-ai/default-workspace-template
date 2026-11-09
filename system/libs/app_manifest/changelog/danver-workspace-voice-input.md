@@ -1,0 +1,1 @@
+The manifest gains `uses_microphone` (bool, default false): whether the app's pages listen to the microphone, which the shell then delegates to their frames and to no other app's. The registry row carries it under the same name. The chat is the one built-in that declares it, for its composer's dictation.

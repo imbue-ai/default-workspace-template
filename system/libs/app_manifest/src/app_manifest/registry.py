@@ -5,9 +5,11 @@ from typing import Final
 
 from app_registration import forward_port
 from loguru import logger
+from pydantic import AliasChoices
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import field_validator
 
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
@@ -19,6 +21,7 @@ from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
 from app_manifest.manifest import ThemingMode
+from app_manifest.manifest import as_default_shortcut_list
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
@@ -138,9 +141,18 @@ class RegistryRow(FrozenModel):
         default=False,
         description="Whether the shell may stop the app's program once no window shows it",
     )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the shell delegates the microphone to the app's frames",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(
-        default=None, description="The shortcut a new desktop is seeded with"
+    # CLEANUP: drop the ``default_shortcut`` alias and ``_read_one_default_shortcut_as_a_list`` once no registry row
+    # predates the ``default_shortcuts`` key; every app rewrites its row when it next starts.
+    default_shortcuts: tuple[DefaultShortcut, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices("default_shortcuts", "default_shortcut"),
+        description="The shortcuts a new desktop is seeded with, in order; an older row's one ``default_shortcut`` "
+        "reads as a list of one",
     )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
@@ -170,6 +182,11 @@ class RegistryRow(FrozenModel):
         description="How the app takes part in workspace themes, when its manifest declares [theming]; absent means "
         "the app does not wear them yet and can be made themeable",
     )
+
+    @field_validator("default_shortcuts", mode="before")
+    @classmethod
+    def _read_one_default_shortcut_as_a_list(cls, value: object) -> object:
+        return as_default_shortcut_list(value)
 
 
 def read_registry(path: Path) -> list[RegistryRow]:

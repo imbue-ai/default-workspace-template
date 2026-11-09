@@ -57,7 +57,7 @@ The table:
 | `scope` | string | no | `linked` | `linked` or `independent`; the location scope of the pinned window |
 | `default_mode` | string | no | `bar` | `bar` or `floating`; the entry mode a client that has chosen none renders |
 
-The chat's manifest declares `path = "/"`, `style = "avatar"`, `scope = "independent"`, keeping the default mode, `bar`: the avatar sits in the tray until a client floats it (section 8).
+The chat's manifest declares `path = "/"`, `style = "avatar"`, `scope = "independent"`, `default_mode = "floating"`: the avatar floats until a client moves it to the taskbar's tray (section 8); a client that already chose a mode keeps it.
 
 ### 3.2 Pinned windows
 

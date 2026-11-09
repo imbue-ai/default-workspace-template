@@ -95,8 +95,8 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_view
-from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import choose_show_target
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -345,11 +345,11 @@ class ShellState(MutableModel):
         return [entry.row for entry in self.inventory.entries()]
 
     def _reconcile_desktops_with(self, rows: Sequence[RegistryRow]) -> tuple[Desktop, ...]:
-        """Every desktop holding the default shortcut of each registered app not yet offered (desktop plan section
-        3.2) and one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile that wrote
-        is announced once, after it, so nothing here recurses into itself. Callers hold the state lock and read
-        ``rows`` under it."""
-        shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
+        """Every desktop holding no shortcut of an unregistered app, each registered app's default shortcuts not yet
+        offered (desktop plan section 3.2), and one pinned window per pinned app (pinned-taskbar-entries plan section
+        3.2). A reconcile that wrote is announced once, after it, so nothing here recurses into itself. Callers hold
+        the state lock and read ``rows`` under it."""
+        shortcuts_outcome = self.desktops.reconcile_shortcuts_with(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
@@ -378,6 +378,7 @@ class ShellState(MutableModel):
                 seed_desktop_shortcuts(rows),
                 [pinned_window(app_pin, now) for app_pin in pinned_apps(rows)],
                 desktop_owner_of(identity),
+                rows,
             )
         self.broadcast_desktops_updated()
         return desktop
@@ -990,7 +991,8 @@ class ShellState(MutableModel):
             now,
             desktop_owner_of(identity),
         )
-        created = self.desktops.add_desktop(seeded, apps_with_their_default_shortcut_on(seeded, self._registry_rows()))
+        rows = self._registry_rows()
+        created = self.desktops.add_desktop(seeded, default_shortcut_targets_on(seeded, rows), rows)
         logger.info(
             "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
             created.name,

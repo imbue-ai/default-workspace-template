@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { railNodeAttrs } from "./agent-rail";
 
 /**
  * How a node's title reads. Finished work greys out; everything else stays at
@@ -35,36 +36,30 @@ export function timelineSpinnerBullet(): m.Vnode {
   );
 }
 
-/**
- * The row itself, minus the status markers each call site adds. The right-hand
- * inset is the agent's gutter (see --width-agent-gutter): task rows stop short
- * of the column edge exactly as the agent's prose does, so the timeline and the
- * replies around it share one right margin.
- */
-export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-agent-gutter))] items-start gap-3.5";
+/** The row itself, minus the status markers each call site adds. */
+export const TIMELINE_NODE_CLASS = "relative flex items-start gap-3.5";
 
 /**
- * The bullet gutter. Its opaque chat background masks the thread behind it.
- *
- * The box is exactly one title line tall and centres the bullet in it, so the
- * bullet and the title agree by construction rather than by two line boxes
- * happening to work out the same.
- *
- * `top-[0.1em]` is the optical correction on top of that. A line box is
- * symmetric about the em box, but the ink in it is not: the ascenders reach
- * most of the way to the top while the descenders use only part of the bottom,
- * so the mass the eye centres on sits BELOW the geometric middle -- by about
- * half a descender, which is what 0.1em is. In em rather than px so it keeps
- * pace with the type size, and relative rather than a margin so the row's
- * layout does not move with it.
+ * The bullet gutter: exactly one title line tall, centring the bullet in it, so
+ * the bullet and the title agree by construction rather than by two line boxes
+ * happening to work out the same. Dead centre, with no optical nudge: the
+ * stretch's line meets the bullet from above and below, and stops the same
+ * distance short of it on both sides.
  *
  * The height must track {@link TITLE_BASE}'s `leading-[1.4]` at
  * `--font-size-body`; both are written out because Tailwind scans class strings
  * literally and would miss a shared constant.
  */
-export const TIMELINE_BULLET_CLASS =
-  "pv-tl-bullet relative top-[0.1em] z-(--z-content) flex h-[calc(var(--font-size-body)*1.4)] w-4 shrink-0 " +
-  "items-center bg-chat";
+const TIMELINE_BULLET_CLASS = "pv-tl-bullet flex h-[calc(var(--font-size-body)*1.4)] w-4 shrink-0 items-center";
+
+/** A node's bullet in its gutter, marked as a stop on the stretch's line. */
+export function renderTimelineBullet(icon: m.Children): m.Vnode {
+  return m("div", { class: TIMELINE_BULLET_CLASS }, m("span", { class: "flex", ...railNodeAttrs("step") }, icon));
+}
+
+/** A run of timeline nodes: in from the column so the bullets' centres sit on the stretch's line, with the 6px
+ *  beyond the stretch's spacing that sets the run 18px from its neighbours, as its nodes are from each other. */
+export const TIMELINE_STEPS_CLASS = "my-1.5 pl-[14.5px]";
 
 /** Everything right of the bullet: title, caption, and the expanded body. */
 export const TIMELINE_BODY_CLASS = "pv-tl-body min-w-0 flex-1";
@@ -90,6 +85,13 @@ export function timelineTitleClass(tone: TimelineTone): string {
   if (tone === "done") return `${TITLE_BASE} text-faint`;
   if (tone === "current") return `${TITLE_BASE} pv-tl-title--current text-primary`;
   return `${TITLE_BASE} text-primary`;
+}
+
+/** The title's words, apart from the chevron beside them. The shimmer is clipped to the text of the element that
+ *  wears it, so it goes on the words alone: worn by the whole title it would also paint the chevron's glyph, unturned,
+ *  under the chevron's own turned one. */
+export function renderTimelineTitleText(text: string): m.Vnode {
+  return m("span", { class: "pv-tl-title-text" }, text);
 }
 
 /** The expand chevron beside the title. text-[18px]: icon glyph, sized
