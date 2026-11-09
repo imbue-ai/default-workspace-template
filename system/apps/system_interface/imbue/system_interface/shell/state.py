@@ -291,13 +291,19 @@ class ShellState(MutableModel):
 
     def adopt_visitor_desktops(self) -> None:
         """Give each desktop ``users.json`` says was made for a visitor, and which carries no owner, that visitor's
-        key (the multiplayer spec, section 8.1). A shell older than desktop owners seeded visitors' desktops with
+        key (the multiplayer spec, section 8.1), on the first start that runs this. A shell older than desktop owners seeded visitors' desktops with
         none, which reads as the workspace owner's: the visitor's own page then shows it in the viewing chrome, and
         "Stop viewing" has no desktop of theirs to go back to."""
         # CLEANUP: remove this (and DesktopStore.adopt_visitor_desktops) once no workspace can still update from a
         # template older than minds-v0.10.0, whose visitor desktops carry no owner.
-        with STATE_FILES_LOCK:
-            outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
+        try:
+            with STATE_FILES_LOCK:
+                outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
+        except ShellStateError as e:
+            logger.opt(exception=e).error(
+                "Failed to give the visitors' old desktops their visitors; the next start retries"
+            )
+            return
         if outcome.is_written:
             logger.info("Gave the visitors' desktops made before desktop owners their visitors")
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(outcome.desktops))

@@ -20,7 +20,6 @@ from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
-from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -44,6 +43,7 @@ from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
+from imbue.system_interface.shell.desktops import VISITOR_DESKTOPS_ADOPTED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
@@ -366,11 +366,11 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     assert [(post.hint.window_id, post.hint.desktop_id) for post in hints] == [(first, "work"), (second, "work")]
 
 
-def test_start_gives_a_visitors_desktop_from_before_desktop_owners_back_to_its_visitor(
+def _shell_with_a_visitors_desktop_from_before_owners(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A shell older than desktop owners seeded a visitor's desktop with none, which reads as the workspace owner's;
-    starting the shell gives it the visitor's key, and only it: the owner's desktops keep no owner."""
+) -> tuple[ShellState, Desktop]:
+    """A shell whose ``kanjun`` desktop was seeded for a visitor by a shell older than desktop owners: no owner, and
+    named by her ``users.json`` record; the workspace also has a desktop of the owner's own."""
     registry_path = write_two_app_registry(tmp_path)
     shell = build_shell_state(
         tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
@@ -388,22 +388,50 @@ def test_start_gives_a_visitors_desktop_from_before_desktop_owners_back_to_its_v
             last_seen=TEST_NOW,
         )
     )
+    return shell, visitors_desktop
+
+
+def test_start_gives_a_visitors_desktop_from_before_desktop_owners_back_to_its_visitor_once(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A shell older than desktop owners seeded a visitor's desktop with none, which reads as the workspace owner's;
+    the first start gives it the visitor's key, and only it. Later starts leave ownerless desktops alone: her record
+    still names the id after the owner deletes that desktop, and the owner may make one of their own under it."""
+    shell, visitors_desktop = _shell_with_a_visitors_desktop_from_before_owners(tmp_path, broadcaster)
     kanjun = RequestIdentity(owner=False, user_id="user-kanjun", email="kanjun@example.com")
 
     shell.start()
     try:
         owners = {desktop.id: desktop.owner for desktop in shell.list_desktops()}
         outcome = shell.arrive_client(ClientId("kanjuns-laptop"), kanjun)
-        second_adoption = shell.desktops.adopt_visitor_desktops(
-            {visitors_desktop.id: ParticipantKey("user:someone-else")}
-        )
     finally:
         shell.stop()
 
     assert owners == {"home": None, "kanjun": "user:user-kanjun", "work": None}
     assert outcome is not None and outcome.desktop_id == "kanjun" and outcome.created_desktop is None
     assert is_desktop_owned_by(shell.get_desktop("kanjun"), kanjun)
-    assert second_adoption.is_written is False
+
+    shell.delete_desktop(visitors_desktop.id)
+    shell.desktops.create_desktop("kanjun", "#123456", 1, (), (), None, ())
+    shell.adopt_visitor_desktops()
+    assert shell.get_desktop("kanjun").owner is None
+
+
+def test_a_fill_in_that_cannot_record_it_ran_is_logged_and_runs_again_at_the_next_start(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, loguru_records: list[str]
+) -> None:
+    shell, _ = _shell_with_a_visitors_desktop_from_before_owners(tmp_path, broadcaster)
+    # A directory where the record goes makes every write of it fail.
+    marker_path = tmp_path / "state" / VISITOR_DESKTOPS_ADOPTED_FILENAME
+    marker_path.mkdir()
+
+    shell.adopt_visitor_desktops()
+
+    assert any(record.startswith("ERROR Failed to give the visitors' old desktops") for record in loguru_records)
+    marker_path.rmdir()
+    shell.adopt_visitor_desktops()
+    assert marker_path.is_file()
+    assert shell.get_desktop("kanjun").owner == "user:user-kanjun"
 
 
 def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(

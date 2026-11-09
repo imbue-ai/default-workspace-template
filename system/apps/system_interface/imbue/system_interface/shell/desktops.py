@@ -76,6 +76,9 @@ DESKTOP_THEMES_FILENAME: Final[str] = "desktop_themes.json"
 DESKTOP_THEMES_FILE_VERSION: Final[int] = 1
 # The default shortcuts the shell has offered (desktop plan section 3.2).
 DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
+# Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
+# runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
+VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 2
 # The record's version while it named apps (``AppsOfferedDocument``).
 _APPS_OFFERED_FILE_VERSION: Final[int] = 1
@@ -470,16 +473,21 @@ class DesktopStore(MutableModel):
         return DesktopsChangeOutcome(desktops=ensured, is_written=True)
 
     def adopt_visitor_desktops(self, owner_by_desktop_id: Mapping[DesktopId, ParticipantKey]) -> DesktopsChangeOutcome:
-        """The desktops after each one with no owner that ``owner_by_desktop_id`` names is given that owner; written
-        only when one was."""
+        """The desktops after each one with no owner that ``owner_by_desktop_id`` names is given that owner, the first
+        time this runs in the workspace; written only when one was. Raises ShellStateError when it cannot record that
+        it ran, leaving the next call to run it again."""
+        marker_path = self.state_directory / VISITOR_DESKTOPS_ADOPTED_FILENAME
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             desktops = document.desktops if document is not None else ()
-            adopted = with_visitor_owners(desktops, owner_by_desktop_id)
-            if adopted == desktops:
+            if marker_path.is_file():
                 return DesktopsChangeOutcome(desktops=desktops, is_written=False)
-            self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=adopted))
-        return DesktopsChangeOutcome(desktops=adopted, is_written=True)
+            adopted = with_visitor_owners(desktops, owner_by_desktop_id)
+            is_written = adopted != desktops
+            if is_written:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=adopted))
+            write_json_atomic(marker_path, {})
+        return DesktopsChangeOutcome(desktops=adopted, is_written=is_written)
 
     def create_desktop(
         self,
