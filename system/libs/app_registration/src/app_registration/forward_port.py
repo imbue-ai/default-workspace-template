@@ -195,7 +195,13 @@ _MANIFEST_STRING_KEYS = (
     "program",
     "window_closed_path",
 )
-_MANIFEST_BOOL_KEYS = ("critical", "internal", "system", "stop_when_no_windows", "uses_microphone")
+_MANIFEST_BOOL_KEYS = (
+    "critical",
+    "internal",
+    "system",
+    "stop_when_no_windows",
+    "uses_microphone",
+)
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
 _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
