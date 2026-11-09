@@ -177,5 +177,6 @@ describe("participantName", () => {
     expect(participants.participantName("user:bob-2", "Robert")).toBe("Bob");
     expect(participants.participantName("name:Someone", "Someone")).toBe("Someone");
     expect(participants.participantName("email:x@example.com", null)).toBe("email:x@example.com");
+    expect(participants.participantName("user:carol-3", null)).toBe("Invited person");
   });
 });

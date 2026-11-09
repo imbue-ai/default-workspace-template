@@ -41,6 +41,7 @@ from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import UNNAMED_PERSON_DISPLAY_NAME
 from workspace_layout.roster import assign_handles
 from workspace_layout.roster import participant_color
 from workspace_layout.shell_url import ROSTER_ROUTE
@@ -120,15 +121,15 @@ def _email_local_part(email: str | None) -> str | None:
 
 
 @pure
-def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None, user_id: str) -> str:
+def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None) -> str:
     """A person's name: their profile's, else the one recorded at their last arrival or by the desktop's identities
-    sidecar, else their email's local part, else their id."""
+    sidecar, else their email's local part, else a neutral label."""
     if profile is not None and profile.display_name:
         return profile.display_name
     if known_name:
         return known_name
     local_part = _email_local_part(email)
-    return local_part if local_part is not None else user_id
+    return local_part if local_part is not None else UNNAMED_PERSON_DISPLAY_NAME
 
 
 @pure
@@ -178,8 +179,7 @@ def _person_entry(
     is_admitted_by_domain: bool,
 ) -> _Entry:
     """One account's entry: named from its profile, else what its last arrival recorded, else what the desktop
-    recorded when it granted them, else its email's local part, else its id; the email read the same way."""
-    user_id = str(key).removeprefix("user:")
+    recorded when it granted them, else its email's local part, else a neutral label; the email read the same way."""
     email = _first_known(
         presence.email if presence is not None else None,
         known.email if known is not None else None,
@@ -189,7 +189,7 @@ def _person_entry(
         known.display_name if known is not None else None,
         identity.display_name if identity is not None else None,
     )
-    display_name = _person_name(profile, known_name, email, user_id)
+    display_name = _person_name(profile, known_name, email)
     return _Entry(
         key=key,
         kind=ParticipantKind.PERSON,

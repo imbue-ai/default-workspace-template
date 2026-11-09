@@ -19,6 +19,7 @@ from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import UNNAMED_PERSON_DISPLAY_NAME
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -30,14 +31,14 @@ ROSTER_CACHE_SECONDS: Final[float] = 5.0
 @pure
 def fallback_display_name(key: ParticipantKey, identity: RequestIdentity) -> str:
     """What to call a sender the roster does not name: a visiting agent's grant name, a person's email local part,
-    else the key itself."""
+    else a neutral label for a person's account and the key itself for anyone else."""
     if identity.agent_name:
         return identity.agent_name
     if identity.email and "@" in identity.email:
         local_part = identity.email.split("@", 1)[0]
         if local_part:
             return local_part
-    return str(key)
+    return UNNAMED_PERSON_DISPLAY_NAME if identity.user_id is not None else str(key)
 
 
 class RosterClient(MutableModel):

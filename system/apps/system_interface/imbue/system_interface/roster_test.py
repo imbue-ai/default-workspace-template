@@ -213,9 +213,11 @@ def test_a_granted_account_that_never_arrived_is_named_from_the_desktops_identit
     source.share_grants.share_grants_path.write_text(_GRANTS)
     source.presence.heartbeat(_ANONYMOUS_OWNER, _T0)
 
-    # With nothing known, the id stands in for the name.
-    carol = source.document(_T0).participants[2]
-    assert (carol.key, carol.display_name, carol.email) == ("user:user-carol-1138", "user-carol-1138", None)
+    # With nothing known, a neutral label stands in for the name, never the account's id; two such people are told
+    # apart by their handles.
+    bob, carol = source.document(_T0).participants[1:3]
+    assert (carol.key, carol.display_name, carol.email) == ("user:user-carol-1138", "Invited person", None)
+    assert (bob.display_name, bob.handle, carol.handle) == ("Invited person", "Invited-person", "Invited-person-2")
 
     source.share_identities.share_identities_path.write_text(
         json.dumps(

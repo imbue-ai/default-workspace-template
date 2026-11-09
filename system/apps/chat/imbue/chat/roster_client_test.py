@@ -81,6 +81,7 @@ def test_a_run_of_roster_failures_warns_once_and_a_recovery_ends_the_run(loguru_
 def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_part() -> None:
     agent = RequestIdentity(owner=False, agent_id="va-1", agent_name="Josh's Claude", granter="x")
     assert fallback_display_name(ParticipantKey("agent:va-1"), agent) == "Josh's Claude"
-    assert fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere")) == str(
-        _BOB
+    assert (
+        fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere"))
+        == "Invited person"
     )

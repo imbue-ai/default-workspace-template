@@ -71,9 +71,18 @@ export function getWorkspaceAgent(): Participant | null {
   return getParticipant(WORKSPACE_AGENT_KEY);
 }
 
-/** The display name of an author key: the roster's, else the name the turn carried, else the key. */
+/** What a person's account is called when nothing names it: never its raw id (the shell's roster says the same). */
+export const UNNAMED_PERSON_NAME = "Invited person";
+const PERSON_KEY_PREFIX = "user:";
+
+/** The display name of an author key: the roster's, else the name the turn carried, else a neutral label for a
+ *  person's account and the key itself for anyone else. */
 export function participantName(key: string, fallbackName: string | null): string {
-  return getParticipant(key)?.display_name ?? fallbackName ?? key;
+  return (
+    getParticipant(key)?.display_name ??
+    fallbackName ??
+    (key.startsWith(PERSON_KEY_PREFIX) ? UNNAMED_PERSON_NAME : key)
+  );
 }
 
 /** Whether a key is the owner's, under either of the owner's keys (the spec's S12): the synthetic ``owner`` of an
