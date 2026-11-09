@@ -29,7 +29,6 @@ from imbue.chat.chat_quick_change import QuickChangeDeliveryError
 from imbue.chat.chat_quick_change import QuickChangeRouter
 from imbue.chat.chat_quick_change import ROUTING_LOG_FILENAME
 from imbue.chat.chat_quick_change import RoutingDecision
-from imbue.chat.chat_quick_change import SIDE_AGENT_DEFAULT_TIER
 from imbue.chat.chat_quick_change import SIDE_AGENT_MODEL_BY_TIER
 from imbue.chat.chat_quick_change import SideAgentTier
 from imbue.chat.chat_quick_change import TIER_QUESTION
@@ -163,6 +162,14 @@ def test_a_quick_change_to_unfinished_work_does_not_route() -> None:
     assert decide_routing(_answer(0.9, 0.8), 0.9, 0.8) is RoutingDecision.PENDING_WORK
 
 
+def test_an_unsure_quick_change_answer_does_not_route() -> None:
+    assert decide_routing(_answer(0.55), 0.55, 0.1) is RoutingDecision.NOT_ROUTED
+
+
+def test_an_unsure_unfinished_work_answer_does_not_route() -> None:
+    assert decide_routing(_answer(0.9, 0.45), 0.9, 0.45) is RoutingDecision.PENDING_WORK
+
+
 def test_a_likely_no_does_not_route() -> None:
     assert decide_routing(_answer(0.2), 0.2, 0.1) is RoutingDecision.NOT_ROUTED
 
@@ -180,9 +187,10 @@ def test_an_unreachable_jev_does_not_route() -> None:
     ("careful_probability", "tier"),
     [
         (0.9, SideAgentTier.CAREFUL),
-        (0.5, SideAgentTier.FAST),
+        (0.45, SideAgentTier.CAREFUL),
+        (0.4, SideAgentTier.FAST),
         (0.1, SideAgentTier.FAST),
-        (None, SIDE_AGENT_DEFAULT_TIER),
+        (None, SideAgentTier.CAREFUL),
     ],
 )
 def test_the_careful_answer_picks_the_tier(careful_probability: float | None, tier: SideAgentTier) -> None:
@@ -388,7 +396,7 @@ def test_a_routed_message_is_logged_for_the_main_agent_with_app_and_answers(tmp_
 
 @pytest.mark.parametrize(
     ("careful", "tier"),
-    [(0.9, SideAgentTier.CAREFUL), (0.1, SideAgentTier.FAST), (None, SIDE_AGENT_DEFAULT_TIER)],
+    [(0.9, SideAgentTier.CAREFUL), (0.1, SideAgentTier.FAST), (None, SideAgentTier.CAREFUL)],
 )
 def test_a_routed_message_carries_the_tier_its_careful_answer_picks(
     tmp_path: Path, careful: float | None, tier: SideAgentTier

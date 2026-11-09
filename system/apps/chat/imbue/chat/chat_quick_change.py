@@ -10,8 +10,11 @@ conversation (the user's and the agent's):
    yet, or revise an unfinished request? (Such a message stays with the chat's own agent, which is
    doing that work.)
 3. Does making it well need careful judgement beyond a direct edit (tricky logic, keeping many parts
-   consistent, a taste call)? This picks the side agent's tier (``SideAgentTier``): careful on a yes,
-   else fast.
+   consistent, a taste call)? This picks the side agent's tier (``SideAgentTier``): fast on a clear no,
+   else careful.
+
+The cutoffs (``QUICK_CHANGE_CUTOFF`` and its neighbours) send an unsure answer to the chat's own agent
+and to the careful tier.
 
 The send waits for the answer before anything is delivered (at most ``ROUTING_TIMEOUT_SECONDS``), so
 a routed message never enters the chat agent's conversation:
@@ -124,8 +127,11 @@ _CONTEXT_MESSAGE_WORD_LIMIT: Final[int] = 300
 # half as many agent turns, and one turn can carry dozens of tool events; events are payload-free and
 # read from memory, so a generous limit is cheap.
 _CONTEXT_TAIL_EVENT_LIMIT: Final[int] = 1000
-# How likely Jev must judge a yes before the message is routed.
-_YES_CUTOFF: Final[float] = 0.5
+# Routed only when question 1 is above its cutoff and question 2 at or below its; careful tier when question 3 is
+# above its cutoff. Unsure answers take the safe path: the chat's own agent, and the careful tier.
+QUICK_CHANGE_CUTOFF: Final[float] = 0.6
+PENDING_WORK_CUTOFF: Final[float] = 0.4
+CAREFUL_TIER_CUTOFF: Final[float] = 0.4
 # A just-created quick-change chat is not taking messages until its agent is up.
 _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
@@ -466,21 +472,21 @@ def decide_routing(
         return RoutingDecision.JEV_FAILED
     if quick_change_probability is None:
         return RoutingDecision.UNUSABLE_ANSWER
-    if quick_change_probability <= _YES_CUTOFF:
+    if quick_change_probability <= QUICK_CHANGE_CUTOFF:
         return RoutingDecision.NOT_ROUTED
     if pending_work_probability is None:
         return RoutingDecision.UNUSABLE_ANSWER
-    if pending_work_probability > _YES_CUTOFF:
+    if pending_work_probability > PENDING_WORK_CUTOFF:
         return RoutingDecision.PENDING_WORK
     return RoutingDecision.ROUTED
 
 
 @pure
 def decide_tier(careful_probability: float | None) -> SideAgentTier:
-    """The tier a routed message goes to: careful on a likely yes to question 3, else the default."""
-    if careful_probability is not None and careful_probability > _YES_CUTOFF:
-        return SideAgentTier.CAREFUL
-    return SIDE_AGENT_DEFAULT_TIER
+    """The tier a routed message goes to: fast only on a likely no to question 3; careful when unsure or unanswered."""
+    if careful_probability is not None and careful_probability <= CAREFUL_TIER_CUTOFF:
+        return SideAgentTier.FAST
+    return SideAgentTier.CAREFUL
 
 
 @pure
