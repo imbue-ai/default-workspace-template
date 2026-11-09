@@ -260,6 +260,33 @@ def test_resolve_many_fetches_again_after_a_background_fetch_raised(tmp_path: Pa
     assert len(raised) == 1
 
 
+def _is_refresh_running() -> bool:
+    return any(thread.name == "profile-refresh" for thread in threading.enumerate())
+
+
+def test_a_profile_the_cache_cannot_keep_is_not_announced_as_changed(tmp_path: Path) -> None:
+    """The listeners announce through ``resolve_many``, which reads only the cache: a fetch the cache could not keep
+    changes nothing it answers, and announcing it would only start the same fetch again, forever."""
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    resolver = _resolver(tmp_path, connector.handle)
+    # A file where the cache directory goes makes every cache write fail.
+    resolver.cache_directory.write_text("")
+    announced: list[dict[str, UserProfile]] = []
+    resolver.add_refresh_listener(lambda: announced.append(resolver.resolve_many([_BOB], _T0)))
+
+    assert resolver.resolve_many([_BOB], _T0) == {}
+
+    wait_for(
+        lambda: len(connector.requests) >= 1 and not _is_refresh_running(),
+        timeout=10.0,
+        poll_interval=0.01,
+        error_message="the profile refresh never settled",
+    )
+    assert announced == []
+    assert len(connector.requests) == 1
+
+
 def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sharing(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)

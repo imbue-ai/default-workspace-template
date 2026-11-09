@@ -182,8 +182,8 @@ def _utc_now() -> datetime:
 
 
 @pure
-def _profile_of(cached: _CachedProfile) -> UserProfile | None:
-    if cached.is_fetch_failed:
+def _profile_of(cached: _CachedProfile | None) -> UserProfile | None:
+    if cached is None or cached.is_fetch_failed:
         return None
     return UserProfile(
         user_id=cached.user_id, display_name=cached.display_name, profile_picture_url=cached.profile_picture_url
@@ -252,7 +252,7 @@ class ProfileResolver(MutableModel):
             if is_stale:
                 stale_user_ids.append(user_id)
             # A stale entry stands in only while the share it came from does, as ``resolve`` answers it.
-            profile = _profile_of(cached) if cached is not None and (is_shared or not is_stale) else None
+            profile = _profile_of(cached) if is_shared or not is_stale else None
             if profile is not None:
                 profile_by_user_id[str(user_id)] = profile
         if stale_user_ids and is_shared:
@@ -275,9 +275,11 @@ class ProfileResolver(MutableModel):
         try:
             user_id = self._take_pending_refresh()
             while user_id is not None:
-                before = self._read_cached(user_id)
-                fetched = self.resolve(user_id, self.clock())
-                if fetched != (_profile_of(before) if before is not None else None):
+                # Judged by the cache, which is all ``resolve_many`` reads: a fetch it could not keep changes
+                # nothing a listener's announcement would show, and announcing it would start the fetch again.
+                before = _profile_of(self._read_cached(user_id))
+                self.resolve(user_id, self.clock())
+                if _profile_of(self._read_cached(user_id)) != before:
                     is_any_profile_changed = True
                 user_id = self._take_pending_refresh()
         finally:
