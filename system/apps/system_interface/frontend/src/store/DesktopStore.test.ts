@@ -3498,6 +3498,18 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   const alices = desktopRecord("alice", { owner: "user:user-alice-0001" });
   const josh = rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true });
   const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice" });
+  const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
+
+  /** Alice visiting a workspace whose desktops are the owner's and Bob's: none is hers. */
+  function visitorWithNoDesktopOfHerOwn(): void {
+    api.desktops = [api.desktops[0], bobs];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+  }
 
   async function viewerStore(): Promise<DesktopStore> {
     api.desktops = [...api.desktops, alices];
@@ -3915,7 +3927,6 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("a visitor with no desktop left arrives again when the viewed one is deleted, and lands on the seeded one", async () => {
-    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
     api.desktops = [api.desktops[0], alices, bobs];
     setOwnIdentityForTesting({
       owner: false,
@@ -3939,13 +3950,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("stop viewing with no desktop of its own arrives again and lands on the seeded one", async () => {
-    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
     api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
@@ -3957,13 +3962,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   it("stop viewing that the shell answers with the viewed desktop says it could not leave, and a retry still can", async () => {
     // A visitor's own desktop reads as the workspace owner's, so she has none of her own, and the shell lands her
     // on the one she is already viewing: the click must not silently do nothing.
-    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
@@ -3981,13 +3980,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("stop viewing that cannot reach the shell says it could not leave until the window moves off", async () => {
-    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
     api.refusal = "the shell is down";
@@ -4005,14 +3998,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("stop viewing that finds nowhere to go after the window already moved off leaves no failure behind", async () => {
-    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
-    api.desktops = [api.desktops[0], bobs];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
