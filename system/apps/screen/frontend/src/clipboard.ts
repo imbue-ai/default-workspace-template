@@ -56,13 +56,10 @@ export function serviceClipboardTransport(
       return blob.size > 0 ? blob : null;
     },
     async writeRemoteText(text, html) {
-      // neko writes one X clipboard target and prefers the HTML when both are sent, which leaves a URL bar or a
-      // terminal on the Screen nothing to paste; the plain text goes alone, and the HTML only when there is no text.
-      const body = text !== "" ? { text, html: "" } : { text: "", html };
       const response = await fetch(nekoRouteWithToken("/neko/api/room/clipboard", token()), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ text, html }),
       });
       return response.ok;
     },
@@ -203,9 +200,13 @@ export class ClipboardBridge {
       return isSent;
     }
     if (text === "" && html === "") return false;
-    const hash = await hashOf([text, html]);
+    // neko writes one X clipboard target and prefers the HTML when both are sent, which leaves a URL bar or a
+    // terminal on the Screen nothing to paste; the plain text goes alone, and the HTML only when there is no text.
+    const sentText = text !== "" ? text : "";
+    const sentHtml = text !== "" ? "" : html;
+    const hash = await hashOf([sentText, sentHtml]);
     if (hash === this.lastSentHash || hash === this.lastReceivedHash) return true;
-    const isSent = await this.transport.writeRemoteText(text, html).catch(() => false);
+    const isSent = await this.transport.writeRemoteText(sentText, sentHtml).catch(() => false);
     if (isSent) this.lastSentHash = hash;
     else this.onStatus("The text could not be pasted on the Screen");
     return isSent;
