@@ -406,7 +406,7 @@ recorded, else what the Imbue Studio desktop recorded of them when it granted
 them (`data/.secrets/share_identities.json`, written beside the grants with
 every save: the email and display name each granted account id resolved
 from, which is how someone granted but never yet here gets a name rather than
-their id), else their email's local part, else their id. The apps read the
+their id), else their email's local part, else `Guest`. The apps read the
 roster from here rather than from its files: it is the one place names, keys,
 and handles are decided.
 
@@ -418,7 +418,11 @@ file the Imbue Studio desktop writes while the workspace is shared (read fresh o
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
-request ever hangs or fails on it. The profile rides on each present user
+request ever hangs or fails on it. The roster and the presence listing never
+wait on the connector at all: they answer from the cache as it stands, a stale
+entry included while the workspace is still shared, fetch what is missing or
+stale on one background thread, and announce the roster and the connected set
+again when that changed what the cache answers. The profile rides on each present user
 over the wire (`display_name`, `profile_picture_url`, null when there is none)
 and names a visitor's desktop on their first arrival. The picture itself is
 served from the shell's own origin, since the pages' content security policy
@@ -449,7 +453,10 @@ it last arrived as that same user), and if it has been deleted the next
 arrival seeds another and says so. Every desktop stays shared and reachable
 from everyone's launcher; there is no private mode. The seeded desktop is
 written with the visitor's key as its owner (the multiplayer spec, section
-8.1), so their card and their overview list it as theirs; a desktop whose owner
+8.1), so their card and their overview list it as theirs (a shell older than
+desktop owners seeded it with none, so the first start of a newer one gives
+each ownerless desktop `users.json` records for a visitor that visitor's key,
+and marks it done in `visitor_desktops_adopted`); a desktop whose owner
 has since left the grants is left behind, listed in the owner's overview under
 "Left behind" so it can be viewed and deleted.
 
@@ -493,7 +500,11 @@ in the owner's colour around the whole desktop, the taskbar included, and a
 chip in that colour with their picture, "<Name> · <Desktop name>", and "Stop
 viewing" in place of the tray, the overview button hidden meanwhile (and the
 backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
-desktop the window came from, else the viewer's first. A viewed desktop is
+desktop the window came from, else the viewer's first, else the desktop the
+shell seeds for a visitor who has none left; when none of those is somewhere
+else to go (the shell could not be asked, or it answered the desktop already on
+screen), the chip says "Couldn't leave this desktop" and its button reads "Try
+again" until the window moves off. A viewed desktop is
 shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it
