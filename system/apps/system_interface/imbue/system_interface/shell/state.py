@@ -130,6 +130,7 @@ from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
@@ -244,7 +245,9 @@ class ShellState(MutableModel):
 
     def start(self) -> None:
         """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness),
-        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests)."""
+        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests).
+        Each visitor's desktop made before desktops carried an owner is given its visitor first."""
+        self.adopt_visitor_desktops()
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
@@ -285,6 +288,19 @@ class ShellState(MutableModel):
         if self._snapshot_watch is not None:
             stop_file_watch(self._snapshot_watch)
             self._snapshot_watch = None
+
+    def adopt_visitor_desktops(self) -> None:
+        """Give each desktop ``users.json`` says was made for a visitor, and which carries no owner, that visitor's
+        key (the multiplayer spec, section 8.1). A shell older than desktop owners seeded visitors' desktops with
+        none, which reads as the workspace owner's: the visitor's own page then shows it in the viewing chrome, and
+        "Stop viewing" has no desktop of theirs to go back to."""
+        # CLEANUP: remove this (and DesktopStore.adopt_visitor_desktops) once no workspace can still update from a
+        # template older than minds-v0.10.0, whose visitor desktops carry no owner.
+        with STATE_FILES_LOCK:
+            outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
+        if outcome.is_written:
+            logger.info("Gave the visitors' desktops made before desktop owners their visitors")
+            self.broadcaster.broadcast_desktops_updated(self.desktop_views(outcome.desktops))
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""

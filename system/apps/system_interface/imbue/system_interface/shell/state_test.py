@@ -20,6 +20,7 @@ from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -39,6 +40,7 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -48,6 +50,7 @@ from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import SupervisorProgramState
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -361,6 +364,46 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     shell.delete_desktop(work.id)
 
     assert [(post.hint.window_id, post.hint.desktop_id) for post in hints] == [(first, "work"), (second, "work")]
+
+
+def test_start_gives_a_visitors_desktop_from_before_desktop_owners_back_to_its_visitor(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A shell older than desktop owners seeded a visitor's desktop with none, which reads as the workspace owner's;
+    starting the shell gives it the visitor's key, and only it: the owner's desktops keep no owner."""
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    shell.list_desktops()
+    visitors_desktop = shell.desktops.create_desktop("kanjun", "#123456", 1, (), (), None, ())
+    shell.desktops.create_desktop("Work", "#654321", 2, (), (), None, ())
+    shell.users.record_user(
+        UserRecord(
+            user_id=UserId("user-kanjun"),
+            desktop_id=visitors_desktop.id,
+            desktop_name=visitors_desktop.name,
+            email="kanjun@example.com",
+            display_name=None,
+            last_seen=TEST_NOW,
+        )
+    )
+    kanjun = RequestIdentity(owner=False, user_id="user-kanjun", email="kanjun@example.com")
+
+    shell.start()
+    try:
+        owners = {desktop.id: desktop.owner for desktop in shell.list_desktops()}
+        outcome = shell.arrive_client(ClientId("kanjuns-laptop"), kanjun)
+        second_adoption = shell.desktops.adopt_visitor_desktops(
+            {visitors_desktop.id: ParticipantKey("user:someone-else")}
+        )
+    finally:
+        shell.stop()
+
+    assert owners == {"home": None, "kanjun": "user:user-kanjun", "work": None}
+    assert outcome is not None and outcome.desktop_id == "kanjun" and outcome.created_desktop is None
+    assert is_desktop_owned_by(shell.get_desktop("kanjun"), kanjun)
+    assert second_adoption.is_written is False
 
 
 def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(

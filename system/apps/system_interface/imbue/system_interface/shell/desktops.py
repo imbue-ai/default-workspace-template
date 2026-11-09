@@ -3,6 +3,7 @@ the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_off
 
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -62,6 +63,7 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.ownership import reordered_desktops
+from imbue.system_interface.shell.ownership import with_visitor_owners
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
@@ -466,6 +468,18 @@ class DesktopStore(MutableModel):
             self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=ensured))
         logger.info("Reconciled the pinned windows of {} desktop(s) for {} pinned app(s)", len(ensured), len(pins))
         return DesktopsChangeOutcome(desktops=ensured, is_written=True)
+
+    def adopt_visitor_desktops(self, owner_by_desktop_id: Mapping[DesktopId, ParticipantKey]) -> DesktopsChangeOutcome:
+        """The desktops after each one with no owner that ``owner_by_desktop_id`` names is given that owner; written
+        only when one was."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            adopted = with_visitor_owners(desktops, owner_by_desktop_id)
+            if adopted == desktops:
+                return DesktopsChangeOutcome(desktops=desktops, is_written=False)
+            self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=adopted))
+        return DesktopsChangeOutcome(desktops=adopted, is_written=True)
 
     def create_desktop(
         self,
