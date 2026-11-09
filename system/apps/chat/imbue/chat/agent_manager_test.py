@@ -8043,23 +8043,34 @@ def test_status_mapping_follows_the_chat_row(
 
 
 @pytest.mark.parametrize(
-    ("lifecycle", "activity", "is_marker_present", "is_permission_pending", "is_connecting", "has_queued", "expected"),
+    (
+        "lifecycle",
+        "activity",
+        "is_marker_present",
+        "is_permission_pending",
+        "is_connecting",
+        "has_queued",
+        "has_harness_task",
+        "expected",
+    ),
     [
-        ("WAITING", ActivityState.IDLE, False, False, False, False, None),
-        ("WAITING", None, False, False, False, False, None),
-        # The turn ended with background work outstanding; the restart ends that work.
-        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, False, None),
-        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, False, False, False, False, False, None),
+        ("WAITING", None, False, False, False, False, False, None),
         # The transcript reads idle between an assistant message and its next tool call.
-        ("RUNNING", ActivityState.IDLE, False, False, False, False, "working"),
+        ("RUNNING", ActivityState.IDLE, False, False, False, False, False, "working"),
         # A turn the observe-reported lifecycle has not caught up with yet.
-        ("WAITING", ActivityState.IDLE, True, False, False, False, "working"),
-        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, "working"),
-        ("WAITING", ActivityState.COMPACTING, False, False, False, False, "working"),
-        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, "working"),
-        ("WAITING", ActivityState.IDLE, True, True, False, False, "waiting on a dialog"),
-        ("WAITING", ActivityState.IDLE, False, False, True, False, "receiving a message"),
-        ("WAITING", ActivityState.IDLE, False, False, False, True, "holding queued messages"),
+        ("WAITING", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, False, "working"),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, True, False, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, False, True, False, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, False, True, False, "holding queued messages"),
+        # The harness's own background work, which a restart would end unreported: as the lifecycle reports it,
+        # and as an older turn-end hook's chat, which reports WAITING, records it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, False, False, "waiting on background work"),
+        ("WAITING", ActivityState.IDLE, False, False, False, False, True, "waiting on background work"),
     ],
 )
 def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
@@ -8069,10 +8080,13 @@ def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
     is_permission_pending: bool,
     is_connecting: bool,
     has_queued: bool,
+    has_harness_task: bool,
     expected: str | None,
 ) -> None:
     assert (
-        restart_busy_reason(lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued)
+        restart_busy_reason(
+            lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued, has_harness_task
+        )
         == expected
     )
 
@@ -8088,6 +8102,24 @@ def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_mark
 
     (state_dir / "active").touch()
     assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
+
+
+def test_only_a_harness_task_keeps_a_waiting_chat_from_its_restart_and_is_read_without_waiting_for_the_poller(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A ``run_in_background`` command a restart ends is reported with the chat's next message; one of the
+    harness's own tasks dies unreported. The check re-reads the markers, so a task recorded since the poller's
+    last pass still counts."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "runner-task", os.getpid())
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+        write_background_task_marker(reader, "agent-1", "claude-task", os.getpid(), harness="claude")
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "waiting on background work"
+    finally:
+        manager.stop()
 
 
 def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:
