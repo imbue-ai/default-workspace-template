@@ -47,9 +47,11 @@ service's log and waits for nothing:
 uv run --no-sync host-backup-now --check
 ```
 
-Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 1 (no
-recent success: the service is down or its ticks fail) and 2 (not observable)
-mean there is **no** confirmed restore point. **None of them blocks the
+Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 4 (the
+account is out of backup storage, so the newest tick freed space instead of
+backing up and the last restore point is older than expected), 1 (no recent
+success: the service is down or its ticks fail) and 2 (not observable) mean
+there is **no** confirmed restore point. **None of them blocks the
 pass**: note which it was, carry it into the results message as a caveat, and
 continue -- git still holds every version of the tree. Do not stop to ask for
 a go-ahead.
@@ -440,7 +442,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
-    --description "Wait for the update's background agent" -- \
+    --description "Wait for the update's background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```

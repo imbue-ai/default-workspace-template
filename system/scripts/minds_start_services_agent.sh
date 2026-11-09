@@ -5,13 +5,15 @@
 # (host_dir/env + host_dir/agents/<id>/env). Sourcing only the host env would
 # violate that contract.
 #
-# Invoked by the Imbue Studio boot units (the lima in-VM unit and the outer-VM unit's
-# `docker exec`) so a workspace recovers after a VM/container restart without the
-# desktop app. Run it through a login shell (`bash -lc`) so uv/mngr are on PATH.
+# Run by the Imbue Studio boot-recovery paths (the lima in-VM unit, the outer-VM
+# unit's `docker exec`, and the container start hook,
+# minds_container_start_hook.sh) so a workspace recovers after a VM/container
+# restart without the desktop app. Run it through a login shell (`bash -lc`) so
+# uv/mngr are on PATH.
 #
 # The agent's env file is keyed by agent id on disk, so we resolve the
 # system-services agent by its name in data.json. `mngr start` is idempotent and
-# flock-serialized, so racing the desktop client is safe.
+# flock-serialized, so racing another of those paths or the desktop client is safe.
 set -eu
 
 # Source host env first (sets MNGR_HOST_DIR etc.), then the system-services

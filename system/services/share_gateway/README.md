@@ -143,8 +143,12 @@ written to `data/.state/share_gateway/status.json`:
  "next_retry_at": "2026-09-13T12:01:00+00:00", "updated_at": "..."}
 ```
 
-`state` is `up`, `retrying`, or `halted`. The Imbue Studio desktop client reads this
-file to explain a share that is not live yet; it is removed at unshare.
+`state` is `up`, `retrying`, or `halted`. While the stack is up the runner
+rewrites the file once a minute, so `updated_at` says whether a runner is alive
+to write it: the Imbue Studio desktop client reads this file to explain a share
+that is not live yet, and disbelieves an `up` stamped more than five minutes
+ago (a container restarted with its services down leaves the last `up` behind
+until the services come back). It is removed at unshare.
 
 The runner also records the share's domain (`SHARE_WORKSPACE_DOMAIN`) in
 `data/.state/share_domain` whenever it reads new materials, and never removes it:
@@ -316,7 +320,7 @@ minutes. With
 `MNGR_AGENT_STATE_DIR` unset nothing is counted.
 
 The analytics collection of an explorer-plan workspace reads this feed and
-the shell's `window_opened` client-activity events
+the shell's `window_opened` and `window_input` client-activity events
 (`specs/minds-app-usage-signals/spec.md` in the mngr repo); the access log is
 never collected. See `docs/system/analytics-collection.md`.
 

@@ -117,3 +117,44 @@ def test_a_backup_in_flight_is_running_and_missing_secrets_mean_not_configured(
         ],
     )
     assert skipped["state"] == "not_configured"
+
+
+def _failed_for_quota(at: datetime, tick: str) -> str:
+    event = json.loads(_event("RESTIC_BACKUP_FAILED", at, tick))
+    event["reason"] = "quota_exceeded"
+    return json.dumps(event)
+
+
+def test_an_account_over_its_backup_quota_is_out_of_storage(tmp_path: Path) -> None:
+    skipped = _summary(
+        tmp_path / "skipped",
+        [
+            _event("RESTIC_BACKUP_SUCCEEDED", _NOW - timedelta(hours=2), "t1"),
+            _event("BACKUP_STARTED", _NOW - timedelta(minutes=5), "t2"),
+            _event("BACKUP_SKIPPED_OVER_QUOTA", _NOW - timedelta(minutes=4), "t2"),
+            _event("FORGET_COMPLETED", _NOW - timedelta(minutes=3), "t2"),
+            _event("PRUNE_COMPLETED", _NOW - timedelta(minutes=2), "t2"),
+        ],
+    )
+    assert skipped["state"] == "out_of_storage"
+    assert skipped["last_success_at"] == (_NOW - timedelta(hours=2)).isoformat()
+    assert skipped["failures_last_day"] == 0
+
+    refused = _summary(
+        tmp_path / "refused",
+        [
+            _event("BACKUP_STARTED", _NOW - timedelta(minutes=5), "t1"),
+            _failed_for_quota(_NOW - timedelta(minutes=4), "t1"),
+        ],
+    )
+    assert refused["state"] == "out_of_storage"
+    assert refused["failures_last_day"] == 1
+
+    ordinary = _summary(
+        tmp_path / "ordinary",
+        [
+            _event("BACKUP_STARTED", _NOW - timedelta(minutes=5), "t1"),
+            _event("RESTIC_BACKUP_FAILED", _NOW - timedelta(minutes=4), "t1"),
+        ],
+    )
+    assert ordinary["state"] == "failing"

@@ -38,7 +38,6 @@ from screen.data_types import Controller
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
-from screen.data_types import RequestIdentity
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
 from screen.data_types import XWindow
@@ -62,6 +61,7 @@ from screen.primitives import CHROMIUM_WINDOW_CLASS_MARKERS
 from screen.primitives import DEFAULT_TITLE
 from screen.primitives import DroppedFileName
 from screen.primitives import FILE_MANAGER_COMMAND
+from screen.primitives import NEKO_API_SESSION_ID
 from screen.primitives import NekoSessionId
 from screen.primitives import VIDEO_ID_WATCH
 from screen.primitives import XWindowId
@@ -76,6 +76,7 @@ from screen.windows import find_file_manager_window
 from screen.xclipboard import ClipboardContents
 from screen.xclipboard import ClipboardMonitor
 from screen.xclipboard import XClipboard
+from workspace_layout.identity import RequestIdentity
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
 SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)
@@ -83,6 +84,9 @@ SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)
 _TICK_SECONDS: Final[float] = 1.0
 _REAP_INTERVAL_SECONDS: Final[float] = 60.0
 _POLL_SECONDS: Final[float] = 0.2
+# How long a human verb waits for the lease to reach neko before answering, so that "controller: nobody" in its
+# answer means the next session's first input is a request neko grants, not a non-host's input it drops.
+_PROJECTION_WAIT_SECONDS: Final[float] = 5.0
 
 DEFAULT_SCREENSHOT_QUALITY: Final[int] = 90
 
@@ -209,7 +213,10 @@ class ScreenService(MutableModel):
     _modes_ledger: ModesLedger | None = PrivateAttr(default=None)
     _projected_host_id: str | None = PrivateAttr(default=None)
     _projection_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _pending_projection: ControlView | None = PrivateAttr(default=None)
+    _pending_projection: tuple[int, ControlView] | None = PrivateAttr(default=None)
+    _requested_projection_sequence: int = PrivateAttr(default=0)
+    _applied_projection_sequence: int = PrivateAttr(default=0)
+    _projection_applied: threading.Condition = PrivateAttr(default_factory=threading.Condition)
     _projection_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _threads: list[threading.Thread] = PrivateAttr(default_factory=list)
@@ -443,22 +450,38 @@ class ScreenService(MutableModel):
 
     def _request_projection(self, view: ControlView) -> None:
         with self._projection_lock:
-            self._pending_projection = view
+            self._requested_projection_sequence += 1
+            self._pending_projection = (self._requested_projection_sequence, view)
         self._projection_wake.set()
 
     def _projection_loop(self) -> None:
         while not self._stop.is_set():
             self._projection_wake.wait()
             self._projection_wake.clear()
-            view = self._take_pending_projection()
-            while view is not None and not self._stop.is_set():
+            pending = self._take_pending_projection()
+            while pending is not None and not self._stop.is_set():
+                sequence, view = pending
                 self.project_control(view)
-                view = self._take_pending_projection()
+                with self._projection_applied:
+                    self._applied_projection_sequence = max(self._applied_projection_sequence, sequence)
+                    self._projection_applied.notify_all()
+                pending = self._take_pending_projection()
 
-    def _take_pending_projection(self) -> ControlView | None:
+    def _take_pending_projection(self) -> tuple[int, ControlView] | None:
         with self._projection_lock:
-            view, self._pending_projection = self._pending_projection, None
-        return view
+            pending, self._pending_projection = self._pending_projection, None
+        return pending
+
+    def _wait_for_projection(self) -> None:
+        """Block until every lease change requested so far has been put onto neko, or log that it was not."""
+        with self._projection_lock:
+            target = self._requested_projection_sequence
+        with self._projection_applied:
+            is_applied = self._projection_applied.wait_for(
+                lambda: self._applied_projection_sequence >= target, timeout=_PROJECTION_WAIT_SECONDS
+            )
+        if not is_applied:
+            logger.warning("The lease was not put onto neko within {}s; answering anyway", _PROJECTION_WAIT_SECONDS)
 
     def project_control(self, view: ControlView) -> None:
         """Put neko in step with the lease: locked while an agent holds it, the human made host, else no host."""
@@ -487,13 +510,19 @@ class ScreenService(MutableModel):
         session = self.known_session(session_id)
         if session is None:
             return False
-        return self.control.take_control(session_id, str(session.name))
+        is_taken = self.control.take_control(session_id, str(session.name))
+        if is_taken:
+            self._wait_for_projection()
+        return is_taken
 
     def return_control(self, session_id: NekoSessionId) -> bool:
         session = self.known_session(session_id)
         if session is None:
             return False
-        return self.control.return_to_agents(session_id, is_owner=session.is_owner)
+        is_returned = self.control.return_to_agents(session_id, is_owner=session.is_owner)
+        if is_returned:
+            self._wait_for_projection()
+        return is_returned
 
     def acquire(self, agent_id: AgentId, agent_name: str | None, is_reclaim: bool) -> dict[str, Any]:
         """An agent's ``acquire``: starts the stack when it is down, and answers ``starting`` until it runs."""
@@ -604,13 +633,17 @@ class ScreenService(MutableModel):
 
     def _handle_control_host(self, payload: dict[str, Any]) -> None:
         """A host change the service did not make is a human taking an uncontrolled Screen; a host going away is
-        the controlling human's session leaving."""
+        the controlling human's session leaving. The service's own changes come back on this socket too, named by
+        neko's API session as their initiator, and only keep the last-host record: reading one as a human's would
+        re-grant a session the lease has already moved past."""
         has_host = payload.get("has_host") is True
         host_id = payload.get("host_id") if has_host else None
         with self._lock:
             previous_host_id = self._last_host_id
             self._last_host_id = str(host_id) if isinstance(host_id, str) and host_id else None
             service_session = self._service_session
+        if payload.get("id") == NEKO_API_SESSION_ID:
+            return
         if isinstance(host_id, str) and host_id:
             if service_session is not None and host_id == str(service_session.session_id):
                 return

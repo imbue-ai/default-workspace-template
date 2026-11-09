@@ -48,7 +48,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `default_chords`, the chords that trigger it out of the box, whose grammar
   the `workspace_profile` library checks),
   `DefaultShortcut`
-  (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
+  (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
+  array of them, read as `default_shortcuts`), `ShortcutMode`,
+  `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;
@@ -71,11 +73,11 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
   `forward_port.py` and `workspace-layout`). `register_app(manifest_path, app_url)` is
-  the startup registration every app's entry point calls: it runs
-  `system/scripts/forward_port.py --manifest <path> --url <url>` under the
-  current interpreter from the repo root, which upserts the app's row from its
-  manifest (a re-registration updates the row in place), and raises
-  `AppRegistrationError` when the script is missing, fails, or times out.
+  the startup registration every app's entry point calls: through
+  `app_registration.forward_port`, the library `system/scripts/forward_port.py`
+  runs, it upserts the app's row from its manifest (a re-registration updates
+  the row in place), and raises `AppRegistrationError` when the manifest or the
+  registration is refused.
   `read_origin_label(path, name)` answers
   one app's origin label, or `""` when no such app is registered or the registry
   cannot be read (logged as a warning), for a page that derives another app's
@@ -138,7 +140,7 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/workspace_bare_scripts/forward_port_test.py` keeps them identical), with
+  `system/libs/app_registration/src/app_registration/forward_port_test.py` keeps them identical), with
   `canonical_name_from_title(title)` (the name a user-facing title registers
   as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
   would collide with a name already taken) for apps that mint names from titles,

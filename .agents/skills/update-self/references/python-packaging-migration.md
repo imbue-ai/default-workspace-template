@@ -47,7 +47,8 @@ above, whether the skill is the user's):
 | `test_no_one_off_runs_a_user_packages_command_from_the_root_venv` names a user file | [A user app, service or lib](#a-user-app-service-or-lib), step 4 |
 | `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A packaged skill](#a-packaged-skill), last step |
-| `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
+| `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
+| `test_prevent_sys_path_edits`, `test_sys_path_edits_only_add_a_bare_search_path` or `test_prevent_running_the_workspaces_own_code_as_a_process` fails and lists a user file | [Launches and import-path edits in the user's code](#launches-and-import-path-edits-in-the-users-code) |
 | `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
 
 ## A user skill with scripts
@@ -126,8 +127,10 @@ it runs today:
    ```
 
    It lists what it would change: the sources that become editable path
-   sources, the dev dependency its tests get, its removal from the root
-   `pyproject.toml`, and the program line and documents it rewrites.
+   sources, the dev dependency its tests get (and, when they type-check it,
+   `ty` at the root's pin and a `[tool.ty]` table, so the check covers its own
+   directory), its removal from the root `pyproject.toml`, and the program line
+   and documents it rewrites.
 2. **Migrate it**, seeding its lock from the shared lock it ran on before the
    merge (`<rollback point>` is the commit the workspace was on before this
    update's merge):
@@ -202,6 +205,53 @@ check sees it; after editing one, re-install it live with
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).
+
+## Launches and import-path edits in the user's code
+
+`system/test_python_launch_rules.py` fails on two things anywhere in the tree,
+the user's code included: a place that runs one of the workspace's own scripts,
+modules or commands as a process, and an edit to the import path, each unless a
+marker names why it has to stay. So any unmarked site in the user's skills,
+apps, services, libs or shell scripts fails it. That is the point: the user's
+code is held to the same rule as the template's, and this update is when it
+gets there.
+
+Fix each site the user's code adds, during the update, by restructuring it --
+not by editing the test, which is a local edit to a built-in file that every
+later update has to reconcile. The goal is code that imports what it uses;
+passing the test is how you know you got there, not the goal itself. You may
+change the caller, the code it reaches for, and their `pyproject.toml` files,
+even though they are not what the update came to change. The failure message
+lists every site. The common ones:
+
+- **A user skill's script puts its own directory on `sys.path` to import a
+  sibling module**: package the skill and import the sibling from the package
+  ([A packaged skill](#a-packaged-skill), step 2), or, for one standard-library
+  script, make it [a bare skill](#a-bare-skill).
+- **An app runs the root venv's interpreter, or a file of its own package,
+  because its own project lacks a package** (an app shelling out to a
+  Playwright script because its venv has no Playwright): declare the package
+  in the app's `pyproject.toml` (`uv add` in its directory) and import the
+  module.
+- **An app runs a skill's script to get its result** (several apps each
+  running a skill's `run.py` with a timeout): add the skill's `python/` project
+  to the app as an editable path source and call its functions. A deadline over
+  network calls that each have a timeout goes in as an argument, checked
+  between calls.
+- **A shell script runs `python3` with `PYTHONPATH` pointing at a package's
+  source**, and often a test re-creates that run: give the package a console
+  script if it has none, run it from a venv that installs it
+  (`uv run --no-sync --project <package> <command>`, or from the venv of the
+  app whose script it is, with the package as an editable path dependency), and
+  delete the test's `PYTHONPATH`.
+
+A site that one of the reasons in `.agents/shared/references/running-python.md`
+("When a launch or an import-path edit has to stay") really applies to -- a
+wrapper that hands secrets to the program it runs, say -- keeps its process with
+the marker that section shows. Name every marker you add, and every site you
+restructured, in your report. A restructure that would change what the user
+sees an app or skill do is a `question` (case (c) in `update-self-worker.md`),
+like a type error whose fix does.
 
 ## Type errors in the user's skills and apps
 

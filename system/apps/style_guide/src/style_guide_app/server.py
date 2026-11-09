@@ -34,6 +34,7 @@ from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import model_response
 from imbue.imbue_common.logging import setup_logging
 from style_guide_app.data_types import HealthResponse
@@ -87,6 +88,7 @@ ROUTE_TABLE: RouteTable = {
 
 def create_app(static_directory: Path, shell_static_directory: Path = SHELL_STATIC_MODULES_DIR) -> Flask:
     app = Flask("style_guide_app", static_folder=None)
+    install_request_guard(app, exempt_rules=frozenset())
     register_api_schema_route(
         app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
     )

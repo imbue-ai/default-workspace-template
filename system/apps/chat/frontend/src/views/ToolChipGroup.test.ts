@@ -1,17 +1,25 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The panel asks the detail cache for on-demand payloads (and kicks off fetches);
 // stub those so the tests drive the state machine without mithril's XHR.
-const { mockDetailState, mockRequestDetail } = vi.hoisted(() => ({
+const { mockDetailState, mockRequestDetail, agent } = vi.hoisted(() => ({
   mockDetailState: vi.fn(),
   mockRequestDetail: vi.fn(),
+  // What the chats model and the transcript store report for the chat: the agent's activity and its events.
+  agent: { activityState: "IDLE", events: [] as unknown[], hasMoreAfter: false },
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
   getEventDetailState: mockDetailState,
   getEventDetailVersion: () => 0,
+  getEventsForChat: () => agent.events,
+  hasMoreAfter: () => agent.hasMoreAfter,
   requestEventDetail: mockRequestDetail,
+}));
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: () => ({ active_agent: { activity_state: agent.activityState } }),
 }));
 
 import m from "mithril";
@@ -38,9 +46,9 @@ function result(over: Partial<ToolResultEvent> & Pick<ToolResultEvent, "tool_cal
 
 let root: HTMLElement;
 
-function mount(chips: ChipEntry[], results: ToolResultEvent[] = []): void {
+function mount(chips: ChipEntry[], results: ToolResultEvent[] = [], isOnLine = false): void {
   const toolResults = new Map(results.map((r) => [r.tool_call_id, r]));
-  m.render(root, m(ToolChipGroup, { chips, toolResults, chatId: "agent-x" }));
+  m.render(root, m(ToolChipGroup, { chips, toolResults, chatId: "agent-x", isOnLine }));
 }
 
 function chipButtons(): HTMLButtonElement[] {
@@ -64,6 +72,9 @@ function click(index: number, chips: ChipEntry[], results: ToolResultEvent[] = [
 beforeEach(() => {
   mockDetailState.mockReset();
   mockRequestDetail.mockReset();
+  agent.activityState = "IDLE";
+  agent.events = [];
+  agent.hasMoreAfter = false;
   root = document.createElement("div");
   document.body.appendChild(root);
 });
@@ -230,6 +241,87 @@ describe("the tool chip row", () => {
     expect(chipButtons()[0].className).toContain("text-faint");
     expect(chipButtons()[1].className).toContain("text-faint");
     expect(chipButtons()[1].className).not.toContain("text-danger");
+  });
+});
+
+describe("the call the agent is running", () => {
+  const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
+  const read: ToolCall = { tool_call_id: "c1", tool_name: "Read", input_chars: 20, header_label: "Tool: Read" };
+  const tests: ToolCall = {
+    tool_call_id: "c2",
+    tool_name: "Bash",
+    input_chars: 20,
+    action_note: "Run the tests",
+    caption_label: "Running npm test",
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows the call running in its chip on the stretch's line, with how long the turn has run, then settles", () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    agent.activityState = "TOOL_RUNNING";
+    agent.events = [
+      {
+        timestamp: new Date(NOW - 75_000).toISOString(),
+        type: "user_message",
+        event_id: "u1",
+        source: "test",
+        role: "user",
+        content: "test it",
+      },
+      {
+        timestamp: new Date(NOW - 70_000).toISOString(),
+        type: "assistant_message",
+        event_id: "a-1",
+        source: "test",
+        model: "m",
+        text: "",
+        tool_calls: [read, tests],
+        stop_reason: "tool_use",
+        usage: null,
+        is_auth_error: false,
+        is_api_error: false,
+        api_error_kind: null,
+        is_provider_fault: false,
+      },
+      result({ tool_call_id: "c1", timestamp: new Date(NOW - 69_000).toISOString() }),
+    ];
+    const chips = [chip(read), chip(tests)];
+
+    mount(chips, [result({ tool_call_id: "c1" })], true);
+    const [done, running] = chipButtons();
+    expect(done.classList.contains("tool-chip--running")).toBe(false);
+    expect(running.classList.contains("tool-chip--running")).toBe(true);
+    // The working dot stands where the icon goes, as the mark the stretch's line runs through.
+    expect(running.querySelector(".tool-chip-icon")).toBeNull();
+    expect(running.querySelector("[data-rail-icon]")).not.toBeNull();
+    expect(running.querySelector(".tool-chip-label")?.textContent).toBe("Running npm test");
+    expect(running.querySelector(".tool-chip-elapsed")?.textContent).toBe("\u00b7 1m 15s");
+
+    // Off the line (a step's opened work), the status row says the call, so its chip stays an ordinary chip.
+    mount(chips, [result({ tool_call_id: "c1" })], false);
+    const offLine = chipButtons()[1];
+    expect(offLine.classList.contains("tool-chip--running")).toBe(false);
+    expect(offLine.querySelector(".tool-chip-icon")).not.toBeNull();
+    expect(offLine.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
+
+    // The reader paged back and the window stops short of the live end: the call running now is past the held
+    // events, so the last unanswered one held is not it.
+    agent.hasMoreAfter = true;
+    mount(chips, [result({ tool_call_id: "c1" })], true);
+    const shortOfLiveEnd = chipButtons()[1];
+    expect(shortOfLiveEnd.classList.contains("tool-chip--running")).toBe(false);
+    expect(shortOfLiveEnd.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
+    agent.hasMoreAfter = false;
+
+    agent.activityState = "THINKING";
+    mount(chips, [result({ tool_call_id: "c1" }), result({ tool_call_id: "c2" })], true);
+    const settled = chipButtons()[1];
+    expect(settled.classList.contains("tool-chip--running")).toBe(false);
+    expect(settled.querySelector(".tool-chip-icon")).not.toBeNull();
+    expect(settled.querySelector(".tool-chip-label")?.textContent).toBe("Run the tests");
   });
 });
 

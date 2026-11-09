@@ -4,8 +4,10 @@ A pre-merge preview is just another registered service served raw at its own
 browser origin, so by default it renders as a bare window -- visually
 indistinguishable from the live interface. This server wraps that inner
 service in a chrome page that frames it on all four sides: an accent border +
-a header label marking the window as a *preview of a proposed change*, with the
-inner service held in a bordered "stage" iframe inside that frame.
+a header label marking the window as a *preview of a proposed change* (or, for
+``--kind mock``, as an early *UI sketch* of an app that is not finished yet, with
+an optional ``--note`` saying what is not real yet), with the inner service held
+in a bordered "stage" iframe inside that frame.
 
 It is deliberately service-agnostic. Given any inner service name already
 registered via ``forward_port.py``, plus a human-readable title, it serves the
@@ -30,22 +32,68 @@ by hand:
 import argparse
 import html
 import json
+from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import NamedTuple
 
 
-def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") -> str:
+class FrameKind(StrEnum):
+    """What the framed page is; its value is the wrapper's ``--kind`` and what a frame's record stores."""
+
+    # A proposed change to an app the user already has (update-app's previews).
+    CHANGE = "change"
+    # A new app's look-and-feel mock (build-app), up until the app is really hooked
+    # up to its data: hard-coded content or a sample, with some of it not working yet.
+    MOCK = "mock"
+
+
+class BannerCopy(NamedTuple):
+    """What the banner says about the framed page, beside its title (HTML, not escaped)."""
+
+    tag: str
+    description: str
+    hint: str
+
+
+BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
+    FrameKind.CHANGE: BannerCopy(
+        tag="Preview",
+        description="proposed change &mdash; not yet live",
+        hint="Approve or request changes in chat",
+    ),
+    FrameKind.MOCK: BannerCopy(
+        tag="UI Sketch",
+        description="early UI sketch &mdash; not the finished app",
+        hint="Ask for changes in chat",
+    ),
+}
+
+
+def build_wrapper_html(
+    inner_service: str,
+    title: str,
+    inner_path: str = "/",
+    kind: FrameKind = FrameKind.CHANGE,
+    note: str | None = None,
+) -> str:
     """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
 
-    ``title`` is shown in the banner (HTML-escaped). The inner iframe ``src`` is
-    assigned from JavaScript because the inner service's origin is a sibling of
-    the wrapper's own and can only be derived from ``location.host`` at render
-    time (see the module docstring); ``inner_path`` is the path opened on it, so
-    a preview can land on the page the user is looking at (a chat's conversation)
-    rather than the app's root.
+    ``title`` is shown in the banner (HTML-escaped), beside what ``kind`` says the
+    framed page is; ``note``, when given, is a line under the banner (HTML-escaped)
+    saying what the user should know about it, such as which parts are not real yet.
+    The inner iframe ``src`` is assigned from JavaScript because the inner service's
+    origin is a sibling of the wrapper's own and can only be derived from
+    ``location.host`` at render time (see the module docstring); ``inner_path`` is
+    the path opened on it, so a preview can land on the page the user is looking at
+    (a chat's conversation) rather than the app's root.
     """
     if not inner_path.startswith("/"):
         raise ValueError(f"inner path must start with '/', got {inner_path!r}")
+    copy = BANNER_COPY_BY_KIND[kind]
     safe_title = html.escape(title)
+    note_html = (
+        f'\n  <div class="preview-note">{html.escape(note)}</div>' if note else ""
+    )
     # json.dumps yields safe, quoted JS string literals for the service name and path.
     service_literal = json.dumps(inner_service)
     path_literal = json.dumps(inner_path)
@@ -53,7 +101,7 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Preview: {safe_title}</title>
+<title>{copy.tag}: {safe_title}</title>
 <style>
   :root {{ color-scheme: dark; }}
   * {{ box-sizing: border-box; }}
@@ -88,6 +136,12 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
     margin-left: auto; color: #cdbb86;
     font-size: 12px; white-space: nowrap;
   }}
+  .preview-note {{
+    flex: 0 0 auto;
+    padding: 0 4px;
+    color: #d8c489;
+    font-size: 12px; line-height: 1.4;
+  }}
   /* The previewed app sits inside a bordered, rounded stage so it reads as an
      object held within the frame rather than the live UI itself. */
   .preview-stage {{
@@ -102,13 +156,13 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
 </head>
 <body>
   <div class="preview-banner">
-    <span class="tag">Preview</span>
+    <span class="tag">{copy.tag}</span>
     <span class="title">{safe_title}</span>
-    <span class="desc">proposed change &mdash; not yet live</span>
-    <span class="hint">Approve or request changes in chat</span>
-  </div>
+    <span class="desc">{copy.description}</span>
+    <span class="hint">{copy.hint}</span>
+  </div>{note_html}
   <div class="preview-stage">
-    <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}"></iframe>
+    <iframe class="preview-frame" id="preview-frame" title="{copy.tag} of {safe_title}"></iframe>
   </div>
   <script>
     // Derive the inner service's sibling origin from this page's own host.
@@ -168,9 +222,20 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
     return _WrapperHandler
 
 
-def serve(port: int, inner_service: str, title: str, inner_path: str) -> None:
+def serve(
+    port: int,
+    inner_service: str,
+    title: str,
+    inner_path: str,
+    kind: FrameKind = FrameKind.CHANGE,
+    note: str | None = None,
+) -> None:
     page_html = build_wrapper_html(
-        inner_service=inner_service, title=title, inner_path=inner_path
+        inner_service=inner_service,
+        title=title,
+        inner_path=inner_path,
+        kind=kind,
+        note=note,
     )
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(page_html))
     server.serve_forever()
@@ -197,12 +262,28 @@ def main(argv: list[str] | None = None) -> int:
         default="/",
         help="The path the frame opens on the inner service (default: /).",
     )
+    parser.add_argument(
+        "--kind",
+        type=FrameKind,
+        choices=list(FrameKind),
+        default=FrameKind.CHANGE,
+        help="What the banner says the framed page is: a proposed change to an "
+        "existing app (default), or an early UI sketch of a new app.",
+    )
+    parser.add_argument(
+        "--note",
+        default=None,
+        help="A line under the banner telling the user what to know about the "
+        "framed page, e.g. what is not real yet in a mock.",
+    )
     args = parser.parse_args(argv)
     serve(
         port=args.port,
         inner_service=args.inner_service,
         title=args.title,
         inner_path=args.inner_path,
+        kind=args.kind,
+        note=args.note,
     )
     return 0
 

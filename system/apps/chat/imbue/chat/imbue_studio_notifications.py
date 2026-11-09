@@ -1,4 +1,5 @@
-"""What the chat app tells the Imbue Studio app's notification feed: that the user has just read a chat.
+"""What the chat app tells the Imbue Studio app's notification feed: that the user has just read a chat, that
+they were mentioned in one, or that a chat could not reply because its AI account is signed out.
 
 When a chat goes from unwatched to watched (``presence.py``), the user is reading it now, so
 the app's unread notifications from it are read too. The chat app posts
@@ -57,32 +58,51 @@ class ImbueStudioNotificationsClient(MutableModel):
     def notify_mention(self, mentioned_in: ChatId, title: str, message: str) -> Future[None]:
         """Queue a notification that the owner was mentioned in ``mentioned_in`` (the multiplayer spec, section
         7.4), posted as that chat's own agent, so a click opens that chat; a chat with no agent sends none."""
-        return self._executor.submit(self._post_mention, mentioned_in, title, message)
+        return self._executor.submit(
+            self._post_notification,
+            mentioned_in,
+            title,
+            message,
+            (),
+            f"notifying the owner of a mention in {mentioned_in}",
+        )
+
+    def notify_sign_in_needed(
+        self, chat_id: ChatId, title: str, message: str, watched_by: tuple[str, ...]
+    ) -> Future[None]:
+        """Queue a notification that ``chat_id`` could not reply for want of a signed-in AI account, posted as
+        that chat's own agent so a click opens the chat, where the reply offers the sign-in. ``watched_by`` names
+        the pages showing the chat to the user, for whom the app records it already read."""
+        return self._executor.submit(
+            self._post_notification, chat_id, title, message, watched_by, f"notifying a sign-in failure in {chat_id}"
+        )
 
     def shutdown(self) -> None:
         """Drop the calls not yet started and let the one in flight finish on its own. Idempotent."""
         self._executor.shutdown(wait=False, cancel_futures=True)
 
-    def _post_mention(self, mentioned_in: ChatId, title: str, message: str) -> None:
-        payload = {
+    def _post_notification(
+        self, chat_id: ChatId, title: str, message: str, watched_by: tuple[str, ...], purpose: str
+    ) -> None:
+        payload: dict[str, Any] = {
             "message": message,
             "title": title,
-            "destination": {"type": "minds:focus-chat", "chatId": str(mentioned_in)},
+            "destination": {"type": "minds:focus-chat", "chatId": str(chat_id)},
         }
-        response = self._post_as_chats_agent(
-            mentioned_in, "/notifications", payload, f"notifying the owner of a mention in {mentioned_in}"
-        )
+        if watched_by:
+            payload["watched_by"] = list(watched_by)
+        response = self._post_as_chats_agent(chat_id, "/notifications", payload, purpose)
         if response is None:
             return
         if not response.is_success:
             logger.warning(
-                "The Imbue Studio app answered {} to a mention notification for {}: {}",
+                "The Imbue Studio app answered {} when {}: {}",
                 response.status_code,
-                mentioned_in,
+                purpose,
                 response.text[:200],
             )
         else:
-            logger.debug("Notified the owner of a mention in {}", mentioned_in)
+            logger.debug("Posted to the Imbue Studio app: {}", purpose)
 
     def _post_chat_read(self, chat_id: ChatId) -> None:
         response = self._post_as_chats_agent(chat_id, "/notifications/read", {}, f"marking chat {chat_id} read")

@@ -19,6 +19,7 @@ import {
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  screenAppRecord,
   themeCatalog,
   themeMetricsRecord,
   themeRecord,
@@ -905,7 +906,7 @@ describe("the desktop shortcut rows", () => {
   it("adds the launch path to the desktop on screen in its default mode, then offers to take it off", async () => {
     const chat = appRecord("chat", {
       launch_paths: [launchPathRecord({ id: "new", path: "/new" })],
-      default_shortcut: { launch: "new", mode: "new" },
+      default_shortcuts: [{ launch: "new", mode: "new" }],
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), chat]);
 
@@ -922,6 +923,17 @@ describe("the desktop shortcut rows", () => {
     chooseRow("remove-from-desktop");
     await settle();
     expect(api.calls).toContain("removeDesktopShortcut:home:chat:new");
+  });
+
+  it("offers each of an app's default shortcuts from its own launcher row", async () => {
+    socket.deliver().onAppsUpdated([appRecord("docs"), screenAppRecord()]);
+
+    openLaunchMenu("screen:browser");
+    chooseRow("add-to-desktop");
+    await settle();
+
+    expect(api.calls).toContain("setDesktopShortcut:home:screen:browser:0,0");
+    expect(api.calls.some((call) => call.startsWith("setDesktopShortcut:home:screen:screen"))).toBe(false);
   });
 
   it("draws an added or removed shortcut at once, and puts the desktop back when the shell refuses", async () => {
@@ -1006,7 +1018,7 @@ describe("the desktop shortcut rows", () => {
         launchPathRecord({ id: "browse", path: "/" }),
         launchPathRecord({ id: "add", path: "/add" }),
       ],
-      default_shortcut: null,
+      default_shortcuts: [],
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), notes]);
 

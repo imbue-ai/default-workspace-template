@@ -18,10 +18,10 @@ Each rule is checked against the real tree and against a planted violation:
   system ``python3`` has no venv, so a venv-tier script run that way fails at its first
   third-party import. A ``uv run <path>.py`` names a script that exists, so a path that
   moved is rewritten wherever it is written down.
-- Code imports packages. Edits to the import path (``sys.path``, ``PYTHONPATH``, pytest's
-  ``pythonpath``), loading a module from a file path, and production code naming one of the
-  workspace's own scripts, modules or commands to run it as a process are counted, and the
-  counts only go down.
+- Code imports packages. An edit to the import path (``sys.path``, ``PYTHONPATH``, pytest's
+  ``pythonpath``), and production code naming one of the workspace's own scripts, modules or
+  commands to run it as a process, each fail unless a marker names why it has to stay.
+  Loading a module from a file path is counted, and the count only goes down.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Collection, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -146,15 +147,23 @@ def _shell_command_string(words: list[str], shell_index: int) -> str | None:
     return None
 
 
+def _past_options(
+    words: Sequence[object], index: int, options_with_values: Collection[str]
+) -> int:
+    """The index of the first word from ``index`` on that is not an option or an option's value."""
+    while (
+        index < len(words)
+        and isinstance(words[index], str)
+        and str(words[index]).startswith("-")
+    ):
+        index += 2 if words[index] in options_with_values else 1
+    return index
+
+
 def _uv_subcommand(arguments: list[str]) -> str | None:
     """The subcommand ``uv`` runs from ``arguments``, past its global options."""
-    words = iter(arguments)
-    for argument in words:
-        if not argument.startswith("-"):
-            return argument
-        if argument in _UV_GLOBAL_OPTIONS_WITH_VALUES:
-            next(words, None)
-    return None
+    index = _past_options(arguments, 0, _UV_GLOBAL_OPTIONS_WITH_VALUES)
+    return arguments[index] if index < len(arguments) else None
 
 
 def _runs_uv_run(command: str) -> bool:
@@ -704,6 +713,106 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
     ]
 
 
+# A launch of the workspace's own code or an import-path edit that has to stay says so in a
+# marker among the comment lines directly above its statement,
+# ``# own-process: <reason> -- <why>`` or ``# import-path: <reason> -- <why>``, naming one
+# of the reasons running-python.md ("When a launch or an import-path edit has to stay")
+# gives. Every unmarked site fails its test.
+_OWN_PROCESS_MARKER = "own-process"
+_IMPORT_PATH_MARKER = "import-path"
+_REASONS_BY_MARKER: dict[str, frozenset[str]] = {
+    _OWN_PROCESS_MARKER: frozenset(
+        {"other-tier", "outlives-caller", "deadline", "other-tree", "wrapper", "server"}
+    ),
+    _IMPORT_PATH_MARKER: frozenset({"no-venv", "other-tree"}),
+}
+# Any comment that opens like a marker is one, so a malformed marker is reported rather than
+# passed over.
+_MARKER_RE = re.compile(r"^\s*#\s*(own-process|import-path):(.*)$")
+
+
+class _Marker(NamedTuple):
+    line: int
+    kind: str
+    reason: str
+    why: str
+
+    def is_valid(self) -> bool:
+        return self.reason in _REASONS_BY_MARKER[self.kind] and bool(self.why)
+
+
+class _Site(NamedTuple):
+    """One launch or import-path edit, with the markers of its kind directly above its statement."""
+
+    relative: str
+    line: int
+    text: str
+    markers: tuple[_Marker, ...]
+
+    def is_kept(self) -> bool:
+        return any(marker.is_valid() for marker in self.markers)
+
+    def describe(self) -> str:
+        return f"{self.relative}:{self.line}: {self.text}"
+
+
+def _markers(lines: list[str]) -> list[_Marker]:
+    found: list[_Marker] = []
+    for number, line in enumerate(lines, start=1):
+        match = _MARKER_RE.match(line)
+        if match:
+            kind, rest = match.groups()
+            reason, _, why = rest.partition("--")
+            found.append(_Marker(number, kind, reason.strip(), why.strip()))
+    return found
+
+
+def _comment_block_above(lines: list[str], line: int) -> range:
+    """The numbers of the unbroken run of comment lines directly above ``line``."""
+    start = line
+    while start > 1 and lines[start - 2].lstrip().startswith("#"):
+        start -= 1
+    return range(start, line)
+
+
+def _statement_spans(tree: ast.AST) -> list[tuple[int, int]]:
+    return [
+        (node.lineno, node.end_lineno or node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.stmt)
+    ]
+
+
+def _statement_start(spans: list[tuple[int, int]], line: int) -> int:
+    """The first line of the innermost statement holding ``line``."""
+    return max((start for start, end in spans if start <= line <= end), default=line)
+
+
+def _sites(
+    relative: str,
+    lines: list[str],
+    flagged_lines: list[int],
+    spans: list[tuple[int, int]],
+    kind: str,
+) -> list[_Site]:
+    marker_by_line = {
+        marker.line: marker for marker in _markers(lines) if marker.kind == kind
+    }
+    return [
+        _Site(
+            relative,
+            line,
+            lines[line - 1].strip(),
+            tuple(
+                marker_by_line[number]
+                for number in _comment_block_above(lines, _statement_start(spans, line))
+                if number in marker_by_line
+            ),
+        )
+        for line in flagged_lines
+    ]
+
+
 # Calls that put a directory on the import path without naming ``sys.path``.
 _IMPORT_PATH_CALLS = frozenset({"syspath_prepend", "addsitedir"})
 
@@ -717,10 +826,9 @@ def _sets_a_path(value: ast.expr) -> bool:
     return not (isinstance(value, ast.Constant) and value.value == "")
 
 
-def _edits_sys_path(source: str) -> bool:
-    """Whether code changes where imports are looked up: ``sys.path`` under any alias, the calls
-    that prepend to it, or a ``PYTHONPATH`` written into an environment."""
-    tree = ast.parse(source)
+def _sys_path_edit_lines(tree: ast.AST) -> list[int]:
+    """The lines where code changes where imports are looked up: ``sys.path`` under any alias,
+    the calls that prepend to it, or a ``PYTHONPATH`` written into an environment."""
     sys_names = {"sys"} | {
         alias.asname
         for node in ast.walk(tree)
@@ -728,13 +836,14 @@ def _edits_sys_path(source: str) -> bool:
         for alias in node.names
         if alias.name == "sys" and alias.asname
     }
+    lines: set[int] = set()
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.ImportFrom)
             and node.module == "sys"
             and any(a.name == "path" for a in node.names)
         ):
-            return True
+            lines.add(node.lineno)
         if isinstance(node, ast.Call):
             called = (
                 node.func.attr
@@ -745,12 +854,12 @@ def _edits_sys_path(source: str) -> bool:
                 keyword.arg == "PYTHONPATH" and _sets_a_path(keyword.value)
                 for keyword in node.keywords
             ):
-                return True
+                lines.add(node.lineno)
         if isinstance(node, ast.Dict) and any(
             _is_pythonpath(key) and _sets_a_path(value)
             for key, value in zip(node.keys, node.values)
         ):
-            return True
+            lines.add(node.lineno)
         if (
             isinstance(node, ast.Assign)
             and _sets_a_path(node.value)
@@ -759,7 +868,7 @@ def _edits_sys_path(source: str) -> bool:
                 for target in node.targets
             )
         ):
-            return True
+            lines.add(node.lineno)
         target = (
             node.func.value
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -774,10 +883,31 @@ def _edits_sys_path(source: str) -> bool:
             isinstance(target, ast.Attribute)
             and target.attr == "path"
             and isinstance(target.value, ast.Name)
+            and target.value.id in sys_names
         ):
-            if target.value.id in sys_names:
-                return True
-    return False
+            lines.add(target.lineno)
+    return sorted(lines)
+
+
+# A file with none of these words and no ``<sys or its alias>.path`` is not parsed. The ordinary
+# spelling of every edit ``_sys_path_edit_lines`` reads has one; an exotic one (a comment between
+# ``sys`` and ``.path``, a ``PYTHONPATH`` key built from escapes) can pass, as ``getattr(sys,
+# "path")`` passes the AST check itself: these scans catch ordinary code, not evasion.
+_IMPORT_PATH_WORDS = ("PYTHONPATH", "syspath_prepend", "addsitedir", "from sys import")
+_SYS_ALIAS_RE = re.compile(r"\bsys\s+as\s+(\w+)")
+
+
+def _may_edit_import_path(text: str) -> bool:
+    if any(word in text for word in _IMPORT_PATH_WORDS):
+        return True
+    names = {"sys", *_SYS_ALIAS_RE.findall(text)}
+    return any(re.search(rf"\b{re.escape(name)}\s*\.\s*path\b", text) for name in names)
+
+
+def _edits_sys_path(source: str) -> bool:
+    return _may_edit_import_path(source) and bool(
+        _sys_path_edit_lines(ast.parse(source))
+    )
 
 
 def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
@@ -814,45 +944,112 @@ def _tracked_python_files(repo_root: Path) -> list[str]:
 _PYTEST_CONFIG_NAMES = frozenset(
     {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"}
 )
-_PYTHONPATH_SETTING_RE = re.compile(r"^\s*pythonpath\s*=", re.MULTILINE)
+_PYTHONPATH_SETTING_RE = re.compile(r"^\s*pythonpath\s*=")
 
 
-def _pytest_configs_setting_pythonpath(repo_root: Path) -> list[str]:
-    """Tracked pytest configs that add to the import path for every test under them."""
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split("\0")
+# A shell line that sets ``PYTHONPATH`` to something (an empty value clears it).
+_SHELL_PYTHONPATH_RE = re.compile(
+    r"(?<![\w$])PYTHONPATH=(?!(?:\"\"|'')?(?:\s|;|&|\||$))"
+)
+
+
+def _tracked_pytest_configs(repo_root: Path) -> list[str]:
     return sorted(
         relative
-        for relative in tracked
-        if PurePosixPath(relative).name in _PYTEST_CONFIG_NAMES
-        and "vendor" not in PurePosixPath(relative).parts
-        and not _is_in_third_party_skill(relative, repo_root)
-        and (repo_root / relative).is_file()
-        and _PYTHONPATH_SETTING_RE.search(
-            (repo_root / relative).read_text(errors="replace")
-        )
+        for name in _PYTEST_CONFIG_NAMES
+        for relative in _tracked_paths(repo_root, f"*{name}")
+        if PurePosixPath(relative).name == name
     )
 
 
-def _sys_path_editors(repo_root: Path) -> list[str]:
+def _shell_pythonpath_lines(lines: list[str]) -> list[int]:
     return [
-        relative
-        for relative in _tracked_python_files(repo_root)
-        if _edits_sys_path((repo_root / relative).read_text())
-    ] + _pytest_configs_setting_pythonpath(repo_root)
+        number
+        for number, line in enumerate(lines, start=1)
+        if not line.lstrip().startswith("#") and _SHELL_PYTHONPATH_RE.search(line)
+    ]
+
+
+def _shell_statement_spans(lines: list[str]) -> list[tuple[int, int]]:
+    """The line spans of commands continued over several lines by a trailing backslash."""
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for number, line in enumerate(lines, start=1):
+        if start is None:
+            start = number
+        if not line.rstrip().endswith("\\"):
+            if number > start:
+                spans.append((start, number))
+            start = None
+    return spans
+
+
+def _import_path_files(repo_root: Path) -> list[str]:
+    """The files an import-path edit, or a marker, can be in: the template's Python, its pytest
+    configs (whose ``pythonpath`` adds to the path for every test under them), and its shell
+    scripts."""
+    return [
+        *_tracked_python_files(repo_root),
+        *_tracked_pytest_configs(repo_root),
+        *_tracked_paths(repo_root, "*.sh"),
+    ]
+
+
+def _import_path_sites_in(repo_root: Path, relative: str) -> list[_Site]:
+    text = (repo_root / relative).read_text(errors="replace")
+    lines = text.splitlines()
+    if relative.endswith(".py"):
+        if not _may_edit_import_path(text):
+            return []
+        tree = ast.parse(text)
+        flagged = _sys_path_edit_lines(tree)
+        spans = _statement_spans(tree) if flagged else []
+    elif relative.endswith(".sh"):
+        flagged, spans = _shell_pythonpath_lines(lines), _shell_statement_spans(lines)
+    else:
+        flagged = [
+            number
+            for number, line in enumerate(lines, start=1)
+            if _PYTHONPATH_SETTING_RE.match(line)
+        ]
+        spans = []
+    return _sites(relative, lines, flagged, spans, _IMPORT_PATH_MARKER)
+
+
+def _import_path_sites(repo_root: Path) -> list[_Site]:
+    return [
+        site
+        for relative in _import_path_files(repo_root)
+        for site in _import_path_sites_in(repo_root, relative)
+    ]
+
+
+def _sys_path_editors(sites: list[_Site]) -> list[str]:
+    """The files with an import-path edit no marker keeps."""
+    return sorted({site.relative for site in sites if not site.is_kept()})
+
+
+_IMPORT_PATH_GUIDE = """\
+Remove each edit by installing the package it reaches for in the venv that runs the code,
+and run a shell script's python through that venv. You may restructure the code involved,
+even when it is not the code you came to change (.agents/shared/references/running-python.md).
+An edit that has to stay takes `# import-path: <reason> -- <why>` in the comment lines
+directly above it, with <reason> one of: {reasons}, and a <why> as running-python.md
+describes it. Name every marker you add in your report.
+Never edit this test to let a site through.
+"""
 
 
 def test_prevent_sys_path_edits() -> None:
-    offenders = _sys_path_editors(REPO_ROOT)
-    assert len(offenders) <= snapshot(21), (
-        "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
-        "project and a system script's beside it, all importable from the root venv:\n"
-        + "\n".join(offenders)
+    sites = _import_path_sites(REPO_ROOT)
+    assert not _sys_path_editors(sites), (
+        "These change where imports are looked up (sys.path, PYTHONPATH in Python or a shell "
+        "script, or a pytest pythonpath setting):\n"
+        + "\n".join(site.describe() for site in sites if not site.is_kept())
+        + "\n\n"
+        + _IMPORT_PATH_GUIDE.format(
+            reasons=", ".join(sorted(_REASONS_BY_MARKER[_IMPORT_PATH_MARKER]))
+        )
     )
 
 
@@ -877,7 +1074,7 @@ def test_a_listed_third_party_skill_is_not_counted_whatever_its_layout(
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == [
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == [
         ".agents/skills/ours/scripts/run.py",
         "system/tool.py",
     ]
@@ -922,20 +1119,7 @@ def test_a_pytest_pythonpath_setting_is_counted(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == ["app/pyproject.toml"]
-
-
-# Files whose sys.path edit adds a directory outside the bare search paths, each for a reason
-# no import can replace.
-_SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS = (
-    # publish-template's two tools run under `uv run --no-project` (pydantic via --with, no
-    # venv) and import their own package from the skill's python/.
-    ".agents/skills/publish-template/scripts/validate_template.py",
-    ".agents/skills/publish-template/scripts/write_template_manifest.py",
-    # The update's apply loads oom_priority's bands from the target release's tree, a path
-    # known only at run time.
-    ".agents/skills/update-self/python/update_self_skill/update_banding.py",
-)
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == ["app/pyproject.toml"]
 
 
 def _file_relative_path(node: ast.expr, file: Path) -> Path | None:
@@ -1003,19 +1187,47 @@ def _sys_path_insert_targets(source: str, file: Path) -> list[tuple[int, Path | 
     return targets
 
 
+def _lets_an_edit_leave_the_bare_search_paths(site: _Site, runs_bare: bool) -> bool:
+    """Code the system python3 runs is type-checked against exactly the bare search paths, so
+    there only an ``other-tree`` edit, whose directory is known only at run time, may leave them."""
+    return any(
+        marker.is_valid() and (not runs_bare or marker.reason == "other-tree")
+        for marker in site.markers
+    )
+
+
 def _sys_path_edits_outside_the_bare_search_paths(
     repo_root: Path, allowed: tuple[Path, ...]
 ) -> list[str]:
     resolved_allowed = {path.resolve() for path in allowed}
-    return [
-        f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
-        for relative in _tracked_python_files(repo_root)
-        if relative not in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS
-        for line, target in _sys_path_insert_targets(
-            (repo_root / relative).read_text(), repo_root / relative
+    offenders: list[str] = []
+    for relative in _tracked_python_files(repo_root):
+        source = (repo_root / relative).read_text()
+        outside = [
+            (line, target)
+            for line, target in _sys_path_insert_targets(source, repo_root / relative)
+            if target not in resolved_allowed
+        ]
+        if not outside:
+            continue
+        runs_bare = is_bare_entry(repo_root / relative)
+        kept = {
+            site.line
+            for site in _sites(
+                relative,
+                source.splitlines(),
+                [line for line, _ in outside],
+                _statement_spans(ast.parse(source)),
+                _IMPORT_PATH_MARKER,
+            )
+            if _lets_an_edit_leave_the_bare_search_paths(site, runs_bare)
+        }
+        offenders.extend(
+            f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
+            for line, target in outside
+            if line not in kept
         )
-        if target not in resolved_allowed
-    ]
+    return offenders
 
 
 def test_sys_path_edits_only_add_a_bare_search_path() -> None:
@@ -1026,13 +1238,10 @@ def test_sys_path_edits_only_add_a_bare_search_path() -> None:
         "A sys.path edit may only add a bare search path (entry_points_testing.BARE_SEARCH_PATHS: "
         "where the bare packages and the stdlib-only libraries live), written as path arithmetic on "
         "Path(__file__) so the bare type check, which searches exactly those directories, resolves "
-        "what the runtime imports:\n" + "\n".join(offenders)
+        "what the runtime imports, unless an `# import-path: <reason> -- <why>` marker keeps it; in "
+        "code the system python3 runs, only an `other-tree` marker does "
+        "(.agents/shared/references/running-python.md):\n" + "\n".join(offenders)
     )
-
-
-def test_every_named_sys_path_exception_still_edits_sys_path() -> None:
-    for relative in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS:
-        assert _edits_sys_path((REPO_ROOT / relative).read_text()), relative
 
 
 def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
@@ -1057,6 +1266,10 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
         '    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))\n'
         'sys.path.append(str(Path(__file__).resolve().parent / "elsewhere"))\n'
         "sys.path.insert(0, computed_somewhere)\n"
+        "# import-path: other-tree -- the target release's tree, known only at run time\n"
+        "sys.path.insert(0, target_tree)\n"
+        "# import-path: no-venv -- `uv run --no-project` runs this with no venv\n"
+        'sys.path.insert(0, str(Path(__file__).resolve().parent / "beside"))\n'
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
@@ -1067,6 +1280,30 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
     assert offenders == [
         f"{relative}:6: adds {(module.parent / 'elsewhere').resolve()}",
         f"{relative}:7: adds a path this check cannot read",
+    ]
+
+
+def test_only_an_other_tree_marker_lets_bare_code_leave_the_bare_search_paths(
+    tmp_path: Path,
+) -> None:
+    allowed_dir = tmp_path / "system" / "scripts"
+    package = allowed_dir / "workspace_bare_scripts"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "probe.py").write_text(
+        "import sys\nfrom pathlib import Path\n\n"
+        "# import-path: no-venv -- the system python3 runs this with no venv\n"
+        'sys.path.insert(0, str(Path(__file__).resolve().parent / "elsewhere"))\n'
+        "# import-path: other-tree -- the target release's tree, known only at run time\n"
+        "sys.path.insert(0, target_tree)\n"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    offenders = _sys_path_edits_outside_the_bare_search_paths(tmp_path, (allowed_dir,))
+
+    assert offenders == [
+        f"system/scripts/workspace_bare_scripts/probe.py:5: adds {(package / 'elsewhere').resolve()}"
     ]
 
 
@@ -1261,6 +1498,56 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
+# Programs that run the argv after them (``timeout 60 tool-cmd``), past options and values
+# this scan does not parse.
+_ARGV_RUNNERS = frozenset(
+    {
+        "chrt",
+        "env",
+        "exec",
+        "flock",
+        "ionice",
+        "nice",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "taskset",
+        "timeout",
+        "xargs",
+    }
+)
+
+
+def _command_word(words: list[object]) -> str | None:
+    """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
+    run's options; None when it cannot be read: a word that is not a literal stands where it
+    would be, the first word is a program that runs the argv after it, or the word follows a
+    run option that may take it as its value."""
+    if not words or not isinstance(words[0], str) or words[0] in _ARGV_RUNNERS:
+        return None
+    if words[0] != "uv":
+        return words[0]
+    index = _past_options(words, 1, _UV_GLOBAL_OPTIONS_WITH_VALUES)
+    if index < len(words) and not isinstance(words[index], str):
+        return None
+    if index >= len(words) or words[index] != "run":
+        return words[0]
+    start = index + 1
+    index = _past_options(words, start, _OPTIONS_WITH_VALUES)
+    previous = words[index - 1] if index > start else None
+    if (
+        isinstance(previous, str)
+        and previous.startswith("-")
+        and previous not in _OPTIONS_WITH_VALUES | _NON_SYNCING_OPTIONS | {"--"}
+        and "=" not in previous
+    ):
+        # An option this scan does not know may take the word after it as its value.
+        return None
+    command = words[index] if index < len(words) else None
+    return command if isinstance(command, str) else None
+
+
 def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return _names_own_script(node.value, programs.scripts, is_path_part=False)
@@ -1279,26 +1566,64 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
         return _names_own_script(
             node.args[0].value, programs.scripts, is_path_part=True
         )
-    if isinstance(node, (ast.List, ast.Tuple)):
-        words = [
+    # A list or tuple holding another is a record (a route table's row), not a command line.
+    if isinstance(node, (ast.List, ast.Tuple)) and not any(
+        isinstance(element, (ast.List, ast.Tuple)) for element in node.elts
+    ):
+        words: list[object] = [
             element.value if isinstance(element, ast.Constant) else None
             for element in node.elts
         ]
-        return any(
-            word == "-m"
-            and isinstance(after, str)
-            and after.split(".")[0] in programs.packages
-            for word, after in zip(words, words[1:])
-        ) or any(word in programs.commands for word in words if isinstance(word, str))
+        # Behind a word that is not a literal (``[*LAUNCHER, "tool-cmd"]``,
+        # ``[UV, "run", "tool-cmd"]``, ``["uv", "run", *FLAGS, "tool-cmd"]``) the program the
+        # argv runs cannot be read, so any console-script name in it may be that program.
+        command = _command_word(words)
+        return (
+            any(
+                word == "-m"
+                and isinstance(after, str)
+                and after.split(".")[0] in programs.packages
+                for word, after in zip(words, words[1:])
+            )
+            or command in programs.commands
+            or (command is None and any(word in programs.commands for word in words))
+        )
     return False
 
 
-def _program_launch_lines(source: str, programs: _OwnPrograms) -> list[int]:
+# Methods that only write, read or check a file: a path they are called on names that
+# file, not a program to run.
+_FILE_ONLY_METHODS = frozenset(
+    {
+        "write_text",
+        "write_bytes",
+        "read_text",
+        "read_bytes",
+        "open",
+        "exists",
+        "is_file",
+        "is_dir",
+        "stat",
+    }
+)
+
+
+def _program_launch_lines(tree: ast.AST, programs: _OwnPrograms) -> list[int]:
+    file_only = {
+        id(part)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _FILE_ONLY_METHODS
+        for part in ast.walk(node.func.value)
+    }
     return sorted(
         {
             node.lineno
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.expr) and _names_own_program(node, programs)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.expr)
+            and id(node) not in file_only
+            and _names_own_program(node, programs)
         }
     )
 
@@ -1309,28 +1634,99 @@ def _is_test_support(relative: str) -> bool:
     )
 
 
-def _program_launch_sites(repo_root: Path) -> list[str]:
+def _launch_sites_in(
+    repo_root: Path, relative: str, programs: _OwnPrograms
+) -> list[_Site]:
+    """The launch sites in ``relative``, marked or not. The file's own path is not one of the
+    scripts matched: a file naming itself (a usage hint it prints) is not calling other
+    workspace code."""
+    source = (repo_root / relative).read_text()
+    tree = ast.parse(source)
+    others = programs._replace(scripts=programs.scripts - {relative})
+    return _sites(
+        relative,
+        source.splitlines(),
+        _program_launch_lines(tree, others),
+        _statement_spans(tree),
+        _OWN_PROCESS_MARKER,
+    )
+
+
+def _launch_sites(repo_root: Path) -> list[_Site]:
     programs = _own_programs(repo_root)
-    sites: list[str] = []
-    for relative in _tracked_python_files(repo_root):
-        if _is_test_support(relative):
-            continue
-        source = (repo_root / relative).read_text()
-        lines = source.splitlines()
-        sites.extend(
-            f"{relative}:{number}: {lines[number - 1].strip()}"
-            for number in _program_launch_lines(source, programs)
-        )
-    return sites
+    return [
+        site
+        for relative in _tracked_python_files(repo_root)
+        if not _is_test_support(relative)
+        for site in _launch_sites_in(repo_root, relative, programs)
+    ]
+
+
+def _program_launch_sites(repo_root: Path) -> list[str]:
+    """The launches no marker keeps."""
+    return [site.describe() for site in _launch_sites(repo_root) if not site.is_kept()]
+
+
+_LAUNCH_GUIDE = """\
+Turn each site into an import: declare the package it runs in the caller's pyproject.toml
+and call its functions. You may restructure the caller and the code it runs, even when it
+is not the code you came to change (.agents/shared/references/running-python.md, "Calling
+workspace code from Python"). A site that needs a process of its own takes
+`# own-process: <reason> -- <why>` in the comment lines directly above it, with <reason>
+one of: {reasons}, and a <why> as running-python.md describes it. Name every marker you
+add in your report. Never edit this test to let a site through.
+"""
 
 
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
-    assert len(sites) <= snapshot(24), (
-        "These name one of the workspace's own scripts, modules or commands to run it as a process. Import it "
-        "instead, unless the call needs a process of its own (.agents/shared/references/running-python.md, "
-        '"Calling workspace code from Python"):\n' + "\n".join(sites)
+    assert not sites, (
+        "These name one of the workspace's own scripts, modules or commands to run it as "
+        "a process:\n"
+        + "\n".join(sites)
+        + "\n\n"
+        + _LAUNCH_GUIDE.format(
+            reasons=", ".join(sorted(_REASONS_BY_MARKER[_OWN_PROCESS_MARKER]))
+        )
     )
+
+
+def _marker_problems(repo_root: Path) -> list[str]:
+    """Markers that keep nothing: an unknown reason, no why, or no site of their kind below.
+
+    Only a file holding a marker has its sites read, so a tree with few markers costs a text scan.
+    """
+    programs: _OwnPrograms | None = None
+    problems: list[str] = []
+    for relative in _import_path_files(repo_root):
+        markers = _markers(
+            (repo_root / relative).read_text(errors="replace").splitlines()
+        )
+        if not markers:
+            continue
+        sites = _import_path_sites_in(repo_root, relative)
+        if relative.endswith(".py") and not _is_test_support(relative):
+            if programs is None:
+                programs = _own_programs(repo_root)
+            sites += _launch_sites_in(repo_root, relative, programs)
+        attached = {marker.line for site in sites for marker in site.markers}
+        for marker in markers:
+            where = f"{relative}:{marker.line}: {marker.kind}"
+            if not marker.is_valid():
+                problems.append(
+                    f"{where}: needs `<reason> -- <why>`, <reason> one of "
+                    + ", ".join(sorted(_REASONS_BY_MARKER[marker.kind]))
+                )
+            elif marker.line not in attached:
+                problems.append(
+                    f"{where}: keeps nothing; it belongs in the comment lines directly "
+                    "above the statement it keeps"
+                )
+    return problems
+
+
+def test_every_marker_keeps_a_site_for_a_named_reason() -> None:
+    assert _marker_problems(REPO_ROOT) == []
 
 
 def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) -> None:
@@ -1341,7 +1737,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
     package.mkdir()
     (package / "__init__.py").write_text("")
     main_guard = 'if __name__ == "__main__":\n    pass\n'
-    (package / "tool.py").write_text(main_guard)
+    (package / "tool.py").write_text('USAGE_PATH = "pkg/tool.py"\n' + main_guard)
     (package / "helpers.py").write_text("")
     (package / "caller.py").write_text(
         "\n".join(
@@ -1359,6 +1755,20 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'print("run python3 pkg/tool.py by hand")',
                 'subprocess.run([sys.executable, "-m", "pytest"])',
                 'subprocess.run(["mngr", "list"])',
+                '(ROOT / "tool.py").write_text("")',
+                'Path("pkg/tool.py").write_bytes(b"")',
+                'subprocess.run(["tool-cmd", "--today"])',
+                'subprocess.run(["supervisorctl", "status", "tool-cmd"])',
+                'ROUTES = [("tool-cmd", handler, ("GET",))]',
+                'IS_ROOT = (ROOT / "pkg" / "tool.py").exists()',
+                'SOURCE = Path("pkg/tool.py").read_text()',
+                'subprocess.run(["uv", "--project", "pkg", "run", "--no-sync", "tool-cmd"])',
+                'subprocess.run([*UV_RUN, "tool-cmd"])',
+                'subprocess.run([UV, "run", "--no-sync", "tool-cmd"])',
+                'subprocess.run(["uv", "run", *FLAGS, "tool-cmd"])',
+                'subprocess.run(["uv", *GLOBAL_OPTIONS, "run", "tool-cmd"])',
+                'subprocess.run(["timeout", "60", "tool-cmd"])',
+                'subprocess.run(["uv", "run", "-p", "3.12", "tool-cmd"])',
             ]
         )
     )
@@ -1377,4 +1787,124 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:6",
         "pkg/caller.py:7",
         "pkg/caller.py:8",
+        "pkg/caller.py:16",
+        "pkg/caller.py:21",
+        "pkg/caller.py:22",
+        "pkg/caller.py:23",
+        "pkg/caller.py:24",
+        "pkg/caller.py:25",
+        "pkg/caller.py:26",
+        "pkg/caller.py:27",
     ]
+
+
+def _git_tree(root: Path, files: dict[str, str]) -> None:
+    for relative, text in files.items():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+
+def test_a_marker_keeps_the_statement_below_it_for_a_named_reason(
+    tmp_path: Path,
+) -> None:
+    _git_tree(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/tool.py": 'if __name__ == "__main__":\n    pass\n',
+            "pkg/caller.py": "\n".join(
+                [
+                    "import subprocess",
+                    "# Runs the wrapper, which execs the command it is given.",
+                    "# own-process: wrapper -- hands the secret to the child only",
+                    "subprocess.run(",
+                    '    ["python3", "pkg/tool.py", "--", "node"],',
+                    ")",
+                    "# own-process: faster -- not a reason the rules give",
+                    'UNKNOWN_REASON = "pkg/tool.py"',
+                    "# own-process: deadline",
+                    'NO_WHY = "pkg/tool.py"',
+                    "# own-process: deadline -- separated from its statement",
+                    "",
+                    'SEPARATED = "pkg/tool.py"',
+                    "# own-process: server -- nothing below names a program",
+                    "VALUE = 1",
+                    "# own-process: wrapper hands the secret to the child only",
+                    'NO_SEPARATOR = "pkg/tool.py"',
+                ]
+            ),
+        },
+    )
+
+    assert [site.split(": ", 1)[0] for site in _program_launch_sites(tmp_path)] == [
+        "pkg/caller.py:8",
+        "pkg/caller.py:10",
+        "pkg/caller.py:13",
+        "pkg/caller.py:17",
+    ]
+    assert [problem.split(": ", 1)[0] for problem in _marker_problems(tmp_path)] == [
+        "pkg/caller.py:7",
+        "pkg/caller.py:9",
+        "pkg/caller.py:11",
+        "pkg/caller.py:14",
+        "pkg/caller.py:16",
+    ]
+
+
+def test_import_path_edits_count_per_file_and_a_marker_keeps_one(
+    tmp_path: Path,
+) -> None:
+    _git_tree(
+        tmp_path,
+        {
+            "tools/bare.py": "\n".join(
+                [
+                    "import sys",
+                    "# import-path: no-venv -- the system python3 runs this with no venv",
+                    "sys.path.insert(0, 'lib')",
+                ]
+            ),
+            "tools/loose.py": "import sys\nsys.path.insert(0, 'lib')\n",
+            "pipeline/refresh.sh": "\n".join(
+                [
+                    "#!/bin/bash",
+                    "# PYTHONPATH=lib python3 -m tool in a comment is not a run",
+                    "PYTHONPATH= python3 -m clean_env",
+                    'PYTHONPATH="" python3 -m clean_env',
+                    'echo "$PYTHONPATH"',
+                    "PYTHONPATH=lib/src python3 -m tool export",
+                ]
+            ),
+            "pipeline/marked.sh": "\n".join(
+                [
+                    "# import-path: other-tree -- the target release's copy, found at run time",
+                    'export PYTHONPATH="$TARGET/lib"',
+                    "# import-path: other-tree -- the same copy, set on a continued line",
+                    "env LANG=C \\",
+                    '    PYTHONPATH="$TARGET/lib" python3 -m tool',
+                ]
+            ),
+            "app/pyproject.toml": '[tool.pytest.ini_options]\npythonpath = ["src"]\n',
+            "lib/pyproject.toml": "\n".join(
+                [
+                    "[tool.pytest.ini_options]",
+                    "# import-path: no-venv -- its tests run under the system python3",
+                    'pythonpath = ["src"]',
+                ]
+            ),
+        },
+    )
+
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == [
+        "app/pyproject.toml",
+        "pipeline/refresh.sh",
+        "tools/loose.py",
+    ]
+    assert [
+        site.describe()
+        for site in _import_path_sites(tmp_path)
+        if site.relative == "pipeline/refresh.sh"
+    ] == ["pipeline/refresh.sh:6: PYTHONPATH=lib/src python3 -m tool export"]
+    assert _marker_problems(tmp_path) == []

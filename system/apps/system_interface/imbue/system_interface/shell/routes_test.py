@@ -8,6 +8,7 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
@@ -22,6 +23,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_theming import AppThemingStore
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
@@ -52,6 +54,9 @@ from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
+# A page's request as a proxy delivers it: the identity header stamped, which is what admits a request from anywhere
+# but loopback (workspace_layout.identity).
+_PAGE_HEADERS = identity_headers(ANONYMOUS_OWNER)
 _BOB_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
 
@@ -133,6 +138,89 @@ def test_every_window_open_is_recorded_in_the_client_activity_log(client: FlaskC
     ]
     assert all("path" not in event and "title" not in event for event in events)
     assert all(event["source"] == "client_activity" and event["event_id"] for event in events)
+
+
+def _heartbeat_with_input(client: FlaskClient, client_id: str | None, input_windows: Any) -> Any:
+    body: dict[str, Any] = {"input_age_seconds": 2.0, "input_windows": input_windows}
+    if client_id is not None:
+        body["client_id"] = client_id
+    return client.post("/api/presence/heartbeat", json=body, headers=identity_headers(_BOB_IDENTITY))
+
+
+def _window_input_events(app: Flask) -> list[tuple[str, str, str, str, str]]:
+    return [
+        (event["client_id"], event["desktop_id"], event["app"], event["window_id"], event["kind"])
+        for event in _shell(app).activity.read_events()
+        if event["type"] == "window_input"
+    ]
+
+
+def test_a_heartbeats_input_reports_are_recorded_as_window_input_events(client: FlaskClient, app: Flask) -> None:
+    """Section 6.3 of the app-usage-signals spec: each reported window becomes one ``window_input`` with the
+    desktop's app and desktop; a window that is gone keeps the reported app when it is registered and takes the
+    client's active desktop; a report of an unregistered app is dropped; a window reported with both kinds in one
+    heartbeat is written once, as input; and a second heartbeat inside the minute writes nothing more."""
+    _register_client(app, "c1", "home")
+    files_window = _open_window(client, "files", "/private/folder/").get_json()["window"]["id"]
+    gone_window = "win-0123456789abcdef"
+    first = _heartbeat_with_input(
+        client,
+        "c1",
+        [
+            {"window_id": files_window, "app": "wrong-name", "kind": "focus"},
+            {"window_id": files_window, "app": "files"},
+            {"window_id": gone_window, "app": "terminal", "kind": "focus"},
+            {"window_id": "win-fedcba9876543210", "app": "never-registered"},
+        ],
+    )
+    assert first.status_code == 200 and first.get_json()["participant"] == "user:user-bob-4471"
+    assert _window_input_events(app) == [
+        ("c1", "home", "files", files_window, "input"),
+        ("c1", "home", "terminal", gone_window, "focus"),
+    ]
+
+    again = _heartbeat_with_input(client, "c1", [{"window_id": files_window, "app": "files"}])
+    assert again.status_code == 200
+    assert len(_window_input_events(app)) == 2
+    assert all("path" not in event for event in _shell(app).activity.read_events())
+
+
+def test_a_heartbeat_is_never_refused_for_its_input_reports(client: FlaskClient, app: Flask) -> None:
+    """A refused heartbeat would record no presence and the page keeps its reports across a failed send, so a page
+    from before the reports (no client id), a client id off the rule, a field off its shape, and an entry off its
+    shape each record presence and drop the reports, never the heartbeat."""
+    _register_client(app, "c1", "home")
+    window_id = _open_window(client, "files", "/").get_json()["window"]["id"]
+    for client_id, input_windows in (
+        (None, [{"window_id": window_id, "app": "files"}]),
+        ("not/a/client", [{"window_id": window_id, "app": "files"}]),
+        ("c1", "not-a-list"),
+        ("c1", [{"window_id": "not-a-window", "app": "files"}, "not-an-object", {"app": "files"}]),
+        ("c1", [{"window_id": window_id, "app": "files", "kind": "unknown"}]),
+    ):
+        response = _heartbeat_with_input(client, client_id, input_windows)
+        assert response.status_code == 200, (client_id, input_windows, response.get_json())
+    assert _window_input_events(app) == []
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["user_id"] == "user-bob-4471" and user["last_input_at"] is not None
+
+
+def test_a_heartbeat_is_not_refused_when_the_desktops_cannot_be_read_for_its_input_reports(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A desktops record the shell cannot bring up to date (here, a directory where the file goes, so the seeding
+    write fails) drops the reports with a warning: presence is recorded and the heartbeat answered as before."""
+    _register_client(app, "c1", "home")
+    desktops_path = _shell(app).desktops.state_directory / DESKTOPS_FILENAME
+    desktops_path.unlink()
+    desktops_path.mkdir()
+
+    response = _heartbeat_with_input(client, "c1", [{"window_id": "win-0123456789abcdef", "app": "files"}])
+
+    assert response.status_code == 200, response.get_json()
+    assert _window_input_events(app) == []
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["user_id"] == "user-bob-4471"
 
 
 def test_an_unplaced_op_open_is_recorded_with_no_client(client: FlaskClient, app: Flask) -> None:
@@ -463,8 +551,13 @@ def test_a_client_stored_on_a_desktop_that_does_not_exist_is_listed_on_the_first
 
 
 def _record_shown(client: FlaskClient, client_id: str, window_id: str | None) -> Any:
-    # From an address other than loopback: the phone's own page posts it.
-    return client.post(f"/api/clients/{client_id}/shown", json={"window_id": window_id}, environ_base=_NOT_LOOPBACK)
+    # From an address other than loopback, through a proxy: the phone's own page posts it.
+    return client.post(
+        f"/api/clients/{client_id}/shown",
+        json={"window_id": window_id},
+        headers=_PAGE_HEADERS,
+        environ_base=_NOT_LOOPBACK,
+    )
 
 
 def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_it(
@@ -512,7 +605,12 @@ def test_a_client_records_its_backdrop_size_and_the_listing_and_the_inventory_ca
     _register_client(app, "c1", "home")
     _record_client(app, "c2", "home")
 
-    answer = client.post("/api/clients/c1/viewport", json={"width": 1440, "height": 823.5}, environ_base=_NOT_LOOPBACK)
+    answer = client.post(
+        "/api/clients/c1/viewport",
+        json={"width": 1440, "height": 823.5},
+        headers=_PAGE_HEADERS,
+        environ_base=_NOT_LOOPBACK,
+    )
     assert answer.status_code == 200
     assert answer.get_json()["viewport"] == {"width": 1440.0, "height": 823.5}
     listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
@@ -2080,6 +2178,7 @@ def test_a_page_shows_a_path_for_its_own_client_through_the_show_route(
     shown = client.post(
         "/api/clients/c1/show",
         json={"app": "buddy", "path": _SHOW_PATH, "repoint": [_REPOINTABLE_PAGE]},
+        headers=_PAGE_HEADERS,
         environ_base=_NOT_LOOPBACK,
     )
 

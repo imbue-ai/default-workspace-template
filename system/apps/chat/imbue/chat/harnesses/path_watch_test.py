@@ -247,6 +247,10 @@ def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_
         shared.close()
 
 
+# On macOS, a loaded run can hang in watchdog's FSEventsEmitter.join() when the watch is
+# unscheduled right after it was scheduled; the join has no timeout, so the test hits the
+# suite's cap. Linux (inotify) does not take this path.
+@pytest.mark.flaky
 def test_a_shared_observer_with_nothing_left_to_watch_holds_no_thread_until_the_next_subscription(
     tmp_path: Path,
 ) -> None:

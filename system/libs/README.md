@@ -8,6 +8,8 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_registration/` - Writes an app's row in the app registry: what
+  `system/scripts/forward_port.py` runs, stdlib-only.
 - `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
   API, built from its Flask routes and served at the path its manifest names
   in `api_schema_path`, and the assertion an app's tests make about it.
@@ -18,6 +20,10 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
+- `workspace_voice/` - Dictation for the frontends (source only, a member of
+  the same npm workspace): on-device speech recognition behind one engine
+  interface, the speech detector, the streaming turn, the inference lane, and
+  the engine worker every chat page shares.
 - `latchkey_access/` - The latchkey gateway as a workspace program reaches it: the
   environment and header names of the agent-to-gateway contract, and `GatewayAccess`,
   which reads the environment and builds a request's URL and headers.
