@@ -88,8 +88,8 @@ needs a directory put on `sys.path`, and each stub says which. See
 Several of these are Imbue Studio's way into the workspace: the app runs them by path, with
 arguments it fixes, and reads their output and exit codes. Which ones, and how, is the app's
 workspace command contract (vendored by `fetch_mngr_assets.sh` from the pinned mngr commit), and
-`system/test_studio_command_contract.py`, which every change runs, checks this checkout against
-it. Keep those scripts' interface as the contract declares it; a change to it is made in mngr.
+`system/test_studio_command_contract.py`, which every change runs, checks this checkout's paths
+and arguments against it (not their output or exit codes). Keep those scripts' interface as the contract declares it; a change to it is made in mngr.
 
 Cohesive machinery lives in packages instead: the routines runner and its
 cron env wrapper in `system/libs/routines/`, the Caretaker check in

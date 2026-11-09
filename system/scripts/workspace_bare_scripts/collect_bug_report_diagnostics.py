@@ -1,7 +1,8 @@
 """Resident in-workspace collector for bug-report diagnostics.
 
 Imbue Studio runs this script: its path, arguments, output and exit codes are the app's workspace
-command contract, which ``system/test_studio_command_contract.py`` checks; change them upstream only.
+command contract. ``system/test_studio_command_contract.py`` checks the paths and arguments, not the output or
+exit codes; change any of them upstream only.
 
 Invoked by the Imbue Studio desktop app via a small ``mngr exec`` as
 ``python3 system/scripts/collect_bug_report_diagnostics.py [--logs]

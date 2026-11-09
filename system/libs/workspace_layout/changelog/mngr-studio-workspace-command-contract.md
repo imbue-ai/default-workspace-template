@@ -1,1 +1,1 @@
-The `workspace-layout` command's docstring now says Imbue Studio runs it under the app's workspace command contract, which `system/test_studio_command_contract.py` checks, so its interface is changed upstream.
+The `workspace-layout` command's docstring now says Imbue Studio runs it under the app's workspace command contract, so its interface is changed upstream.
