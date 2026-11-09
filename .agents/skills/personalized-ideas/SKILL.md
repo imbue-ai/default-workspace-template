@@ -52,18 +52,12 @@ That offer states everything step 2 requires, so do not make it again:
 
 ## 2. Ask
 
-Offer once, in your own words, and say exactly what will happen.
-The offer must cover all of these:
+Make the offer once, as this exact message, word for word, with nothing added before or after it:
 
-- You would search the public web for their name.
-- Only to suggest things for them to build.
-- You would show them what you found and use only what they confirm is them.
-- You would remember what they confirm for future chats, not only for these ideas.
-- What you keep stays in this workspace, with links to where it came from, and they can ask you to forget it at any time.
+> **Not sure what to build?** I can look you up on public web pages by the name on your account, then suggest things that fit you. I’ll show you what I find so you can tell me what’s really you, and remember only that, in this workspace, for future chats. You can ask me to forget it anytime. Just say yes if you’d like that.
 
-For example:
-
-> I can suggest ideas that fit you better if I know a bit about you. Want me to look you up online by your name? I'd search public pages only, show you what I find so you can tell me what's really you, and remember that in your workspace for future chats. You can ask me to forget it anytime. Or just tell me a little about what you do and I'll go from there.
+It is the same message Imbue Studio's welcome uses (`LOOKUP_OFFER` in mngr-internal's `apps/minds/frontend/src/models/creationTranscript.ts`), and it is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
+Do not reword it, shorten it, personalize it, or mention anything about the user in it; change it only in both places at once.
 
 Then end your turn and wait.
 Only a clear yes is a yes.
