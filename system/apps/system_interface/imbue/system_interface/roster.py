@@ -12,10 +12,10 @@ the workspace agent's ``agent`` is reserved before anyone else's.
 
 ``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
 (someone came or went, or a person's newest input time moved), a grants file or the desktop's identities sidecar
-changes (the desktop and the gateway write them, so the shell watches them), and on connect. The announcer pushes a
-document only when it differs from the one it last pushed, and the watch folds a burst of file events (an atomic
-replace fires twice; the gateway rewrites its last-seen record every ten seconds per working visiting agent) into one
-announcement.
+changes (the desktop and the gateway write them, so the shell watches them), a background profile fetch changed what
+the profile cache answers, and on connect. The announcer pushes a document only when it differs from the one it last
+pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway rewrites its last-seen
+record every ten seconds per working visiting agent) into one announcement.
 """
 
 import threading
@@ -428,9 +428,9 @@ class RosterSource(MutableModel):
 class RosterAnnouncer(MutableModel):
     """How the roster reaches every window: computed afresh and pushed as ``roster_updated``, unless it is the very
     document last pushed, which every window already holds. One announcement at a time, computed and pushed under
-    the one lock: the heartbeat route, the sweep, and the watch announce from threads of their own, and a document
-    computed earlier must never go out after a newer one, which the skip of an equal document would then leave
-    standing."""
+    the one lock: the heartbeat route, the sweep, the watch, and the profile refresh announce from threads of their
+    own, and a document computed earlier must never go out after a newer one, which the skip of an equal document
+    would then leave standing."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
