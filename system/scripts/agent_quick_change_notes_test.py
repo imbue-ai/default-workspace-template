@@ -91,16 +91,123 @@ def _context(completed: subprocess.CompletedProcess[str]) -> str:
     return output["additionalContext"]
 
 
-def test_a_new_report_from_this_chat_is_passed_on_as_one_note(tmp_path: Path) -> None:
-    _routed_and_reported(tmp_path, "r1", _CHAT)
+def _routed(
+    root: Path, request_id: str, chat_id: str, status: str = "forwarded"
+) -> None:
+    _append(
+        root,
+        {
+            "type": "request",
+            "request_id": request_id,
+            "chat_id": chat_id,
+            "message": "make the header dark blue",
+            "app": "todo",
+        },
+        {"type": "forward", "request_id": request_id, "status": status},
+    )
+
+
+def test_a_new_hand_over_from_this_chat_is_passed_on_as_one_note(
+    tmp_path: Path,
+) -> None:
+    _routed(tmp_path, "r1", _CHAT)
 
     completed = _run(tmp_path)
 
     assert completed.returncode == 0
     lines = _context(completed).splitlines()
     assert len(lines) == 1
-    assert "Todo: header is now dark blue" in lines[0]
-    assert "keep it when you edit them" in lines[0]
+    assert (
+        '"make the header dark blue" was routed to the quick-change agent' in lines[0]
+    )
+
+
+def test_a_hand_over_already_passed_on_is_not_passed_on_again(tmp_path: Path) -> None:
+    _routed(tmp_path, "r1", _CHAT)
+    _run(tmp_path)
+    # Another chat's lines change the log size, so the reading half runs again.
+    _routed(tmp_path, "r2", _OTHER_CHAT)
+
+    completed = _run(tmp_path)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_a_long_message_is_shortened_in_the_hand_over_note(tmp_path: Path) -> None:
+    _append(
+        tmp_path,
+        {"type": "request", "request_id": "r1", "chat_id": _CHAT, "message": "x" * 500},
+        {"type": "forward", "request_id": "r1", "status": "forwarded"},
+    )
+
+    completed = _run(tmp_path)
+
+    assert '"' + "x" * 197 + '..."' in _context(completed)
+
+
+def test_a_failed_hand_over_is_not_passed_on(tmp_path: Path) -> None:
+    _routed(tmp_path, "r1", _CHAT, status="forward_failed")
+
+    completed = _run(tmp_path)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_a_hand_over_from_another_chat_is_not_passed_on(tmp_path: Path) -> None:
+    _routed(tmp_path, "r1", _OTHER_CHAT)
+
+    completed = _run(tmp_path)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_the_quick_change_agent_gets_no_hand_over_note(tmp_path: Path) -> None:
+    _routed(tmp_path, "r1", _QUICK_CHAT)
+    _write_per_tier_agent_record(tmp_path)
+
+    completed = _run(tmp_path, chat_id=_QUICK_CHAT)
+
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+
+
+def test_a_new_hand_over_and_report_together_are_passed_on_hand_over_first(
+    tmp_path: Path,
+) -> None:
+    _routed_and_reported(tmp_path, "r1", _CHAT)
+
+    completed = _run(tmp_path)
+
+    assert completed.returncode == 0
+    lines = _context(completed).splitlines()
+    assert len(lines) == 2
+    assert "was routed to the quick-change agent" in lines[0]
+    assert "Todo: header is now dark blue" in lines[1]
+    assert "keep it when you edit them" in lines[1]
+
+
+def test_a_report_after_its_hand_over_note_is_passed_on_alone(tmp_path: Path) -> None:
+    _routed(tmp_path, "r1", _CHAT)
+    _run(tmp_path)
+    _append(
+        tmp_path,
+        {
+            "type": "report",
+            "request_id": "r1",
+            "status": "done",
+            "report": "Todo: header is now dark blue.",
+            "reported_at": "2026-11-09T10:00:30+00:00",
+        },
+    )
+
+    completed = _run(tmp_path)
+
+    lines = _context(completed).splitlines()
+    assert len(lines) == 1
+    assert "Todo: header is now dark blue." in lines[0]
 
 
 def test_the_note_answers_under_the_event_that_ran_it(tmp_path: Path) -> None:

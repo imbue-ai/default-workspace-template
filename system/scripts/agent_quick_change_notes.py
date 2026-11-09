@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The reading half of agent_quick_change_notes.sh: pass a chat's new quick-change reports on to its agent.
+"""The reading half of agent_quick_change_notes.sh: pass a chat's new quick-change hand-overs and reports on to its agent.
 
 Reads the hook payload on stdin (only for the event name), the quick-change log, and this chat's
-state file. Prints one hookSpecificOutput.additionalContext JSON object with one line per report
-the agent has not been told about, or nothing. The state file is plain text: the log size when it
-was last read, then one line per report already passed on.
+state file. Prints one hookSpecificOutput.additionalContext JSON object with one line per hand-over
+or report the agent has not been told about, or nothing. The state file is plain text: the log size
+when it was last read, then one key per note already passed on.
 
 Standard library only: the hook runs it with the system ``python3``.
 """
@@ -22,6 +22,8 @@ from typing import Any
 # additionalContext back under the event it sent.
 EVENTS = ("PreToolUse", "UserPromptSubmit")
 NOTE_SUFFIX = "Do not mention this to the user unless they ask."
+# Enough of the user's message for the agent to know which change it is.
+ROUTED_MESSAGE_LIMIT = 200
 
 
 def read_records(log_path: Path) -> list[dict[str, Any]]:
@@ -42,6 +44,23 @@ def report_key(record: dict[str, Any]) -> str:
     return f"{record.get('request_id')} {record.get('reported_at')}"
 
 
+def routed_key(record: dict[str, Any]) -> str:
+    """A hand-over's identity, kept apart from report keys (which start with the request id)."""
+    return f"routed {record.get('request_id')}"
+
+
+def routed_note_for(request: dict[str, Any]) -> str:
+    message = " ".join(str(request.get("message", "")).split())
+    if len(message) > ROUTED_MESSAGE_LIMIT:
+        message = message[: ROUTED_MESSAGE_LIMIT - 3].rstrip() + "..."
+    return (
+        f"Background: the user's message {json.dumps(message, ensure_ascii=False)} was routed to the "
+        "quick-change agent, which is making that change now. Do not make it yourself, and avoid "
+        "editing that part of the app until a follow-up note says it is done. "
+        f"{NOTE_SUFFIX}"
+    )
+
+
 def note_for(report: dict[str, Any], app: str | None) -> str:
     where = f"in the {app} app" if app else "in an app"
     summary = " ".join(str(report.get("report", "")).split())
@@ -58,24 +77,31 @@ def note_for(report: dict[str, Any], app: str | None) -> str:
 def new_notes(
     records: list[dict[str, Any]], chat_id: str, passed_on: set[str]
 ) -> tuple[list[str], list[str]]:
-    """The notes for this chat's reports not yet passed on, and those reports' keys."""
-    app_by_request = {
-        record.get("request_id"): record.get("app")
+    """The notes for this chat's hand-overs and reports not yet passed on, in log order, and their keys.
+
+    A hand-over is the "forward" line with status "forwarded": the "request" line is written before
+    the hand-over is tried, and a failed one ("forward_failed") leaves the message with this agent.
+    """
+    request_by_id = {
+        record.get("request_id"): record
         for record in records
         if record.get("type") == "request" and record.get("chat_id") == chat_id
     }
     notes: list[str] = []
     keys: list[str] = []
     for record in records:
-        if (
-            record.get("type") != "report"
-            or record.get("request_id") not in app_by_request
-        ):
+        request = request_by_id.get(record.get("request_id"))
+        if request is None:
             continue
-        key = report_key(record)
+        if record.get("type") == "forward" and record.get("status") == "forwarded":
+            key, note = routed_key(record), routed_note_for(request)
+        elif record.get("type") == "report":
+            key, note = report_key(record), note_for(record, request.get("app"))
+        else:
+            continue
         if key in passed_on:
             continue
-        notes.append(note_for(record, app_by_request[record.get("request_id")]))
+        notes.append(note)
         keys.append(key)
     return notes, keys
 
