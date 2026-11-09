@@ -9,9 +9,9 @@ answer -- and each failure -- is cached for five minutes under ``profiles/<user_
 connector outage costs one failed fetch per user per five minutes.
 
 The roster and the presence listing are built on every page's request and every heartbeat, so they never
-wait on the connector: ``resolve_many`` answers from the cache as it stands, a stale entry included, and
-fetches what is missing or stale in one background thread, then tells its listeners when any profile
-changed so the roster and the connected set can be announced again.
+wait on the connector: ``resolve_many`` answers from the cache as it stands, a stale entry included while
+the workspace is still shared, and fetches what is missing or stale in one background thread, then tells
+its listeners when any profile changed so the roster and the connected set can be announced again.
 
 The picture itself is served from the shell's own origin (the multiplayer spec, section 4.2): the pages'
 content security policy admits images from the workspace alone, so the roster points at the shell's
@@ -241,8 +241,9 @@ class ProfileResolver(MutableModel):
         return fetched
 
     def resolve_many(self, user_ids: Sequence[UserId], now: datetime) -> dict[str, UserProfile]:
-        """The profile of each user the cache holds one for, by user id, without waiting on the connector: an entry
-        that is missing or past the TTL is answered as the cache has it and fetched in the background."""
+        """The profile of each user the cache holds one for, by user id, without waiting on the connector: while the
+        workspace is shared, an entry that is missing or past the TTL is answered as the cache has it and fetched in
+        the background; once it is not, a stale entry answers nothing and nothing is fetched."""
         is_shared = read_share_broker_url(self.share_env_path) is not None
         profile_by_user_id: dict[str, UserProfile] = {}
         stale_user_ids: list[UserId] = []
