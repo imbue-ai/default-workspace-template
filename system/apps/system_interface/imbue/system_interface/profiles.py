@@ -206,9 +206,6 @@ class ProfileResolver(MutableModel):
     transport: httpx.BaseTransport | None = Field(
         default=None, frozen=True, description="A test's stand-in for the network; the real one when None"
     )
-    clock: Callable[[], datetime] = Field(
-        default=_utc_now, frozen=True, description="The time a background fetch is stamped with"
-    )
 
     _refresh_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_refresh: set[UserId] = PrivateAttr(default_factory=set)
@@ -279,7 +276,7 @@ class ProfileResolver(MutableModel):
                 # Judged by the cache, which is all ``resolve_many`` reads: a fetch it could not keep changes
                 # nothing a listener's announcement would show, and announcing it would start the fetch again.
                 before = _profile_of(self._read_cached(user_id))
-                self.resolve(user_id, self.clock())
+                self.resolve(user_id, _utc_now())
                 if _profile_of(self._read_cached(user_id)) != before:
                     is_any_profile_changed = True
                 user_id = self._take_pending_refresh()
