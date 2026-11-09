@@ -48,6 +48,8 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
+  // The keyboard shortcuts page's readiness (contract v15). Probed like the ones above.
+  export const KEYBOARD_SHORTCUTS_READY: "minds:keyboard-shortcuts-ready";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

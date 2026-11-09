@@ -109,6 +109,14 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
+// Workspace -> embedder (contract v15): the keyboard shortcuts page Imbue Studio's Workspace settings frames has
+// loaded. Payload: {}. Until it arrives the settings pane shows no frame, so a workspace too old to serve the page
+// is told apart from one still loading.
+export const KEYBOARD_SHORTCUTS_READY: "minds:keyboard-shortcuts-ready" =
+  "KEYBOARD_SHORTCUTS_READY" in embedContract
+    ? embedContract.KEYBOARD_SHORTCUTS_READY
+    : "minds:keyboard-shortcuts-ready";
+
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
 // (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with
