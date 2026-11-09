@@ -132,6 +132,7 @@ def fake_app(
         program="",
         critical=False,
         stop_when_no_windows=False,
+        uses_microphone=False,
         launch_paths=tuple(launch_paths),
         default_shortcuts=tuple(default_shortcuts),
         launcher_rank=None,

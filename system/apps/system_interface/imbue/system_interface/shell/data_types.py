@@ -115,6 +115,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: fr
         program=row.program or "",
         critical=row.critical,
         stop_when_no_windows=row.stop_when_no_windows,
+        uses_microphone=row.uses_microphone,
         launch_paths=effective_launch_paths(row),
         default_shortcuts=row.default_shortcuts,
         launcher_rank=row.launcher_rank,

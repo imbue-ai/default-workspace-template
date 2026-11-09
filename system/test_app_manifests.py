@@ -554,6 +554,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "system-monitor": True,
         "style-guide": True,
     }
+    # The composer's dictation (the workspace-voice-input spec in the mngr repository) is the one built-in that
+    # listens, so the chat's frames alone are handed the microphone.
+    assert {name for name, manifest in by_name.items() if manifest.uses_microphone} == {"chat"}
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
     assert {

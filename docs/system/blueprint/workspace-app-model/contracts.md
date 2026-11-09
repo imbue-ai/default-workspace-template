@@ -35,6 +35,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
 | `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
+| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone; the shell delegates it to the frames of an app that declares it, and to no other (the desktop interface's contracts section 2). |
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |

@@ -90,6 +90,7 @@ COPY system/apps/routines/pyproject.toml /home/user/workspace/system/apps/routin
 # package.json) -- install needs only these.
 COPY system/package.json system/package-lock.json /home/user/workspace/system/
 COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/workspace_ui/
+COPY system/libs/workspace_voice/package.json /home/user/workspace/system/libs/workspace_voice/
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/

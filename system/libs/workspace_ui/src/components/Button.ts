@@ -29,6 +29,10 @@ export interface ButtonOptions {
   /** Accent-tint pressed look; an icon ghost with `selected` is the on/off
    *  toggle recipe. */
   selected?: boolean;
+  /** The neutral pressed look (the fill-active tint in the text colour), for
+   *  an on/off control whose "on" should not read as the accent: the
+   *  composer's mic while it listens. Wins over `selected`. */
+  pressed?: boolean;
   /** Non-interactive without `disabled`: resting look, default cursor, no
    *  hover/press. The element stays enabled so a hover tooltip can explain
    *  why; the component marks it aria-disabled for assistive tech. */
@@ -95,6 +99,8 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
 // outline reads as a frame around the control (most visibly on the modal's
 // inline illustration), and ghost <-> selected keeps identical geometry.
 export const BTN_SELECTED = "bg-accent-light text-accent border-transparent";
+// The neutral counterpart: the ghost variant's own pressed tint, held.
+export const BTN_PRESSED = "bg-fill-active text-primary border-transparent";
 
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {
@@ -103,6 +109,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     icon = false,
     round = false,
     selected = false,
+    pressed = false,
     readonly = false,
     quiet = false,
     block = false,
@@ -130,7 +137,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     size,
     quiet ? "font-normal" : "font-medium",
     round ? "rounded-full" : "rounded-md",
-    selected ? BTN_SELECTED : BTN_VARIANTS[variant],
+    pressed ? BTN_PRESSED : selected ? BTN_SELECTED : BTN_VARIANTS[variant],
   ];
   if (block) parts.push("w-full");
   if (extra !== "") parts.push(extra);
@@ -150,12 +157,36 @@ interface ButtonAttrs extends m.Attributes, ButtonOptions {
   variant?: ButtonVariant;
 }
 
-const OWN_KEYS = ["variant", "sm", "xs", "icon", "round", "selected", "readonly", "quiet", "block", "extra"] as const;
+const OWN_KEYS = [
+  "variant",
+  "sm",
+  "xs",
+  "icon",
+  "round",
+  "selected",
+  "pressed",
+  "readonly",
+  "quiet",
+  "block",
+  "extra",
+] as const;
 
 export function Button(): m.Component<ButtonAttrs> {
   return {
     view(vnode) {
-      const { variant = "secondary", sm, xs, icon, round, selected, readonly, quiet, block, extra } = vnode.attrs;
+      const {
+        variant = "secondary",
+        sm,
+        xs,
+        icon,
+        round,
+        selected,
+        pressed,
+        readonly,
+        quiet,
+        block,
+        extra,
+      } = vnode.attrs;
       // The passthrough spread comes after `type` (so a caller can still opt
       // into type="submit" if a form ever appears) and after the readonly
       // aria-disabled default (so an explicit caller value wins).
@@ -163,7 +194,7 @@ export function Button(): m.Component<ButtonAttrs> {
         "button",
         {
           type: "button",
-          class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, quiet, block, extra }),
+          class: buttonClass(variant, { sm, xs, icon, round, selected, pressed, readonly, quiet, block, extra }),
           ...buttonPartAttrs(variant, icon === true),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),
