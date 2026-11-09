@@ -30,11 +30,14 @@ from imbue.chat.chat_quick_change import QuickChangeDeliveryError
 from imbue.chat.chat_quick_change import QuickChangeRouter
 from imbue.chat.chat_quick_change import ROUTING_LOG_FILENAME
 from imbue.chat.chat_quick_change import RoutingDecision
+from imbue.chat.chat_quick_change import SIDE_AGENT_DEFAULT_TIER
 from imbue.chat.chat_quick_change import SIDE_AGENT_MODEL_BY_TIER
 from imbue.chat.chat_quick_change import SideAgentTier
+from imbue.chat.chat_quick_change import TIER_QUESTION
 from imbue.chat.chat_quick_change import ask_jev
 from imbue.chat.chat_quick_change import build_recent_conversation
 from imbue.chat.chat_quick_change import decide_routing
+from imbue.chat.chat_quick_change import decide_tier
 from imbue.chat.chat_quick_change import find_editing_lease_app
 from imbue.chat.chat_quick_change import is_routable_message
 from imbue.chat.chat_quick_change import parse_editing_lease
@@ -53,16 +56,17 @@ _CREDENTIALS = JevCredentials(endpoint_url=OPENROUTER_JEV_URL, api_key=_DUMMY_KE
 _STYLE_REQUEST = "Make the header of my todo app dark blue"
 
 
-def _answer(probability: float, pending_work: float = 0.1) -> JevOutcome:
+def _answer(probability: float, pending_work: float = 0.1, careful: float | None = 0.1) -> JevOutcome:
+    """Jev's answer to the three questions; ``careful=None`` leaves question 3 out."""
+    answers = {
+        QUICK_CHANGE_QUESTION: {"type": "noul", "noul": probability},
+        PENDING_WORK_QUESTION: {"type": "noul", "noul": pending_work},
+    }
+    if careful is not None:
+        answers[TIER_QUESTION] = {"type": "noul", "noul": careful}
     return JevOutcome(
         status=JevOutcomeStatus.ANSWERED,
-        response={
-            "model": "typesafe/jev-1.13-20260917",
-            "answers": {
-                QUICK_CHANGE_QUESTION: {"type": "noul", "noul": probability},
-                PENDING_WORK_QUESTION: {"type": "noul", "noul": pending_work},
-            },
-        },
+        response={"model": "typesafe/jev-1.13-20260917", "answers": answers},
     )
 
 
@@ -167,6 +171,19 @@ def test_a_quick_change_without_an_unfinished_work_answer_does_not_route() -> No
 def test_an_unreachable_jev_does_not_route() -> None:
     outcome = JevOutcome(status=JevOutcomeStatus.FAILED, detail="request failed: ReadTimeout")
     assert decide_routing(outcome, None, None) is RoutingDecision.JEV_FAILED
+
+
+@pytest.mark.parametrize(
+    ("careful_probability", "tier"),
+    [
+        (0.9, SideAgentTier.CAREFUL),
+        (0.5, SideAgentTier.FAST),
+        (0.1, SideAgentTier.FAST),
+        (None, SIDE_AGENT_DEFAULT_TIER),
+    ],
+)
+def test_the_careful_answer_picks_the_tier(careful_probability: float | None, tier: SideAgentTier) -> None:
+    assert decide_tier(careful_probability) is tier
 
 
 # --- the editing lease --------------------------------------------------------------------------
@@ -362,8 +379,44 @@ def test_a_routed_message_is_logged_for_the_main_agent_with_app_and_answers(tmp_
 
     request, forward = _quick_change_records(tmp_path)
     assert (request["type"], request["message"], request["app"]) == ("request", _STYLE_REQUEST, "todo")
-    assert request["jev"] == {QUICK_CHANGE_QUESTION: 0.9, PENDING_WORK_QUESTION: 0.1}
+    assert request["jev"] == {QUICK_CHANGE_QUESTION: 0.9, PENDING_WORK_QUESTION: 0.1, TIER_QUESTION: 0.1}
     assert (forward["type"], forward["status"]) == ("forward", "forwarded")
+
+
+@pytest.mark.parametrize(
+    ("careful", "tier"),
+    [(0.9, SideAgentTier.CAREFUL), (0.1, SideAgentTier.FAST), (None, SIDE_AGENT_DEFAULT_TIER)],
+)
+def test_a_routed_message_carries_the_tier_its_careful_answer_picks(
+    tmp_path: Path, careful: float | None, tier: SideAgentTier
+) -> None:
+    router, _ = _router(tmp_path, outcome=_answer(0.9, careful=careful))
+    result = router.route(_CHAT_ID, _STYLE_REQUEST)
+    assert (result.is_routed, result.tier, result.careful_probability) == (True, tier, careful)
+
+
+def test_a_routing_decision_is_logged_with_its_tier_and_careful_answer(tmp_path: Path) -> None:
+    router, _ = _router(tmp_path, outcome=_answer(0.9, careful=0.8))
+    router.route(_CHAT_ID, _STYLE_REQUEST)
+
+    [record] = _log_records(tmp_path)
+    assert (record["decision"], record["tier"], record["careful_probability"]) == ("routed", "careful", 0.8)
+
+
+def test_an_unrouted_decision_is_logged_without_a_tier(tmp_path: Path) -> None:
+    router, _ = _router(tmp_path, outcome=_answer(0.1, careful=0.8))
+    router.route(_CHAT_ID, _STYLE_REQUEST)
+
+    [record] = _log_records(tmp_path)
+    assert (record["decision"], record["tier"]) == ("not_routed", None)
+
+
+def test_a_routed_request_is_logged_for_the_main_agent_with_its_tier(tmp_path: Path) -> None:
+    router, _ = _router(tmp_path, outcome=_answer(0.9, careful=0.8))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+
+    request = _quick_change_records(tmp_path)[0]
+    assert (request["type"], request["tier"]) == ("request", "careful")
 
 
 def test_a_routed_message_is_shown_in_its_chat_at_once(tmp_path: Path) -> None:
@@ -535,7 +588,7 @@ def test_jev_reads_the_message_and_recent_conversation(tmp_path: Path) -> None:
         "new_message": _STYLE_REQUEST,
         "recent_conversation": "Agent: Your todo app is ready.",
     }
-    assert list(request["questions"]) == [QUICK_CHANGE_QUESTION, PENDING_WORK_QUESTION]
+    assert list(request["questions"]) == [QUICK_CHANGE_QUESTION, PENDING_WORK_QUESTION, TIER_QUESTION]
 
 
 def test_every_decision_is_logged_with_request_answer_and_timestamps(

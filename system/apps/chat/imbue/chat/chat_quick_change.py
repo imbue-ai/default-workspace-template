@@ -1,21 +1,24 @@
-"""Routing quick look-and-feel changes to a separate Sonnet agent.
+"""Routing quick, simple app changes to a separate side agent.
 
-On every message sent to a chat, the chat app asks Jev (TypeSafe's decision model) two yes/no
-questions in one call, about the message and the last few messages of the conversation (the
-user's and the agent's):
+On every message sent to a chat, the chat app asks Jev (TypeSafe's decision model) three yes/no
+questions in one call (``JEV_QUESTIONS``), about the message and the last few messages of the
+conversation (the user's and the agent's):
 
-1. Is this a quick look-and-feel change to an app (a colour, font size, spacing, showing or hiding an
-   element, light/dark styling, restyling a page) that needs no new features, data or backend work?
-2. Is it blocked by earlier requested work that is not finished: does it style something not built
+1. Is this a simple, fast change to an existing app, clear from the message and needing no research,
+   investigation, design decisions or large feature work?
+2. Is it blocked by earlier requested work that is not finished: does it change something not built
    yet, or revise an unfinished request? (Such a message stays with the chat's own agent, which is
-   doing that work. Restyling a page that is still being changed elsewhere is not blocked.)
+   doing that work.)
+3. Does making it well need careful judgement beyond a direct edit (tricky logic, keeping many parts
+   consistent, a taste call)? This picks the side agent's tier (``SideAgentTier``): careful on a yes,
+   else fast.
 
 The send waits for the answer before anything is delivered (at most ``ROUTING_TIMEOUT_SECONDS``), so
 a routed message never enters the chat agent's conversation:
 
 - Yes to 1 and no to 2: the message is NOT delivered to the chat's own agent. It is forwarded word
   for word to the workspace's quick-change agent (one chat per workspace, created on first use and
-  reused, running the ``quick-look-and-feel-change`` skill on Sonnet), together with the app named
+  reused, running the ``quick-look-and-feel-change`` skill), together with the app named
   by the current editing lease (the in-progress ``editing service <name>`` tk ticket the update-app
   skill has an agent hold). That agent edits the live app under the lease, refreshes the window, and
   reports with ``system/scripts/report_quick_change.py``.
@@ -24,7 +27,7 @@ a routed message never enters the chat agent's conversation:
 Two logs live in the chat app's data folder (``data/.apps/chat/`` in a workspace):
 
 - ``quick_changes.jsonl`` (``QUICK_CHANGES_LOG_FILENAME``): the record the chat's own agents read.
-  Per routed message, a ``request`` line (request id, chat, time, text, app, Jev's answers), a
+  Per routed message, a ``request`` line (request id, chat, time, text, app, Jev's answers, tier), a
   ``forward`` line (handed over, or failed to), and a ``report`` line from the quick-change agent
   (done or failed, and its one-line summary). The update-app skill tells agents to check it. The
   chat shows the request and the report as a turn of its own (``chat_quick_change_feed.py``).
@@ -126,51 +129,79 @@ _YES_CUTOFF: Final[float] = 0.5
 _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
 
-QUICK_CHANGE_QUESTION: Final[str] = "quick_look_and_feel_change"
+QUICK_CHANGE_QUESTION: Final[str] = "quick_simple_change"
 PENDING_WORK_QUESTION: Final[str] = "blocked_by_unfinished_work"
+TIER_QUESTION: Final[str] = "needs_careful_side_agent"
 JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     QUICK_CHANGE_QUESTION: {
         "type": "noul",
         "instructions": (
-            "A user sent new_message to an AI agent that builds and runs apps on their computer. Is new_message "
-            "a request for a quick look-and-feel change to an existing app: a colour, font or font size, "
-            "spacing, showing or hiding an element, light or dark styling, or restyling a page, that can be "
-            "made without new features, new data or backend work?"
+            "A user sent new_message to an AI agent that builds and runs apps on their computer. Does new_message "
+            "ask for a change to an existing app that is simple and fast: it is already clear from the message "
+            "what to change, and making it needs no web search, gathering context, investigating a problem, data "
+            "analysis, architectural or design decisions, building a large feature, or sophisticated reasoning?"
         ),
         "criteria": {
             "true": (
-                "A quick visual or styling change to an existing app, and nothing more: no new feature, "
-                "no new data, no backend or behaviour change."
+                "new_message asks for a small, specified change that can be made in a few minutes by editing the "
+                "app directly: for example a colour, font, size or spacing; showing, hiding or moving an element; "
+                "changing text to wording the message gives or makes obvious, such as renaming a label, fixing a "
+                "typo or editing one line; reordering items; or a small addition whose shape the message already "
+                "states, such as a simple on/off setting, a sort option or a toggle between two presentations."
             ),
             "false": (
-                "Anything else: building a new app, adding a feature or data, adding a control the user operates (a "
-                "toggle, switch, button, collapsible or expandable section), fixing behaviour, a question, "
-                "conversation, or a styling request bundled with other work."
+                "new_message does not ask for a change (thanks, approval, a question, declining an offer, asking "
+                "the agent to carry on), or any part of it needs more: reporting something wrong whose cause must "
+                "be found, research, exploring large amounts of code or data, a design choice the user left open "
+                "('make it look more modern', 'give it more personality'), connecting or switching data sources or "
+                "services, backend or data work, a feature beyond a small addition, writing new content that the "
+                "agent has to come up with (explanations, summaries or suggestions, especially for many items), or "
+                "careful reasoning; also building a new app. If one part of the message is simple and another is "
+                "not, the answer is no."
             ),
         },
     },
     PENDING_WORK_QUESTION: {
         "type": "noul",
         "instructions": (
-            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. First "
-            "name the part of the app that new_message changes. Then answer: is that part something the user "
-            "earlier asked the agent to add, build or change, which no later agent reply says is done, live or "
-            "added?"
+            "Read recent_conversation, which holds the user's earlier messages and the agent's replies. First name "
+            "the part of the app that new_message changes. Then answer: is that part something the user earlier "
+            "asked the agent to add, build or change, which no later agent reply says is done, live or added?"
         ),
         "criteria": {
             "true": (
-                "The part new_message changes was itself requested earlier and is not reported done. That includes: a "
-                "part the agent's latest reply says it is adding, building, drawing or working on, or has only "
-                "acknowledged ('On it', 'Building it now', 'Drawing the diagram now', 'Got it', 'Will do' all mean "
-                "not done yet); any piece of such a part (the caption of a diagram still being drawn, the background "
-                "of a shelf still being built); restyling a whole app that is still being built; and a revision of an "
-                "earlier change request whose result the agent has not reported done (for example a different colour "
-                "for a background the user asked to recolour a moment ago)."
+                "The part new_message changes was itself requested earlier and is not reported done. That "
+                "includes: a part the agent's latest reply says it is adding, building, drawing or working on, or "
+                "has only acknowledged ('On it', 'Building it now', 'Making the chart now', 'Got it', 'Will do' "
+                "all mean not done yet); any piece of such a part (the label of a chart still being made, the "
+                "background of a shelf still being built); restyling a whole app that is still being built; and a "
+                "revision of an earlier change request whose result the agent has not reported done (for example a "
+                "different colour for a background the user asked to recolour a moment ago)."
             ),
             "false": (
-                "The part new_message changes already exists in the app, or the agent has said it is done. A part the "
-                "user only described, pointed at or complained about earlier counts as existing. The agent building "
-                "other, different things at the same time does not matter."
+                "The part new_message changes already exists in the app, or the agent has said it is done. A part "
+                "the user only described, pointed at or complained about earlier counts as existing. The agent "
+                "building other, different things at the same time does not matter."
+            ),
+        },
+    },
+    TIER_QUESTION: {
+        "type": "noul",
+        "instructions": (
+            "Suppose a side agent makes the change new_message asks for in an existing app. Does doing it well "
+            "need careful judgement, beyond a direct edit?"
+        ),
+        "criteria": {
+            "true": (
+                "Getting it right depends on subtle reasoning: tricky logic or edge cases in a behaviour change "
+                "(saving and restoring state, timers, limits enforced in several places), keeping many parts of "
+                "the app consistent (restyling the whole app), or a taste call on a colour scheme or overall look "
+                "that is easy to get slightly wrong."
+            ),
+            "false": (
+                "A direct edit where the message says exactly what to change: a colour, size, font or spacing on "
+                "specific elements, text with the wording given, showing, hiding or moving something, a sort "
+                "order, or a simple setting."
             ),
         },
     },
@@ -243,6 +274,8 @@ class RoutingResult(FrozenModel):
     recent_conversation: str = Field(default="", description="The context Jev read, forwarded too (routed only)")
     quick_change_probability: float | None = Field(default=None, description="Jev's answer to question 1")
     pending_work_probability: float | None = Field(default=None, description="Jev's answer to question 2")
+    careful_probability: float | None = Field(default=None, description="Jev's answer to question 3")
+    tier: SideAgentTier = Field(default=SIDE_AGENT_DEFAULT_TIER, description="The side agent tier it goes to")
 
 
 class QuickChangeReportStatus(LowerCaseStrEnum):
@@ -442,6 +475,14 @@ def decide_routing(
 
 
 @pure
+def decide_tier(careful_probability: float | None) -> SideAgentTier:
+    """The tier a routed message goes to: careful on a likely yes to question 3, else the default."""
+    if careful_probability is not None and careful_probability > _YES_CUTOFF:
+        return SideAgentTier.CAREFUL
+    return SIDE_AGENT_DEFAULT_TIER
+
+
+@pure
 def is_routable_message(message: str) -> bool:
     """Whether a sent text is the user's own words (a report, notice, slash command or chip is not)."""
     if _normalize_text(message) == "" or message.lstrip().startswith("/"):
@@ -634,7 +675,9 @@ class QuickChangeRouter(MutableModel):
                 "jev": {
                     QUICK_CHANGE_QUESTION: result.quick_change_probability,
                     PENDING_WORK_QUESTION: result.pending_work_probability,
+                    TIER_QUESTION: result.careful_probability,
                 },
+                "tier": str(result.tier),
             },
         )
         agent_id = self.get_active_agent_id(main_chat_id)
@@ -724,7 +767,9 @@ class QuickChangeRouter(MutableModel):
         response = outcome.response or {}
         quick_change_probability = read_probability(response, QUICK_CHANGE_QUESTION)
         pending_work_probability = read_probability(response, PENDING_WORK_QUESTION)
+        careful_probability = read_probability(response, TIER_QUESTION)
         decision = decide_routing(outcome, quick_change_probability, pending_work_probability)
+        tier = decide_tier(careful_probability) if decision is RoutingDecision.ROUTED else None
         elapsed_ms = round((time.monotonic() - started) * 1000)
         self._log(
             {
@@ -733,20 +778,25 @@ class QuickChangeRouter(MutableModel):
                 "jev_outcome": outcome.model_dump(mode="json"),
                 "quick_change_probability": quick_change_probability,
                 "pending_work_probability": pending_work_probability,
+                "careful_probability": careful_probability,
                 "decision": str(decision),
+                "tier": None if tier is None else str(tier),
                 "elapsed_ms": elapsed_ms,
                 "finished_at": _now_iso(),
             }
         )
         logger.info(
-            "Quick-change routing for chat {}: {} ({} ms, quick change p={}, unfinished work p={})",
+            "Quick-change routing for chat {}: {} (tier {}, {} ms, quick change p={}, unfinished work p={}, "
+            "careful p={})",
             chat_id,
             decision,
+            tier,
             elapsed_ms,
             quick_change_probability,
             pending_work_probability,
+            careful_probability,
         )
-        if decision is not RoutingDecision.ROUTED:
+        if tier is None:
             return RoutingResult()
         return RoutingResult(
             is_routed=True,
@@ -756,6 +806,8 @@ class QuickChangeRouter(MutableModel):
             recent_conversation=recent_conversation,
             quick_change_probability=quick_change_probability,
             pending_work_probability=pending_work_probability,
+            careful_probability=careful_probability,
+            tier=tier,
         )
 
     def _forward(self, main_chat_id: ChatId, result: RoutingResult, lease_app: str | None) -> None:
