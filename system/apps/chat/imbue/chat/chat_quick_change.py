@@ -17,8 +17,8 @@ The send waits for the answer before anything is delivered (at most ``ROUTING_TI
 a routed message never enters the chat agent's conversation:
 
 - Yes to 1 and no to 2: the message is NOT delivered to the chat's own agent. It is forwarded word
-  for word to the workspace's quick-change agent (one chat per workspace, created on first use and
-  reused, running the ``quick-look-and-feel-change`` skill), together with the app named
+  for word to the workspace's quick-change agent for its tier (one chat per tier, created on first use
+  of that tier on its model and reused, running the ``quick-look-and-feel-change`` skill), with the app named
   by the current editing lease (the in-progress ``editing service <name>`` tk ticket the update-app
   skill has an agent hold). That agent edits the live app under the lease, refreshes the window, and
   reports with ``system/scripts/report_quick_change.py``.
@@ -37,7 +37,7 @@ Two logs live in the chat app's data folder (``data/.apps/chat/`` in a workspace
 Jev is reached with an OpenRouter key saved in the chat app's data folder (``openrouter_api_key``)
 when there is one, else through the Imbue LiteLLM proxy the chat's account is signed in to, at its
 Jev route (``/jev/v1/systemone``). A chat with neither is never routed. The quick-change agent's
-chat id is kept in ``quick_change_agent.json`` beside the logs.
+chat id of each tier is kept in ``quick_change_agent.json`` beside the logs.
 """
 
 import json
@@ -87,7 +87,8 @@ ROUTING_LOG_FILENAME: Final[str] = "quick_change_routing.jsonl"
 QUICK_CHANGES_LOG_FILENAME: Final[str] = "quick_changes.jsonl"
 QUICK_CHANGE_AGENT_FILENAME: Final[str] = "quick_change_agent.json"
 QUICK_CHANGE_SKILL: Final[str] = "quick-look-and-feel-change"
-QUICK_CHANGE_CHAT_NAME: Final[str] = "Quick look-and-feel changes"
+# Each tier's chat is named this plus the tier, so the chats are told apart in the chat list.
+QUICK_CHANGE_CHAT_NAME: Final[str] = "Quick changes"
 # The label the quick-change chat carries, so it can be found in `mngr list`.
 QUICK_CHANGE_LABEL: Final[str] = "quick_change_agent"
 
@@ -483,6 +484,25 @@ def decide_tier(careful_probability: float | None) -> SideAgentTier:
 
 
 @pure
+def quick_change_chat_name(tier: SideAgentTier) -> str:
+    return f"{QUICK_CHANGE_CHAT_NAME} ({tier})"
+
+
+@pure
+def agent_record_entries(payload: object) -> dict[str, dict[str, Any]]:
+    """A quick-change agent record as each tier's entry (``chat_id``, ``created_at``), keyed by tier.
+
+    The single-chat record written before there were tiers is read as the fast tier's, so a workspace that
+    already has a quick-change chat keeps using it.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    if "chat_id" in payload:
+        return {str(SideAgentTier.FAST): payload}
+    return {key: entry for key, entry in payload.items() if isinstance(key, str) and isinstance(entry, dict)}
+
+
+@pure
 def is_routable_message(message: str) -> bool:
     """Whether a sent text is the user's own words (a report, notice, slash command or chip is not)."""
     if _normalize_text(message) == "" or message.lstrip().startswith("/"):
@@ -589,9 +609,10 @@ class QuickChangeRouter(MutableModel):
     call_jev: Callable[[JevCredentials, dict[str, Any], float], JevOutcome] = Field(
         frozen=True, description="One call to Jev, with its timeout in seconds"
     )
-    create_agent_chat: Callable[[str, str, dict[str, str]], str] = Field(
+    create_agent_chat: Callable[[str, str, dict[str, str], SideAgentTier], str] = Field(
         frozen=True,
-        description="Creates the quick-change chat from a name, first message and labels; returns its id",
+        description="Creates a quick-change chat from a name, first message and labels, on the tier's model; "
+        "returns its id",
     )
     deliver: Callable[[ChatId, str], bool] = Field(
         frozen=True,
@@ -629,18 +650,15 @@ class QuickChangeRouter(MutableModel):
     _agent_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _log_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def quick_change_chat_id(self) -> str | None:
-        """The quick-change agent's chat id, or None before its first use."""
-        path = self.data_dir / QUICK_CHANGE_AGENT_FILENAME
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return None
-        except (OSError, ValueError) as e:
-            logger.warning("Ignoring an unreadable quick-change agent record at {}: {}", path, e)
-            return None
-        chat_id = payload.get("chat_id") if isinstance(payload, dict) else None
-        return chat_id if isinstance(chat_id, str) and chat_id else None
+    def quick_change_chat_ids(self) -> dict[SideAgentTier, str]:
+        """Each tier's quick-change chat id, for the tiers used so far."""
+        entries = agent_record_entries(self._read_agent_record())
+        chat_ids: dict[SideAgentTier, str] = {}
+        for tier in SideAgentTier:
+            chat_id = entries.get(str(tier), {}).get("chat_id")
+            if isinstance(chat_id, str) and chat_id:
+                chat_ids[tier] = chat_id
+        return chat_ids
 
     def route(self, chat_id: ChatId | None, message: str) -> RoutingResult:
         """Ask Jev about ``message`` and say whether it goes to the quick-change agent instead of the chat's own.
@@ -649,7 +667,8 @@ class QuickChangeRouter(MutableModel):
         Never raises: anything that goes wrong leaves the message unrouted.
         """
         unrouted = RoutingResult()
-        if not is_routable_message(message) or (chat_id is not None and str(chat_id) == self.quick_change_chat_id()):
+        is_quick_change_chat = chat_id is not None and str(chat_id) in self.quick_change_chat_ids().values()
+        if not is_routable_message(message) or is_quick_change_chat:
             return unrouted
         try:
             return self._route(chat_id, message)
@@ -821,7 +840,7 @@ class QuickChangeRouter(MutableModel):
             lease_app,
         )
         try:
-            quick_chat_id, is_created = self._deliver_to_agent(text)
+            quick_chat_id, is_created = self._deliver_to_agent(result.tier, text)
         except (AgentCreationError, ChatAppError, OSError) as e:
             logger.opt(exception=e).error(
                 "Could not forward chat {}'s message to the quick-change agent",
@@ -862,6 +881,7 @@ class QuickChangeRouter(MutableModel):
                 "request_id": result.request_id,
                 "status": "forwarded",
                 "quick_change_chat_id": quick_chat_id,
+                "tier": str(result.tier),
                 "at": forwarded_at,
             },
         )
@@ -871,6 +891,7 @@ class QuickChangeRouter(MutableModel):
                 "request_id": result.request_id,
                 "chat_id": str(main_chat_id),
                 "quick_change_chat_id": quick_chat_id,
+                "tier": str(result.tier),
                 "is_agent_created": is_created,
                 "lease_app": lease_app,
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
@@ -878,15 +899,15 @@ class QuickChangeRouter(MutableModel):
             }
         )
 
-    def _deliver_to_agent(self, text: str) -> tuple[str, bool]:
-        """Deliver to the existing quick-change chat, or create it with ``text`` as its first message."""
+    def _deliver_to_agent(self, tier: SideAgentTier, text: str) -> tuple[str, bool]:
+        """Deliver to the tier's existing quick-change chat, or create it with ``text`` as its first message."""
         with self._agent_lock:
-            existing = self.quick_change_chat_id()
+            existing = self.quick_change_chat_ids().get(tier)
             if existing is not None and self._deliver_with_retries(ChatId(existing), text):
                 return existing, False
-            created = self.create_agent_chat(QUICK_CHANGE_CHAT_NAME, text, {QUICK_CHANGE_LABEL: "true"})
-            self._write_agent_record(created)
-            logger.info("Created the quick-change chat {}", created)
+            created = self.create_agent_chat(quick_change_chat_name(tier), text, {QUICK_CHANGE_LABEL: "true"}, tier)
+            self._write_agent_record(tier, created)
+            logger.info("Created the {} quick-change chat {}", tier, created)
             return created, True
 
     def _deliver_with_retries(self, chat_id: ChatId, text: str) -> bool:
@@ -905,14 +926,25 @@ class QuickChangeRouter(MutableModel):
                 self.wait(_DELIVERY_RETRY_SECONDS)
         return False
 
-    def _write_agent_record(self, chat_id: str) -> None:
+    def _read_agent_record(self) -> object:
+        """The quick-change agent record as stored, or None before any quick-change chat exists."""
+        path = self.data_dir / QUICK_CHANGE_AGENT_FILENAME
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as e:
+            logger.warning("Ignoring an unreadable quick-change agent record at {}: {}", path, e)
+            return None
+
+    def _write_agent_record(self, tier: SideAgentTier, chat_id: str) -> None:
+        """Record the tier's chat, keeping the other tiers' (a single-chat record is rewritten per tier)."""
+        entries = agent_record_entries(self._read_agent_record())
+        entries[str(tier)] = {"chat_id": chat_id, "created_at": _now_iso()}
         self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self.data_dir / QUICK_CHANGE_AGENT_FILENAME
         temp_path = path.with_suffix(".json.tmp")
-        temp_path.write_text(
-            json.dumps({"chat_id": chat_id, "created_at": _now_iso()}, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        temp_path.write_text(json.dumps(entries, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temp_path.replace(path)
 
     def _log(self, record: dict[str, Any]) -> None:

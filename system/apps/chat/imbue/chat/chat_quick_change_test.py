@@ -22,7 +22,6 @@ from imbue.chat.chat_quick_change import OPENROUTER_KEY_FILENAME
 from imbue.chat.chat_quick_change import PENDING_WORK_QUESTION
 from imbue.chat.chat_quick_change import QUICK_CHANGES_LOG_FILENAME
 from imbue.chat.chat_quick_change import QUICK_CHANGE_AGENT_FILENAME
-from imbue.chat.chat_quick_change import QUICK_CHANGE_CHAT_NAME
 from imbue.chat.chat_quick_change import QUICK_CHANGE_LABEL
 from imbue.chat.chat_quick_change import QUICK_CHANGE_QUESTION
 from imbue.chat.chat_quick_change import QUICK_CHANGE_SKILL
@@ -41,6 +40,7 @@ from imbue.chat.chat_quick_change import decide_tier
 from imbue.chat.chat_quick_change import find_editing_lease_app
 from imbue.chat.chat_quick_change import is_routable_message
 from imbue.chat.chat_quick_change import parse_editing_lease
+from imbue.chat.chat_quick_change import quick_change_chat_name
 from imbue.chat.chat_quick_change import read_chat_jev_credentials
 from imbue.chat.chat_quick_change import read_openrouter_jev_credentials
 from imbue.chat.chat_quick_change import read_probability
@@ -51,6 +51,8 @@ from imbue.chat.primitives import ChatId
 
 _CHAT_ID = ChatId("agent-00000000000000000000000000000001")
 _QUICK_CHAT_ID = "agent-00000000000000000000000000000002"
+_CAREFUL_CHAT_ID = "agent-00000000000000000000000000000003"
+_CHAT_ID_BY_TIER = {SideAgentTier.FAST: _QUICK_CHAT_ID, SideAgentTier.CAREFUL: _CAREFUL_CHAT_ID}
 _DUMMY_KEY = "sk-or-dummy-test-key"
 _CREDENTIALS = JevCredentials(endpoint_url=OPENROUTER_JEV_URL, api_key=_DUMMY_KEY, is_openrouter_key=True)
 _STYLE_REQUEST = "Make the header of my todo app dark blue"
@@ -75,14 +77,14 @@ class _Fakes:
 
     def __init__(self) -> None:
         self.jev_requests: list[dict[str, Any]] = []
-        self.created: list[tuple[str, str, dict[str, str]]] = []
+        self.created: list[tuple[str, str, dict[str, str], SideAgentTier]] = []
         self.delivered: list[tuple[str, str]] = []
 
 
 def _router(
     tmp_path: Path,
     *,
-    outcome: JevOutcome | None = None,
+    outcome: JevOutcome | list[JevOutcome] | None = None,
     credentials: JevCredentials | None = _CREDENTIALS,
     conversation: list[dict[str, Any]] | None = None,
     deliver: Callable[[ChatId, str], bool] | None = None,
@@ -94,11 +96,12 @@ def _router(
     def call_jev(_credentials: JevCredentials, jev_request: dict[str, Any], _timeout: float) -> JevOutcome:
         fakes.jev_requests.append(jev_request)
         assert outcome is not None, "Jev was not expected to be asked"
-        return outcome
+        # A list is answered one item per call, in order.
+        return outcome.pop(0) if isinstance(outcome, list) else outcome
 
-    def create_agent_chat(name: str, message: str, labels: dict[str, str]) -> str:
-        fakes.created.append((name, message, labels))
-        return _QUICK_CHAT_ID
+    def create_agent_chat(name: str, message: str, labels: dict[str, str], tier: SideAgentTier) -> str:
+        fakes.created.append((name, message, labels, tier))
+        return _CHAT_ID_BY_TIER[tier]
 
     def default_deliver(chat_id: ChatId, text: str) -> bool:
         fakes.delivered.append((str(chat_id), text))
@@ -248,14 +251,14 @@ def test_the_main_chats_own_lease_wins_over_a_newer_one(tmp_path: Path) -> None:
 def test_the_lease_app_is_passed_to_the_quick_change_agent(tmp_path: Path) -> None:
     router, fakes = _router(tmp_path, outcome=_answer(0.9), lease_app="todo")
     router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
-    [(_, first_message, _)] = fakes.created
+    [(_, first_message, _, _)] = fakes.created
     assert "Editing lease app: todo\n" in first_message
 
 
 def test_no_lease_is_passed_as_none(tmp_path: Path) -> None:
     router, fakes = _router(tmp_path, outcome=_answer(0.9), lease_app=None)
     router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
-    [(_, first_message, _)] = fakes.created
+    [(_, first_message, _, _)] = fakes.created
     assert "Editing lease app: (none)\n" in first_message
 
 
@@ -465,8 +468,12 @@ def test_a_yes_creates_the_quick_change_agent_with_the_request_word_for_word(
     router, fakes = _router(tmp_path, outcome=_answer(0.9))
     router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
 
-    [(name, first_message, labels)] = fakes.created
-    assert (name, labels) == (QUICK_CHANGE_CHAT_NAME, {QUICK_CHANGE_LABEL: "true"})
+    [(name, first_message, labels, tier)] = fakes.created
+    assert (name, labels, tier) == (
+        quick_change_chat_name(SideAgentTier.FAST),
+        {QUICK_CHANGE_LABEL: "true"},
+        SideAgentTier.FAST,
+    )
     assert first_message.startswith(f"/{QUICK_CHANGE_SKILL}\n")
     assert f"Main chat: {_CHAT_ID}" in first_message
     assert first_message.endswith(f"The user's request, word for word:\n{_STYLE_REQUEST}")
@@ -475,7 +482,7 @@ def test_a_yes_creates_the_quick_change_agent_with_the_request_word_for_word(
 def test_the_quick_change_agent_is_recorded_once_created(tmp_path: Path) -> None:
     router, _ = _router(tmp_path, outcome=_answer(0.9))
     router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
-    assert router.quick_change_chat_id() == _QUICK_CHAT_ID
+    assert router.quick_change_chat_ids() == {SideAgentTier.FAST: _QUICK_CHAT_ID}
 
 
 def test_a_second_yes_reuses_the_quick_change_agent(tmp_path: Path) -> None:
@@ -487,13 +494,72 @@ def test_a_second_yes_reuses_the_quick_change_agent(tmp_path: Path) -> None:
     assert [chat_id for chat_id, _ in fakes.delivered] == [_QUICK_CHAT_ID]
 
 
+def test_the_first_fast_and_first_careful_change_each_create_their_tiers_chat(tmp_path: Path) -> None:
+    router, fakes = _router(tmp_path, outcome=[_answer(0.9, careful=0.1), _answer(0.9, careful=0.9)])
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, "Restyle the whole app in a calmer palette"))
+
+    assert [tier for _, _, _, tier in fakes.created] == [SideAgentTier.FAST, SideAgentTier.CAREFUL]
+    assert router.quick_change_chat_ids() == _CHAT_ID_BY_TIER
+
+
+def test_a_careful_change_creates_the_careful_chat_on_the_careful_tier(tmp_path: Path) -> None:
+    router, fakes = _router(tmp_path, outcome=_answer(0.9, careful=0.9))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+
+    [(name, _, _, tier)] = fakes.created
+    assert (name, tier) == (quick_change_chat_name(SideAgentTier.CAREFUL), SideAgentTier.CAREFUL)
+
+
+def test_a_second_careful_change_reuses_the_careful_chat(tmp_path: Path) -> None:
+    router, fakes = _router(tmp_path, outcome=_answer(0.9, careful=0.9))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, "Now make the whole palette warmer"))
+
+    assert len(fakes.created) == 1
+    assert [chat_id for chat_id, _ in fakes.delivered] == [_CAREFUL_CHAT_ID]
+
+
+def test_the_tier_names_tell_the_chats_apart() -> None:
+    assert quick_change_chat_name(SideAgentTier.FAST) != quick_change_chat_name(SideAgentTier.CAREFUL)
+
+
+def test_a_single_chat_record_is_read_as_the_fast_tiers_chat(tmp_path: Path) -> None:
+    (tmp_path / QUICK_CHANGE_AGENT_FILENAME).write_text(json.dumps({"chat_id": "agent-old"}), encoding="utf-8")
+    router, fakes = _router(tmp_path, outcome=_answer(0.9, careful=0.1))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+
+    assert fakes.created == []
+    assert [chat_id for chat_id, _ in fakes.delivered] == ["agent-old"]
+
+
+def test_a_single_chat_record_keeps_its_chat_as_fast_when_the_careful_chat_is_created(tmp_path: Path) -> None:
+    (tmp_path / QUICK_CHANGE_AGENT_FILENAME).write_text(json.dumps({"chat_id": "agent-old"}), encoding="utf-8")
+    router, _ = _router(tmp_path, outcome=_answer(0.9, careful=0.9))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+
+    assert router.quick_change_chat_ids() == {SideAgentTier.FAST: "agent-old", SideAgentTier.CAREFUL: _CAREFUL_CHAT_ID}
+
+
+def test_a_routed_message_is_forwarded_with_its_tier(tmp_path: Path) -> None:
+    router, _ = _router(tmp_path, outcome=_answer(0.9, careful=0.9))
+    router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
+
+    forward = _quick_change_records(tmp_path)[-1]
+    assert (forward["type"], forward["quick_change_chat_id"], forward["tier"]) == (
+        "forward",
+        _CAREFUL_CHAT_ID,
+        "careful",
+    )
+
+
 def test_a_gone_quick_change_agent_is_replaced(tmp_path: Path) -> None:
     (tmp_path / QUICK_CHANGE_AGENT_FILENAME).write_text(json.dumps({"chat_id": "agent-gone"}), encoding="utf-8")
     router, fakes = _router(tmp_path, outcome=_answer(0.9), deliver=lambda _chat_id, _text: False)
     router.forward(_CHAT_ID, router.route(_CHAT_ID, _STYLE_REQUEST))
 
     assert len(fakes.created) == 1
-    assert router.quick_change_chat_id() == _QUICK_CHAT_ID
+    assert router.quick_change_chat_ids() == {SideAgentTier.FAST: _QUICK_CHAT_ID}
 
 
 def test_a_quick_change_agent_that_keeps_refusing_is_logged_as_a_failed_forward(
@@ -578,6 +644,14 @@ def test_messages_to_the_quick_change_chat_itself_are_not_asked_about(
     assert fakes.jev_requests == []
 
 
+def test_messages_to_the_careful_quick_change_chat_are_not_asked_about(tmp_path: Path) -> None:
+    record = {"fast": {"chat_id": _QUICK_CHAT_ID}, "careful": {"chat_id": _CAREFUL_CHAT_ID}}
+    (tmp_path / QUICK_CHANGE_AGENT_FILENAME).write_text(json.dumps(record), encoding="utf-8")
+    router, fakes = _router(tmp_path)
+    router.route(ChatId(_CAREFUL_CHAT_ID), _STYLE_REQUEST)
+    assert fakes.jev_requests == []
+
+
 def test_jev_reads_the_message_and_recent_conversation(tmp_path: Path) -> None:
     conversation = [{"type": "assistant_message", "text": "Your todo app is ready."}]
     router, fakes = _router(tmp_path, outcome=_answer(0.9), conversation=conversation)
@@ -628,7 +702,7 @@ def test_routing_end_to_end_over_a_stubbed_openrouter_endpoint(tmp_path: Path) -
         resolve_credentials=lambda _chat_id: read_chat_jev_credentials(None, key_path),
         get_conversation_tail=lambda _chat_id, _limit: [],
         call_jev=lambda credentials, request, timeout: ask_jev(credentials, request, http_client, timeout),
-        create_agent_chat=lambda _name, message, _labels: created.append(message) or _QUICK_CHAT_ID,
+        create_agent_chat=lambda _name, message, _labels, _tier: created.append(message) or _QUICK_CHAT_ID,
         deliver=lambda _chat_id, _text: True,
         find_lease_app=lambda _main_chat_id: None,
         run_in_background=lambda fn: fn(),

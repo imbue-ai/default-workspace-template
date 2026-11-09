@@ -58,6 +58,8 @@ from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_quick_change import SIDE_AGENT_DEFAULT_TIER
+from imbue.chat.chat_quick_change import SideAgentTier
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -75,9 +77,9 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
-from imbue.chat.harnesses.claude.model import claude_launch_settings
 from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
+from imbue.chat.harnesses.claude.model import claude_launch_settings
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -1729,7 +1731,10 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
 
 
 def _create_quick_change_chat_on_a_recording_mngr(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tier: SideAgentTier = SIDE_AGENT_DEFAULT_TIER,
 ) -> tuple[str, RecordingMngrMessenger]:
     """Create the quick-change chat through the chat app's own path and let its create land and settle; returns
     the ``mngr`` argv line it ran and the messenger every message to the agent (a ``/model`` included) goes to."""
@@ -1739,7 +1744,7 @@ def _create_quick_change_chat_on_a_recording_mngr(
     sent: list[tuple[str, str, str]] = []
     manager, _store, argv_log = _handoff_manager(broadcaster, tmp_path, sent, messenger=messenger)
     try:
-        chat_id = _create_quick_change_chat(manager, "Quick changes", "Make the header blue", {})
+        chat_id = _create_quick_change_chat(manager, "Quick changes", "Make the header blue", {}, tier)
         outcome = manager.wait_for_chat_creation(ChatId(chat_id), timeout=10.0)
         assert outcome is not None and outcome.is_created
     finally:
@@ -1748,14 +1753,22 @@ def _create_quick_change_chat_on_a_recording_mngr(
     return argv_line, messenger
 
 
-def test_the_quick_change_chat_launches_on_the_fast_tiers_model_and_effort(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("tier", "model"),
+    [(SideAgentTier.FAST, "sonnet[1m]"), (SideAgentTier.CAREFUL, "opus[1m]")],
+)
+def test_a_quick_change_chat_launches_on_its_tiers_model_and_effort(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tier: SideAgentTier,
+    model: str,
 ) -> None:
-    argv_line, _messenger = _create_quick_change_chat_on_a_recording_mngr(broadcaster, tmp_path, monkeypatch)
+    argv_line, _messenger = _create_quick_change_chat_on_a_recording_mngr(broadcaster, tmp_path, monkeypatch, tier)
     tokens = argv_line.split(" ")
     settings = [tokens[i + 1] for i, tok in enumerate(tokens) if tok == "-S"]
     assert settings == [
-        "agent_types.claude.settings_overrides.model=sonnet[1m]",
+        f"agent_types.claude.settings_overrides.model={model}",
         "agent_types.claude.settings_overrides.effortLevel=medium",
     ]
 

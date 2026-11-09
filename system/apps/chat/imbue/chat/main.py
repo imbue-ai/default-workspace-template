@@ -67,7 +67,7 @@ logger = _loguru_logger
 # ``test_app_manifests.py`` reads this constant from the source to check the program registers
 # with this manifest.
 MANIFEST_PATH: Final[Path] = Path("system/apps/chat/app.toml")
-# How many numbered names ("Quick look-and-feel changes", "... 2", ...) the quick-change chat tries.
+# How many numbered names ("Quick changes (fast)", "... 2", ...) a quick-change chat tries.
 _QUICK_CHANGE_NAME_ATTEMPTS: Final[int] = 10
 
 
@@ -220,8 +220,8 @@ def build_production_state(
             call_jev=lambda credentials, jev_request, timeout: ask_jev(
                 credentials, jev_request, state.http_client, timeout
             ),
-            create_agent_chat=lambda name, message, labels: _create_quick_change_chat(
-                agent_manager, name, message, labels
+            create_agent_chat=lambda name, message, labels, tier: _create_quick_change_chat(
+                agent_manager, name, message, labels, tier
             ),
             deliver=lambda chat_id, text: _deliver_chat_message(state, chat_id, text),
             get_active_agent_id=lambda chat_id: _active_agent_id(agent_manager, chat_id),
@@ -247,8 +247,8 @@ def _create_quick_change_chat(
     labels: dict[str, str],
     tier: SideAgentTier = SIDE_AGENT_DEFAULT_TIER,
 ) -> str:
-    """Create the quick-change chat on the tier's model; a name already taken (a chat left from an earlier record)
-    gets a number.
+    """Create a tier's quick-change chat on that tier's model; a name already taken (a chat left from an earlier
+    record) gets a number.
 
     The model rides the create's launch settings rather than a model pick: a pick is applied with ``/model``
     once the agent is up, which saves the model as the account's default for every new session.

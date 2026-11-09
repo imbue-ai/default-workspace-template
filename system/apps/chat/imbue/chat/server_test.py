@@ -5318,7 +5318,7 @@ def _wire_quick_change_router(
         resolve_credentials=lambda _chat_id: JevCredentials(endpoint_url="https://jev.invalid", api_key="sk-dummy"),
         get_conversation_tail=lambda _chat_id, _limit: [],
         call_jev=_jev_answering(probability),
-        create_agent_chat=lambda _name, message, _labels: created.append(message) or _QUICK_CHANGE_CHAT,
+        create_agent_chat=lambda _name, message, _labels, _tier: created.append(message) or _QUICK_CHANGE_CHAT,
         deliver=lambda chat_id, text: state.chat_message_deliverer is not None
         and state.chat_message_deliverer(str(chat_id), text),
         find_lease_app=lambda _main_chat_id: "todo",
