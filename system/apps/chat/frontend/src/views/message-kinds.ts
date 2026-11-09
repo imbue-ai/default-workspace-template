@@ -50,9 +50,11 @@
 
 /** Which side / channel a message renders on. */
 export enum Rail {
-  /** Right-aligned "user" channel (`.message-user` / `.message-system-collapsed`). */
+  /** The "user" channel (`.message-user` / `.message-system-collapsed`): a person's bubble, or a system chip,
+   *  which sits on the bubbles' text edge in a stretch of the agent's output (a bash-mode command and its output,
+   *  the person's own, stand on their side instead). */
   User = "user",
-  /** Left, full-width "assistant" channel -- used when a user_message's content
+  /** The agent's channel, in a stretch of its output -- used when a user_message's content
    *  is relocated into an assistant-side block (e.g. a skill body folded into its
    *  `Tool: Skill` call). */
   Assistant = "assistant",
@@ -145,13 +147,16 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "Right-aligned COLLAPSED chip ('▸ <label>') at the point it arrived. It is " +
+      "COLLAPSED chip ('▸ <label>') at the point it arrived, on the agent's " +
+      "bubbles' text edge, as a piece of the stretch it lands in. It is " +
       "not a turn of its own, but the timeline breaks at it: what the agent said " +
       "before stays above it, and the work it resumes (any open step carried " +
       "over) renders below it. Click to expand the raw body. Same " +
       "chrome as Stop-hook feedback (`.message-system-collapsed` wrapping a " +
       "`.tool-call-block`). The chip label distinguishes the source " +
-      "(e.g. 'Stop hook feedback', 'Browser fleet', 'Background task').",
+      "(e.g. 'Stop hook feedback', 'Browser fleet', 'Background task'). A chip of " +
+      "the person's own doing (`display: person_chip`, a bash-mode command and its " +
+      "output) stands on the person's side instead and ends the agent's stretch.",
   },
   [UserMessageKind.SkillExpansion]: {
     rail: Rail.Assistant,
@@ -196,7 +201,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "chips in the agent's chip rows, beside its tool calls: a start chip named as " +
       "the activity strip names the compaction ('Compacting while idle…', package-open " +
       "glyph) and a finish chip reading 'Compacted' (package glyph). They join the " +
-      "chip run at the event's transcript position (or a row of their own when " +
+      "chip run at the event's transcript position (or a chip run of their own when " +
       "nothing chips beside them, as under a `/compact` bubble), and " +
       "follow the reply when the event landed after it. Either chip opens the tool " +
       "chips' detail panel on why it ran and where to change that; under it, the " +
@@ -210,7 +215,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "A left-aligned single line at the point it arrived, breaking the timeline " +
+      "A single line at the point it arrived, on the agent's bubbles' text " +
+      "edge as a piece of the stretch it lands in, its tick on the stretch's line, breaking the timeline " +
       "like a SystemChip: a tick, the lead in medium weight ('Background task " +
       "completed:'), then the summary in plain secondary text. Nothing to expand " +
       "-- the summary is the whole of it.",

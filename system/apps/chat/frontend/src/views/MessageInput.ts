@@ -76,7 +76,7 @@ import {
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
-import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -88,8 +88,23 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
+import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { createDictation } from "@imbue/workspace-voice/src/dictation";
+import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
+import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
+import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
+import {
+  describeHost,
+  dictationShortcutChord,
+  dictationShortcutLabel,
+  isApplePlatform,
+  isDictationSupported,
+  pageDictationOptions,
+} from "@imbue/workspace-voice/src/support";
+import { DictationButton, dictationNotice, dictationProgressPercent } from "./DictationButton";
+import type { DictationProgress } from "./DictationButton";
 
-const MAX_TEXTAREA_HEIGHT_PX = 240;
+export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
 /* Styling.
  * Utilities in the markup; the message-input and composer-attachment class
@@ -340,8 +355,15 @@ export function prependToComposer(chatId: string, block: string): void {
  *  The row holds its height while the text is measured collapsed to one line. Otherwise the page
  *  lays out around a one-line composer for that moment, and the browser clamps the transcript's
  *  scroll position to fit it: a tall composer would pull the transcript off its bottom on every
- *  redraw. */
-function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
+ *  redraw.
+ *
+ *  Once the text outgrows the cap the textarea scrolls. It keeps its scroll position across the
+ *  collapse, which not every browser preserves. Typing (``isTyping``) with the caret at the end of the
+ *  draft scrolls it all the way down instead, since the browser scrolls the caret into view without
+ *  the padding under the last line. */
+function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
+  const scrollTopPx = textarea.scrollTop;
+  const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
   row.style.height = `${row.getBoundingClientRect().height}px`;
   row.removeAttribute("data-stacked");
   textarea.style.overflowY = "hidden";
@@ -351,7 +373,12 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
     row.hasAttribute("data-attachments") || textarea.scrollHeight > textarea.clientHeight,
   );
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
-  textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+  const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
+  textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
+  const targetScrollTopPx =
+    isOverflowing && isTypingAtEnd ? textarea.scrollHeight - textarea.clientHeight : scrollTopPx;
+  // Writing scrollTop is a programmatic scroll, which would interrupt the reader scrolling the draft mid-gesture.
+  if (textarea.scrollTop !== targetScrollTopPx) textarea.scrollTop = targetScrollTopPx;
   row.style.height = "";
 }
 
@@ -392,6 +419,24 @@ function warmUpStoppedChat(chatId: string): void {
     })
     .catch((err: unknown) => console.warn(`Could not start chat ${chatId} ahead of its message: ${String(err)}`))
     .finally(() => warmingAgentIds.delete(agentId));
+}
+
+/** Whether this page offers dictation at all (the workspace-voice-input spec, D5): a secure context with a
+ *  microphone, an audio worklet, WebAssembly, and a worker. */
+function isDictationOffered(): boolean {
+  return isDictationSupported(describeHost());
+}
+
+function isAppleKeyboard(): boolean {
+  return typeof navigator !== "undefined" && isApplePlatform(navigator);
+}
+
+// The mounted composer's hook for the page going out of view, which stops its dictation and keeps the words.
+let mountedDictationHide: (() => void) | null = null;
+
+/** Stop the page's dictation, keeping the words it heard: what the page does when the shell says it is hidden. */
+export function stopDictationWhenHidden(): void {
+  mountedDictationHide?.();
 }
 
 export interface MessageInputAttrs {
@@ -472,6 +517,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Whether the composer was disabled at the last render, so it takes focus the moment a provider makes it usable.
   let wasComposerDisabled = false;
   let messageRowElement: HTMLElement | null = null;
+  // An edit refits the composer as typing, and so does the redraw that follows it: the browser scrolls the caret
+  // into view after the input event, which can undo the edit's own scroll to the bottom.
+  let isTypingUntilRedraw = false;
   // Refits the composer when its width changes, since that changes where the text wraps.
   let messageRowResizeObserver: ResizeObserver | null = null;
   let messageRowWidthPx = 0;
@@ -554,6 +602,152 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let switchPreparingChatId: string | null = null;
   // The mention being typed, while the caret follows an ``@`` (section 7.2); null otherwise.
   let mentionDraft: MentionDraft | null = null;
+  // Dictation (the workspace-voice-input spec), made on first use since it pulls the speech runtime in; its
+  // state is mirrored here for the view, with the engine's own the truth for what a press does.
+  let dictation: Dictation | null = null;
+  let dictationState: DictationState = "idle";
+  let dictationProgress: DictationProgress | null = null;
+  let lastShownProgressPercent = -1;
+  let dictationProblem: DictationProblem | null = null;
+  // The stretch of the box the dictation owns, from the caret it started at; null while none runs.
+  let dictationSpan: LiveSpan | null = null;
+  // Fills the mic's capsule, handed over by the button while its glyph is in the document.
+  let setMeterLevel: ((level: number) => void) | null = null;
+  // Send or Enter came while dictating: the words are finished first, then the box is sent (spec D8).
+  let isSendPendingAfterDictation = false;
+  // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
+  let isComposerDisabledNow = false;
+
+  /** Write the dictation's words into the box: the live span, with the caret at its end so the words stay in
+   *  view, and only the final words to the saved draft. */
+  function applyDictationSpan(): void {
+    if (dictationSpan === null || currentChatId === null) return;
+    const rendered = renderSpan(dictationSpan);
+    messageText = rendered.text;
+    if (rendered.draft === "") localStorage.removeItem(messageTextKey(currentChatId));
+    else localStorage.setItem(messageTextKey(currentChatId), rendered.draft);
+    if (messageTextareaElement !== null) {
+      messageTextareaElement.value = rendered.text;
+      messageTextareaElement.setSelectionRange(rendered.spanEnd, rendered.spanEnd);
+      refitAfterEdit();
+    }
+    m.redraw();
+  }
+
+  /** Fix where the words will land: the caret (or the selection) as it is when dictation starts. */
+  function openDictationSpan(): void {
+    const textarea = messageTextareaElement;
+    const start = textarea?.selectionStart ?? messageText.length;
+    const end = textarea?.selectionEnd ?? messageText.length;
+    dictationSpan = openSpan(messageText, start, end);
+  }
+
+  function ensureDictation(): Dictation {
+    if (dictation !== null) return dictation;
+    // The page's own URL roots the runtime's files; a document-less test has none.
+    const pageUrl = typeof location === "undefined" ? "" : location.href;
+    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl), {
+      onStateChange: (state) => {
+        dictationState = state;
+        if (state !== "loading") {
+          dictationProgress = null;
+          lastShownProgressPercent = -1;
+        }
+        // Once idle the words are ordinary text; the next dictation opens a span of its own.
+        if (state === "idle") dictationSpan = null;
+        m.redraw();
+      },
+      onProgress: (loadedBytes, totalBytes) => {
+        dictationProgress = { loadedBytes, totalBytes };
+        // A download reports every chunk; the ring and the tooltip move by whole percents.
+        const percent = dictationProgressPercent(dictationProgress);
+        if (percent !== lastShownProgressPercent) {
+          lastShownProgressPercent = percent;
+          m.redraw();
+        }
+      },
+      onLevel: (level) => setMeterLevel?.(level),
+      onFinalWords: (words) => {
+        if (dictationSpan === null) return;
+        dictationSpan = appendFinal(dictationSpan, words);
+        applyDictationSpan();
+        if (currentChatId !== null) warmUpStoppedChat(currentChatId);
+      },
+      onTentativeWords: (words) => {
+        if (dictationSpan === null) return;
+        dictationSpan = setTentative(dictationSpan, words);
+        applyDictationSpan();
+      },
+      onUtteranceEnd: () => {
+        if (dictationSpan === null) return;
+        dictationSpan = clearTentative(dictationSpan);
+        applyDictationSpan();
+      },
+      onProblem: (problem) => {
+        dictationProblem = problem;
+        m.redraw();
+      },
+    });
+    return dictation;
+  }
+
+  /** The mic and the shortcut: start from idle, stop while listening, nothing in between. */
+  function toggleDictation(): void {
+    if (currentChatId === null || isComposerDisabledNow) return;
+    const running = ensureDictation();
+    if (running.state === "listening") {
+      void running.stop();
+      return;
+    }
+    if (running.state !== "idle") return;
+    dictationProblem = null;
+    openDictationSpan();
+    void running.start();
+  }
+
+  /** Stop and keep the words heard so far; a dictation still starting has none, so it is called off. */
+  function stopDictationKeepingWords(): void {
+    if (dictation === null) return;
+    if (dictation.state === "listening") void dictation.stop();
+    else if (dictation.state === "loading" || dictation.state === "starting") void dictation.cancel();
+  }
+
+  function disposeDictation(): void {
+    dictation?.dispose();
+    dictation = null;
+    dictationState = "idle";
+    dictationProgress = null;
+    dictationProblem = null;
+    dictationSpan = null;
+    isSendPendingAfterDictation = false;
+  }
+
+  function handleDictationShortcut(event: KeyboardEvent): void {
+    if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
+    event.preventDefault();
+    toggleDictation();
+  }
+
+  function handleVisibilityChange(): void {
+    if (document.visibilityState === "hidden") stopDictationKeepingWords();
+  }
+
+  /** The shortcut works anywhere in the chat page, and the page going away takes the dictation with it: hidden
+   *  keeps the words, closed drops the unfinished ones. */
+  function attachDictationToPage(): void {
+    document.addEventListener("keydown", handleDictationShortcut);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", disposeDictation);
+    mountedDictationHide = stopDictationKeepingWords;
+  }
+
+  function detachDictationFromPage(): void {
+    document.removeEventListener("keydown", handleDictationShortcut);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("pagehide", disposeDictation);
+    if (mountedDictationHide === stopDictationKeepingWords) mountedDictationHide = null;
+    disposeDictation();
+  }
 
   function mentionRows(): MentionHandle[] {
     return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
@@ -579,7 +773,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
     localStorage.setItem(messageTextKey(currentChatId), messageText);
     mentionDraft = null;
-    refitComposer();
+    refitAfterEdit();
     focusMessageTextarea();
     m.redraw();
   }
@@ -609,10 +803,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageTextareaElement?.focus();
   }
 
-  function refitComposer(): void {
+  function refitComposer(isTyping = false): void {
     if (messageRowElement !== null && messageTextareaElement !== null) {
-      fitComposer(messageRowElement, messageTextareaElement);
+      fitComposer(messageRowElement, messageTextareaElement, isTyping);
     }
+  }
+
+  function refitAfterEdit(): void {
+    isTypingUntilRedraw = true;
+    refitComposer(true);
   }
 
   function attachMessageRow(rowVnode: m.VnodeDOM): void {
@@ -756,6 +955,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       if (currentChatId !== chatId) {
+        // A dictation belongs to the chat it started in.
+        disposeDictation();
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         const persistedHint = localStorage.getItem(composerHintKey(chatId));
@@ -939,7 +1140,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // the send too, so a chat app that holds the message while the chat switches
         // harness can name it back and the bubble stands down for that rendering.
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         let priorTurnIds: ReadonlySet<string> = new Set();
 
@@ -1098,7 +1299,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const pick = getPendingPick(chatId)?.identity ?? null;
         setSwitchSending(chatId, true);
         const messageId = mintMessageId();
-        const outgoingId = addOutgoing(chatId, sentText, messageId);
+        const outgoingId = addOutgoing(chatId, finalText, messageId);
         m.redraw();
         try {
           await whenChatRegistered(chatId);
@@ -1210,6 +1411,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (chatId && isSwitchSending(chatId)) {
           return Promise.resolve();
         }
+        if (dictation !== null && dictation.state !== "idle") {
+          // One action sends what was said: the words are finished first, and the send follows (spec D8).
+          isSendPendingAfterDictation = true;
+          stopDictationKeepingWords();
+          m.redraw();
+          return Promise.resolve();
+        }
         if (switchTarget !== null) {
           return chatId && canSend ? handleSwitchAndSend() : Promise.resolve();
         }
@@ -1217,6 +1425,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
+        if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
+          event.preventDefault();
+          void dictation.cancel();
+          return;
+        }
         if (handleMentionKeydown(event)) {
           event.preventDefault();
           m.redraw();
@@ -1398,7 +1612,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
         const messageId = recovery.messageId;
-        const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
+        const outgoingId = addOutgoing(recovery.chatId, recovery.sentText, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {
           refuseSendToFailedChat(recovery.chatId);
@@ -1600,6 +1814,29 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
+      /** What dictation has to say, over the composer: Retry runs held words again, or starts dictation again. */
+      function renderDictationNotice(problem: DictationProblem): m.Children {
+        return dictationNotice(problem, {
+          onRetry: () => {
+            if (dictation?.isHeld) {
+              dictation.retryHeld();
+            } else {
+              dictationProblem = null;
+              toggleDictation();
+            }
+            m.redraw();
+          },
+          onDiscard: () => {
+            dictation?.discardHeld();
+            m.redraw();
+          },
+          onDismiss: () => {
+            dictationProblem = null;
+            m.redraw();
+          },
+        });
+      }
+
       function renderDeclinedCommandNotice(declined: { title: string; body: string }): m.Children {
         return m(declinedCommandNotice, {
           title: declined.title,
@@ -1698,7 +1935,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         areAccountsLoaded() &&
         accountForFirstSend(awaitingFirstSend.account_id) === null;
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
+      isComposerDisabledNow = isComposerDisabled;
       const canSendNow = canSend && !isComposerDisabled;
+      // The box is read-only while dictation owns it, from the press until the last words land.
+      const isDictating = dictationState !== "idle";
+      // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
+      if (isSendPendingAfterDictation && !isDictating) {
+        isSendPendingAfterDictation = false;
+        queueMicrotask(() => void handleSubmit());
+      }
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
         : isBlockedByNoProvider && chatId !== null
@@ -1729,215 +1974,244 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ? "Interrupt agent and bring queued messages to draft area"
             : "Interrupt agent";
 
-      return m("div", { class: "message-input mx-auto w-full max-w-(--width-message-column)" }, [
-        interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
-        declinedSend !== null ? renderDeclinedCommandNotice(declinedSend) : null,
-        actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-        switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
-        blockingNotice,
-        m("input", {
-          type: "file",
-          multiple: true,
-          class: "message-input-file-input hidden",
-          oncreate: (inputVnode: m.VnodeDOM) => {
-            fileInputElement = inputVnode.dom as HTMLInputElement;
-          },
-          onremove: () => {
-            fileInputElement = null;
-          },
-          onchange: (event: Event) => {
-            const input = event.target as HTMLInputElement;
-            uploadFilesToComposer(chatId, input.files);
-            input.value = "";
-          },
-        }),
-        composeRow(
-          vnode.attrs.leading,
-          // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
-          [
-            mentionPopover({
-              rows: mentionRows(),
-              selectedIndex: mentionDraft?.index ?? 0,
-              onPick: pickMention,
-              onHover: (index) => {
-                if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
-              },
-            }),
-            m(
-              "div",
-              {
-                class: MESSAGE_ROW_CLASS,
-                "data-attachments": attachments.length > 0 ? "" : undefined,
-                oncreate: attachMessageRow,
-                onremove: detachMessageRow,
-              },
-              [
-                m("textarea", {
-                  class:
-                    "message-input-textbox col-start-2 row-start-1 w-full resize-none border-none bg-transparent " +
-                    "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
-                    "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
-                    "disabled:cursor-not-allowed disabled:opacity-60",
-                  // A switch off a room holds the message like any switch, so its wording comes first.
-                  placeholder:
-                    handoff !== null
-                      ? handoffComposerPlaceholder(handoff)
-                      : composerHint !== null
-                        ? composerHint
-                        : isRoomChat(chatId)
-                          ? "Message (tag @agent to ask the agent)"
-                          : isAgentWorking
-                            ? "Type to queue more messages..."
-                            : "Type a message...",
-                  rows: 1,
-                  disabled: isComposerDisabled,
-                  value: messageText,
-                  oncreate: (textareaVnode: m.VnodeDOM) => {
-                    messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                    mountedComposerTextarea = messageTextareaElement;
-                    wasComposerDisabled = isComposerDisabled;
-                    refitComposer();
-                    focusMessageTextarea();
-                  },
-                  onupdate: (textareaVnode: m.VnodeDOM) => {
-                    messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                    mountedComposerTextarea = messageTextareaElement;
-                    refitComposer();
-                    if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
-                    wasComposerDisabled = isComposerDisabled;
-                  },
-                  onremove: () => {
-                    if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
-                    messageTextareaElement = null;
-                  },
-                  oninput: (event: Event) => {
-                    const textarea = event.target as HTMLTextAreaElement;
-                    messageText = textarea.value;
-                    localStorage.setItem(messageTextKey(chatId), messageText);
-                    updateMentionDraft(textarea);
-                    refitComposer();
-                    if (messageText.trim() !== "") warmUpStoppedChat(chatId);
-                  },
-                  onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
-                  onblur: () => {
-                    mentionDraft = null;
-                  },
-                  onkeydown: handleKeydown,
-                  onpaste: handlePaste,
-                }),
-                m(
-                  Button,
-                  {
-                    variant: "ghost",
-                    icon: true,
-                    sm: true,
-                    extra: ATTACH_BUTTON_CLASS,
-                    ...hoverTooltipAttrs("Attach files", "above"),
-                    "aria-label": "Attach files",
+      const isDictationShown = isDictationOffered();
+      return m(
+        "div",
+        {
+          class: "message-input mx-auto w-full max-w-(--width-message-column)",
+          oncreate: isDictationShown ? attachDictationToPage : undefined,
+          onremove: isDictationShown ? detachDictationFromPage : undefined,
+        },
+        [
+          interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
+          declinedSend !== null ? renderDeclinedCommandNotice(declinedSend) : null,
+          actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
+          dictationProblem !== null ? renderDictationNotice(dictationProblem) : null,
+          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
+          blockingNotice,
+          m("input", {
+            type: "file",
+            multiple: true,
+            class: "message-input-file-input hidden",
+            oncreate: (inputVnode: m.VnodeDOM) => {
+              fileInputElement = inputVnode.dom as HTMLInputElement;
+            },
+            onremove: () => {
+              fileInputElement = null;
+            },
+            onchange: (event: Event) => {
+              const input = event.target as HTMLInputElement;
+              uploadFilesToComposer(chatId, input.files);
+              input.value = "";
+            },
+          }),
+          composeRow(
+            vnode.attrs.leading,
+            // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
+            [
+              mentionPopover({
+                rows: mentionRows(),
+                selectedIndex: mentionDraft?.index ?? 0,
+                onPick: pickMention,
+                onHover: (index) => {
+                  if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
+                },
+              }),
+              m(
+                "div",
+                {
+                  class: MESSAGE_ROW_CLASS,
+                  "data-attachments": attachments.length > 0 ? "" : undefined,
+                  oncreate: attachMessageRow,
+                  onremove: detachMessageRow,
+                },
+                [
+                  m("textarea", {
+                    class:
+                      "message-input-textbox col-start-2 row-start-1 w-full resize-none border-none bg-transparent " +
+                      "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
+                      "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
+                      "disabled:cursor-not-allowed disabled:opacity-60",
+                    // A switch off a room holds the message like any switch, so its wording comes first.
+                    placeholder:
+                      handoff !== null
+                        ? handoffComposerPlaceholder(handoff)
+                        : composerHint !== null
+                          ? composerHint
+                          : isRoomChat(chatId)
+                            ? "Message (tag @agent to ask the agent)"
+                            : isAgentWorking
+                              ? "Type to queue more messages..."
+                              : "Type a message...",
+                    rows: 1,
                     disabled: isComposerDisabled,
-                    onclick: openFilePicker,
-                  },
-                  m.trust(icon("attach", { size: 16, strokeWidth: 1.5 })),
-                ),
-                attachments.length > 0
-                  ? m(
-                      "div",
-                      { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
-                      m(AttachmentStrip, {
-                        children: attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
-                      }),
-                    )
-                  : null,
-                m("div", { class: TOOLBAR_CLASS }, [
-                  isCancelSwitchVisible
+                    readonly: isDictating,
+                    value: messageText,
+                    oncreate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      mountedComposerTextarea = messageTextareaElement;
+                      wasComposerDisabled = isComposerDisabled;
+                      refitComposer();
+                      focusMessageTextarea();
+                    },
+                    onupdate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      mountedComposerTextarea = messageTextareaElement;
+                      refitComposer(isTypingUntilRedraw);
+                      isTypingUntilRedraw = false;
+                      if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
+                      wasComposerDisabled = isComposerDisabled;
+                    },
+                    onremove: () => {
+                      if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
+                      messageTextareaElement = null;
+                    },
+                    oninput: (event: Event) => {
+                      const textarea = event.target as HTMLTextAreaElement;
+                      messageText = textarea.value;
+                      localStorage.setItem(messageTextKey(chatId), messageText);
+                      updateMentionDraft(textarea);
+                      refitAfterEdit();
+                      if (messageText.trim() !== "") warmUpStoppedChat(chatId);
+                    },
+                    onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
+                    onblur: () => {
+                      mentionDraft = null;
+                    },
+                    onkeydown: handleKeydown,
+                    onpaste: handlePaste,
+                  }),
+                  m(
+                    Button,
+                    {
+                      variant: "ghost",
+                      icon: true,
+                      sm: true,
+                      extra: ATTACH_BUTTON_CLASS,
+                      ...hoverTooltipAttrs("Attach files", "above"),
+                      "aria-label": "Attach files",
+                      disabled: isComposerDisabled,
+                      onclick: openFilePicker,
+                    },
+                    m.trust(icon("attach", { size: 16, strokeWidth: 1.5 })),
+                  ),
+                  attachments.length > 0
                     ? m(
-                        Button,
-                        {
-                          variant: "secondary",
-                          sm: true,
-                          extra: "message-input-cancel-switch-button shrink-0",
-                          readonly: isCancelSwitchInFlight,
-                          ...hoverTooltipAttrs(
-                            "Keep this chat on its current agent; your message comes back here",
-                            "above",
-                          ),
-                          "aria-label": "Cancel switch",
-                          onclick: () => void handleCancelSwitch(),
-                        },
-                        isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                        "div",
+                        { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
+                        m(AttachmentStrip, {
+                          children: attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
+                        }),
                       )
                     : null,
-                  isStopButtonVisible
-                    ? m(
-                        Button,
-                        {
-                          variant: "stop",
-                          icon: true,
-                          sm: true,
-                          extra: "message-input-stop-button shrink-0",
-                          // The label states what THIS press will do. The button always interrupts;
-                          // it only hands messages back when there are some parked in the harness,
-                          // so promising that unconditionally described a case that usually is not
-                          // the one in front of the user.
-                          ...hoverTooltipAttrs(stopButtonLabel, "above"),
-                          "aria-label": stopButtonLabel,
-                          onclick: handleStopToComposer,
-                        },
-                        m.trust(stopIcon(14)),
-                      )
-                    : null,
-                  // The send button reads "Switch and send" while a pending lane differs from the
-                  // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
-                  // Otherwise it stays in place: the green send button, or with nothing it can send a
-                  // disabled ghost -- the bare arrow, faded.
-                  canSendNow && switchTarget !== null
-                    ? m(
-                        Button,
-                        {
-                          variant: "primary",
-                          sm: true,
-                          extra: "message-input-send-button message-input-send-button--switch shrink-0",
-                          ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
-                          "aria-label": "Switch and send",
-                          onclick: handleSubmit,
-                        },
-                        [
-                          m("span", "Switch and send"),
-                          m(
-                            "span",
-                            { class: "ml-1.5 inline-flex items-center" },
-                            m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
-                          ),
-                        ],
-                      )
-                    : m(
-                        Button,
-                        {
-                          variant: canSendNow ? "primary" : "ghost",
-                          icon: true,
-                          sm: true,
-                          extra: "message-input-send-button shrink-0",
-                          disabled: !canSendNow,
-                          readonly: isSendHeldForSwitch,
-                          ...hoverTooltipAttrs(
-                            !canSendNow
-                              ? null
-                              : isSendHeldForSwitch
-                                ? "Sending is paused until the switch starts"
-                                : "Send message",
-                            "above",
-                          ),
-                          "aria-label": "Send message",
-                          onclick: handleSubmit,
-                        },
-                        m.trust(icon("send", { size: 16, strokeWidth: 2 })),
-                      ),
-                ]),
-              ],
-            ),
-          ],
-        ),
-      ]);
+                  m("div", { class: TOOLBAR_CLASS }, [
+                    isCancelSwitchVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "secondary",
+                            sm: true,
+                            extra: "message-input-cancel-switch-button shrink-0",
+                            readonly: isCancelSwitchInFlight,
+                            ...hoverTooltipAttrs(
+                              "Keep this chat on its current agent; your message comes back here",
+                              "above",
+                            ),
+                            "aria-label": "Cancel switch",
+                            onclick: () => void handleCancelSwitch(),
+                          },
+                          isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                        )
+                      : null,
+                    isStopButtonVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "stop",
+                            icon: true,
+                            sm: true,
+                            extra: "message-input-stop-button shrink-0",
+                            // The label states what THIS press will do. The button always interrupts;
+                            // it only hands messages back when there are some parked in the harness,
+                            // so promising that unconditionally described a case that usually is not
+                            // the one in front of the user.
+                            ...hoverTooltipAttrs(stopButtonLabel, "above"),
+                            "aria-label": stopButtonLabel,
+                            onclick: handleStopToComposer,
+                          },
+                          m.trust(stopIcon(14)),
+                        )
+                      : null,
+                    isDictationShown
+                      ? m(DictationButton, {
+                          state: dictationState,
+                          progress: dictationProgress,
+                          shortcutLabel: dictationShortcutLabel(isAppleKeyboard()),
+                          disabled: isComposerDisabled,
+                          onToggle: toggleDictation,
+                          onMeter: (setLevel) => {
+                            setMeterLevel = setLevel;
+                          },
+                        })
+                      : null,
+                    // The send button reads "Switch and send" while a pending lane differs from the
+                    // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                    // Otherwise it stays in place: the green send button, or with nothing it can send a
+                    // disabled ghost -- the bare arrow, faded.
+                    canSendNow && switchTarget !== null
+                      ? m(
+                          Button,
+                          {
+                            variant: "primary",
+                            sm: true,
+                            extra: "message-input-send-button message-input-send-button--switch shrink-0",
+                            ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
+                            "aria-label": "Switch and send",
+                            onclick: handleSubmit,
+                          },
+                          [
+                            m("span", "Switch and send"),
+                            m(
+                              "span",
+                              { class: "ml-1.5 inline-flex items-center" },
+                              m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
+                            ),
+                          ],
+                        )
+                      : m(
+                          Button,
+                          {
+                            variant: canSendNow ? "primary" : "ghost",
+                            icon: true,
+                            sm: true,
+                            extra: "message-input-send-button shrink-0",
+                            disabled: !canSendNow && !isSendPendingAfterDictation,
+                            // While the dictation's last words are landing, the send waits and says so (spec D8).
+                            readonly: isSendHeldForSwitch || isSendPendingAfterDictation,
+                            ...hoverTooltipAttrs(
+                              isSendPendingAfterDictation
+                                ? "Finishing your words"
+                                : !canSendNow
+                                  ? null
+                                  : isSendHeldForSwitch
+                                    ? "Sending is paused until the switch starts"
+                                    : "Send message",
+                              "above",
+                            ),
+                            "aria-label": "Send message",
+                            onclick: handleSubmit,
+                          },
+                          isSendPendingAfterDictation
+                            ? m.trust(spinnerIcon(16))
+                            : m.trust(icon("send", { size: 16, strokeWidth: 2 })),
+                        ),
+                  ]),
+                ],
+              ),
+            ],
+          ),
+        ],
+      );
     },
   };
 }

@@ -1,0 +1,1 @@
+- A capture whose `npm ls -g` retry cannot run or times out raises `CaptureCommandError`, like every other probe, instead of a raw `FileNotFoundError` or `TimeoutExpired`, so the backup's in-process capture treats it as a failed capture and still takes its snapshot.

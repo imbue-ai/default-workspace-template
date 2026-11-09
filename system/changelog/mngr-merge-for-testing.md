@@ -1,0 +1,3 @@
+Testing branch merging `mngr/avoid-api-key-limits` (the backup store: `provision_backups.py` drops its credential-propagation retry) and `mngr/remote-execution` (the `run-on-users-computer` skill, pointed at from AGENTS.md) so both can be deployed and exercised together with their mngr counterparts (imbue-ai/mngr-internal#2854). mngr is pinned to the public export of that merged mngr branch.
+
+AGENTS.md's pointer at the `run-on-users-computer` skill now says commands run in the workspace by default, and that the skill is for an explicit request to run something on the user's own physical computer.

@@ -567,6 +567,136 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
         expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
+def _assistant_line(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+
+
+def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": output}],
+        },
+    }
+
+
+# A line of intent, a tool call, a background task's report, a finished step, and the closing reply below the timeline.
+_STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-st-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Install the update"},
+    },
+    _assistant_line(
+        "uuid-st-2",
+        "2026-01-01T00:00:01Z",
+        [
+            {"type": "text", "text": "Checks all passed. Installing now."},
+            {"type": "tool_use", "id": "toolu_st1", "name": "Read", "input": {"file_path": "/tmp/project/notes.txt"}},
+        ],
+        "tool_use",
+    ),
+    _tool_result_line("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
+    {
+        "type": "user",
+        "uuid": "uuid-st-3b",
+        "timestamp": "2026-01-01T00:00:02.5Z",
+        "message": {
+            "role": "user",
+            "content": "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
+            "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
+        },
+    },
+    _assistant_line(
+        "uuid-st-4",
+        "2026-01-01T00:00:03Z",
+        [
+            {
+                "type": "tool_use",
+                "id": "toolu_st2",
+                "name": "Bash",
+                "input": {"command": 'tk close ws-step-a1b2 "Installed the update."'},
+            }
+        ],
+        "tool_use",
+    ),
+    _tool_result_line(
+        "uuid-st-5",
+        "2026-01-01T00:00:04Z",
+        "toolu_st2",
+        "Updated ws-step-a1b2 -> closed\n"
+        "tk-step ws-step-a1b2 title: Install the update\n"
+        "tk-step ws-step-a1b2 summary: Installed the update.",
+    ),
+    _assistant_line(
+        "uuid-st-6",
+        "2026-01-01T00:00:05Z",
+        [{"type": "text", "text": "Your workspace is on the new version."}],
+        "end_turn",
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tmp_path: Path, page: Page) -> None:
+    """A stretch of the agent's output sits under one header, beside the agent's face: each message's prose a bubble
+    of its own, and its tool calls, system notices and step timeline on the bubbles' text edge between them, threaded
+    by one line through the chip icons, ticks and bullets that never crosses a bubble."""
+    with _running_e2e_server(tmp_path, session_events=_STEPPED_TURN_SESSION_EVENTS) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        bubbles = chat.locator("[data-machine-bubble]")
+        expect(bubbles).to_have_count(2, timeout=15000)
+        expect(bubbles.nth(0)).to_have_text("Checks all passed. Installing now.")
+        expect(bubbles.nth(1)).to_have_text("Your workspace is on the new version.")
+        expect(chat.locator("[data-machine-header]")).to_have_count(1)
+        expect(chat.locator(".agent-rail-segment")).to_have_count(4)
+
+        face = _box(chat.locator(".machine-face"))
+        first = _box(bubbles.nth(0))
+        assert face["right"] - face["left"] == 24, "the agent's face is not 24px wide"
+        assert abs(face["top"] - first["top"]) <= 1, "the agent's face is not level with its first bubble"
+        assert first["left"] > face["right"], "the agent's bubble starts under its face, not beside it"
+        assert bubbles.nth(0).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "4px"
+        assert bubbles.nth(1).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "18px"
+        for selector in (".tool-chip-group", ".message-notice", ".pv-tl-bullet"):
+            expect(chat.locator(f"[data-machine-bubble] {selector}")).to_have_count(0)
+
+        text_edge = first["left"] + 16
+        marks = (
+            ("the tool call's icon", chat.locator(".tool-chip-icon").first),
+            ("the background task's tick", chat.locator(".message-notice [data-rail-node]").first),
+            ("the step's bullet", chat.locator(".pv-tl-bullet [data-rail-node]").first),
+        )
+        line_x = text_edge + 6.5
+        for name, locator in marks:
+            box = _box(locator)
+            assert abs((box["left"] + box["right"]) / 2 - line_x) <= 1, f"{name} is not on the line"
+        bubble_boxes = [_box(bubbles.nth(i)) for i in range(2)]
+        for i in range(4):
+            segment = _box(chat.locator(".agent-rail-segment").nth(i))
+            assert abs((segment["left"] + segment["right"]) / 2 - line_x) <= 1, "a line segment is off the text edge"
+            for bubble in bubble_boxes:
+                assert segment["bottom"] <= bubble["top"] + 0.5 or segment["top"] >= bubble["bottom"] - 0.5, (
+                    "the line runs through a bubble"
+                )
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Page) -> None:
     """New events written to the session file appear in the UI as they stream in."""
@@ -678,6 +808,31 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_another_persons_queued_message_is_drawn_under_their_name_without_the_prefix(
+    tmp_path: Path, page: Page
+) -> None:
+    """A visitor's message the harness queued (as delivered, prefixed) is drawn on the owner's page as the turn it
+    becomes will be: under their name, beside their monogram, and never with the prefix."""
+    delivered = "[from: Bob] actually also update the changelog"
+    events = [*_QUEUED_SESSION_EVENTS[:-1], {**_QUEUED_SESSION_EVENTS[-1], "content": delivered}]
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        server.chat_state.authors.record(
+            ChatId(FIXTURE_AGENT_ID),
+            new_author_annotation("msg-bob-1", ParticipantKey("user:user-bob-4471"), "Bob", delivered),
+        )
+        _open_fixture_chat(page, server)
+
+        queued = _chat(page).locator(".queued-message", has_text="actually also update the changelog")
+        expect(queued).to_be_visible(timeout=15000)
+        expect(queued).to_have_class(re.compile(r"message-other"))
+        # Joined to Bob's annotation: the prefix alone would name a synthetic ``name:Bob``.
+        expect(queued.locator("[data-author]")).to_have_attribute("data-author", "user:user-bob-4471")
+        expect(queued.locator(".message-author")).to_have_text("Bob")
+        expect(queued.locator("[data-participant-picture]")).to_have_text("B")
+        expect(_chat(page).locator(".queued-group")).not_to_contain_text("[from:")
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
     """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
     with _running_e2e_server(tmp_path) as server:
@@ -732,7 +887,8 @@ def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
 
 def _visible_user_messages(page: Page) -> list[str]:
     return _chat_frame(page).evaluate(
-        "() => Array.from(document.querySelectorAll('.message-user')).map((e) => (e.textContent || '').trim())"
+        "() => Array.from(document.querySelectorAll('.message-user .message-user-bubble'))"
+        ".map((e) => (e.textContent || '').trim())"
     )
 
 
@@ -891,6 +1047,73 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
             timeout=_TRIGGER_TIMEOUT_MS
         )
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+
+
+# Record the transcript's distance from its bottom each time its viewport is resized, as it will be painted: the
+# browser calls resize observers after layout and before paint, in the order they were created, so this one reads the
+# viewport after the transcript's own observer has had its turn.
+_START_RESIZE_GAP_RECORDER_JS = """
+() => {
+  const el = document.querySelector('.transcript-scroll');
+  window.__resizeGaps = [];
+  window.__resizeGapObserver = new ResizeObserver(() => {
+    window.__resizeGaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
+  });
+  window.__resizeGapObserver.observe(el);
+}
+"""
+_STOP_RESIZE_GAP_RECORDER_JS = "() => { window.__resizeGapObserver.disconnect(); return window.__resizeGaps; }"
+
+# Whether the draft is scrolled all the way down: the line holding a caret at its end, and the padding under it,
+# in view, once the edit's redraw has run (two animation frames later).
+_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS = """
+async () => {
+  for (let frame = 0; frame < 2; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+  const ta = document.querySelector('.message-input-textbox');
+  return ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 1;
+}
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path: Path, page: Page) -> None:
+    """Each line the draft grows by shortens the transcript above the composer: the transcript is back at its bottom
+    before that frame is painted instead of jumping up a line, and once the draft outgrows the composer the line being
+    typed stays fully in view. A message arriving meanwhile leaves the draft where its reader scrolled it.
+    """
+    events = _make_long_conversation_events(60)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.set_viewport_size({"width": 1000, "height": 720})
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=15000)
+        textarea = chat.locator(".message-input-textbox")
+        textarea.click()
+
+        frame.evaluate(_START_RESIZE_GAP_RECORDER_JS)
+        for line in range(16):
+            # One edit per line, not one key event per character: typing the draft key by key outran the test's
+            # timeout in the workspace image's browser.
+            page.keyboard.insert_text(f"typed line {line} " + "lorem ipsum " * 3 + "\n")
+            assert frame.evaluate(_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS), (
+                f"the line being typed is cut off after line {line}"
+            )
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        resize_gaps = frame.evaluate(_STOP_RESIZE_GAP_RECORDER_JS)
+        assert len(resize_gaps) >= 5, f"the composer grew the transcript's viewport only {len(resize_gaps)} times"
+        assert max(resize_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(resize_gaps)}px"
+        assert frame.evaluate(
+            "() => { const ta = document.querySelector('.message-input-textbox'); "
+            "return ta.scrollHeight > ta.clientHeight; }"
+        ), "the draft never outgrew the composer"
+
+        frame.evaluate("() => { document.querySelector('.message-input-textbox').scrollTop = 40; }")
+        _append_user_turn(server.session_file, "long-u-while-drafting", "arrived-while-drafting")
+        expect(chat.locator(".message-user", has_text="arrived-while-drafting")).to_be_attached(
+            timeout=_TRIGGER_TIMEOUT_MS
+        )
+        assert frame.evaluate("() => document.querySelector('.message-input-textbox').scrollTop") == 40
 
 
 def _make_long_tool_conversation_events(turn_count: int) -> list[dict[str, Any]]:

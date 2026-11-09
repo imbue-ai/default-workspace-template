@@ -49,7 +49,7 @@ from pathlib import Path
 from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
 from app_manifest.registry_location import registry_path
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
 # Where the shared substrate files each instance, and where this script keeps what it
 # adds: the registry copy and the sibling list.
@@ -88,6 +88,7 @@ class InstanceSpec:
     preview_title: str
     inner_path: str
     theming_mode: str | None
+    project: str | None
 
 
 class Instances:
@@ -108,10 +109,12 @@ class Instances:
             preview_title=spec.preview_title,
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
+            project=spec.project,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
             spawner=serve_isolated_instance.Spawner(),
+            venv_linker=serve_isolated_instance.VenvLinker(),
         )
 
     def refresh(self, name: str, repo_root: Path) -> int:
@@ -121,6 +124,7 @@ class Instances:
             runner=serve_isolated_instance.Runner(),
             http=serve_isolated_instance.HttpClient(),
             spawner=serve_isolated_instance.Spawner(),
+            venv_linker=serve_isolated_instance.VenvLinker(),
         )
 
     def down(self, name: str, repo_root: Path) -> int:

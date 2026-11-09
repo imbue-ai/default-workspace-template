@@ -1,5 +1,5 @@
-"""Integration: the launcher as a real process, registering through the real forward_port.py and
-becoming a fake datalib-http."""
+"""Integration: the launcher as a real process, registering through the real app_registration library
+and becoming a fake datalib-http."""
 
 import os
 import subprocess
@@ -24,7 +24,7 @@ from datalib_launcher_testing import (
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _PORT: Final[int] = 18731
 _PUBLISHED_TOKEN: Final[str] = "published-token.0123_abc~"
-# forward_port.py's override for where the registry lives.
+# The registration's override for where the registry lives.
 _ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 _RUN_TIMEOUT_SECONDS: Final[float] = 60.0
 # A host without it (macOS) cannot band a process, and the launcher only warns there.
@@ -52,8 +52,6 @@ def _run_launcher(
             str(datalib_http_path),
             "--state-directory",
             str(tmp_path / "state"),
-            "--forward-port",
-            str(_REPO_ROOT / launcher.FORWARD_PORT_PATH),
         ],
         env={
             **os.environ,
@@ -99,7 +97,7 @@ def test_the_launcher_registers_the_token_on_the_launch_path_and_becomes_datalib
     assert row["name"] == "datalib"
     assert row["url"] == f"http://localhost:{_PORT}"
     assert row["stop_when_no_windows"] is False
-    assert row["default_shortcut"] == {"launch": "ui", "mode": "focus"}
+    assert row["default_shortcuts"] == [{"launch": "ui", "mode": "focus"}]
     # The window opens at the launch path with its presets as the query: /?token=<token>.
     assert row["launch_paths"] == [
         {
