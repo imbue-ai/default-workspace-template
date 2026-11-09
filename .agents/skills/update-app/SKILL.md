@@ -88,11 +88,52 @@ the request is -- it changes what you do *before* touching code:
   confirm and ship it on its own rather than bundling it with unrelated
   changes.
 
+  When building it will take long stretches of reasoning, hand the build to a
+  background worker once the shape is settled (see "Hand large work to a
+  background worker" below).
+
 When in doubt about which bucket you're in, treat a change that alters what
 the user *sees or perceives* as larger-scope (confirm the shape first) and a
 change that only alters behavior behind an unchanged surface as contained.
 Either way, the mechanics of surfacing the change to the user are the same
-live loop:
+live loop.
+
+## Hand large work to a background worker
+
+Keep the main chat free for the user. Work that needs long stretches of
+heavy reasoning goes to a background worker through the `launch-task` skill:
+a new feature that spans several files, a redesign of a page or view, a change
+applied across many records or many parts of the app, or anything else you
+expect to take more than a few minutes of building. You stay available to
+answer the user's next messages, make small changes yourself, and bring the
+worker's result in when it lands. Small, contained changes stay with you,
+because handing them off takes longer than doing them.
+
+To hand work off:
+
+1. If the change needs its shape confirmed (a larger-scope change above),
+   settle the shape with the user first, then hand off the build.
+2. Commit your pending edits and launch the worker as `launch-task` describes.
+   The brief names the app, the request in the user's words, the files and
+   decisions you already know about, and what done looks like. It asks the
+   worker to build the change to a usable state, verify it against its own
+   instance (never the live app), commit, and send a milestone report each
+   time a usable part is committed, so each part can reach the user early. The
+   worker does not run the harden pass: that still happens at turn-end, after
+   the user's feedback, as described below.
+3. Tell the user in one line that the change is being built and that they can
+   keep sending requests.
+4. While the worker runs, keep handling new messages. Do a small request on a
+   part the worker is not changing yourself, through the live loop below.
+   Forward a request that changes or adds to the worker's part to the worker
+   with `create_worker.py reply`, and leave those files to it, so two agents
+   never edit the same code.
+5. When a milestone or the final report arrives, merge it as
+   `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
+   through steps 2 and 3 of the live loop, and tell the user what is now there.
+
+The worker edits its own worktree, so it needs no service lease. Take yours as
+usual (next section) before you merge its work into the live app.
 
 ## One editor at a time: the service lease
 
