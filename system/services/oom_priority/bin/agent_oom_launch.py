@@ -36,7 +36,7 @@ TUI and its ``app-server`` daemon, so a codex agent registers two pids under one
 agent id. Both get the correct band at launch, which is the protection that matters,
 and either being shed now produces a ledger record where before there was none.
 
-The prioritizer's engagement re-tag reaches both (``lookup_pids_by_agent_id``).
+The prioritizer's engagement re-tag reaches both (``live_pids_by_agent_id``).
 
 One known limit, acceptable because it is strictly better than the unbanded
 status quo: shedding is asymmetric and only PROBABLY lands the right way. Killing
@@ -72,6 +72,7 @@ import shutil
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- its only import beyond the standard library is the stdlib-only `oom_priority`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import bands

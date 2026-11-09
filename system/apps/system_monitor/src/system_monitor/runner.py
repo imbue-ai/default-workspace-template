@@ -35,6 +35,7 @@ from app_schema.api_schema import (
     SchemalessRoute,
     register_api_schema_route,
 )
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import model_response, parse_request_body
 from flask import Flask, Response, abort, request, send_file
 from host_backup.config import get_events_dir
@@ -136,6 +137,7 @@ ROUTE_TABLE: RouteTable = {
 }
 
 app = Flask("system_monitor", static_folder=None)
+install_request_guard(app, exempt_rules=frozenset())
 # The app describes its own API: an OpenAPI document of every route below, at the manifest's api_schema_path.
 register_api_schema_route(
     app,

@@ -45,6 +45,14 @@ def test_the_finished_reply_is_no_draft_once_the_transcript_holds_it() -> None:
     assert draft.read(_fixture("pane_reply_finished.txt"), landed) == ""
 
 
+def test_a_landed_reply_above_its_finished_tool_calls_is_no_draft() -> None:
+    """A real capture (Claude Code 2.1.316, 120 columns): the reply, the gray "Ran 3 shell commands"
+    its tool calls collapsed into, a subagent running, and the background-agents list below."""
+    draft = ClaudeReplyDraft()
+
+    assert draft.read(_fixture("pane_landed_reply_above_ran_tools.txt"), ["Looking at what is using the disk."]) == ""
+
+
 def test_a_reset_draft_forgets_the_reply_it_stitched() -> None:
     draft = ClaudeReplyDraft()
     draft.read(_fixture("pane_reply_streaming.txt"), [])

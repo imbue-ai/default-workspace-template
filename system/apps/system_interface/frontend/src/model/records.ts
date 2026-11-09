@@ -207,9 +207,13 @@ export interface AppRecord {
   readonly critical: boolean;
   /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
   readonly stop_when_no_windows: boolean;
+  /** Whether the app's pages listen to the microphone, which the shell then delegates to their frames. */
+  readonly uses_microphone: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
-  readonly default_shortcut: DefaultShortcut | null;
+  /** The shortcuts a new desktop is seeded with, as the app declares them; none for an app that leaves the choice to
+   *  the shell. */
+  readonly default_shortcuts: readonly DefaultShortcut[];
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
   /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
@@ -342,6 +346,8 @@ export interface RosterParticipant {
   readonly last_seen: string | null;
   /** When their newest page last saw keyboard or pointer input (ISO 8601), when it reports it. */
   readonly last_input_at: string | null;
+  /** Whether a domain grant admits them rather than a grant naming them (the multiplayer spec, section 4.2). */
+  readonly is_admitted_by_domain: boolean;
 }
 
 /** What a chat is doing, as the chat app reports it for the agent's card (the multiplayer spec, section 6.4). */
@@ -592,8 +598,7 @@ function parseAppParams(raw: unknown): AppParams | null {
   };
 }
 
-function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
-  if (raw === null || raw === undefined) return null;
+function parseDefaultShortcut(raw: unknown): DefaultShortcut {
   const record = asObject(raw, "default_shortcut");
   return {
     launch: asString(record.launch, "default_shortcut.launch"),
@@ -635,8 +640,9 @@ export function parseAppRecord(raw: unknown): AppRecord {
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,
+    uses_microphone: record.uses_microphone === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
-    default_shortcut: parseDefaultShortcut(record.default_shortcut),
+    default_shortcuts: asArray(record.default_shortcuts ?? [], "app.default_shortcuts").map(parseDefaultShortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
     pin: parsePin(record.pin),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
@@ -824,6 +830,7 @@ function parseRosterParticipant(raw: unknown): RosterParticipant {
     is_connected: asBoolean(record.is_connected, "participant.is_connected"),
     last_seen: asOptionalString(record.last_seen, "participant.last_seen"),
     last_input_at: asOptionalString(record.last_input_at, "participant.last_input_at"),
+    is_admitted_by_domain: asBoolean(record.is_admitted_by_domain, "participant.is_admitted_by_domain"),
   };
 }
 

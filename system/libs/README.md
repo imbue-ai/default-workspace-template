@@ -8,6 +8,8 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_registration/` - Writes an app's row in the app registry: what
+  `system/scripts/forward_port.py` runs, stdlib-only.
 - `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
   API, built from its Flask routes and served at the path its manifest names
   in `api_schema_path`, and the assertion an app's tests make about it.
@@ -18,6 +20,10 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
+- `workspace_voice/` - Dictation for the frontends (source only, a member of
+  the same npm workspace): on-device speech recognition behind one engine
+  interface, the speech detector, the streaming turn, the inference lane, and
+  the engine worker every chat page shares.
 - `latchkey_access/` - The latchkey gateway as a workspace program reaches it: the
   environment and header names of the agent-to-gateway contract, and `GatewayAccess`,
   which reads the environment and builds a request's URL and headers.
@@ -29,6 +35,10 @@ README for details.
   the apps and services.
 - `chat_background_tasks/` - The marker files recording the background tasks
   each chat waits on, and their readers.
+- `disk_headroom/` - How much the workspace can still write to its disk: the
+  filesystem's free space, or the room left under a cloud machine's disk
+  quota when that runs out first, and the agent-facing
+  `uv run --no-sync disk-headroom` command that reports it.
 - `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against

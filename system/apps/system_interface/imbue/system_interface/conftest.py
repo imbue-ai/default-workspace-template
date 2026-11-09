@@ -341,7 +341,7 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
                 PIPELINE_SEEDED_APP_NAME,
                 seeded.http_url,
                 is_critical=True,
-                default_shortcut=("new", "new"),
+                default_shortcuts=[("new", "new")],
                 launch_paths=(("new", "New Chat", "/new"), ("subagent", "Open subagent", "/subagent")),
             ),
             registry_row_toml(PIPELINE_STUB_APP_NAME, stub.http_url),

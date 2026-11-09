@@ -7,8 +7,8 @@ its package, kept where something outside the release calls a fixed path or the 
 no venv and imports its own package. An entry's tier is its package's -- an entry into a bare
 package runs under the system ``python3`` with no venv (stdlib only), any other runs from the
 root venv (``uv run --no-sync``) -- except for the bare modules of venv packages listed below,
-a bare skill's single script, and a few standalone stdlib scripts outside the scripts
-directories. See .agents/shared/references/running-python.md.
+a bare skill's single script, a few standalone stdlib scripts, and the stubs of stdlib-only
+libraries. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
@@ -52,12 +52,6 @@ BARE_MODULES = (
     / "shared"
     / "scripts"
     / "agents_shared"
-    / "serve_isolated_instance.py",
-    REPO_ROOT
-    / ".agents"
-    / "shared"
-    / "scripts"
-    / "agents_shared"
     / "resolve_template_base.py",
     REPO_ROOT
     / ".agents"
@@ -75,15 +69,17 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src",
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
+    REPO_ROOT / "system" / "libs" / "app_registration" / "src",
 )
 
-# Bare scripts that are not package stubs: oom_priority's own entry scripts, a
-# stdlib-only maintenance script, and the Datalib app's launcher (the app is not a
-# workspace member, and the launcher is its supervisord program).
+# Bare scripts outside the bare packages (standalone scripts, and stubs of stdlib-only
+# libraries): the system python3 runs each by its path, and it imports only the standard
+# library and the stdlib-only libraries.
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
+    SYSTEM_SCRIPTS / "forward_port.py",
 )
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its

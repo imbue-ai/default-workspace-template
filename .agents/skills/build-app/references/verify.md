@@ -26,6 +26,12 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --marker 
 uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
 
+While the app is still a mock, it is shown only inside the mock frame, so the call
+drops `--open` / `--refresh` and ends with `&& uv run --no-sync
+.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name> --note
+"<what is not real yet>" --open` the first time and `mock_frame.py refresh --app
+<name>` after that; see SKILL.md Step 1.
+
 `--restart` asks supervisord to stop the program and start it again *without*
 waiting (the `supervisorctl restart` command would block for the program's
 `startsecs=30`), then polls the port, which answers within a second; while it

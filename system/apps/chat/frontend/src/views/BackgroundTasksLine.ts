@@ -11,6 +11,7 @@
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { BackgroundTask } from "../models/Chats";
+import { railNodeAttrs } from "./agent-rail";
 
 const TICK_MS = 1_000;
 
@@ -71,7 +72,7 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
           {
             type: "button",
             class:
-              "background-tasks-line__summary flex w-full items-center gap-2 px-1 text-left " +
+              "background-tasks-line__summary flex w-full items-center gap-1.5 pr-1 text-left " +
               "text-(length:--font-size-helper) text-secondary hover:text-primary",
             "aria-expanded": String(isExpanded),
             onclick: () => {
@@ -79,7 +80,12 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
             },
           },
           [
-            m("span", { class: "background-tasks-line__ring chat-rail-dot--dashed flex-none rounded-full" }),
+            // The ring in an icon's box, so it sits on the stretch's line where a chip's icon does.
+            m(
+              "span",
+              { class: "flex size-[13px] flex-none items-center justify-center", ...railNodeAttrs("point") },
+              m("span", { class: "background-tasks-line__ring chat-rail-dot--dashed flex-none rounded-full" }),
+            ),
             m("span", { class: "background-tasks-line__label truncate" }, waitSummary(tasks.length)),
             oldestElapsed === null
               ? null
@@ -94,7 +100,7 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
         isExpanded
           ? m(
               "ul",
-              { class: "background-tasks-line__tasks mt-1 flex flex-col gap-0.5 pl-6" },
+              { class: "background-tasks-line__tasks mt-1 flex flex-col gap-0.5 pl-[19px]" },
               tasks.map((task) => {
                 const elapsed = elapsedSince(startedAtMs(task), now);
                 return m(

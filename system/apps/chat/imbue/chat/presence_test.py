@@ -79,7 +79,9 @@ def test_a_report_that_arrives_after_a_later_one_from_its_page_is_dropped() -> N
     tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
 
     assert tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, is_focused=True, sequence=1)) == (
-        PresenceTransition(is_newly_visible=False, is_newly_watched=False)
+        PresenceTransition(
+            is_newly_visible=False, is_newly_watched=False, is_open_changed=False, is_visible_changed=False
+        )
     )
     assert tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == ["page-1"]
@@ -217,10 +219,10 @@ def test_a_report_says_when_it_makes_the_chat_watched_and_only_then() -> None:
     tracker, _ = _tracker()
 
     assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE)) == PresenceTransition(
-        is_newly_visible=True, is_newly_watched=False
+        is_newly_visible=True, is_newly_watched=False, is_open_changed=True, is_visible_changed=True
     )
     assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)) == PresenceTransition(
-        is_newly_visible=False, is_newly_watched=True
+        is_newly_visible=False, is_newly_watched=True, is_open_changed=False, is_visible_changed=False
     )
     # The heartbeat of a page already watching, and a second page joining it, change nothing.
     assert not tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
@@ -237,3 +239,29 @@ def test_watching_again_after_every_watcher_left_is_a_new_transition() -> None:
     # A watcher whose heartbeats stopped long enough to go stale is gone too: its next report is a return.
     clock.now += WATCHING_STALE_SECONDS + 1.0
     assert tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True)).is_newly_watched
+
+
+def _changes(transition: PresenceTransition) -> tuple[bool, bool]:
+    return transition.is_open_changed, transition.is_visible_changed
+
+
+def test_a_report_says_when_it_changes_whether_the_chat_is_open_or_visible() -> None:
+    tracker, clock = _tracker()
+
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (True, False)
+    # The heartbeat of a page in the same state changes neither answer.
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE))) == (False, True)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))) == (False, False)
+    # A second page showing the chat adds nothing; the first putting it away changes nothing either.
+    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.VISIBLE))) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN))) == (False, False)
+    assert _changes(tracker.record(_CHAT, _report("page-2", PresenceState.CLOSED))) == (False, True)
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))) == (True, False)
+    # A report dropped as stale changes nothing, whatever it says.
+    assert _changes(tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, sequence=1))) == (False, False)
+
+    # A heartbeat that revives an expired report reopens the chat, so it counts as a change.
+    tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE))
+    clock.now += PRESENCE_EXPIRY_SECONDS + 1.0
+    assert _changes(tracker.record(_CHAT, _report("page-3", PresenceState.VISIBLE))) == (True, True)

@@ -1,9 +1,14 @@
 import sys
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
 from share_gateway.runner import POLL_INTERVAL_SECONDS
+from share_gateway.runner import STATUS_HEARTBEAT_INTERVAL
+from share_gateway.runner import _is_status_heartbeat_due
 from share_gateway.runner import _try_setup_inotify
 from share_gateway.runner import _wait_for_change_inotify
 
@@ -14,9 +19,7 @@ def test_share_env_write_wakes_the_watcher_before_the_poll_interval(
 ) -> None:
     share_env = tmp_path / "data" / ".secrets" / "share.env"
     inotify = _try_setup_inotify([share_env])
-    assert inotify is not None, (
-        "inotify_simple is a declared dependency, so the watch must be set up on Linux"
-    )
+    assert inotify is not None, "inotify_simple is a declared dependency, so the watch must be set up on Linux"
 
     share_env.write_text("RELAY_TOKEN=x\n")
 
@@ -31,3 +34,11 @@ def test_watcher_times_out_quietly_when_nothing_changes(tmp_path: Path) -> None:
     assert inotify is not None
 
     assert _wait_for_change_inotify(inotify, timeout_seconds=0.1) is False
+
+
+def test_the_up_status_is_restamped_once_a_minute_and_well_inside_the_desktops_staleness_limit() -> None:
+    last = datetime(2026, 11, 9, 0, 0, tzinfo=timezone.utc)
+    assert _is_status_heartbeat_due(last, last + timedelta(seconds=59)) is False
+    assert _is_status_heartbeat_due(last, last + STATUS_HEARTBEAT_INTERVAL) is True
+    # Well inside the staleness limit the desktop applies to an "up".
+    assert STATUS_HEARTBEAT_INTERVAL <= timedelta(minutes=5) / 4

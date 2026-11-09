@@ -210,6 +210,7 @@ class ChatAppState(MutableModel):
                 if any(is_workspace_agent_turn(event) for event in events):
                     self.agent_manager.clear_chat_awaiting(chat_id)
                 self.bubble_agent_turns(chat_id, agent_id, events)
+                self.agent_manager.report_sign_in_failures(chat_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
