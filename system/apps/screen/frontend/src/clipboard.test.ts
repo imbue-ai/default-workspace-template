@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ClipboardBridge, nekoRouteWithToken } from "./clipboard";
+import { ClipboardBridge, nekoRouteWithToken, remoteHtmlOf } from "./clipboard";
 import type { ClipboardTransport, LocalClipboard } from "./clipboard";
 
 interface Harness {
@@ -9,8 +9,10 @@ interface Harness {
   log: string[];
 }
 
-/** ``isRemoteRefusing`` makes every write to the Screen fail, as the service's image route does for a session that
- *  does not hold control. */
+/** The fake Screen models neko over ``xclip``: a text write owns the X clipboard with one target, and an xclip
+ *  owner answers every target with its payload, so neko reads the write back with the HTML equal to the text. A
+ *  copy made by a program on the Screen is staged by setting ``remote`` directly. ``isRemoteRefusing`` makes every
+ *  write to the Screen fail, as the service's image route does for a session that does not hold control. */
 function build(isRemoteRefusing = false): Harness {
   const remote = { text: "", html: "", image: null as Blob | null };
   const local = { text: "", html: "", image: null as Blob | null, isFocused: true };
@@ -22,10 +24,10 @@ function build(isRemoteRefusing = false): Harness {
     async readRemoteImage() {
       return remote.image;
     },
-    async writeRemoteText(text, html) {
+    async writeRemoteText(text) {
       if (isRemoteRefusing) return false;
       remote.text = text;
-      remote.html = html;
+      remote.html = text;
       log.push(`remote-text:${text}`);
       return true;
     },
@@ -58,6 +60,14 @@ function textPaste(text: string): DataTransfer {
   return { items: [], getData: (type: string) => (type === "text/plain" ? text : "") } as unknown as DataTransfer;
 }
 
+/** A paste event's data carrying plain text and an HTML flavor, as a copy from an editor or a terminal does. */
+function richPaste(text: string, html: string): DataTransfer {
+  return {
+    items: [],
+    getData: (type: string) => (type === "text/plain" ? text : type === "text/html" ? html : ""),
+  } as unknown as DataTransfer;
+}
+
 describe("ClipboardBridge", () => {
   it("brings remote text and html to the local clipboard on neko's update", async () => {
     const { bridge, remote, local } = build();
@@ -66,6 +76,15 @@ describe("ClipboardBridge", () => {
     await bridge.onRemoteTextUpdated();
     expect(local.text).toBe("hello");
     expect(local.html).toBe("<b>hello</b>");
+  });
+
+  it("writes no html locally when neko reports the plain text as the html", async () => {
+    const { bridge, remote, local } = build();
+    remote.text = "ls -la";
+    remote.html = "ls -la";
+    await bridge.onRemoteTextUpdated();
+    expect(local.text).toBe("ls -la");
+    expect(local.html).toBe("");
   });
 
   it("fetches and writes an image when the service says one is there", async () => {
@@ -83,22 +102,28 @@ describe("ClipboardBridge", () => {
     expect(log).toEqual([]);
   });
 
-  it("sends only the plain text of a rich paste, and the html alone when there is no text", async () => {
-    const { bridge, remote } = build();
-    const rich = {
-      items: [],
-      getData: (type: string) => (type === "text/plain" ? "ls -la" : "<pre>ls -la</pre>"),
-    } as unknown as DataTransfer;
-    expect(await bridge.onPaste(rich)).toBe(true);
+  it("sends only the plain text of a rich paste", async () => {
+    const { bridge, remote, log } = build();
+    expect(await bridge.onPaste(richPaste("ls -la", "<pre>ls -la</pre>"))).toBe(true);
     expect(remote.text).toBe("ls -la");
-    expect(remote.html).toBe("");
-    const htmlOnly = {
-      items: [],
-      getData: (type: string) => (type === "text/html" ? "<img src='x'>" : ""),
-    } as unknown as DataTransfer;
-    expect(await bridge.onPaste(htmlOnly)).toBe(true);
-    expect(remote.text).toBe("");
-    expect(remote.html).toBe("<img src='x'>");
+    expect(log).toEqual(["remote-text:ls -la"]);
+  });
+
+  it("reports a paste that carries no text, and sends nothing", async () => {
+    const { bridge, log } = build();
+    expect(await bridge.onPaste(richPaste("", "<img src='x'>"))).toBe(false);
+    expect(log).toEqual(["status:There is no text to paste on the Screen"]);
+  });
+
+  it("treats neko's announcement of the viewer's own write as an echo, not as a copy from the Screen", async () => {
+    const { bridge, local, log } = build();
+    local.text = "python";
+    local.html = "<pre>python</pre>";
+    expect(await bridge.onPaste(richPaste("python", "<pre>python</pre>"))).toBe(true);
+    await bridge.onRemoteTextUpdated();
+    await bridge.onRemoteTextUpdated();
+    expect(local.html).toBe("<pre>python</pre>");
+    expect(log).toEqual(["remote-text:python"]);
   });
 
   it("sends a pasted text to the Screen, once per content", async () => {
@@ -110,13 +135,27 @@ describe("ClipboardBridge", () => {
     expect(log.filter((entry) => entry.startsWith("remote-text"))).toHaveLength(1);
   });
 
-  it("does not echo what it just received back to the Screen", async () => {
+  it("sends a text again once the Screen's clipboard has moved on", async () => {
+    const { bridge, remote, log } = build();
+    expect(await bridge.onPaste(textPaste("first"))).toBe(true);
+    remote.text = "copied remotely";
+    remote.html = "<b>copied remotely</b>";
+    await bridge.onRemoteTextUpdated();
+    expect(await bridge.onPaste(textPaste("first"))).toBe(true);
+    expect(log.filter((entry) => entry.startsWith("remote-text"))).toEqual(["remote-text:first", "remote-text:first"]);
+  });
+
+  it("does not echo what it just received back to the Screen, and leaves the Screen's rich copy in place", async () => {
     const { bridge, remote, local, log } = build();
     remote.text = "copied remotely";
+    remote.html = "<b>copied remotely</b>";
     await bridge.onRemoteTextUpdated();
     expect(local.text).toBe("copied remotely");
-    expect(await bridge.onPaste(textPaste("copied remotely"))).toBe(true);
+    expect(await bridge.onPaste(richPaste("copied remotely", "<meta charset='utf-8'><b>copied remotely</b>"))).toBe(
+      true,
+    );
     expect(log.filter((entry) => entry.startsWith("remote-text"))).toHaveLength(0);
+    expect(remote.html).toBe("<b>copied remotely</b>");
   });
 
   it("prefers an image on paste and posts it to the service", async () => {
@@ -129,6 +168,19 @@ describe("ClipboardBridge", () => {
     expect(await bridge.onPaste(data)).toBe(true);
     expect(remote.image).toBe(file);
     expect(remote.text).toBe("");
+  });
+
+  it("does not bring the viewer's own image back when the service announces it", async () => {
+    const { bridge, local, log } = build();
+    const file = new File([new Uint8Array(16)], "shot.png", { type: "image/png" });
+    const data = {
+      items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+      getData: () => "",
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(data)).toBe(true);
+    await bridge.onRemoteImageUpdated();
+    expect(local.image).toBeNull();
+    expect(log).toEqual(["remote-image:16"]);
   });
 
   it("reports a paste the Screen refused", async () => {
@@ -165,6 +217,14 @@ describe("ClipboardBridge", () => {
     bridge.onFocus();
     await Promise.resolve();
     expect(local.text).toBe("later");
+  });
+});
+
+describe("remoteHtmlOf", () => {
+  it("keeps html that differs from the text and drops html that repeats it", () => {
+    expect(remoteHtmlOf({ text: "a", html: "<b>a</b>" })).toBe("<b>a</b>");
+    expect(remoteHtmlOf({ text: "a", html: "a" })).toBe("");
+    expect(remoteHtmlOf({ text: "a", html: "" })).toBe("");
   });
 });
 

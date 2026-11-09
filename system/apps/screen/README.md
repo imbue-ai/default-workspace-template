@@ -253,29 +253,34 @@ null sink's monitor in any case.
 
 ## Clipboard, files and the phone
 
-`xclipboard.py` (the browser app's bridge, carried over) owns the X clipboard: `xclip`
-sets and reads the CLIPBOARD selection and an XFixes watcher on `:99` notices every
-ownership change while the stack runs. neko sends `clipboard/updated` to the host
-session alone and with text only, so the directions are:
+`xclipboard.py` (the browser app's bridge, carried over) owns the service's side of the X
+clipboard: `xclip` sets and reads the CLIPBOARD selection and an XFixes watcher on `:99` notices
+every ownership change while the stack runs. neko owns the text side, also through `xclip`, and
+two facts about that pair shape the directions (verified against neko 3.2.0 and xclip 0.13):
+neko's clipboard write sets one target (`text/html` when any HTML is sent, else `UTF8_STRING`),
+and an `xclip` owner answers a request for any target with its one payload, so neko's read-back
+of its own write reports HTML equal to the text. neko announces every change, its own writes
+included, as `clipboard/updated` to the host session alone and with text only. So:
 
-- Remote to local: on `clipboard/updated` the controller's viewer reads text and HTML
-  from neko's `GET /api/room/clipboard` (host only) and writes them with the Clipboard
-  API; when the watcher sees an image target the service broadcasts `clipboard`
-  (`{"kind": "image"}`) on `/api/ws` and the controller's viewer fetches
-  `GET /neko/api/room/clipboard/image.png` and writes it. A write that fails for want of
-  focus runs on the next focus.
-- Local to remote: on paste, while this viewer holds control, the paste event's data goes
-  across; the plain text to neko's `POST /api/room/clipboard` (neko writes one X clipboard
-  target and keeps only the HTML when both are sent, which leaves a URL bar or a terminal
-  nothing to paste, so the HTML goes only when there is no text), an image to
-  `POST /api/clipboard/image` as this session, which the
-  service accepts from the session in control alone (a visitor in control included). A
-  paste chord (Ctrl+V, Cmd+V) is left to the browser so its `paste` event carries the data;
-  once the remote clipboard holds it the viewer taps V with Ctrl held on the remote, and a
-  paste that did not cross says so in the strip. The viewer never reads the local clipboard
-  on its own (a programmatic read makes Safari and Firefox show a "Paste" button and Chrome
-  a permission prompt on every click into the Screen). What was just received is never
-  echoed back, by content hash.
+- Remote to local: on `clipboard/updated` the controller's viewer reads text and HTML from
+  neko's `GET /api/room/clipboard` (host only) and writes them with the Clipboard API, taking
+  HTML equal to the text as no HTML. A read whose text is what this viewer last sent, with no
+  other remote change since, is the echo of its own write and is not written back. When the
+  watcher sees an image target the service broadcasts `clipboard` (`{"kind": "image"}`) on
+  `/api/ws` and the controller's viewer fetches `GET /neko/api/room/clipboard/image.png` and
+  writes it, with the same echo rule by content hash. A write that fails for want of focus
+  runs on the next focus.
+- Local to remote: on paste, while this viewer holds control, the paste event's plain text goes
+  to neko's `POST /api/room/clipboard`, never its HTML (an HTML-only X clipboard gives a URL bar
+  or a terminal nothing to paste), unless the Screen already holds that text (just sent, or just
+  copied there), in which case nothing is sent and the Screen's clipboard keeps its rich flavors.
+  An image goes to `POST /api/clipboard/image` as this session, which the service accepts from
+  the session in control alone (a visitor in control included). A paste chord (Ctrl+V, Cmd+V) is
+  left to the browser so its `paste` event carries the data; once the remote clipboard holds it
+  the viewer taps V with Ctrl held on the remote. A paste that did not cross, and a paste while
+  this viewer does not control, say so in the strip. The viewer never reads the local clipboard
+  on its own (a programmatic read makes Safari and Firefox show a "Paste" button and Chrome a
+  permission prompt on every click into the Screen).
 - The viewer's calls to neko's routes (`/neko/api/room/clipboard`, the image, the screencast,
   the logout) carry the session token in the `token` query parameter, as its WebSocket does,
   never as an `Authorization: Bearer` header: the share gateway reads such a header as a

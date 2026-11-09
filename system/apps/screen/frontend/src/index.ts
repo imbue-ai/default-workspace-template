@@ -191,7 +191,13 @@ class Viewer {
   private wireClipboard(): void {
     window.addEventListener("focus", () => this.clipboard.onFocus());
     document.addEventListener("paste", (event) => {
-      if (!this.clipboard.isActive || !event.clipboardData) return;
+      if (!event.clipboardData) return;
+      if (!this.clipboard.isActive) {
+        // The paste would be dropped on the floor: say why, so a lease that moved to another session (or to
+        // nobody after a reconnect) does not read as a broken clipboard.
+        if (this.state?.lifecycle === "running") this.showClipboardStatus("Take control to paste on the Screen");
+        return;
+      }
       event.preventDefault();
       void this.clipboard.onPaste(event.clipboardData).then((isSent) => {
         // The clipboard is on the Screen: paste it there with the chord the user pressed (Ctrl+V, or synthesized
