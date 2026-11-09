@@ -1,0 +1,1 @@
+mngr is pinned to the public export of `mngr/studio-create-skill`: the workspace listing reports each workspace's `launch_mode`, `instance_type` and recorded size, and `GET /api/v1/workspaces/cloud-accounts` lists the cloud connections a create may target, so the vendored `imbue-studio` skill can place a new workspace like the one its agent runs in.
