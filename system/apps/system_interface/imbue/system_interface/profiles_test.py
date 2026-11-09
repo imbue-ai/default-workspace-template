@@ -1,4 +1,5 @@
 import json
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
@@ -175,15 +176,56 @@ def test_a_fresh_cache_entry_answers_even_after_the_share_ended(tmp_path: Path) 
     assert resolver.resolve(_BOB, _T0 + PROFILE_CACHE_TTL) is None
 
 
-def test_resolve_many_answers_only_the_users_with_a_profile(tmp_path: Path) -> None:
+def _refreshed_listener(resolver: ProfileResolver) -> threading.Event:
+    """An event set each time the resolver's background fetch changes a profile."""
+    refreshed = threading.Event()
+    resolver.add_refresh_listener(refreshed.set)
+    return refreshed
+
+
+def test_resolve_many_never_waits_on_the_connector_and_answers_once_the_background_fetch_lands(
+    tmp_path: Path,
+) -> None:
+    """The roster and the presence listing are built on the request path, so a slow connector must not hold
+    them: the first answer has no profile, the fetch runs behind it, and the listeners hear when it changed one."""
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    is_released = threading.Event()
+
+    def slow_connector(request: httpx.Request) -> httpx.Response:
+        is_released.wait(timeout=10)
+        return connector.handle(request)
+
+    resolver = _resolver(tmp_path, slow_connector)
+    refreshed = _refreshed_listener(resolver)
+
+    assert resolver.resolve_many([_BOB, UserId("user-unknown")], _T0) == {}
+    assert not is_released.is_set()
+
+    is_released.set()
+    assert refreshed.wait(timeout=10)
+    profile_by_user_id = resolver.resolve_many([_BOB, UserId("user-unknown")], _T0)
+    assert set(profile_by_user_id) == {"user-bob-4471"}
+    assert profile_by_user_id["user-bob-4471"].display_name == "Bob"
+    assert sorted(request.url.path for request in connector.requests) == [
+        "/users/user-bob-4471/profile",
+        "/users/user-unknown/profile",
+    ]
+
+
+def test_resolve_many_answers_a_stale_profile_at_once_and_replaces_it_in_the_background(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
     resolver = _resolver(tmp_path, connector.handle)
+    resolver.resolve(_BOB, _T0)
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "display_name": "Robert"})
+    refreshed = _refreshed_listener(resolver)
 
-    profile_by_user_id = resolver.resolve_many([_BOB, UserId("user-unknown")], _T0)
+    stale = resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)
 
-    assert set(profile_by_user_id) == {"user-bob-4471"}
-    assert profile_by_user_id["user-bob-4471"].display_name == "Bob"
+    assert stale["user-bob-4471"].display_name == "Bob"
+    assert refreshed.wait(timeout=10)
+    assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Robert"
 
 
 def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp_path: Path) -> None:

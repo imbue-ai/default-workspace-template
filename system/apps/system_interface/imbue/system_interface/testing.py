@@ -38,6 +38,7 @@ from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import ProfileRefreshAnnouncer
 from imbue.system_interface.presence import build_presence_sweep
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
@@ -281,6 +282,14 @@ def build_test_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, resolved_broadcaster, utc_now)
+    resolved_profiles.add_refresh_listener(
+        ProfileRefreshAnnouncer(
+            store=presence,
+            profiles=resolved_profiles,
+            broadcaster=resolved_broadcaster,
+            announce_roster=roster_announcer.announce,
+        ).announce
+    )
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,

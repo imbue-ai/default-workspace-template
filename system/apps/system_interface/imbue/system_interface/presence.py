@@ -428,3 +428,22 @@ def build_presence_sweep(
         ),
         announce_roster=announce_roster,
     )
+
+
+class ProfileRefreshAnnouncer(MutableModel):
+    """What a background profile fetch that changed someone's profile announces: the connected set, each user
+    carrying their profile, and the roster after it."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    store: PresenceStore = Field(frozen=True, description="Who is connected")
+    profiles: ProfileResolver = Field(frozen=True, description="Each account's name and picture")
+    broadcaster: WebSocketBroadcaster = Field(frozen=True, description="Where the connected set is pushed")
+    announce_roster: Callable[[], None] = Field(frozen=True, description="How the roster reaches the windows")
+
+    def announce(self) -> None:
+        now = utc_now()
+        self.broadcaster.broadcast_presence_updated(
+            present_users_wire_json(self.store.connected_users(now), self.profiles, now)
+        )
+        self.announce_roster()

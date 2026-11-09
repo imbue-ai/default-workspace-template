@@ -6,7 +6,12 @@ connector serves publicly at ``GET {broker_url}/users/{user_id}/profile``. The b
 ``SHARE_BROKER_URL`` in ``data/.secrets/share.env``, the file the Imbue Studio desktop writes while the
 workspace is shared (read fresh on every miss; absent means no profiles are available). Each
 answer -- and each failure -- is cached for five minutes under ``profiles/<user_id>.json``, so a
-connector outage costs one failed fetch per user per five minutes and never a hung request.
+connector outage costs one failed fetch per user per five minutes.
+
+The roster and the presence listing are built on every page's request and every heartbeat, so they never
+wait on the connector: ``resolve_many`` answers from the cache as it stands, a stale entry included, and
+fetches what is missing or stale in one background thread, then tells its listeners when any profile
+changed so the roster and the connected set can be announced again.
 
 The picture itself is served from the shell's own origin (the multiplayer spec, section 4.2): the pages'
 content security policy admits images from the workspace alone, so the roster points at the shell's
@@ -19,10 +24,13 @@ person per five minutes too.
 import base64
 import hashlib
 import re
+import threading
 import time
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 from typing import Self
@@ -32,6 +40,7 @@ from loguru import logger
 from pydantic import AwareDatetime
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import ValidationError
 from pydantic import model_validator
 from workspace_layout.primitives import UserId
@@ -194,6 +203,15 @@ class ProfileResolver(MutableModel):
         default=None, frozen=True, description="A test's stand-in for the network; the real one when None"
     )
 
+    _refresh_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _pending_refresh: set[UserId] = PrivateAttr(default_factory=set)
+    _refresh_thread: threading.Thread | None = PrivateAttr(default=None)
+    _refresh_listeners: list[Callable[[], None]] = PrivateAttr(default_factory=list)
+
+    def add_refresh_listener(self, listener: Callable[[], None]) -> None:
+        """Hear when a background fetch changed a profile ``resolve_many`` had answered."""
+        self._refresh_listeners.append(listener)
+
     def resolve(self, user_id: UserId, now: datetime) -> UserProfile | None:
         """The user's profile, or None when the connector has none, cannot be reached, or the workspace is not
         shared. Never raises for a connector failure: that is cached as a miss until the TTL passes."""
@@ -216,13 +234,53 @@ class ProfileResolver(MutableModel):
         return fetched
 
     def resolve_many(self, user_ids: Sequence[UserId], now: datetime) -> dict[str, UserProfile]:
-        """The profile of each user that has one, by user id."""
+        """The profile of each user the cache holds one for, by user id, without waiting on the connector: an entry
+        that is missing or past the TTL is answered as the cache has it and fetched in the background."""
         profile_by_user_id: dict[str, UserProfile] = {}
+        stale_user_ids: list[UserId] = []
         for user_id in user_ids:
-            profile = self.resolve(user_id, now)
+            cached = self._read_cached(user_id)
+            if cached is None or now - cached.fetched_at >= self.cache_ttl:
+                stale_user_ids.append(user_id)
+            profile = _profile_of(cached) if cached is not None else None
             if profile is not None:
                 profile_by_user_id[str(user_id)] = profile
+        if stale_user_ids and read_share_broker_url(self.share_env_path) is not None:
+            self._refresh_in_background(stale_user_ids)
         return profile_by_user_id
+
+    def _refresh_in_background(self, user_ids: Sequence[UserId]) -> None:
+        """Fetch ``user_ids`` on the refresh thread, starting it unless it is already running."""
+        with self._refresh_lock:
+            self._pending_refresh.update(user_ids)
+            if self._refresh_thread is not None:
+                return
+            thread = threading.Thread(target=self._run_refresh, daemon=True, name="profile-refresh")
+            self._refresh_thread = thread
+        thread.start()
+
+    def _run_refresh(self) -> None:
+        """Fetch every pending user, one at a time, until none is left; then tell the listeners if a profile changed."""
+        is_any_profile_changed = False
+        user_id = self._take_pending_refresh()
+        while user_id is not None:
+            before = self._read_cached(user_id)
+            fetched = self.resolve(user_id, datetime.now(timezone.utc))
+            if fetched != (_profile_of(before) if before is not None else None):
+                is_any_profile_changed = True
+            user_id = self._take_pending_refresh()
+        if is_any_profile_changed:
+            for listener in tuple(self._refresh_listeners):
+                listener()
+
+    def _take_pending_refresh(self) -> UserId | None:
+        """The next user to fetch, or None when there is none, which also lets the refresh thread end: a later
+        ``_refresh_in_background`` starts another."""
+        with self._refresh_lock:
+            if not self._pending_refresh:
+                self._refresh_thread = None
+                return None
+            return self._pending_refresh.pop()
 
     def resolve_picture(self, user_id: UserId, now: datetime) -> ProfilePicture | None:
         """The user's profile picture, or None when their profile names none (or cannot be resolved): the cached

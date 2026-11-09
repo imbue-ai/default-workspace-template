@@ -52,6 +52,7 @@ class RosterClient(MutableModel):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _document: RosterDocument | None = PrivateAttr(default=None)
     _fetched_at: float | None = PrivateAttr(default=None)
+    _is_shell_failing: bool = PrivateAttr(default=False)
 
     def document(self) -> RosterDocument:
         """The roster as the shell last answered it; empty when it has never answered."""
@@ -66,7 +67,17 @@ class RosterClient(MutableModel):
             try:
                 self._document = self.shell.roster()
             except ShellOpError as e:
-                logger.debug("Could not read the roster from the shell; keeping the last one: {}", e)
+                # Every name, handle, and mention reads this roster, so the first failure of a run is a warning;
+                # the rest of the run would repeat it every few seconds.
+                if self._is_shell_failing:
+                    logger.debug("Could not read the roster from the shell again; keeping the last one: {}", e)
+                else:
+                    logger.warning("Could not read the roster from the shell; keeping the last one: {}", e)
+                self._is_shell_failing = True
+            else:
+                if self._is_shell_failing:
+                    logger.debug("Read the roster from the shell again")
+                self._is_shell_failing = False
             self._fetched_at = now
             return self._document if self._document is not None else RosterDocument(participants=())
 

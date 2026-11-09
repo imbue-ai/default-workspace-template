@@ -19,6 +19,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
 from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import ProfileRefreshAnnouncer
 from imbue.system_interface.presence import build_presence_sweep
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
@@ -108,6 +109,11 @@ def build_production_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, broadcaster, utc_now)
+    profiles.add_refresh_listener(
+        ProfileRefreshAnnouncer(
+            store=presence, profiles=profiles, broadcaster=broadcaster, announce_roster=roster_announcer.announce
+        ).announce
+    )
     return SystemInterfaceState(
         config=config,
         shell=shell,

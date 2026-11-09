@@ -436,6 +436,10 @@ def test_a_persons_picture_is_the_shells_own_route_versioned_by_the_connectors_u
         )
     )
     source.presence.heartbeat(_BOB, _T0)
+    refreshed = threading.Event()
+    pictured.profiles.add_refresh_listener(refreshed.set)
+    pictured.document(_T0)
+    assert refreshed.wait(timeout=10)
 
     bob = next(entry for entry in pictured.document(_T0).participants if str(entry.key) == "user:user-bob-4471")
     assert (

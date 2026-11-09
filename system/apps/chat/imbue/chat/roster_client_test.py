@@ -57,6 +57,27 @@ def test_an_unreachable_shell_keeps_the_last_roster_and_names_a_sender_from_thei
     assert fresh.document().participants == ()
 
 
+def test_a_run_of_roster_failures_warns_once_and_a_recovery_ends_the_run(loguru_records: list[str]) -> None:
+    shell = FakeShell(roster_document=_roster("Bob"))
+    now = [0.0]
+    client = RosterClient(shell=shell, cache_seconds=5.0, clock=lambda: now[0])
+    client.document()
+
+    shell.listing_error = ShellUnreachableError("timed out")
+    for moment in (10.0, 20.0, 30.0):
+        now[0] = moment
+        client.document()
+    shell.listing_error = None
+    now[0] = 40.0
+    client.document()
+    shell.listing_error = ShellUnreachableError("timed out")
+    now[0] = 50.0
+    client.document()
+
+    warnings = [record for record in loguru_records if record.startswith("WARNING Could not read the roster")]
+    assert len(warnings) == 2
+
+
 def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_part() -> None:
     agent = RequestIdentity(owner=False, agent_id="va-1", agent_name="Josh's Claude", granter="x")
     assert fallback_display_name(ParticipantKey("agent:va-1"), agent) == "Josh's Claude"
