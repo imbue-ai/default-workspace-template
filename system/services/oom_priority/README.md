@@ -44,8 +44,10 @@ Under gVisor, `/proc/meminfo` also misses the memory the runtime itself is
 charged against the cgroup (0.3-0.9 GB on a gen-2 slice), so earlyoom's 10%
 threshold can arrive only after the cgroup has killed the whole sandbox. A
 gen-2 slice VM therefore publishes the cgroup's own limit and headroom into the
-workspace's volume, and earlyoom runs with `--host-meminfo
-/mngr-vol/.host-meminfo` (`system/supervisord.conf.d/earlyoom.conf`), acting on
+workspace's volume, and so does the VM of a cloud workspace (AWS, GCP, Azure,
+Vultr, OVH: mngr_vps's `mngr-vps-container-meminfo.service`), and earlyoom runs
+with `--host-meminfo /mngr-vol/.host-meminfo`
+(`system/supervisord.conf.d/earlyoom.conf`), acting on
 whichever of the two shows less headroom. A local docker workspace under runc
 publishes the same file for itself: the `publish_cgroup_meminfo` program
 (`bin/publish_cgroup_meminfo.py`, over `cgroup_meminfo`) reads the container's

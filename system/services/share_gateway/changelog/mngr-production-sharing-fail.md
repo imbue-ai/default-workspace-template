@@ -1,0 +1,1 @@
+While the share stack is up the runner rewrites `data/.state/share_gateway/status.json` once a minute, so its `updated_at` tells a reader whether a runner is alive: the Imbue Studio desktop disbelieves an `up` stamped more than five minutes ago, which a container restarted with its services down otherwise left behind as a misleading `up`.
