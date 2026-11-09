@@ -407,8 +407,12 @@ class PresenceSweep(MutableModel):
     def announce_connected(self) -> None:
         """Announce the connected set and the roster now, whether or not its membership changed: a profile a
         background fetch changed changes what each connected user carries."""
-        self.announce(self.store.connected_users(utc_now()))
-        self.announce_roster()
+        # Runs on the profile-refresh thread, where nothing else would log it.
+        try:
+            self.announce(self.store.connected_users(utc_now()))
+            self.announce_roster()
+        except (OSError, ValueError) as e:
+            logger.opt(exception=e).error("Failed to announce a refreshed profile; the next announcement carries it")
 
     def _run(self) -> None:
         while not self._stop.wait(timeout=self.interval_seconds):
