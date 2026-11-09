@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Entry point for :mod:`update_self_skill.update_self`.
 
+Imbue Studio runs this script: its path, arguments, output and exit codes are the app's workspace
+command contract. ``system/test_studio_command_contract.py`` checks the path and arguments but little
+of the output or exit codes; change any of them upstream only.
+
 The guard below runs before anything is imported and parses on any Python 3: a workspace
 whose system python3 is older than the 3.12 floor (a local Lima workspace from before
 2026-09-14, on Debian 12) cannot run this release's update code, so the staged copy exits
