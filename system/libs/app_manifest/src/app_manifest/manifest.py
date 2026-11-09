@@ -511,6 +511,11 @@ class AppManifest(FrozenModel):
         description="Whether the shell may stop the app's program once no window on any desktop shows it "
         "(docs/system/specs/stop-when-no-windows.md); a critical app never is",
     )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the app's pages listen to the microphone; the shell delegates it to the frames of "
+        "an app that declares this, and to no other",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")

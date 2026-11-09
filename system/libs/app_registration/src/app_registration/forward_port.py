@@ -22,7 +22,7 @@ Manifests
 An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
-``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
+``stop_when_no_windows``, ``uses_microphone``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
@@ -195,7 +195,13 @@ _MANIFEST_STRING_KEYS = (
     "program",
     "window_closed_path",
 )
-_MANIFEST_BOOL_KEYS = ("critical", "internal", "system", "stop_when_no_windows")
+_MANIFEST_BOOL_KEYS = (
+    "critical",
+    "internal",
+    "system",
+    "stop_when_no_windows",
+    "uses_microphone",
+)
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
 _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
@@ -218,6 +224,7 @@ _MANIFEST_OWNED_KEYS = (
     "instances_url",
     "critical",
     "stop_when_no_windows",
+    "uses_microphone",
     "priority",
     "program",
     "internal",

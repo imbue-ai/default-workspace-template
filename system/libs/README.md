@@ -20,6 +20,10 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
+- `workspace_voice/` - Dictation for the frontends (source only, a member of
+  the same npm workspace): on-device speech recognition behind one engine
+  interface, the speech detector, the streaming turn, the inference lane, and
+  the engine worker every chat page shares.
 - `latchkey_access/` - The latchkey gateway as a workspace program reaches it: the
   environment and header names of the agent-to-gateway contract, and `GatewayAccess`,
   which reads the environment and builds a request's URL and headers.
