@@ -3,3 +3,5 @@
 - `AGENTS.md`, `system/scripts/README.md` and the docstrings of those scripts now say that their interface is the app's contract and is changed upstream.
 
 - Gave the five heaviest whole-tree scans in `system/test_python_launch_rules.py` a 60-second timeout: they take a few seconds alone and could pass the 10-second default on a loaded machine.
+
+- Updated the pinned SHA256 of the Fortress v156.0.8078.47 x64 tarball: upstream replaced that release asset under the same tag on 2026-11-09, so every fresh image build refused it.
