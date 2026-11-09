@@ -76,7 +76,7 @@ needs a directory put on `sys.path`, and each stub says which. See
   `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes).
-- Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`, and `minds_container_start_hook.sh` (installed in the image as `/usr/local/bin/mngr-container-start-hook`, which mngr's container entrypoint runs on every container start to relaunch the services agent after a restart docker made on its own).
+- Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`, and `minds_container_start_hook.sh` (installed in the image as `/usr/local/bin/mngr-container-start-hook`, which mngr's container entrypoint runs on every container start to relaunch the services agent after a restart docker made on its own; it records the restart as a `container_restarted` event through `workspace_bare_scripts/record_container_restart.py`).
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the routines runner and its
