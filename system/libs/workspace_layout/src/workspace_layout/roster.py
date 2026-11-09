@@ -20,7 +20,7 @@ _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 _FALLBACK_HANDLE: Final[str] = "someone"
 # What a person is called when nothing names them (no profile name, no email, no record of an arrival): never their
 # account's raw id, which tells a reader nothing.
-UNNAMED_PERSON_DISPLAY_NAME: Final[str] = "Invited person"
+UNNAMED_PERSON_DISPLAY_NAME: Final[str] = "Guest"
 
 # The eight colours a participant may be drawn in (the viewing chrome, the tray ring, the card), chosen by hashing the
 # key so every surface agrees; ``workspace_ui``'s tokens carry the same eight.

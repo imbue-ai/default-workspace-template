@@ -72,7 +72,7 @@ export function getWorkspaceAgent(): Participant | null {
 }
 
 /** What a person's account is called when nothing names it: never its raw id (the shell's roster says the same). */
-export const UNNAMED_PERSON_NAME = "Invited person";
+export const UNNAMED_PERSON_NAME = "Guest";
 const PERSON_KEY_PREFIX = "user:";
 
 /** The display name of an author key: the roster's, else the name the turn carried, else a neutral label for a

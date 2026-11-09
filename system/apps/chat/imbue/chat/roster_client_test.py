@@ -82,6 +82,5 @@ def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_pa
     agent = RequestIdentity(owner=False, agent_id="va-1", agent_name="Josh's Claude", granter="x")
     assert fallback_display_name(ParticipantKey("agent:va-1"), agent) == "Josh's Claude"
     assert (
-        fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere"))
-        == "Invited person"
+        fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere")) == "Guest"
     )

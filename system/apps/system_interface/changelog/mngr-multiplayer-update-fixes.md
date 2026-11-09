@@ -4,4 +4,4 @@
 
 - The roster and the presence listing never wait on the connector. Profiles were re-fetched one person at a time inside the request every five minutes, so `GET /api/roster` and the heartbeat could take longer than the chat app's two-second limit. They now answer from the profile cache, a stale entry included, fetch what is missing or stale in the background, and announce the roster and the connected set again when a fetched profile changed.
 
-- A granted person nothing names (no profile name, no email, no arrival yet) is called "Invited person" in the roster instead of their account's raw id.
+- A granted person nothing names (no profile name, no email, no arrival yet) is called "Guest" in the roster instead of their account's raw id.
