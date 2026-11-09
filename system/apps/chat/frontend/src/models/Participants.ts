@@ -2,8 +2,9 @@
  * Who this page is, and who everyone else is (the multiplayer spec, sections 4 and 5.4): the page's own
  * participant key from ``GET /api/me``, and the roster from ``GET /api/participants`` (the shell's, served by the
  * chat app with every picture on this origin). Both load as the page boots and again whenever the page comes back
- * into view or focus, or someone's mentions change (a few seconds of cache folds a burst of those into one read),
- * so a person who joined after the page loaded, and the owner's key once the workspace is shared, are drawn right;
+ * into view or focus, someone's mentions change, or a turn arrives naming its author differently than the page's
+ * copy does (a few seconds of cache folds a burst of those into one read), so a person who joined or was renamed
+ * after the page loaded, and the owner's key once the workspace is shared, are drawn right;
  * a transcript turn is drawn as the viewer's own, or as another person's with their picture and name, from these.
  */
 
