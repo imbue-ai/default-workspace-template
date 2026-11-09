@@ -68,6 +68,8 @@ def summarize(
         return summary
     if ticks.inflight_tick_id is not None:
         summary["state"] = "running"
+    elif _is_out_of_storage(terminal):
+        summary["state"] = "out_of_storage"
     elif terminal_type in _FAILURE_TYPES:
         summary["state"] = "failing"
     elif success_at is not None and moment - success_at <= timedelta(
@@ -77,6 +79,20 @@ def summarize(
     else:
         summary["state"] = "stale"
     return summary
+
+
+def _is_out_of_storage(terminal: dict[str, object] | None) -> bool:
+    """Whether the newest tick ended on the account's backup storage quota: the tick skipped
+    its backup to free space, or the store refused the upload."""
+    if terminal is None:
+        return False
+    terminal_type = terminal.get("type")
+    if terminal_type == backup_events.BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value:
+        return True
+    return (
+        terminal_type == backup_events.BackupEventType.RESTIC_BACKUP_FAILED.value
+        and terminal.get("reason") == backup_events.BACKUP_FAILURE_REASON_QUOTA_EXCEEDED
+    )
 
 
 def _event_time(event: dict[str, object] | None) -> datetime | None:

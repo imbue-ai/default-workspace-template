@@ -13,6 +13,7 @@ import { getChatById } from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { TranscriptEvent } from "../models/Response";
 import { isTurnUserMessage } from "./message-classification";
+import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { Age, longAge } from "./relativeTime";
 
 function isMessage(event: TranscriptEvent): boolean {
@@ -39,10 +40,14 @@ export function LastMessageMark(): m.Component<{ chatId: string; events: Transcr
     view(vnode) {
       const atMs = lastMessageAtMs(vnode.attrs.chatId, vnode.attrs.events);
       if (atMs === null) return null;
-      return m("div", { class: "last-message-mark min-h-5 px-1 leading-5 text-faint" }, [
-        "Last message ",
-        m(Age, { atMs, format: longAge, tooltipLead: "Last message", class: "last-message-mark__age" }),
-      ]);
+      return m(
+        "div",
+        { class: `last-message-mark -mt-3.5 mb-5 ${AGENT_TEXT_EDGE_CLASS} font-mono text-[11px] text-faint` },
+        [
+          "Last message ",
+          m(Age, { atMs, format: longAge, tooltipLead: "Last message", class: "last-message-mark__age" }),
+        ],
+      );
     },
   };
 }

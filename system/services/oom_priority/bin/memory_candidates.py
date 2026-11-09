@@ -17,7 +17,9 @@ It joins four sources, each read independently so one failing leaves the others 
   busy, and whose latest activity is at least ``IDLE_AFTER_SECONDS`` old. A chat is busy while a
   background task will wake its agent, which ``chat_background_tasks`` reads from the chats'
   marker files. Its memory is the summed anonymous memory of its process trees, rooted at the pid mngr
-  reports plus every live pid the agent-pid registry holds for it;
+  reports plus every live pid the agent-pid registry holds for it. The workspace's main chat, named
+  by the chat app's ``main_chat.json``, is never one: the chat app starts it again as soon as it
+  stops, so a note names it instead;
 - apps, from the shell's ``GET /api/inventory`` joined to the programs supervisord is running: an
   app the workspace is allowed to stop (with a program of its own that no critical app shares, and
   neither critical nor internal itself), with how many windows show it, since that is what decides
@@ -51,7 +53,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 
+# import-path: no-venv -- its only imports beyond the standard library are the stdlib-only `oom_priority` and `chat_background_tasks`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# import-path: no-venv -- its only imports beyond the standard library are the stdlib-only `oom_priority` and `chat_background_tasks`
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[3] / "libs" / "chat_background_tasks" / "src"),
@@ -83,6 +87,10 @@ IDLE_AGENT_STATE: Final[str] = "WAITING"
 # off; an agent without it is its own chat.
 CHAT_ID_LABEL: Final[str] = "chat_id"
 CHAT_KIND: Final[str] = "chat"
+# The chat app's record of which chat is the workspace's main chat (its ``DEFAULT_CHAT_DATA_DIR`` and
+# ``MAIN_CHAT_FILENAME``), under the main checkout.
+MAIN_CHAT_FILE: Final[Path] = Path("data") / ".apps" / "chat" / "main_chat.json"
+MAIN_CHAT_ID_KEY: Final[str] = "chat_id"
 WORKER_KIND: Final[str] = "worker"
 
 # The fields each listed agent is rendered with, in column order. The display name goes last because
@@ -191,6 +199,7 @@ class AgentCandidate(NamedTuple):
 
     name: str
     agent_id: str
+    chat_id: str
     display_name: str | None
     kind: str
     state: str
@@ -289,6 +298,7 @@ class Sources(NamedTuple):
     shell_url: str
     now: datetime
     is_chat_busy: IsChatBusy
+    main_chat_file: Path
 
 
 # Free memory
@@ -488,6 +498,7 @@ def idle_agent_candidates(
             AgentCandidate(
                 name=agent.name,
                 agent_id=agent.agent_id,
+                chat_id=agent.chat_id,
                 display_name=agent.display_name,
                 kind=kind,
                 state=agent.state,
@@ -509,6 +520,25 @@ def idle_agent_candidates(
     )
 
 
+def read_main_chat_id(path: Path) -> tuple[str | None, list[str]]:
+    """The chat id the chat app's main-chat file names, or None when there is no main chat, plus a note when
+    the file is there but cannot be read, since the main chat may then be listed."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, []
+    except (OSError, ValueError) as error:
+        return None, [
+            f"could not read the main chat from {path}, so it may be listed: {error}"
+        ]
+    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else ""
+    if chat_id is None:
+        return None, []
+    if not isinstance(chat_id, str) or not chat_id:
+        return None, [f"{path} does not name a chat, so the main chat may be listed"]
+    return chat_id, []
+
+
 def collect_agent_section(sources: Sources) -> AgentSection:
     agents, notes = run_mngr_list(sources.run_command)
     if agents is None:
@@ -517,7 +547,20 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     candidates = idle_agent_candidates(
         agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy
     )
-    return AgentSection(candidates=tuple(candidates), notes=tuple(notes))
+    main_chat_id, main_chat_notes = read_main_chat_id(sources.main_chat_file)
+    notes += main_chat_notes
+    notes += [
+        f"{candidate.name} is the main chat, which the chat app starts again as soon as it stops,"
+        " so it is not listed"
+        for candidate in candidates
+        if candidate.chat_id == main_chat_id
+    ]
+    return AgentSection(
+        candidates=tuple(
+            candidate for candidate in candidates if candidate.chat_id != main_chat_id
+        ),
+        notes=tuple(notes),
+    )
 
 
 # Browsers
@@ -1084,6 +1127,7 @@ def _collect_live_report(now: datetime) -> Report:
             shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
             now=now,
             is_chat_busy=busy_chat_check(os.environ),
+            main_chat_file=markers.main_checkout(_REPO_ROOT) / MAIN_CHAT_FILE,
         )
     )
 

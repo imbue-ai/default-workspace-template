@@ -35,14 +35,20 @@ switching to, or messaging one of them never moves its score. A chat with no liv
 process (dormant, revives on its next message) is simply skipped until its
 process exists.
 
-Re-tagging is event-driven plus a slow sweep. The events (presence reports,
-sends, and lifecycle changes) cover everything that *raises* a chat's
-protection; the sweep exists because staleness is the one signal that changes
-with no event to announce it -- a chat crosses a ramp threshold simply by sitting
-there. The messaged-revive path is race-free without the sweep: the send blocks
-until the revived process is ready (and the launch wrapper registers its pid
-before that), and the send route records the message only after the send
-returns, so ``reapply``'s pid lookup finds the live process.
+Re-tagging is event-driven plus a slow sweep, and once started, every pass runs
+on one background thread. The events (a presence report that changes whether a chat is
+open or visible, a send, a lifecycle change) cover everything that *raises* a
+chat's protection; each only asks the pass thread for a pass, so no request waits
+on one and a burst of them costs one pass. The sweep exists because staleness is
+the one signal that changes with no event to announce it -- a chat crosses a ramp
+threshold simply by sitting there, and a page that vanished without its closing
+report stops counting only by expiry. A pass reads the pid registry once for every
+chat and ``/proc`` once per registered process, which is why it must never run on
+request threads: with dozens of chats, one pass per heartbeat piled request
+threads up until the chat app stopped answering. The messaged-revive path is
+race-free: the send blocks until the revived process is ready (and the launch
+wrapper registers its pid before that), and the send route records the message
+only after the send returns, so the pass's pid lookup finds the live process.
 
 The band arithmetic lives in ``oom_priority.bands`` (the stdlib-only, testable
 policy); this engine only holds the activity state and drives the writes. All
@@ -54,9 +60,11 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Final
 
+from loguru import logger
 from oom_priority import bands
 
 from imbue.chat.presence import PresenceReport
@@ -65,20 +73,29 @@ from imbue.chat.presence import PresenceTransition
 from imbue.chat.primitives import ChatId
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
-# minute-granularity is ample; each pass is a handful of stats and ``/proc``
-# writes per chat.
+# minute-granularity is ample, and a pass costs a read of the whole pid registry.
 SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
+
+# The least time between two passes. A burst of events (the lifecycle changes of a
+# workspace discovering dozens of agents at once, say) collapses into one pass per
+# interval; a band written this much later changes nothing about which chat a shed picks.
+MIN_PASS_INTERVAL_SECONDS: Final[float] = 2.0
+
+# A pass that takes this long is logged: it reads ``/proc`` for every registered process,
+# and a slow one is the first sign of the workspace being too busy for it.
+_SLOW_PASS_WARN_SECONDS: Final[float] = 5.0
 
 
 class ChatOomPrioritizer:
     """Holds chat activity state and re-tags each chat's ``oom_score_adj``.
 
     ``list_chat_ids`` returns the ids of the chats to manage (the caller excludes workers and
-    the primary agent). ``resolve_pids`` maps a chat to its active agent's live main-process
-    pids (codex runs two), empty when it has no running process.
-    ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort; its return value
-    is ignored); None makes an inert prioritizer that still accepts every report but
-    computes nothing, writes nothing, and runs no sweep.
+    the primary agent). ``resolve_pids_by_chat_id`` maps the given chats to their active
+    agents' live main-process pids (codex runs two) in one call, so a pass reads the pid
+    registry once rather than once per chat; a chat with no running process may be absent
+    or map to an empty list. ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort;
+    its return value is ignored); None makes an inert prioritizer that still accepts every
+    report but computes nothing, writes nothing, and runs no sweep.
     ``resolve_process_started_at`` returns the epoch time at which a
     chat's claude process last started, or None when unknown; it floors the
     engagement clock so a revived chat is never treated as stale. ``clock``
@@ -92,19 +109,21 @@ class ChatOomPrioritizer:
         self,
         *,
         list_chat_ids: Callable[[], Iterable[ChatId]],
-        resolve_pids: Callable[[ChatId], Sequence[int]],
+        resolve_pids_by_chat_id: Callable[[Sequence[ChatId]], Mapping[ChatId, Sequence[int]]],
         set_adj: Callable[[int, int], bool] | None,
         resolve_process_started_at: Callable[[ChatId], float | None],
         clock: Callable[[], float] = time.time,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
+        min_pass_interval_seconds: float = MIN_PASS_INTERVAL_SECONDS,
         presence: PresenceTracker | None = None,
     ) -> None:
         self._list_chat_ids = list_chat_ids
-        self._resolve_pids = resolve_pids
+        self._resolve_pids_by_chat_id = resolve_pids_by_chat_id
         self._set_adj = set_adj
         self._resolve_process_started_at = resolve_process_started_at
         self._clock = clock
         self._sweep_interval_seconds = sweep_interval_seconds
+        self._min_pass_interval_seconds = min_pass_interval_seconds
         self._lock = threading.Lock()
         self._presence = presence if presence is not None else PresenceTracker(clock=clock)
         # chat_id -> time of its most recent message, for recency ranking.
@@ -114,11 +133,14 @@ class ChatOomPrioritizer:
         self._last_engaged_at: dict[ChatId, float] = {}
         # Chats whose active agent is in a running lifecycle state, i.e. mid-turn.
         self._running: set[ChatId] = set()
-        self._sweep_stop = threading.Event()
-        self._sweep_thread: threading.Thread | None = None
+        # Set by every ``reapply`` once the pass thread runs; the thread clears it as it
+        # takes a pass. A set event is never lost: a pass recomputes everything.
+        self._pass_wanted = threading.Event()
+        self._pass_stop = threading.Event()
+        self._pass_thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Begin the staleness sweep and apply the current state once.
+        """Apply the current state once on this thread, then start the pass thread.
 
         Separate from construction so tests (and any caller that only wants the
         event-driven behaviour) can drive ``record_*``/``reapply`` directly
@@ -127,18 +149,20 @@ class ChatOomPrioritizer:
         if self._set_adj is None:
             return
         self.reapply()
-        self._sweep_stop.clear()
-        thread = threading.Thread(target=self._run_sweep, daemon=True, name="oom-chat-sweep")
-        self._sweep_thread = thread
+        self._pass_stop.clear()
+        self._pass_wanted.clear()
+        thread = threading.Thread(target=self._run_passes, daemon=True, name="oom-chat-passes")
+        self._pass_thread = thread
         thread.start()
 
     def stop(self) -> None:
-        """Stop the staleness sweep. Idempotent; safe if ``start`` never ran."""
-        self._sweep_stop.set()
-        thread = self._sweep_thread
+        """Stop the pass thread; a pass already running finishes. Idempotent; safe if ``start`` never ran."""
+        self._pass_stop.set()
+        self._pass_wanted.set()
+        thread = self._pass_thread
         if thread is not None:
             thread.join(timeout=5)
-            self._sweep_thread = None
+            self._pass_thread = None
 
     def seed_last_message_times(self, last_message_at_by_chat_id: dict[ChatId, float]) -> None:
         """Seed per-chat last-message times from a durable record, at startup.
@@ -154,23 +178,27 @@ class ChatOomPrioritizer:
                 self._stamp_message_locked(chat_id, messaged_at)
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
-        """Apply one page instance's presence report about one chat, re-tag every chat, and say what it changed.
+        """Apply one page instance's presence report about one chat, re-tag if it changed anything, and say what.
 
         The report replaces that instance's standing one unless it is numbered at or
         below it (self-healing: the page's heartbeat corrects any missed one). Non-chat
-        ids are accepted and ignored by ``reapply``, which only iterates the managed chats.
+        ids are accepted and ignored by the pass, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
         everything currently visible: a window left visible and untouched is not
         continuing engagement, and re-stamping it every heartbeat would make it
-        permanently fresh.
+        permanently fresh. A report that leaves the chat as open and as visible as
+        it was (the heartbeat, almost always) asks for no pass: every band it would
+        write is already written, and a page that vanished unannounced stops
+        counting by expiry, which the sweep notices.
         """
         transition = self._presence.record(chat_id, report)
         if transition.is_newly_visible:
             now = self._clock()
             with self._lock:
                 self._stamp_engagement_locked(chat_id, now)
-        self.reapply()
+        if transition.is_open_changed or transition.is_visible_changed:
+            self.reapply()
         return transition
 
     def record_message(self, chat_id: ChatId) -> None:
@@ -199,7 +227,7 @@ class ChatOomPrioritizer:
         stale ceiling. Between the two edges the chat is exempt from the climb entirely.
 
         The ids may include workers and the primary agent (own chats under the own-chat
-        rule); they are ignored by ``reapply``, which only iterates the managed chats.
+        rule); they are ignored by the pass, which only iterates the managed chats.
         """
         now = self._clock()
         with self._lock:
@@ -212,14 +240,58 @@ class ChatOomPrioritizer:
         self.reapply()
 
     def reapply(self) -> None:
-        """Recompute and write every managed chat's ``oom_score_adj``.
+        """Have every managed chat's ``oom_score_adj`` recomputed and written.
+
+        Once ``start`` has run this only asks the pass thread for a pass and returns, so
+        ``record_*`` returning means the activity was accepted, not that its band is
+        written; the thread writes it moments later. Before ``start`` (and after
+        ``stop``, or should the thread have died) the pass runs on the caller's thread.
+        Does nothing without a ``set_adj``.
+        """
+        if self._set_adj is None:
+            return
+        thread = self._pass_thread
+        if thread is None or not thread.is_alive():
+            self._reapply_once()
+            return
+        self._pass_wanted.set()
+
+    def _run_passes(self) -> None:
+        """Run a pass whenever one is asked for, and at least once every sweep interval, until stopped.
+
+        Every pass recomputes every chat, so one an event asked for also serves as the
+        sweep. A pass that cannot read the registry or ``/proc`` is logged and the next
+        one retries; any other error ends the thread (its traceback reaches the
+        supervisor log), after which passes run on the requesting threads again, as
+        they did before the thread existed.
+        """
+        while not self._pass_stop.is_set():
+            self._pass_wanted.wait(timeout=self._sweep_interval_seconds)
+            self._pass_wanted.clear()
+            if self._pass_stop.is_set():
+                return
+            self._run_one_pass_logging_failures()
+            # Pace the passes, so a burst of events costs one pass per interval.
+            self._pass_stop.wait(timeout=self._min_pass_interval_seconds)
+
+    def _run_one_pass_logging_failures(self) -> None:
+        started_at = time.monotonic()
+        try:
+            self._reapply_once()
+        except OSError as e:
+            logger.opt(exception=e).warning("Re-tagging chats' memory priority failed; the next pass retries")
+        elapsed_seconds = time.monotonic() - started_at
+        if elapsed_seconds > _SLOW_PASS_WARN_SECONDS:
+            logger.warning("Re-tagging chats' memory priority took {:.1f}s", elapsed_seconds)
+
+    def _reapply_once(self) -> None:
+        """One pass: recompute and write every managed chat's ``oom_score_adj``.
 
         Snapshots the activity state under the lock, then classifies, ranks by
-        recency, resolves each chat's pids, and writes its band to each -- all outside the
-        lock, so a write (or a call into the agent manager / pid registry) never
-        blocks a concurrent activity report. Chats with no live process are
-        skipped. Idempotent: concurrent reapplies converge on the same result.
-        Does nothing without a ``set_adj``.
+        recency, resolves every chat's pids in one registry read, and writes its band to
+        each -- all outside the lock, so a write (or a call into the agent manager / pid
+        registry) never blocks a concurrent activity report. Chats with no live process
+        are skipped. Idempotent: two passes over the same state write the same bands.
         """
         set_adj = self._set_adj
         if set_adj is None:
@@ -245,8 +317,9 @@ class ChatOomPrioritizer:
         )
         rank_by_id = {cid: rank for rank, cid in enumerate(messaged_newest_first)}
 
+        pids_by_chat_id = self._resolve_pids_by_chat_id(chat_ids)
         for chat_id in chat_ids:
-            pids = self._resolve_pids(chat_id)
+            pids = pids_by_chat_id.get(chat_id, ())
             if not pids:
                 continue
             is_visible = chat_id in visible_ids
@@ -288,12 +361,3 @@ class ChatOomPrioritizer:
         if previous is None or at > previous:
             self._last_message_at[chat_id] = at
         self._stamp_engagement_locked(chat_id, at)
-
-    def _run_sweep(self) -> None:
-        """Re-tag every managed chat on a slow cadence until stopped.
-
-        The only thing this catches that the event paths do not is the passage of
-        time: a chat crosses a staleness threshold without anything happening.
-        """
-        while not self._sweep_stop.wait(self._sweep_interval_seconds):
-            self.reapply()

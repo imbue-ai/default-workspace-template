@@ -17,8 +17,10 @@ const mocks = vi.hoisted(() => {
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
     noteLoadedArrivals: vi.fn(),
-    // The page's not-yet-real bubbles, as the outgoing view renders them.
+    // The page's not-yet-real bubbles, as the outgoing view renders them, and whether each render was told they
+    // carry on the viewer's run from a bubble above them.
     outgoingBubbles: [] as unknown[],
+    outgoingAfterOwnTurn: [] as (boolean | undefined)[],
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
     isChatListReceived: true,
@@ -96,7 +98,10 @@ vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
 vi.mock("./OutgoingMessageView", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./OutgoingMessageView")>()),
-  renderOutgoingMessages: () => mocks.outgoingBubbles,
+  renderOutgoingMessages: (_chatId: string, ownRun?: { isOpen: boolean }) => {
+    mocks.outgoingAfterOwnTurn.push(ownRun?.isOpen);
+    return mocks.outgoingBubbles;
+  },
 }));
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
@@ -223,6 +228,7 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.openProviderChooser.mockClear();
     mocks.chat = undefined;
     mocks.outgoingBubbles = [];
+    mocks.outgoingAfterOwnTurn = [];
     mocks.fetchEvents.mockClear();
   });
 
@@ -275,6 +281,17 @@ describe("ChatPanel over a provisional chat", () => {
 
     expect(renderedText(tree)).toContain("sent from another page");
     expect(renderedText(tree)).not.toContain("Starting your chat");
+  });
+
+  it("names the viewer once over the held messages and the sends after them while the chat starts", () => {
+    creating();
+    mountPanel()();
+    expect(mocks.outgoingAfterOwnTurn.map(Boolean)).toEqual([false]);
+
+    mocks.outgoingAfterOwnTurn = [];
+    mocks.proto = { ...(mocks.proto as object), held_sends: [{ message_id: "m-1", text: "sent from another page" }] };
+    mountPanel()();
+    expect(mocks.outgoingAfterOwnTurn.map(Boolean)).toEqual([true]);
   });
 
   it("keeps a failed create's held messages in view above its reason", () => {

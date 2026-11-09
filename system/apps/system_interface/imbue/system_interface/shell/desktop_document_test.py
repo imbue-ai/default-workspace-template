@@ -1,6 +1,7 @@
 """Tests for the pure desktop editor: the shared geometry vectors, and the verbs over desktops and layouts."""
 
 import json
+from collections.abc import Set as AbstractSet
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -41,16 +42,16 @@ from imbue.system_interface.shell.desktop_document import GridMetrics
 from imbue.system_interface.shell.desktop_document import MAXIMIZED_FRAME
 from imbue.system_interface.shell.desktop_document import PINNED_WINDOW_FRAME
 from imbue.system_interface.shell.desktop_document import VIEWPORT
-from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
-from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
-from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import backdrop_frame_of
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
+from imbue.system_interface.shell.desktop_document import first_default_shortcut_targets
 from imbue.system_interface.shell.desktop_document import fit_frame_to_backdrop
 from imbue.system_interface.shell.desktop_document import fit_state_frame
 from imbue.system_interface.shell.desktop_document import focused_window_id
@@ -65,6 +66,7 @@ from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import place_shortcuts
 from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
 from imbue.system_interface.shell.desktop_document import viewport_rect
@@ -85,6 +87,7 @@ from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktop_document import with_windows_side_by_side
 from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
+from imbue.system_interface.shell.desktop_document import without_shortcuts_of_unregistered_apps
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -94,6 +97,9 @@ from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import desktop_with_windows
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import screen_row_toml
+from imbue.system_interface.shell.testing import shortcut_at
+from imbue.system_interface.shell.testing import targets_and_cells
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_registry
 
@@ -444,27 +450,17 @@ def test_the_pinned_apps_are_the_non_internal_rows_that_carry_a_pin(tmp_path: Pa
 # Desktops: shortcuts
 
 
-def _shortcut(
-    app: str, launch: str, column: int, row: int, mode: ShortcutMode = ShortcutMode.FOCUS
-) -> DesktopShortcut:
-    return DesktopShortcut(
-        target=ShortcutTarget(app=AppName(app), launch=LaunchPathId(launch)),
-        mode=mode,
-        cell=GridCell(column=column, row=row),
-    )
-
-
 def _desktop_with_shortcuts(*shortcuts: DesktopShortcut) -> Desktop:
     empty = desktop_with_windows()
     return empty.model_copy_update(to_update(empty.field_ref().shortcuts, shortcuts))
 
 
 def test_setting_a_shortcut_replaces_the_same_target_in_place_and_appends_a_new_one() -> None:
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0))
-    flipped = with_shortcut(desktop, _shortcut("chat", "new", 0, 0, ShortcutMode.NEW))
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 1, 0))
+    flipped = with_shortcut(desktop, shortcut_at("chat", "new", 0, 0, ShortcutMode.NEW))
     assert [shortcut.target.app for shortcut in flipped.shortcuts] == ["chat", "files"]
     assert flipped.shortcuts[0].mode is ShortcutMode.NEW
-    added = with_shortcut(flipped, _shortcut("terminal", "new", 2, 0))
+    added = with_shortcut(flipped, shortcut_at("terminal", "new", 2, 0))
     assert [shortcut.target.app for shortcut in added.shortcuts] == ["chat", "files", "terminal"]
     assert next_shortcut_cell(added) == GridCell(column=3, row=0)
     removed = without_shortcut(added, AppName("files"), LaunchPathId("new"))
@@ -472,7 +468,7 @@ def test_setting_a_shortcut_replaces_the_same_target_in_place_and_appends_a_new_
 
 
 def test_moving_a_shortcut_onto_an_occupied_cell_displaces_the_occupant_to_the_nearest_free_cell() -> None:
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 0, 1))
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 0, 1))
     moved = with_shortcut_moved(desktop, AppName("files"), LaunchPathId("new"), GridCell(column=0, row=0))
     assert {shortcut.target.app: shortcut.cell for shortcut in moved.shortcuts} == {
         "files": GridCell(column=0, row=0),
@@ -486,20 +482,20 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         write_registry(
             tmp_path / "apps.toml",
             # Registered last but ranked first, so the seed reads the rank rather than the registration order.
-            registry_row_toml("files", "http://localhost:4", launcher_rank=20, default_shortcut=("open", "focus")),
-            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
+            registry_row_toml("files", "http://localhost:4", launcher_rank=20, default_shortcuts=[("open", "focus")]),
+            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcuts=[("open", "focus")]),
             registry_row_toml("plain", "http://localhost:3"),
             registry_row_toml(
                 "chat",
                 "http://localhost:1",
                 launcher_rank=10,
                 launch_paths=[("new", "New Chat", "/new")],
-                default_shortcut=("new", "new"),
+                default_shortcuts=[("new", "new")],
             ),
             # An app that declares no rank follows every ranked one.
-            registry_row_toml("extra", "http://localhost:6", default_shortcut=("open", "focus")),
+            registry_row_toml("extra", "http://localhost:6", default_shortcuts=[("open", "focus")]),
             # A default shortcut naming a launch path the row does not declare seeds nothing.
-            registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
+            registry_row_toml("odd", "http://localhost:5", default_shortcuts=[("make", "focus")]),
         )
     )
     seeded = seed_desktop_shortcuts(rows)
@@ -571,7 +567,7 @@ def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_t
                 "intake",
                 "http://localhost:7",
                 program="intake",
-                default_shortcut=("send", "new"),
+                default_shortcuts=[("send", "new")],
                 launch_paths=[("send", "Send", "/send"), ("home", "Home", "/")],
                 launch_params={"send": ["message"]},
                 launch_text_params={"send": "message"},
@@ -588,14 +584,41 @@ def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_t
         ("asker", "ask", ShortcutMode.FOCUS),
         ("intake", "send", ShortcutMode.NEW),
     ]
-    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal", "asker", "intake"}
+    assert _pairs(default_shortcut_targets(rows)) == {
+        ("notes", "open"),
+        ("recipes", "browse"),
+        ("journal", "read"),
+        ("asker", "ask"),
+        ("intake", "send"),
+    }
 
 
-def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
-    return [
-        (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
-        for shortcut in desktop.shortcuts
+def _pairs(targets: AbstractSet[ShortcutTarget]) -> set[tuple[str, str]]:
+    return {(str(target.app), str(target.launch)) for target in targets}
+
+
+def test_an_app_declaring_several_default_shortcuts_is_seeded_with_each_it_offers_in_its_order(
+    tmp_path: Path,
+) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            screen_row_toml([("screen", "focus"), ("missing", "new"), ("browser", "focus")]),
+            registry_row_toml("notes", "http://localhost:1", program="notes", launcher_rank=40),
+        )
+    )
+
+    seeded = seed_desktop_shortcuts(rows)
+
+    assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column) for shortcut in seeded] == [
+        ("screen", "screen", 0),
+        ("screen", "browser", 1),
+        ("notes", "open", 2),
     ]
+    (screen_row, _) = rows
+    assert default_launch_path_id(screen_row) == "screen"
+    # Before an app could declare several, the record offered each app its first one.
+    assert _pairs(first_default_shortcut_targets(rows, {AppName("screen"), AppName("gone")})) == {("screen", "screen")}
 
 
 def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_again_in_launcher_order(
@@ -603,13 +626,13 @@ def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_agai
 ) -> None:
     before_chat, with_chat = builtin_registry_rows(tmp_path)
     home = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
-    offered = apps_with_a_default_shortcut(before_chat)
-    assert offered == set(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+    offered = default_shortcut_targets(before_chat)
+    assert {str(target.app) for target in offered} == set(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
 
     reconciled = with_default_shortcuts_offered(home, with_chat, offered)
 
     assert reconciled.shortcuts == seed_desktop_shortcuts(with_chat)
-    assert _targets_and_cells(reconciled) == [
+    assert targets_and_cells(reconciled) == [
         ("chat", "root", 0, 0),
         ("getting-started", "open", 1, 0),
         ("files", "new", 2, 0),
@@ -626,7 +649,7 @@ def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_
     seeded = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
     touched = with_shortcut_moved(seeded, AppName("getting-started"), LaunchPathId("open"), GridCell(column=0, row=2))
 
-    reconciled = with_default_shortcuts_offered(touched, with_chat, apps_with_a_default_shortcut(before_chat))
+    reconciled = with_default_shortcuts_offered(touched, with_chat, default_shortcut_targets(before_chat))
 
     assert reconciled.shortcuts[:-1] == touched.shortcuts
     (chat,) = (shortcut for shortcut in reconciled.shortcuts if shortcut.target.app == "chat")
@@ -638,10 +661,10 @@ def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_
 def test_a_late_apps_shortcut_is_not_added_where_its_target_already_is(tmp_path: Path) -> None:
     before_chat, with_chat = builtin_registry_rows(tmp_path)
     placed_by_hand = _desktop_with_shortcuts(
-        *seed_desktop_shortcuts(before_chat), _shortcut("chat", "root", 6, 3, ShortcutMode.FOCUS)
+        *seed_desktop_shortcuts(before_chat), shortcut_at("chat", "root", 6, 3, ShortcutMode.FOCUS)
     )
 
-    reconciled = with_default_shortcuts_offered(placed_by_hand, with_chat, apps_with_a_default_shortcut(before_chat))
+    reconciled = with_default_shortcuts_offered(placed_by_hand, with_chat, default_shortcut_targets(before_chat))
 
     assert reconciled is placed_by_hand
 
@@ -653,29 +676,65 @@ def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shor
         write_registry(
             tmp_path / "apps.toml",
             builtin_chat_row_toml(),
-            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
+            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcuts=[("open", "focus")]),
             registry_row_toml("plain", "http://localhost:3"),
-            registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
+            registry_row_toml("odd", "http://localhost:5", default_shortcuts=[("make", "focus")]),
         )
     )
     # The user removed the chat's shortcut after it was offered: an empty desktop the seed no longer matches.
     emptied = _desktop_with_shortcuts()
 
-    assert with_default_shortcuts_offered(emptied, rows, {AppName("chat")}) is emptied
-    assert apps_with_a_default_shortcut(rows) == {"chat"}
+    chat_root = ShortcutTarget(app=AppName("chat"), launch=LaunchPathId("root"))
+    assert with_default_shortcuts_offered(emptied, rows, {chat_root}) is emptied
+    assert default_shortcut_targets(rows) == {chat_root}
 
 
-def test_the_apps_on_a_desktop_are_every_app_with_a_shortcut_or_only_those_holding_their_default_one(
+def test_an_offered_apps_further_default_shortcut_is_added_at_the_next_free_cell(tmp_path: Path) -> None:
+    """A workspace offered the Screen's one shortcut before the Screen declared a second gets only the second."""
+    rows = read_registry(
+        write_registry(tmp_path / "apps.toml", screen_row_toml([("screen", "focus"), ("browser", "focus")]))
+    )
+    desktop = _desktop_with_shortcuts(shortcut_at("chat", "new", 0, 0), shortcut_at("screen", "screen", 2, 1))
+
+    reconciled = with_default_shortcuts_offered(
+        desktop, rows, {ShortcutTarget(app=AppName("screen"), launch=LaunchPathId("screen"))}
+    )
+
+    assert targets_and_cells(reconciled) == [
+        ("chat", "new", 0, 0),
+        ("screen", "screen", 2, 1),
+        ("screen", "browser", 1, 0),
+    ]
+    assert reconciled.shortcuts[-1].mode is ShortcutMode.FOCUS
+
+
+def test_only_the_shortcuts_of_apps_no_row_registers_are_dropped(tmp_path: Path) -> None:
+    _, with_chat = builtin_registry_rows(tmp_path)
+    desktop = _desktop_with_shortcuts(
+        shortcut_at("chat", "new", 0, 0), shortcut_at("retired", "new", 0, 1), shortcut_at("files", "new", 0, 2)
+    )
+
+    kept = without_shortcuts_of_unregistered_apps(desktop, with_chat)
+
+    assert targets_and_cells(kept) == [("chat", "new", 0, 0), ("files", "new", 0, 2)]
+    assert without_shortcuts_of_unregistered_apps(kept, with_chat) is kept
+
+
+def test_the_targets_on_a_desktop_are_every_shortcuts_or_only_those_of_a_default_shortcut(
     tmp_path: Path,
 ) -> None:
     _, with_chat = builtin_registry_rows(tmp_path)
     desktop = _desktop_with_shortcuts(
-        _shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0), _shortcut("unregistered", "open", 2, 0)
+        shortcut_at("chat", "new", 0, 0), shortcut_at("files", "new", 1, 0), shortcut_at("unregistered", "open", 2, 0)
     )
 
-    assert apps_with_a_shortcut_on([desktop, _desktop_with_shortcuts()]) == {"chat", "files", "unregistered"}
+    assert _pairs(shortcut_targets_on([desktop, _desktop_with_shortcuts()])) == {
+        ("chat", "new"),
+        ("files", "new"),
+        ("unregistered", "open"),
+    }
     # The chat's default shortcut is its ``root`` launch path, not ``new``.
-    assert apps_with_their_default_shortcut_on(desktop, with_chat) == {"files"}
+    assert _pairs(default_shortcut_targets_on(desktop, with_chat)) == {("files", "new")}
 
 
 # Layouts

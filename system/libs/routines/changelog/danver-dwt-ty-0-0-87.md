@@ -1,0 +1,1 @@
+The type-check ratchet runs `ty` 0.0.87 (was 0.0.85). 0.0.87 checks a property against the method it overrides, and its one finding is fixed: `Duration.count`, which shadowed `str.count` on a `str` subclass, is now `Duration.amount` (the `3` of `3h`).

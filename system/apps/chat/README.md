@@ -253,12 +253,16 @@ reads the reply being written off the agent's terminal pane three times a
 second, through mngr's `stream_snapshot` converter
 (`harnesses/claude/reply_draft.py`), and sends what changed:
 `{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
-shows the draft after the transcript while `after_event_id` is still the last
-event it holds, so the reply landing replaces it at once; an empty `text`
-clears it. A draft that matches a reply the transcript already holds is never
-sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. Codex also writes an agent message to its
-rollout only once it is finished; its draft comes from the
+shows the draft while `after_event_id` is still the last event it holds, so the
+reply landing replaces it at once; an empty `text` clears it. It shows where the
+reply will land: while a step is open, as that step's caption (or at the end of
+its work, when the step is expanded), and otherwise as a bubble at the end of
+the agent's output (see the stretch layout below). A step left open from an
+earlier turn takes it only once the agent works in it again in the new turn. A
+draft that matches a reply the transcript already holds is never sent. The
+terminal's rendering loses heading levels and code-fence languages, which the
+landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
 rollout holds the message's id. Pi records an assistant message only on
@@ -901,8 +905,8 @@ login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
 the line was reworded, on its own probe; a denial the browser reports says
 access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
-keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
-sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+keeps waiting with Try again). A ChatGPT code login that cannot start says so
+and offers trying again or an API key. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
 first way in (`reauth_method` on each account row). Signing in again
 restarts the live agents bound to the account (by the `account=<id>` label described below),
@@ -914,6 +918,15 @@ the chat is switching to another agent or account (or once it has switched).
 Which messages a sign-in error refused goes by timestamp, on both the page
 (`auth-recovery.ts`) and the chat app: claude can write the error into its
 transcript ahead of the message it refused.
+
+A sign-in error only shows to someone looking at the chat, so the chat app also
+tells the Imbue Studio app's feed (`sign_in_notices.py`,
+`imbue_studio_notifications.py`). A chat's refusals form a run, from its first
+live reply flagged `is_auth_error` to its next reply that is not, and only the
+run's first refusal is posted: one notification as the chat's own agent, so a
+click opens the chat, carrying the chat's watchers as `watched_by`, so a reader
+already in the chat gets no toast. The backlog a watcher reads when it starts is
+history and is never announced.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
@@ -949,6 +962,36 @@ was connected still gets its window whenever someone finally connects. The one
 exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
+
+## Dictation
+
+The composer dictates (the workspace-voice-input spec in the mngr repository):
+a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
+the chat page, turn speech into text on the user's own device. The speech model
+(Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
+a pinned commit, checked against its size and SHA-256, kept in the browser's
+Cache Storage for the workspace's origin (one checked copy, which the browser
+evicts under storage pressure like any site's and which is checked again on
+every read), and run in a SharedWorker every chat page of the workspace shares
+for as long as any of them is open; the workspace stores and runs nothing for
+voice.
+Silero VAD splits speech into utterances, and a bounded streaming window keeps
+every inference job short, so dictation has no length limit. The words land at
+the caret, fitted to the sentence around them; the unfinished tail is rewritten
+in place, and only final words reach the saved draft. The box is read-only while
+listening; Enter or Send finishes the words first and then sends; Escape drops
+the words that are not yet final. The mic carries every state (a ring while the
+model downloads, a spinner while starting and stopping, the neutral pressed tint
+with its capsule filling to the input level while listening), and a problem is
+told in a notice over the composer. The library is `system/libs/workspace_voice/`
+(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
+mic and the notice, and `MessageInput.ts` drives the dictation and writes its
+words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
+and Hugging Face's hosts (see `create_application`), the manifest declares
+`uses_microphone`, and the root's inner frames allow the microphone. For a
+side-by-side evaluation, a browser's `localStorage` may name another registered
+engine under `workspace-voice:engine` and insist on a device (`webgpu` or
+`wasm`) under `workspace-voice:device`.
 
 ## Development
 
@@ -1017,7 +1060,10 @@ Every request reaches the chat app with the shell's `X-Imbue-Identity` header
 person the workspace is shared with (`user:<id>`), or a visiting agent
 (`agent:<id>`). A present header that does not parse is refused with 400; only a
 missing or blank one reads as the owner (an in-workspace caller, such as a
-script). Every route that delivers a person's words attributes them the same
+script), and only from loopback under a loopback `Host`, since the workspace's
+own browser is on loopback too; a request a browser marks as a page of another
+origin's is refused with 403 before any route runs (the request guard every app
+installs, `app_schema.request_guard`). Every route that delivers a person's words attributes them the same
 way: the message route, a new chat's first message (the create's and the
 new-chat intake's), and the message that confirms a switch. A send from anyone but the owner is delivered
 to the harness as `[from: <name>] <text>` when the harness the words are for reads
@@ -1035,9 +1081,14 @@ read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
 several queued messages), else not at all: an unstamped turn is the owner's. The
-prefix is stripped into `display_body` so the page never shows it, and a send held
-while the chat converges is listed in the snapshot's `held_sends` without it too; the
-terminal view shows the pane as it is.
+prefix is stripped into `display_body` so the page never shows it; the
+terminal view shows the pane as it is. A message the page shows before its turn
+exists is drawn under its sender the same way: each of the harness queue's entries
+(`active_agent.queued_messages`) is joined to its annotation like a turn and gets the
+words behind its prefix as `display_body`, and each send held while the chat
+converges (`handoff.held_sends`) or is being created (the provisional chat's
+`held_sends`) is listed without the prefix and with the author of the annotation
+recorded under its message id.
 
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own
@@ -1048,8 +1099,22 @@ workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
 app proxies from the shell -- asked at that path with the page's own query, its
 caching answer relayed -- so the page needs no second origin.
-The agent's prose is drawn as bubbles under that picture and the workspace's name,
-one per reply (tool chips and cards sit between them, outside the bubbles).
+A stretch of the agent's output -- everything it does until a person speaks or another
+agent takes over -- sits under the workspace's name, once, with its picture beside the
+first piece. Each message's prose is a grey bubble of its own. Its tool chips, step
+timeline and the system notices among them sit on the chat between the bubbles, on the
+bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
+stretch, through the chip icons, step bullets and notice ticks, stopping short of each
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
+line (the working dot, the harness's caption, and how long the turn has run); a call in a
+step's work is said by the status line instead, which is the stretch's last piece on the
+line whenever it shows; the done mark sits just under the stretch. A command a person
+runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
+person's side and end the stretch (display `person_chip`). The reply the agent is still
+writing, and a switch the transcript does not show yet, end the last stretch while it is
+open, and open a stretch of their own after a person's turn or a switch to another agent.
+A run of one person's turns names them once, over its first bubble ("You" for the
+viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 

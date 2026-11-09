@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from host_backup.restic import (
     extract_snapshot_id_from_backup_output,
+    format_restic_size,
+    is_quota_exceeded_error,
     is_repo_locked_error,
     is_repo_missing_error,
 )
@@ -56,3 +58,24 @@ def test_extract_snapshot_id_handles_garbage_lines() -> None:
 
 def test_extract_snapshot_id_handles_empty() -> None:
     assert extract_snapshot_id_from_backup_output("") == ""
+
+
+def test_is_quota_exceeded_error_matches_the_stores_507() -> None:
+    # The exact stderr restic emits when the backup store refuses a data upload.
+    assert is_quota_exceeded_error(
+        "Save(<data/f5098c7a77>) failed: unexpected HTTP response (507): 507 Insufficient Storage\n"
+        "Fatal: unable to save snapshot: unexpected HTTP response (507): 507 Insufficient Storage"
+    )
+
+
+def test_is_quota_exceeded_error_rejects_other_refusals() -> None:
+    assert not is_quota_exceeded_error("unexpected HTTP response (403): 403 Forbidden")
+    assert not is_quota_exceeded_error("repository is already locked")
+    assert not is_quota_exceeded_error("")
+
+
+def test_format_restic_size_floors_to_whole_mebibytes() -> None:
+    assert format_restic_size(512 * 1024 * 1024) == "512M"
+    assert format_restic_size(512 * 1024 * 1024 + 1) == "512M"
+    assert format_restic_size(100) == "0M"
+    assert format_restic_size(-5) == "0M"
