@@ -136,35 +136,32 @@ CAREFUL_TIER_CUTOFF: Final[float] = 0.4
 _DELIVERY_ATTEMPTS: Final[int] = 36
 _DELIVERY_RETRY_SECONDS: Final[float] = 5.0
 
-QUICK_CHANGE_QUESTION: Final[str] = "quick_simple_change"
+QUICK_CHANGE_QUESTION: Final[str] = "quick_side_task"
 PENDING_WORK_QUESTION: Final[str] = "blocked_by_unfinished_work"
 TIER_QUESTION: Final[str] = "needs_careful_side_agent"
 JEV_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
     QUICK_CHANGE_QUESTION: {
         "type": "noul",
         "instructions": (
-            "A user sent new_message to an AI agent that builds and runs apps on their computer. Does new_message "
-            "ask for a change to an existing app that is simple and fast: it is already clear from the message "
-            "what to change, and making it needs no web search, gathering context, investigating a problem, data "
-            "analysis, architectural or design decisions, building a large feature, or sophisticated reasoning?"
+            "A user sent new_message to an AI agent that builds and runs apps on their computer. Is new_message a "
+            "quick, bounded change to the front end of an existing app that a side agent could finish in a few "
+            "minutes, even if it needs some design judgement?"
         ),
         "criteria": {
             "true": (
-                "new_message asks for a small, specified change that can be made in a few minutes by editing the "
-                "app directly: for example a colour, font, size or spacing; showing, hiding or moving an element; "
-                "changing text to wording the message gives or makes obvious, such as renaming a label, fixing a "
-                "typo or editing one line; reordering items; or a small addition whose shape the message already "
-                "states, such as a simple on/off setting, a sort option or a toggle between two presentations."
+                "A change to how existing parts of the app look or behave on screen that touches only the front end: "
+                "restyling a page, an element or the whole app (colours, colour scheme, fonts, layout, spacing, "
+                "visual style); a design or taste choice about how something should look; changing text with given or "
+                "obvious wording; showing, hiding, moving or reordering elements; or a small, clearly described "
+                "addition to the interface such as a setting or a toggle."
             ),
             "false": (
-                "new_message does not ask for a change (thanks, approval, a question, declining an offer, asking "
-                "the agent to carry on), or any part of it needs more: reporting something wrong whose cause must "
-                "be found, research, exploring large amounts of code or data, a design choice the user left open "
-                "('make it look more modern', 'give it more personality'), connecting or switching data sources or "
-                "services, backend or data work, a feature beyond a small addition, writing new content that the "
-                "agent has to come up with (explanations, summaries or suggestions, especially for many items), or "
-                "careful reasoning; also building a new app. If one part of the message is simple and another is "
-                "not, the answer is no."
+                "Anything that is not quick and bounded or not front-end only: server, data or storage work; "
+                "connecting or switching services or data sources; research or investigating a problem whose cause "
+                "must be found; exploring large amounts of code or data; architectural decisions; a large new "
+                "feature; writing content the agent must come up with for many items; a complaint where it is unclear "
+                "what is wrong or where; building a new app; questions, thanks or other messages that ask for no "
+                "change; or several requests where any part is not quick."
             ),
         },
     },
