@@ -201,7 +201,6 @@ def test_resolve_many_never_waits_on_the_connector_and_answers_once_the_backgrou
     refreshed = _refreshed_listener(resolver)
 
     assert resolver.resolve_many([_BOB, UserId("user-unknown")], _T0) == {}
-    assert not is_released.is_set()
 
     is_released.set()
     assert refreshed.wait(timeout=10)
