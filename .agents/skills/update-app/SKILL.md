@@ -94,34 +94,27 @@ change that only alters behavior behind an unchanged surface as contained.
 Either way, the mechanics of surfacing the change to the user are the same
 live loop:
 
-## One native subagent per requested change
+## Hand quick changes to a Sonnet subagent
 
-Subagents are here to keep you responsive and get the work done faster: while
-they build, you stay free to read the user's next message and reply. Do every
-task through a subagent, whether a new one or one already running: each
-requested change, each follow-up on a change, and each fix. Keep one subagent for
-quick look-and-feel changes (a colour, a font size, spacing, showing or hiding an
-element) and send each such request to it as soon as it arrives, so those
-changes appear in the app right away. After each change it makes, the quick
-look-and-feel subagent refreshes the user's window (`uv run --no-sync
-workspace-layout refresh --app <name>`) so the change shows at once. Hand every
-other request to a subagent as soon as it arrives, including the first one: start
-a new native subagent (the `Agent` tool) when the work makes sense to give to a
-new agent, or send it to a subagent already running when it fits with that
-subagent's work. A list of changes in one message is several
-requests, so each change in the list goes to a subagent as above. Start each
-building subagent with `model: "sonnet"`, and leave its `isolation` unset, so
-every subagent edits the live app directly. Subagents run in the background, so
-starting one returns at once. They work under your service lease (below) and do
-not take their own. Keep each brief short: the user's request word for word and
-the app's location; leave the design to the subagent. Building subagents only
-build their change and send back a short report; they do not test it in a
-browser. Subagents don't sleep to wait for other work. A subagent that needs
-something not yet ready reports and stops; message it when it's ready. Start one
-verification subagent that checks the
-changes as they land, grouping its checks however is fastest, and sends you a
-short report. This is separate from `launch-task`, which starts a background
-worker on its own branch.
+Do the work yourself by default. When a request, or part of one, is a quick,
+bounded change (a one-off that takes a few minutes: restyling, a design or taste
+choice on existing parts, text with given wording, showing, hiding or moving
+elements, a small setting or toggle), hand that part at once to a native
+subagent (the `Agent` tool) with `model: "sonnet"` and carry on with your own
+work, so the user sees it right away while your longer work continues. Send
+later quick changes to that same subagent. Keep the brief short: the user's
+words and the app's location. Leave its `isolation` unset so it edits the live
+app directly; it runs in the background and works under your service lease
+(below) without taking its own. After each change it refreshes the user's window
+(`uv run --no-sync workspace-layout refresh --app <name>`) so the change shows at
+once, then sends back a short report. Keep for yourself anything that applies to
+many pieces of data or needs large, coordinated changes: content for many items,
+data, storage or server work, research or investigation, large features, and
+changes spanning several parts of the app. Subagents don't sleep to wait for
+other work; one that needs something not yet ready reports and stops, and you
+message it when it's ready. Keep track of what you handed off so you don't redo
+or overwrite it, and check those changes along with your own. This is separate
+from `launch-task`, which starts a background worker on its own branch.
 
 ## One editor at a time: the service lease
 
