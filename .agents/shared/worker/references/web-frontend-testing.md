@@ -29,11 +29,13 @@ which is installed before any agent starts, and it fails a test that asks for
 pytest-playwright's `page` / `context` / `browser` instead. A user-built app's
 suite is its own pytest root, which that conftest does not reach: `type-app.md`'s
 "On a phone" says how its browser test gets Playwright and launches Fortress.
-Anywhere else, do not write your own launch fixture. Never `playwright install`
-a managed browser, and never skip browser tests on browser presence -- a
-browser that cannot launch must fail the run. Under the repo-root conftest,
-the only per-suite setup a browser test needs is a
-`pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
+The chat app's and the shell's suites are their own pytest roots too, and
+their own conftests point `page` / `context` / `browser` at Fortress, so use
+those there. Where a conftest provides the browser, do not write your own
+launch fixture. Never `playwright install` a managed browser, and never skip
+browser tests on browser presence -- a browser that cannot launch must fail
+the run. Under the repo-root conftest, the only per-suite setup a browser test
+needs is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
 10-second default does not cover a browser launch. Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
