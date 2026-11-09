@@ -442,13 +442,13 @@ def _repoll_assignment(stack: ShareStack) -> None:
     _converge_frpc_processes(stack)
 
 
-def is_status_heartbeat_due(last_status_heartbeat: datetime, now: datetime) -> bool:
+def _is_status_heartbeat_due(last_status_heartbeat: datetime, now: datetime) -> bool:
     return now - last_status_heartbeat >= STATUS_HEARTBEAT_INTERVAL
 
 
 def _heartbeat_gateway_status(stack: ShareStack, now: datetime) -> None:
     """Rewrite the "up" status with a fresh stamp once per heartbeat interval."""
-    if not is_status_heartbeat_due(stack.last_status_heartbeat, now):
+    if not _is_status_heartbeat_due(stack.last_status_heartbeat, now):
         return
     stack.last_status_heartbeat = now
     _write_up_status(stack.materials.workspace_domain, now)

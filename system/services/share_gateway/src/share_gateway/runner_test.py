@@ -8,9 +8,9 @@ import pytest
 
 from share_gateway.runner import POLL_INTERVAL_SECONDS
 from share_gateway.runner import STATUS_HEARTBEAT_INTERVAL
+from share_gateway.runner import _is_status_heartbeat_due
 from share_gateway.runner import _try_setup_inotify
 from share_gateway.runner import _wait_for_change_inotify
-from share_gateway.runner import is_status_heartbeat_due
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="inotify is a Linux facility")
@@ -38,7 +38,7 @@ def test_watcher_times_out_quietly_when_nothing_changes(tmp_path: Path) -> None:
 
 def test_the_up_status_is_restamped_once_a_minute_and_well_inside_the_desktops_staleness_limit() -> None:
     last = datetime(2026, 11, 9, 0, 0, tzinfo=timezone.utc)
-    assert is_status_heartbeat_due(last, last + timedelta(seconds=59)) is False
-    assert is_status_heartbeat_due(last, last + STATUS_HEARTBEAT_INTERVAL) is True
+    assert _is_status_heartbeat_due(last, last + timedelta(seconds=59)) is False
+    assert _is_status_heartbeat_due(last, last + STATUS_HEARTBEAT_INTERVAL) is True
     # Well inside the staleness limit the desktop applies to an "up".
     assert STATUS_HEARTBEAT_INTERVAL <= timedelta(minutes=5) / 4
