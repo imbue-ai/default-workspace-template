@@ -452,6 +452,7 @@ def test_a_planted_uv_run_window_is_caught_at_any_depth(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.timeout(60)
 def test_no_plain_uv_run_in_agent_facing_files() -> None:
     offenders = [
         f"{relative}: {line.strip()}"
@@ -465,6 +466,7 @@ def test_no_plain_uv_run_in_agent_facing_files() -> None:
     )
 
 
+@pytest.mark.timeout(60)
 def test_every_deliberate_sync_exception_still_matches_a_line() -> None:
     violations = _plain_uv_run_violations()
     stale = [
@@ -1231,6 +1233,7 @@ def _sys_path_edits_outside_the_bare_search_paths(
     return offenders
 
 
+@pytest.mark.timeout(60)
 def test_sys_path_edits_only_add_a_bare_search_path() -> None:
     offenders = _sys_path_edits_outside_the_bare_search_paths(
         REPO_ROOT, BARE_SEARCH_PATHS

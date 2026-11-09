@@ -2,4 +2,4 @@
 
 - `AGENTS.md`, `system/scripts/README.md` and the docstrings of those scripts now say that their interface is the app's contract and is changed upstream.
 
-- Gave the two whole-tree scans in `system/test_python_launch_rules.py` a 60-second timeout: they take about 6 seconds alone and could pass the 10-second default on a loaded machine.
+- Gave the five heaviest whole-tree scans in `system/test_python_launch_rules.py` a 60-second timeout: they take a few seconds alone and could pass the 10-second default on a loaded machine.
