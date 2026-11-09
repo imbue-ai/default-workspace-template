@@ -229,10 +229,8 @@ describe("reportChatOnScreenOnce", () => {
     reportChatOnScreenOnce("agent-1", true);
     expect(chatOnScreenReports(parent)).toEqual([]);
 
-    window.dispatchEvent(new MessageEvent("message", { source: parent as unknown as Window, data: HANDSHAKE }));
-    window.dispatchEvent(
-      new MessageEvent("message", { source: parent as unknown as Window, data: { type: SHELL_SHOWN } }),
-    );
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_SHOWN }, parent);
     reportChatOnScreenOnce("agent-1", false);
     expect(chatOnScreenReports(parent)).toEqual([]);
 
@@ -246,10 +244,8 @@ describe("reportChatOnScreenOnce", () => {
     layOutDocument(0);
     const { connectChatToShell, reportChatOnScreenOnce } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
-    window.dispatchEvent(new MessageEvent("message", { source: parent as unknown as Window, data: HANDSHAKE }));
-    window.dispatchEvent(
-      new MessageEvent("message", { source: parent as unknown as Window, data: { type: SHELL_SHOWN } }),
-    );
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_SHOWN }, parent);
 
     reportChatOnScreenOnce("agent-1", true);
     expect(chatOnScreenReports(parent)).toEqual([]);
