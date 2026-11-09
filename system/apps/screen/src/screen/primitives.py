@@ -42,6 +42,9 @@ SERVICE_PORT: Final[int] = 8090
 LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
 NEKO_HOST: Final[str] = "127.0.0.1"
 NEKO_PORT: Final[int] = 8091
+# The session neko runs an admin API-token request as, and names as the initiator (`id`) of every host change
+# the service makes through its REST API (give, reset, locking); it never appears in the session list.
+NEKO_API_SESSION_ID: Final[str] = "API"
 ICE_MUX_PORT: Final[int] = 59000
 
 # The supervisord group of the stack and its members, in the order the service starts them.
