@@ -1539,6 +1539,8 @@ export class DesktopStore {
     const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
     if (target === null || target === viewedId) {
+      // A window that moved off while the shell was asked has left already: there is no failure to show.
+      if (this.state.activeDesktopId !== viewedId) return;
       this.stopViewingFailedOn = viewedId;
       this.redraw();
       return;

@@ -4004,6 +4004,42 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.isStopViewingFailed()).toBe(false);
   });
 
+  it("stop viewing that finds nowhere to go after the window already moved off leaves no failure behind", async () => {
+    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
+    api.desktops = [api.desktops[0], bobs];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    let answerArrival: () => void = () => undefined;
+    const arrivalAnswered = new Promise<void>((resolve) => {
+      answerArrival = resolve;
+    });
+    const arrive = api.arriveClient.bind(api);
+    api.arriveClient = async (clientId) => {
+      await arrivalAnswered;
+      return arrive(clientId);
+    };
+
+    const stopping = store.stopViewing();
+    await store.switchDesktop("bob");
+    answerArrival();
+    await stopping;
+    expect(store.getState().activeDesktopId).toBe("bob");
+
+    // Bob's desktop goes, and with the shell unreachable the window falls back onto the desktop the stop began on.
+    api.refusal = "the shell is down";
+    socket.deliver().onDesktopsUpdated([api.desktops[0]]);
+    await settle();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    expect(store.isStopViewingFailed()).toBe(false);
+  });
+
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {
     api.desktops = [...api.desktops, alices];
     const store = await startedStore();
