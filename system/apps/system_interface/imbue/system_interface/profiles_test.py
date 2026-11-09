@@ -10,6 +10,7 @@ import httpx
 import pytest
 from workspace_layout.primitives import UserId
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.profiles import PROFILE_CACHE_TTL
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -226,6 +227,63 @@ def test_resolve_many_answers_a_stale_profile_at_once_and_replaces_it_in_the_bac
     assert stale["user-bob-4471"].display_name == "Bob"
     assert refreshed.wait(timeout=10)
     assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Robert"
+
+
+class _UnexpectedConnectorError(Exception):
+    """What no fetch path expects, so it ends the refresh thread that met it."""
+
+
+# The raised error ends that refresh thread, which pytest reports; that is the case under test.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_resolve_many_fetches_again_after_a_background_fetch_raised(tmp_path: Path) -> None:
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    raised: list[httpx.Request] = []
+
+    def failing_once(request: httpx.Request) -> httpx.Response:
+        if not raised:
+            raised.append(request)
+            raise _UnexpectedConnectorError("the connector answered something no one expected")
+        return connector.handle(request)
+
+    resolver = _resolver(tmp_path, failing_once)
+    refreshed = _refreshed_listener(resolver)
+
+    resolver.resolve_many([_BOB], _T0)
+
+    wait_for(
+        lambda: bool(resolver.resolve_many([_BOB], _T0)),
+        timeout=10.0,
+        poll_interval=0.01,
+        error_message="the refresh never ran again after a fetch raised",
+    )
+    assert refreshed.is_set()
+    assert len(raised) == 1
+
+
+def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sharing(tmp_path: Path) -> None:
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    resolver = _resolver(tmp_path, connector.handle)
+    resolver.resolve(_BOB, _T0)
+
+    assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Bob"
+    resolver.share_env_path.unlink()
+
+    assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL) == {}
+    assert resolver.resolve_many([_BOB], _T0)["user-bob-4471"].display_name == "Bob"
+
+
+def test_a_malformed_broker_url_is_a_failed_fetch(tmp_path: Path) -> None:
+    connector = _Connector()
+    resolver = _resolver(tmp_path, connector.handle)
+    # httpx refuses a non-numeric port before any request is made.
+    resolver.share_env_path.write_text('export SHARE_BROKER_URL="https://broker.example.test:notaport"\n')
+
+    assert resolver.resolve(_BOB, _T0) is None
+    assert connector.requests == []
+    cached = json.loads((tmp_path / "profiles" / "user-bob-4471.json").read_text())
+    assert cached["is_fetch_failed"] is True
 
 
 def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp_path: Path) -> None:

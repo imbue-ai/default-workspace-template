@@ -177,6 +177,10 @@ def read_share_broker_url(share_env_path: Path) -> str | None:
     return parse_share_broker_url(text)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @pure
 def _profile_of(cached: _CachedProfile) -> UserProfile | None:
     if cached.is_fetch_failed:
@@ -201,6 +205,9 @@ class ProfileResolver(MutableModel):
     )
     transport: httpx.BaseTransport | None = Field(
         default=None, frozen=True, description="A test's stand-in for the network; the real one when None"
+    )
+    clock: Callable[[], datetime] = Field(
+        default=_utc_now, frozen=True, description="The time a background fetch is stamped with"
     )
 
     _refresh_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -236,16 +243,19 @@ class ProfileResolver(MutableModel):
     def resolve_many(self, user_ids: Sequence[UserId], now: datetime) -> dict[str, UserProfile]:
         """The profile of each user the cache holds one for, by user id, without waiting on the connector: an entry
         that is missing or past the TTL is answered as the cache has it and fetched in the background."""
+        is_shared = read_share_broker_url(self.share_env_path) is not None
         profile_by_user_id: dict[str, UserProfile] = {}
         stale_user_ids: list[UserId] = []
         for user_id in user_ids:
             cached = self._read_cached(user_id)
-            if cached is None or now - cached.fetched_at >= self.cache_ttl:
+            is_stale = cached is None or now - cached.fetched_at >= self.cache_ttl
+            if is_stale:
                 stale_user_ids.append(user_id)
-            profile = _profile_of(cached) if cached is not None else None
+            # A stale entry stands in only while the share it came from does, as ``resolve`` answers it.
+            profile = _profile_of(cached) if cached is not None and (is_shared or not is_stale) else None
             if profile is not None:
                 profile_by_user_id[str(user_id)] = profile
-        if stale_user_ids and read_share_broker_url(self.share_env_path) is not None:
+        if stale_user_ids and is_shared:
             self._refresh_in_background(stale_user_ids)
         return profile_by_user_id
 
@@ -262,13 +272,19 @@ class ProfileResolver(MutableModel):
     def _run_refresh(self) -> None:
         """Fetch every pending user, one at a time, until none is left; then tell the listeners if a profile changed."""
         is_any_profile_changed = False
-        user_id = self._take_pending_refresh()
-        while user_id is not None:
-            before = self._read_cached(user_id)
-            fetched = self.resolve(user_id, datetime.now(timezone.utc))
-            if fetched != (_profile_of(before) if before is not None else None):
-                is_any_profile_changed = True
+        try:
             user_id = self._take_pending_refresh()
+            while user_id is not None:
+                before = self._read_cached(user_id)
+                fetched = self.resolve(user_id, self.clock())
+                if fetched != (_profile_of(before) if before is not None else None):
+                    is_any_profile_changed = True
+                user_id = self._take_pending_refresh()
+        finally:
+            # A fetch that raised ends this thread early; the next stale answer starts another.
+            with self._refresh_lock:
+                if self._refresh_thread is threading.current_thread():
+                    self._refresh_thread = None
         if is_any_profile_changed:
             for listener in tuple(self._refresh_listeners):
                 listener()
@@ -375,7 +391,8 @@ class ProfileResolver(MutableModel):
         with client:
             try:
                 response = client.get(url)
-            except httpx.HTTPError as e:
+            # A malformed broker URL in share.env is refused before any request, outside ``HTTPError``.
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
                 logger.warning("Failed to fetch the {} of {} from {}: {}", subject, user_id, url, e)
                 return None
         elapsed_seconds = time.monotonic() - started_at
