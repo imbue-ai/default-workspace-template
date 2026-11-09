@@ -1,7 +1,7 @@
 #!/bin/bash
 # The container's start hook: mngr's self-healing entrypoint runs this, detached,
-# on every container start after sshd is up (mngr's `CONTAINER_START_HOOK_PATH`,
-# installed by the Dockerfile at /usr/local/bin/mngr-container-start-hook).
+# on every container start after sshd is up (the Dockerfile installs it at mngr's
+# `CONTAINER_START_HOOK_PATH`).
 #
 # Docker's restart policy brings a workspace container back after an OOM kill, a
 # docker daemon restart or a VM reboot with nothing in it but sshd: the services
