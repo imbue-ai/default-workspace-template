@@ -3,6 +3,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { configDefaults } from "vitest/config";
 import path from "path";
 import { themeBoot } from "@imbue/workspace-ui/src/themes/themeBoot";
+// By path rather than by package name: vite loads a config's bare imports through Node as they are, which
+// cannot follow the plugin's extensionless imports, while a relative import is bundled with the config.
+import { voiceRuntimeAssets } from "../../../libs/workspace_voice/src/runtimeAssets";
 
 export default defineConfig({
   // `dist/` is not part of this project's output -- the bundle goes to
@@ -19,8 +22,12 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, "dist/**"],
   },
-  // themeBoot wears the theme this origin last wore before the first paint (workspace-themes plan section 5.3).
-  plugins: [tailwindcss(), themeBoot()],
+  // themeBoot wears the theme this origin last wore before the first paint (workspace-themes plan section 5.3);
+  // voiceRuntimeAssets ships the dictation's WebAssembly, worklet, and detector model under assets/voice/.
+  plugins: [tailwindcss(), themeBoot(), voiceRuntimeAssets()],
+  // The dictation's engine worker is a module worker that loads the speech runtime on its own; the default
+  // iife format cannot split it.
+  worker: { format: "es" },
   publicDir: "media",
   root: ".",
   resolve: {

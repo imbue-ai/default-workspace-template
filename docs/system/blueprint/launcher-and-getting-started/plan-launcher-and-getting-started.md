@@ -91,7 +91,7 @@ The row's caption shows the text it will send (section 4.2), so what Enter does 
 A launch-path row runs its launch path in one of three modes, decided by the manifest rather than by the row:
 
 - a launch path whose `path` equals its app's pin `path` runs in **focus** mode: the app's pinned window on the active desktop is restored and raised, and nothing is opened (the shell's own rule that a focus-mode open at the home path finds the pinned window);
-- every launch path of an unpinned app whose `default_shortcut` mode is `focus` (a one-window app: the Screen, Getting Started, Memory & disk) runs in **one** mode: the launch's target is `focus`, so the shell lands it in the app's window already on the desktop, whichever client opened it, raised in this client's layout, and opens one only when there is none (the Screen spec, section 4.1);
+- every launch path of an unpinned app whose first `default_shortcut` mode is `focus` (a one-window app: the Screen, Getting Started, Memory & disk) runs in **one** mode: the launch's target is `focus`, so the shell lands it in the app's window already on the desktop, whichever client opened it, raised in this client's layout, and opens one only when there is none (the Screen spec, section 4.1);
 - every other launch path runs in **new** mode, as its shortcut does: a new window at the path.
 
 On a stock machine "Chat" raises the pinned chat window, "Screen" and "Browser" land in the one Screen window, and "Terminal" and "File Viewer" open windows.
@@ -206,10 +206,10 @@ A disabled free-text row is drawn faint with its reason as the tooltip.
 The highlighted row wears the active fill and `data-highlighted="true"`.
 The menu renders no loading state at any point; every row comes from state the browser already holds.
 
-An app's desktop icon is its default shortcut (desktop-interface plan section 3.6) and nothing else: one per app.
-A right-click on the launch-path row of that shortcut (a shortcut of a launch path that takes text has no such row; its app's taskbar entry offers it) opens the desktop's menu for the app, ending with the reference rows every right-click menu of the shell ends with; every other row keeps the plain reference menu.
+An app's desktop icons are its default shortcuts (desktop-interface plan section 3.6) and nothing else: one per default shortcut it declares, most apps declaring one.
+A right-click on the launch-path row of one of those shortcuts (a shortcut of a launch path that takes text has no such row; when it is the app's first, its app's taskbar entry offers it) opens the desktop's menu for that shortcut, ending with the reference rows every right-click menu of the shell ends with; every other row keeps the plain reference menu.
 It offers `Add to desktop` when the active desktop does not hold the shortcut, added at the first free cell in reading order in the shortcut's mode, and `Remove from desktop` when it does.
-A taskbar entry's menu carries the same row for its window's app.
+A taskbar entry's menu carries the same row for its window's app's first default shortcut.
 Either way the desktop shows the change at once, and puts it back if the shell refuses it.
 
 ### 4.3 Running a row

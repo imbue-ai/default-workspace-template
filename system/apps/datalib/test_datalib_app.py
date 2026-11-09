@@ -97,7 +97,7 @@ def test_the_launcher_registers_the_token_on_the_launch_path_and_becomes_datalib
     assert row["name"] == "datalib"
     assert row["url"] == f"http://localhost:{_PORT}"
     assert row["stop_when_no_windows"] is False
-    assert row["default_shortcut"] == {"launch": "ui", "mode": "focus"}
+    assert row["default_shortcuts"] == [{"launch": "ui", "mode": "focus"}]
     # The window opens at the launch path with its presets as the query: /?token=<token>.
     assert row["launch_paths"] == [
         {

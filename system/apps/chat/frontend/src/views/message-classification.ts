@@ -50,6 +50,7 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
     case "hidden":
       return { kind: UserMessageKind.Hidden, label: null, body: content };
     case "chip":
+    case "person_chip":
       return {
         kind: UserMessageKind.SystemChip,
         label: event.display_label ?? null,
@@ -116,6 +117,12 @@ export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
 
+/** True when the message is a chip of the person's own doing (a bash-mode command or its output): it stands on
+ *  their side of the transcript rather than in the agent's turn. */
+export function isPersonsChipMessage(event: Pick<UserMessageEvent, "display">): boolean {
+  return event.display === "person_chip";
+}
+
 /** True when the message is a one-line notice on the agent's rail. */
 export function isNoticeUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.Notice;
@@ -143,7 +150,7 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
  *  is_meta injection) or relocated into an assistant-side block (a skill expansion). The
  *  rendering/rows layers use this to skip emitting a row.
  *
- *  Not "off the user rail": a notice draws its own row on the agent's. */
+ *  Not "off the user rail": a notice draws in the stretch of the agent's output it lands in. */
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   const kind = classifyUserMessage(event).kind;
   return KIND_SPEC[kind].rail === Rail.None || kind === UserMessageKind.SkillExpansion;

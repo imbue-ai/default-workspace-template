@@ -6,6 +6,7 @@ from loguru import logger
 
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
+from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import read_origin_label
@@ -38,8 +39,9 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.display_name is None
     assert row.critical is False
     assert row.stop_when_no_windows is False
+    assert row.uses_microphone is False
     assert row.priority == "user"
-    assert row.default_shortcut is None
+    assert row.default_shortcuts == ()
     assert row.launch_paths == ()
     assert row.launcher_rank is None
     assert row.pin is None
@@ -60,8 +62,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'display_name = "Files"\n'
         "critical = false\n"
         "stop_when_no_windows = true\n"
+        "uses_microphone = true\n"
         'priority = "files"\n'
-        'default_shortcut = {launch = "new", mode = "focus"}\n'
+        'default_shortcuts = [{launch = "new", mode = "focus"}, {launch = "recent", mode = "new"}]\n'
         'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
@@ -78,6 +81,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.icon == APP_ICON_MARKUP
     assert row.window_closed_path == "/api/window-closed"
     assert row.stop_when_no_windows is True
+    assert row.uses_microphone is True
     assert [(handler.type, handler.path, handler.show, handler.showing) for handler in row.message_handlers] == [
         ("minds:focus-chat", "/api/focus-chat", None, ()),
         ("open:file", None, "{path}?view", ("{path}", "{path}/")),
@@ -87,8 +91,10 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     ]
     assert row.display_name == "Files"
     assert row.priority == "files"
-    assert row.default_shortcut is not None
-    assert row.default_shortcut.launch == "new"
+    assert [(shortcut.launch, shortcut.mode) for shortcut in row.default_shortcuts] == [
+        ("new", ShortcutMode.FOCUS),
+        ("recent", ShortcutMode.NEW),
+    ]
     assert [
         (launch_path.id, launch_path.label, launch_path.path, launch_path.params, launch_path.text_param)
         for launch_path in row.launch_paths
@@ -121,6 +127,23 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "independent",
         "floating",
     )
+
+
+def test_a_row_registered_before_the_shortcut_list_reads_its_one_default_shortcut(tmp_path: Path) -> None:
+    """A row an older registration wrote carries one ``default_shortcut`` table; it reads as a list of one."""
+    registry = tmp_path / "apps.toml"
+    registry.write_text(
+        "[[apps]]\n"
+        'name = "browser"\n'
+        'url = "http://localhost:8200"\n'
+        'program = "browser"\n'
+        'default_shortcut = {launch = "new", mode = "focus"}\n'
+        'launch_paths = [{id = "new", label = "Browser", path = "/new", method = "POST"}]\n'
+    )
+
+    (row,) = read_registry(registry)
+
+    assert [(shortcut.launch, shortcut.mode) for shortcut in row.default_shortcuts] == [("new", ShortcutMode.FOCUS)]
 
 
 def test_a_pin_on_a_row_reads_its_defaults_for_the_keys_the_manifest_left_out(tmp_path: Path) -> None:

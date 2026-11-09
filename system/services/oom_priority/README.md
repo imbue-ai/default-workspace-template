@@ -44,8 +44,10 @@ Under gVisor, `/proc/meminfo` also misses the memory the runtime itself is
 charged against the cgroup (0.3-0.9 GB on a gen-2 slice), so earlyoom's 10%
 threshold can arrive only after the cgroup has killed the whole sandbox. A
 gen-2 slice VM therefore publishes the cgroup's own limit and headroom into the
-workspace's volume, and earlyoom runs with `--host-meminfo
-/mngr-vol/.host-meminfo` (`system/supervisord.conf.d/earlyoom.conf`), acting on
+workspace's volume, and so does the VM of a cloud workspace (AWS, GCP, Azure,
+Vultr, OVH: mngr_vps's `mngr-vps-container-meminfo.service`), and earlyoom runs
+with `--host-meminfo /mngr-vol/.host-meminfo`
+(`system/supervisord.conf.d/earlyoom.conf`), acting on
 whichever of the two shows less headroom. A local docker workspace under runc
 publishes the same file for itself: the `publish_cgroup_meminfo` program
 (`bin/publish_cgroup_meminfo.py`, over `cgroup_meminfo`) reads the container's
@@ -291,16 +293,21 @@ with no evidence at all counts as fresh: it is demoted only on positive evidence
 of abandonment. The lifecycle signal is what covers a chat messaged *outside* the
 UI (by `mngr message` or another agent), which the frontend never reports.
 
-Re-tagging is event-driven plus a slow sweep (`SWEEP_INTERVAL_SECONDS`, 60s). The
-events -- each presence report the chat page posts on tab-presence changes
-(`POST /api/chats/<chat_id>/presence`), each message sent through the chat
-app, and each lifecycle change from the observe stream --
-cover everything that changes a chat's engagement. The sweep exists solely because
-staleness is the one input that changes with nothing to announce it: a chat
-crosses a ramp threshold by sitting still. The revive-on-message path is race-free
-without the sweep, because the send blocks until the revived process is ready --
-the wrapper registers its pid before `exec`, so the pid exists by the time the
-frontend reports activity after the send returns.
+Re-tagging is event-driven plus a slow sweep (`SWEEP_INTERVAL_SECONDS`, 60s), and
+every pass runs on the prioritizer's one background thread. The events -- a presence
+report (`POST /api/chats/<chat_id>/presence`) that changes whether any page has the
+chat open or showing (a heartbeat that changes neither asks for nothing), each
+message sent through the chat app, and each lifecycle change from the observe
+stream -- cover everything that changes a chat's engagement. Each only asks that
+thread for a pass, so no request waits on one; passes run one at a time, at most one
+every `MIN_PASS_INTERVAL_SECONDS` (2s), and each reads the pid registry once for
+every chat (`live_pids_by_agent_id`) and `/proc` once per registered process. The
+sweep exists because two inputs change with nothing to announce them: a chat crosses
+a ramp threshold by sitting still, and a page that vanished without its closing
+report stops counting only when its report expires. The revive-on-message path is
+race-free, because the send blocks until the revived process is ready -- the wrapper
+registers its pid before `exec`, so the pid exists by the time the frontend reports
+activity after the send returns.
 
 Across a system-interface restart the per-chat message times are re-seeded from
 the durable client-activity log; without that, every chat would look

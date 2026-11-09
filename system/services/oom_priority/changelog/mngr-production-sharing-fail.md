@@ -1,0 +1,1 @@
+The README records that the memory headroom file earlyoom reads with `--host-meminfo` (`/mngr-vol/.host-meminfo`) is now also published by a cloud workspace's VM (mngr_vps's `mngr-vps-container-meminfo.service`), so earlyoom sees the cgroup's real headroom under gVisor on AWS, GCP, Azure, Vultr, and OVH as it already did on Imbue Cloud slices.

@@ -72,14 +72,14 @@ function renderBubble(content: string): Collected {
 }
 
 describe("user message bubble with attachments", () => {
-  it("keeps the typed text and hands the attachment line to markdown (not hidden)", () => {
+  it("keeps the typed text and hands the attachment markdown, without its label, to markdown", () => {
     const { texts, markdownContents } = renderBubble(buildMessageWithAttachments("here is the file", [IMAGE_PATH]));
 
     expect(texts.join(" ")).toContain("here is the file");
     // The path is not in the plain-text nodes: it lives inside the markdown block.
     expect(texts.join(" ")).not.toContain(IMAGE_PATH);
     expect(markdownContents).toHaveLength(1);
-    expect(markdownContents[0]).toContain("See attachment here:");
+    expect(markdownContents[0]).not.toContain("See attachment here:");
     // Image: inline image markdown with the absolute path as both alt and URL.
     expect(markdownContents[0]).toContain(`![${IMAGE_PATH}](${IMAGE_PATH})`);
   });

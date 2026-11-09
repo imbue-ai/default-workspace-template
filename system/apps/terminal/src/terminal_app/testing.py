@@ -10,7 +10,6 @@ from typing import Final
 
 import pytest
 from app_manifest.registry_location import ENV_APPS_FILE
-from flask import Flask
 from flask.testing import FlaskClient
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -20,7 +19,7 @@ from terminal_app.data_types import TerminalSessionRecord, TmuxSession
 from terminal_app.pages import (
     PageConfig,
     SessionPage,
-    build_pages_blueprint,
+    build_pages_app,
     render_page,
 )
 from terminal_app.primitives import (
@@ -358,16 +357,12 @@ def build_pages_test_client(
 ) -> FlaskClient:
     """A test client over the wrapper pages alone, reading origin labels from ``registry_path`` and serving the
     contract module at ``contract_path``."""
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_pages_blueprint(
-            source=source,
-            registry_path=registry_path,
-            contract_path=contract_path,
-            on_window_closed=window_closed_posts.append,
-        )
-    )
-    return app.test_client()
+    return build_pages_app(
+        source=source,
+        registry_path=registry_path,
+        contract_path=contract_path,
+        on_window_closed=window_closed_posts.append,
+    ).test_client()
 
 
 class TerminalEnvironment(FrozenModel):

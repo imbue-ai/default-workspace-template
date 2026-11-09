@@ -345,8 +345,8 @@ registering apps and restarting services, and release it when done.
 **Data.** Everything under the source's data tree arrives at its new location --
 **including `data/.secrets/anthropic.env`**, so migrated integrations keep working
 by default. Exactly two files are excluded, because they are per-workspace
-identity rather than user content: `restic.env` (an R2 bucket keyed by *that*
-workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted per
+identity rather than user content: `restic.env` (a backup repository keyed by
+*that* workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted per
 `agent_id`). Copying either would point this workspace at the old one's
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
 

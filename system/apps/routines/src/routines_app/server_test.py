@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from imbue.imbue_common.model_update import to_update
 from routines.data_types import CurrentRun
 from routines.mock_chat_app_test import ScriptedChatApp
@@ -293,3 +295,15 @@ def test_a_schedule_body_the_model_refuses_is_a_bad_request(
         assert refused.status_code == 400, body
         assert refused.get_json()["detail"]
     assert service.detail(sync_routine).row.schedule_text == "Every hour"
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(
+    client: FlaskClient, service: RoutinesService, sync_routine: RoutineId
+) -> None:
+    """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard)."""
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/routines")
+    cross_site = client.post(f"/api/routines/{sync_routine}/run", headers=CROSS_SITE_FETCH_HEADERS)
+    assert cross_site.status_code == 403
+    assert service.detail(sync_routine).runs == ()
