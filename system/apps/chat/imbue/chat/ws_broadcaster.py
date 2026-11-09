@@ -7,7 +7,7 @@ from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
 from imbue.chat.models import ChatSnapshot
-from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 
@@ -25,9 +25,14 @@ _CLIENT_QUEUE_MAX_SIZE = 1000
 _MAX_CONSECUTIVE_QUEUE_FULL = 50
 
 
-def provisional_chat_created_message(provisional: ProvisionalChat) -> dict[str, Any]:
-    """The ``provisional_chat_created`` message: the provisional chat's fields beside the type."""
-    return {"type": "provisional_chat_created", **provisional.model_dump(mode="json")}
+def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dict[str, Any]:
+    """The ``provisional_chat_created`` message: the provisional chat's fields beside the type, its held sends as
+    the page draws them."""
+    return {
+        "type": "provisional_chat_created",
+        **provisional.chat.model_dump(mode="json", exclude={"held_sends"}),
+        "held_sends": [held.model_dump(mode="json") for held in provisional.held_sends],
+    }
 
 
 def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> dict[str, Any]:
@@ -135,7 +140,7 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast a chats_updated event: every chat's snapshot, and the main chat's id."""
         self.broadcast(chats_updated_message(snapshots, main_chat_id))
 
-    def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
+    def broadcast_provisional_chat_created(self, provisional: ProvisionalChatAsShown) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""
         self.broadcast(provisional_chat_created_message(provisional))
 

@@ -205,7 +205,7 @@ def _running_e2e_server(
             registry_row_toml(
                 _STUB_APP_NAME,
                 stub_url,
-                default_shortcut=(_STUB_LAUNCH_ID, stub_shortcut_mode),
+                default_shortcuts=[(_STUB_LAUNCH_ID, stub_shortcut_mode)],
                 display_name=_STUB_APP_DISPLAY_NAME,
                 launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
             )
@@ -215,7 +215,7 @@ def _running_e2e_server(
                 registry_row_toml(
                     _SECOND_APP_NAME,
                     second_served.http_url,
-                    default_shortcut=(_STUB_LAUNCH_ID, "focus"),
+                    default_shortcuts=[(_STUB_LAUNCH_ID, "focus")],
                     display_name=_SECOND_APP_DISPLAY_NAME,
                     launch_paths=((_STUB_LAUNCH_ID, "New notes", _STUB_LAUNCH_PATH),),
                 )

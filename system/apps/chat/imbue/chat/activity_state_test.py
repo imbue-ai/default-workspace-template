@@ -1,32 +1,67 @@
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
+from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
+from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_non_turn_tail_event
 from imbue.chat.activity_state import is_transcript_tail_stale
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
-from imbue.chat.activity_state import resolve_is_agent_running
+from imbue.chat.activity_state import resolve_is_turn_in_flight
+
+_FRONTEND_SRC = Path(__file__).parent.parent.parent / "frontend" / "src"
 
 
-def test_resolve_is_agent_running_running_state_is_authoritative() -> None:
+def test_an_agent_carrying_work_past_its_turn_is_alive_but_not_running() -> None:
+    """The two questions this module answers come apart exactly here.
+
+    Its turn has ended, so no turn is in flight; work it declared will start the next one, so it
+    is not dead. What acts on death restarts the agent, so reading it as dead acts against a
+    live, working agent.
+    """
+    assert is_lifecycle_dead(BACKGROUND_LIFECYCLE_STATE) is False
+    assert resolve_is_turn_in_flight(BACKGROUND_LIFECYCLE_STATE, is_active_marker_present=False) is False
+    assert BACKGROUND_LIFECYCLE_STATE not in RUNNING_LIFECYCLE_STATES
+
+
+@pytest.mark.frontend
+def test_the_frontends_alive_states_match_this_modules() -> None:
+    """The frontend keeps its own copy of the live set, in a language that cannot import this one.
+
+    Its ``agentLiveness.ts`` mirrors ``is_lifecycle_dead``, and the two drifting is invisible
+    until a user sees a live agent's terminal unmount. Nothing but this test holds them together.
+    """
+    source = (_FRONTEND_SRC / "views" / "agentLiveness.ts").read_text()
+    declaration = re.search(r"ALIVE_STATES: ReadonlySet<string> = new Set\(\[(.*?)\]\)", source, re.S)
+    assert declaration is not None, "ALIVE_STATES is not declared the way this test reads it"
+    frontend_states = set(re.findall(r'"([A-Z_]+)"', declaration.group(1)))
+
+    assert frontend_states == set(RUNNING_LIFECYCLE_STATES) | {WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE}
+
+
+def test_resolve_is_turn_in_flight_running_state_is_authoritative() -> None:
     # A reported RUNNING state means running regardless of the marker.
-    assert resolve_is_agent_running("RUNNING", is_active_marker_present=False) is True
-    assert resolve_is_agent_running("RUNNING_UNKNOWN_AGENT_TYPE", is_active_marker_present=False) is True
+    assert resolve_is_turn_in_flight("RUNNING", is_active_marker_present=False) is True
+    assert resolve_is_turn_in_flight("RUNNING_UNKNOWN_AGENT_TYPE", is_active_marker_present=False) is True
 
 
-def test_resolve_is_agent_running_waiting_trusts_the_marker() -> None:
+def test_resolve_is_turn_in_flight_waiting_trusts_the_marker() -> None:
     # The lag case: a short turn leaves the reported state at WAITING while the marker flips.
-    assert resolve_is_agent_running("WAITING", is_active_marker_present=True) is True
-    assert resolve_is_agent_running("WAITING", is_active_marker_present=False) is False
+    assert resolve_is_turn_in_flight("WAITING", is_active_marker_present=True) is True
+    assert resolve_is_turn_in_flight("WAITING", is_active_marker_present=False) is False
 
 
-def test_resolve_is_agent_running_terminal_state_ignores_a_stale_marker() -> None:
+def test_resolve_is_turn_in_flight_terminal_state_ignores_a_stale_marker() -> None:
     # A hard-crashed agent can leave a stale marker; a STOPPED/EXITED state must still read
     # as not running so it never shows "Thinking".
-    assert resolve_is_agent_running("STOPPED", is_active_marker_present=True) is False
-    assert resolve_is_agent_running("EXITED", is_active_marker_present=True) is False
+    assert resolve_is_turn_in_flight("STOPPED", is_active_marker_present=True) is False
+    assert resolve_is_turn_in_flight("EXITED", is_active_marker_present=True) is False
 
 
 @pytest.mark.parametrize(

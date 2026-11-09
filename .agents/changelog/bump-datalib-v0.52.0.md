@@ -1,0 +1,1 @@
+The `datalib` skill now installs datalib v0.52.0. A search has one merged answer, with `semantic:off` to leave out meaning, and `tab=` and `--tab` are gone. Email keeps previews and a muted mark, Gmail can fetch each label to its own depth, and anything a sync drops now leaves a trail. An email's muted mark moves to `read_marks.muted` the first time this build opens the store.

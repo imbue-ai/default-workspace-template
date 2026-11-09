@@ -1,0 +1,1 @@
+The shell adds `microphone` to the `allow` attribute of the live page frames of an app whose manifest declares `uses_microphone` (the chat, for its composer's dictation), and of no other app's. The inventory's `app` object carries the flag, and the frontend's app record reads it.

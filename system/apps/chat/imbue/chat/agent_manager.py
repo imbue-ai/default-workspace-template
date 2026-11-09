@@ -21,7 +21,7 @@ from chat_background_tasks.markers import TaskSource
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pids_by_agent_id
+from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.primitives import ParticipantKey
@@ -39,6 +39,7 @@ from imbue.chat.accounts import index_path
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
@@ -56,6 +57,10 @@ from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.authors import AuthorAnnotation
+from imbue.chat.authors import author_of_send
+from imbue.chat.authors import participant_keys_of
+from imbue.chat.authors import resolve_author
 from imbue.chat.authors import split_author_prefix
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -129,6 +134,8 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import chat_kind_of
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import MessageDisplay
+from imbue.chat.harnesses.message_display import classify_delivered_message
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
@@ -182,11 +189,13 @@ from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendSnapshot
+from imbue.chat.models import MessageAuthorFields
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import ResentSendSnapshot
@@ -204,6 +213,9 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
+from imbue.chat.sign_in_notices import SignInFailureNotices
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -589,9 +601,8 @@ _DecidedT = TypeVar("_DecidedT", bound=DisplayDecisionFields)
 
 
 @pure
-def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
-    """``message`` carrying the render decision ``text`` would get in the transcript."""
-    decision = classify_user_message(text)
+def _with_display_decision(message: _DecidedT, decision: MessageDisplay | None) -> _DecidedT:
+    """``message`` carrying the render decision its text would get in the transcript."""
     if decision is None:
         return message
     return message.model_copy_update(
@@ -601,10 +612,46 @@ def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
     )
 
 
+_AuthoredT = TypeVar("_AuthoredT", bound=MessageAuthorFields)
+
+
+@pure
+def _with_author(message: _AuthoredT, author: tuple[ParticipantKey, str] | None) -> _AuthoredT:
+    """``message`` carrying the author its turn will be stamped with; unchanged for an unattributed one (None),
+    which is the owner's."""
+    if author is None:
+        return message
+    return message.model_copy_update(
+        to_update(message.field_ref().author, author[0]),
+        to_update(message.field_ref().author_name, author[1]),
+    )
+
+
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
-    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
+    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript:
+    the content is the text as delivered, so a non-owner's carries their author prefix, which the decision reads
+    past."""
     queued = QueuedMessageState.model_validate(entry)
-    return _with_display_decision(queued, queued.content)
+    return _with_display_decision(queued, classify_delivered_message(queued.content))
+
+
+@pure
+def _authored_queue(
+    queued_messages: Sequence[QueuedMessageState], annotations: Sequence[AuthorAnnotation]
+) -> tuple[QueuedMessageState, ...]:
+    """The queue with each entry's author, joined from the chat's annotations as its transcript turn's will be."""
+    return tuple(
+        _with_author(queued, resolve_author(queued.content, queued.timestamp, annotations))
+        for queued in queued_messages
+    )
+
+
+@pure
+def _authored_held_sends(
+    held_sends: Sequence[HeldSendSnapshot], annotations: Sequence[AuthorAnnotation]
+) -> tuple[HeldSendSnapshot, ...]:
+    """The held sends with each one's author, joined from the annotation recorded under its message id."""
+    return tuple(_with_author(held, author_of_send(held.message_id, annotations)) for held in held_sends)
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -635,6 +682,44 @@ def is_turn_in_flight(activity_state: ActivityState | None) -> bool:
 
 
 @pure
+def resolve_is_busy(
+    *,
+    activity_state: ActivityState | None,
+    is_turn_closing: bool,
+    lifecycle_state: str,
+    has_background_task: bool,
+) -> bool:
+    """Whether the agent will resume on its own rather than waiting on the user.
+
+    Each signal reaches what the others cannot. The transcript tail and the closing turn cover a
+    turn the observe stream has not caught up with. The RUNNING_BACKGROUND lifecycle covers every
+    task kind the harness names. A task marker covers a detached ``run_in_background`` runner,
+    which never reaches the harness's payload and so can never show up as the lifecycle, and the
+    task kinds this workspace records that the lifecycle has not reported yet.
+
+    CLEANUP: this workspace records the harness's own background tasks itself, in
+    `claude_background_task_hooks.py`, from the same turn-end payload mngr reads for
+    RUNNING_BACKGROUND -- so those two track the same work. Two things have to change before that
+    duplicate can go, and the first is not ours:
+
+    1. Every chat has to report the lifecycle. mngr writes both halves an agent needs -- the
+       work-lease library and the harness's turn-end hook -- into the agent's own state dir at
+       create, and the hook the harness runs is that copy, so bumping the mngr pin leaves existing
+       chats running their older one. A turn end does not opt them in. They report WAITING until
+       recreated, and our markers are the only signal they have.
+    2. A lease has to carry what the task row shows: what each task is, and when it started,
+       preserved across the turn ends that rewrite the lease set. A lease carries a name and a
+       deadline, so today the row would lose its description and its elapsed time.
+    """
+    return (
+        is_turn_in_flight(activity_state)
+        or is_turn_closing
+        or lifecycle_state == BACKGROUND_LIFECYCLE_STATE
+        or has_background_task
+    )
+
+
+@pure
 def chat_status_for_agent(
     lifecycle_state: str,
     activity_state: ActivityState | None,
@@ -643,7 +728,10 @@ def chat_status_for_agent(
     is_turn_closing: bool,
 ) -> ChatStatus:
     """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, a compaction or
-    a turn still closing, then a busy chat (one a pending background task will wake)."""
+    a turn still closing, then a busy chat (one a pending background task will wake).
+
+    What counts as busy is :func:`resolve_is_busy`'s question.
+    """
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
@@ -954,7 +1042,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
+        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
         if transition.trigger_text
         else ()
     )
@@ -966,12 +1054,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        # The page draws a held send as the sender's own bubble, so it gets the words behind the author prefix a
-        # non-owner's send carries; the record keeps the delivered text for the successor.
-        held_sends=(
-            *trigger,
-            *(_held_send_snapshot(held.message_id, split_author_prefix(held.text)[1]) for held in others),
-        ),
+        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
@@ -980,9 +1063,11 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
-    """One held send on the wire, carrying the render decision its text would get in the transcript."""
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
+def _held_send_snapshot(message_id: str, delivered_text: str) -> HeldSendSnapshot:
+    """One held send on the wire: the words behind the author prefix a non-owner's send carries (the record keeps the
+    delivered text for the agent), with the render decision they would get in the transcript."""
+    words = split_author_prefix(delivered_text)[1]
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=words), classify_user_message(words))
 
 
 @pure
@@ -1059,7 +1144,12 @@ def chat_snapshot_for_active_agent(
     """
     handoff = chat.handoff
     transition = chat.transition
-    is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
+    is_busy = resolve_is_busy(
+        activity_state=agent.activity_state,
+        is_turn_closing=agent.is_turn_closing,
+        lifecycle_state=agent.state,
+        has_background_task=bool(background_tasks),
+    )
     return ChatSnapshot(
         chat_id=chat.chat_id,
         kind=chat_kind_of(agent.harness),
@@ -1431,6 +1521,8 @@ class AgentManager:
     # Tells the Imbue Studio app a chat was read when it goes from unwatched to watched. Reaches the
     # app only when ``build`` was given the gateway; the default drops every call.
     _imbue_studio_notifications: ImbueStudioNotificationsClient
+    # The chats whose current sign-in failure the app's feed was already told of.
+    _sign_in_failure_notices: SignInFailureNotices
     # Runs periodic idle compaction (mngr's autocompact plugin, in process) for the opted-in chats.
     _autocompactor: ChatAutoCompactor
     # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
@@ -1483,10 +1575,10 @@ class AgentManager:
     # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
     # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
     _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
-    # Who has written in a chat, for its snapshot (the multiplayer spec, section 5.4): reads the chat's author
-    # annotations, which live on the app state the manager must not import. Set once at composition
-    # (``set_participants_reader``); ``None`` (tests) = no chat names participants.
-    _participants_reader: Callable[[ChatId], tuple[ParticipantKey, ...]] | None
+    # A chat's author annotations, which live on the app state the manager must not import: they say who has written
+    # in the chat (the multiplayer spec, section 5.4) and who sent each message not on its transcript yet. Set once
+    # at composition (``set_author_annotations_reader``); ``None`` (tests) = no chat has any.
+    _author_annotations_reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]] | None
     # Evicts one agent's session watcher (releasing its resident transcript, thread, and
     # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
     # the watcher registry lives on the app state, which the manager must not import; the
@@ -1633,7 +1725,7 @@ class AgentManager:
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._chats_updated_listener = None
-        manager._participants_reader = None
+        manager._author_annotations_reader = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
         manager._session_watcher_check = None
@@ -1664,11 +1756,12 @@ class AgentManager:
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
         )
+        manager._sign_in_failure_notices = SignInFailureNotices()
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
+            resolve_pids_by_chat_id=manager._resolve_active_pids_by_chat_id,
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1691,10 +1784,19 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
-        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
-        active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
+    def _resolve_active_pids_by_chat_id(self, chat_ids: Sequence[ChatId]) -> dict[ChatId, list[int]]:
+        """The pids of the processes each chat runs on, for the OOM prioritizer, from one read of the pid registry.
+
+        A chat with no active agent, or whose agent has no live process, maps to an empty list.
+        """
+        pids_by_agent_id = live_pids_by_agent_id()
+        pids_by_chat_id: dict[ChatId, list[int]] = {}
+        for chat_id in chat_ids:
+            active_agent_id = self._active_agent_id_of_chat(chat_id)
+            pids_by_chat_id[chat_id] = (
+                [] if active_agent_id is None else sorted(pids_by_agent_id.get(active_agent_id, []))
+            )
+        return pids_by_chat_id
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
@@ -1819,10 +1921,11 @@ class AgentManager:
         spec, section 6.4). The composition root calls this once."""
         self._chats_updated_listener = listener
 
-    def set_participants_reader(self, reader: Callable[[ChatId], tuple[ParticipantKey, ...]]) -> None:
-        """Install what answers who has written in a chat, for its snapshot (the multiplayer spec, section 5.4):
-        the author annotations live on the app state. The composition root calls this once."""
-        self._participants_reader = reader
+    def set_author_annotations_reader(self, reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]]) -> None:
+        """Install what reads a chat's author annotations, for its snapshot: who has written in it (the multiplayer
+        spec, section 5.4), and who sent each message it shows before the transcript does. The annotations live on
+        the app state. The composition root calls this once."""
+        self._author_annotations_reader = reader
 
     def _wake_main_chat_if_stopped(self) -> None:
         """Start the main chat's agent, on a thread of its own, when it is stopped: the main chat never sleeps.
@@ -1872,12 +1975,22 @@ class AgentManager:
         """Push a provisional chat to every client, under the name it is shown by."""
         self._broadcaster.broadcast_provisional_chat_created(self._provisional_as_shown(provisional))
 
-    def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChat:
+    def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChatAsShown:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
-        if title is None:
-            return provisional
-        return provisional.model_copy_update(to_update(provisional.field_ref().name, title))
+        held_sends = tuple(_held_send_snapshot(held.message_id, held.text) for held in provisional.held_sends)
+        return ProvisionalChatAsShown(
+            chat=provisional
+            if title is None
+            else provisional.model_copy_update(to_update(provisional.field_ref().name, title)),
+            held_sends=_authored_held_sends(held_sends, self._author_annotations_of(provisional.chat_id)),
+        )
+
+    def _author_annotations_of(self, chat_id: ChatId) -> tuple[AuthorAnnotation, ...]:
+        """The chat's author annotations. Never called under ``_lock``: the author store takes a lock of its own,
+        and foreign locks are never taken under this one (see ``get_chat_snapshots``)."""
+        reader = self._author_annotations_reader
+        return () if reader is None else reader(chat_id)
 
     def get_main_chat_id(self) -> ChatId | None:
         """The workspace's main chat (``main_chat.py``), or None while it has no chat to take it.
@@ -1940,15 +2053,31 @@ class AgentManager:
             title = self._title_override_by_chat.get(snapshot.chat_id)
             awaiting = self._awaiting_chat_ids_locked(snapshot.chat_id, time.monotonic())
             resent_sends = self._resent_sends_by_chat.get(snapshot.chat_id, ())
-        # Read outside ``_lock``: the author store takes a lock of its own, and foreign locks are
-        # never taken under this one (see ``get_chat_snapshots``).
-        reader = self._participants_reader
-        participants = () if reader is None else reader(snapshot.chat_id)
+        annotations = self._author_annotations_of(snapshot.chat_id)
+        active_agent = snapshot.active_agent
+        handoff = snapshot.handoff
         return snapshot.model_copy_update(
             to_update(snapshot.field_ref().title, snapshot.title if title is None else title),
             to_update(snapshot.field_ref().awaiting_chat_ids, awaiting),
-            to_update(snapshot.field_ref().participants, participants),
+            to_update(snapshot.field_ref().participants, participant_keys_of(annotations)),
             to_update(snapshot.field_ref().resent_sends, resent_sends),
+            to_update(
+                snapshot.field_ref().active_agent,
+                active_agent.model_copy_update(
+                    to_update(
+                        active_agent.field_ref().queued_messages,
+                        _authored_queue(active_agent.queued_messages, annotations),
+                    )
+                ),
+            ),
+            to_update(
+                snapshot.field_ref().handoff,
+                None
+                if handoff is None
+                else handoff.model_copy_update(
+                    to_update(handoff.field_ref().held_sends, _authored_held_sends(handoff.held_sends, annotations))
+                ),
+            ),
         )
 
     def note_send_begun(self, agent_id: str) -> float:
@@ -2669,8 +2798,9 @@ class AgentManager:
             )
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
-        """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
-        Studio app when the report is what made someone watch it."""
+        """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
+        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
+        watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
@@ -2680,6 +2810,17 @@ class AgentManager:
         section 7.4), as that chat's own agent, so the notification opens that chat and no other; a chat whose
         agent the app cannot post as sends nothing."""
         self._imbue_studio_notifications.notify_mention(mentioned_in, title, message)
+
+    def report_sign_in_failures(self, chat_id: ChatId, events: list[dict[str, Any]]) -> None:
+        """Tell the Imbue Studio app's feed when a live batch of ``chat_id``'s events starts a run of replies
+        refused for want of a signed-in AI account; once per run, and recorded read there for anyone already
+        watching the chat, who sees the sign-in action in the reply itself."""
+        if not self._sign_in_failure_notices.record_live_events(chat_id, events):
+            return
+        _loguru_logger.info("Chat {} could not reply: its AI account is signed out; notifying the owner", chat_id)
+        self._imbue_studio_notifications.notify_sign_in_needed(
+            chat_id, SIGN_IN_NEEDED_TITLE, SIGN_IN_NEEDED_MESSAGE, tuple(self.chat_watchers(chat_id))
+        )
 
     def read_streamed_reply(self, agent_id: str) -> StreamedReply | None:
         """The reply the agent's harness session is streaming over its live connection, or None.
@@ -2818,6 +2959,7 @@ class AgentManager:
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         """Continue a chat on ``account_id``, or as a room when ``kind`` says so: a rebind when the account is on
         the chat's own harness and lane and that harness can be rebound, else a handoff (spec 5.2).
@@ -2826,7 +2968,8 @@ class AgentManager:
         text draining returned for the composer. ``model_pick`` is the model the chat runs on
         once the switch lands, applied before ``message``: a handoff's successor, which starts on
         its harness's default without one, or a rebind's restarted agent, which keeps its own
-        model without one. Raises ``ChatConvergingError`` for a chat already converging and
+        model without one. ``on_begun`` runs once the switch is written, before any page is told
+        of it. Raises ``ChatConvergingError`` for a chat already converging and
         ``HandoffError`` for a chat with no active agent, an unknown account, or the chat's own
         account.
         """
@@ -2834,9 +2977,13 @@ class AgentManager:
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         if is_rebind_target(agent_state, target):
-            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin, model_pick)
+            phase, returned_block = self.begin_rebind(
+                chat_id, account_id, message, message_id, origin, model_pick, on_begun=on_begun
+            )
             return TransitionKind.REBIND, phase, returned_block
-        phase, returned_block = self.begin_handoff(chat_id, account_id, message, message_id, origin, model_pick, kind)
+        phase, returned_block = self.begin_handoff(
+            chat_id, account_id, message, message_id, origin, model_pick, kind, on_begun=on_begun
+        )
         return TransitionKind.HANDOFF, phase, returned_block
 
     def begin_handoff(
@@ -2848,6 +2995,7 @@ class AgentManager:
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat to ``account_id`` on a new agent, or to a room when ``kind`` says so: write the
         handoff, drain the retiring agent, and run the rest.
@@ -2858,7 +3006,8 @@ class AgentManager:
         applied before that message. A retiring agent that never received a user turn makes
         the handoff a fresh start: no summary is asked for and no prompt is written, so the
         successor begins as a new chat would, and so does a switch to a room, which takes no prompt (the
-        multiplayer spec, section 7.6). Raises ``ChatConvergingError`` for a chat already converging and
+        multiplayer spec, section 7.6). ``on_begun`` runs once the handoff is written, before any page is told of
+        it. Raises ``ChatConvergingError`` for a chat already converging and
         ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, or a model is
         named beside a room (which runs on none). ``begin_switch`` decides between this and a rebind.
         """
@@ -2879,6 +3028,8 @@ class AgentManager:
             handoff = self._open_handoff_locked(
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick, is_fresh_start
             )
+        if on_begun is not None:
+            on_begun()
         self._broadcast_chats_updated()
         if target.account is not None:
             _record_mru(target.account.id)
@@ -2908,13 +3059,15 @@ class AgentManager:
         message_id: str,
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat's agent to ``account_id`` in place (spec 6): write the rebind, drain the agent,
         and restart it on its own thread.
 
         Returns the phase the chat is in once draining is done and the queued text draining
         returned for the composer. ``model_pick`` is the model the agent runs on once it is back,
-        applied before ``message``; without one it keeps its own. Raises ``ChatConvergingError``
+        applied before ``message``; without one it keeps its own. ``on_begun`` runs once the rebind
+        is written, before any page is told of it. Raises ``ChatConvergingError``
         and ``HandoffError`` as ``begin_handoff`` does, plus ``HandoffError`` when the account is
         not one the agent can be rebound to (another harness or lane, or a harness that cannot be).
         """
@@ -2932,6 +3085,8 @@ class AgentManager:
             rebind = self._open_rebind_locked(
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick
             )
+        if on_begun is not None:
+            on_begun()
         self._broadcast_chats_updated()
         _record_mru(target.account_id)
         _loguru_logger.info(
@@ -4318,8 +4473,8 @@ class AgentManager:
         with self._lock:
             return list(self._provisional_chats.values())
 
-    def get_provisional_chats_as_shown(self) -> list[ProvisionalChat]:
-        """``get_provisional_chats`` under the names they are shown by, for a client catching up."""
+    def get_provisional_chats_as_shown(self) -> list[ProvisionalChatAsShown]:
+        """``get_provisional_chats`` as the pages are sent them, for a client catching up."""
         return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
 
     def get_provisional_chat(self, chat_id: str) -> ProvisionalChat | None:
@@ -5613,7 +5768,7 @@ class AgentManager:
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
-        # activity indicator through the unchanged ``is_agent_running`` gate --
+        # activity indicator through the unchanged activity gate --
         # otherwise a stopped agent would keep a stale "Thinking..." indicator.
         # Added agents were already recomputed via _ensure_activity_tracking above;
         # unchanged agents keep their re-applied cached state. broadcast_on_change
@@ -5645,8 +5800,7 @@ class AgentManager:
         # of a chat messaged outside the workspace UI (by mngr or another agent):
         # entering a running state is the observable consequence of such a message,
         # and it keeps a chat exempt from its staleness climb for the turn's
-        # duration. After the broadcast because it writes to /proc, which the UI
-        # update should not wait on.
+        # duration. After the broadcast so the UI update never waits on it.
         with self._lock:
             self._running_chat_ids = frozenset(
                 chat_id_by_agent_id[agent_id]

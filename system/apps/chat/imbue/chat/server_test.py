@@ -136,6 +136,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import drain_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
@@ -152,6 +153,7 @@ from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
@@ -210,8 +212,9 @@ def client(app: Flask) -> FlaskClient:
 def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
     """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
     images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
-    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
-    carries none."""
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), the composer's dictation
+    may compile WebAssembly and download its speech model from Hugging Face and the CDN hosts it redirects to,
+    scripts still come only from the chat's origin, and a non-page answer carries none."""
     page = client.get("/")
 
     assert page.status_code == 200
@@ -220,6 +223,8 @@ def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskCl
     assert "frame-src http: https:" in policy
     assert "img-src * data: blob:" in policy
     assert "media-src * data: blob:" in policy
+    assert "script-src 'self' 'wasm-unsafe-eval'" in policy
+    assert "connect-src 'self' https://huggingface.co https://*.hf.co" in policy
     assert "Content-Security-Policy" not in client.get("/api/health").headers
 
 
@@ -2535,7 +2540,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2709,7 +2714,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [4242] for cid in cids if cid == agent_id},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
@@ -4885,7 +4890,7 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
-def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_as_theirs_without_the_prefix(
     tmp_path: Path,
 ) -> None:
     app, _log_path = _recording_app(tmp_path)
@@ -4899,18 +4904,19 @@ def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_withou
     )
     assert held.status_code == 202
 
-    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    # The successor is handed the prefix; the page, which draws the held send under its sender, is handed the words
+    # and who the sender is.
     manager: AgentManager = state_of(app).agent_manager
     record = manager._chat_record_store.read(ChatId(first))
     assert record is not None and record.handoff is not None
     assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
     listed = client.get("/api/chats").get_json()["chats"]
     assert [
-        {"message_id": held_send["message_id"], "text": held_send["text"]}
+        {key: held_send[key] for key in ("message_id", "text", "author", "author_name")}
         for held_send in listed[0]["handoff"]["held_sends"]
     ] == [
-        {"message_id": "trigger-1", "text": "Carry on in Codex"},
-        {"message_id": "m-2", "text": "and this"},
+        {"message_id": "trigger-1", "text": "Carry on in Codex", "author": None, "author_name": None},
+        {"message_id": "m-2", "text": "and this", "author": "user:user-bob-4471", "author_name": "bob"},
     ]
 
 
@@ -6057,6 +6063,32 @@ def test_a_visitors_send_to_a_chat_the_app_does_not_know_is_refused_with_nothing
     assert sorted(path.name for path in authors_root.glob("*")) == []
 
 
+def test_a_visitors_send_to_a_chat_being_created_is_shown_under_them_without_the_prefix() -> None:
+    """The agent the chat gets is handed the prefix; every page, the ones that reconnect included, is sent the
+    words and who sent them."""
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    client.post(
+        f"/api/chats/{chat_id}/message",
+        json={"message": "hello", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "and mine", "message_id": "m-2"})
+
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None
+    assert [held.text for held in proto.held_sends] == ["[from: bob] hello", "and mine"]
+    (shown,) = manager.get_provisional_chats_as_shown()
+    replayed = provisional_chat_created_message(shown)
+    assert [
+        {key: held[key] for key in ("message_id", "text", "author", "author_name")} for held in replayed["held_sends"]
+    ] == [
+        {"message_id": "m-1", "text": "hello", "author": _VISITOR_KEY, "author_name": "bob"},
+        {"message_id": "m-2", "text": "and mine", "author": None, "author_name": None},
+    ]
+
+
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
     client = app.test_client()
     assert client.get("/api/me").get_json() == {"participant": "owner"}
@@ -6884,12 +6916,14 @@ def test_a_visitors_create_with_a_message_hands_the_agent_the_prefix_and_annotat
 
 def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_to(tmp_path: Path) -> None:
     """The confirming message of a switch is the next agent's first (section 5.1): a switch to a room holds the
-    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them."""
+    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them under
+    the visitor from the first push that tells the pages of the switch."""
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
     # Stopped, so the switch has nothing to drain off it.
     _register_agent(app, first, "Chat-1", "STOPPED")
+    pushes = state_of(app).agent_manager.broadcaster.register()
 
     response = client.post(
         f"/api/chats/{first}/handoff",
@@ -6907,6 +6941,16 @@ def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_
     assert annotation.text_sha256 == text_sha256("let's make this a room")
     listed = [chat for chat in client.get("/api/chats").get_json()["chats"] if chat["chat_id"] == first]
     assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
+    first_switch_push = next(
+        chat
+        for push in drain_pushes(pushes)
+        if push["type"] == "chats_updated"
+        for chat in push["chats"]
+        if chat["chat_id"] == first and chat["handoff"] is not None
+    )
+    assert [(held["author"], held["author_name"]) for held in first_switch_push["handoff"]["held_sends"]] == [
+        (_VISITOR_KEY, "bob")
+    ]
 
 
 def test_a_switch_the_manager_refuses_annotates_nothing(tmp_path: Path) -> None:

@@ -12,11 +12,20 @@
  * A row can also hold status chips, for something that happened to the agent
  * rather than a call it made (a compaction of its context). They wear the same
  * chrome and open the same panel, filled with what the page composes for them.
+ *
+ * On a stretch's line, the call the agent is running right now is its chip,
+ * running: the working dot in its icon's place, the harness's caption for it, and
+ * how long the turn has run once that is worth saying. It stands in for the status
+ * row (see ActivityIndicator) and settles into an ordinary chip when its result
+ * lands. A row off the line (a step's opened work) leaves the call to the status
+ * row, so only one of the two ever says it.
  */
 
 import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
+import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
+import { labelForToolCall, runningCallElapsed, runningToolCall } from "./ActivityIndicator";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { TOOL_CALL_PART } from "./ToolCallBlock";
 import { resolveToolPayloads } from "./tool-payloads";
@@ -152,11 +161,11 @@ const ROW_CLASS = "tool-chip-row -ml-1 flex flex-wrap items-center gap-1";
 /** A ghost button: no fill at rest, a wash on hover, a stronger fill and full-
  *  strength text once it is the open one.
  *
- *  `max-w-[20rem]`: a chip carries a phrase, and one long one must not take a
+ *  `max-w-[15rem]`: a chip carries a phrase, and one long one must not take a
  *  whole line of the row to itself. Past that width the target truncates and the
  *  hover title carries the rest. */
 const CHIP_BASE =
-  "tool-chip inline-flex max-w-[20rem] cursor-pointer appearance-none items-center gap-0.5 rounded-md border-0 " +
+  "tool-chip inline-flex max-w-[15rem] cursor-pointer appearance-none items-center gap-1 rounded-md border-0 " +
   "px-1 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
   "hover:bg-fill-hover";
 
@@ -502,16 +511,36 @@ function renderChipLabel(text: ChipText): m.Vnode {
       ]);
 }
 
+/** A running chip's face: the working dot in its icon's box (which the stretch's line runs through, as it does a
+ *  chip's icon), the call's caption, and the turn's clock once it has run long enough to show one. */
+function renderRunningChipFace(call: ToolCall, chatId: string): m.Children[] {
+  const elapsed = runningCallElapsed(chatId);
+  return [
+    m(
+      "span",
+      { class: "tool-chip-running-mark flex size-[13px] shrink-0 items-center justify-center", "data-rail-icon": "" },
+      m("span", { class: activityDotClass("h-1.5 w-1.5", "accent") }),
+    ),
+    m("span", { class: CHIP_LABEL_CLASS, "aria-live": "polite" }, labelForToolCall(call)),
+    elapsed === null
+      ? null
+      : m("span", { class: "tool-chip-elapsed shrink-0 tabular-nums text-faint" }, `\u00b7 ${elapsed}`),
+  ];
+}
+
 interface ToolChipGroupAttrs {
   chips: ChipEntry[];
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
+  /** The row stands on a stretch's line, where the running call's chip shows it running. */
+  isOnLine?: boolean;
 }
 
 export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
   view(vnode) {
     const { chips, toolResults, chatId } = vnode.attrs;
     const open = chips.find((chip) => isBlockExpanded(chipKey(chip))) ?? null;
+    const running = vnode.attrs.isOnLine === true ? runningToolCall(chatId) : null;
 
     // The panel goes INSIDE the row, immediately after the chip that opened it,
     // because a long run wraps and a panel hung below the whole row would sit
@@ -530,7 +559,9 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
           // prose, a line or two below, which is the form a reader can act on.
           // Colour is left to say the one thing nothing else does -- which chip
           // is open.
-          const tone = isOpen ? "text-primary" : "text-faint";
+          const isRunning =
+            chip.kind === "tool" && running !== null && chip.call.tool_call_id === running.tool_call_id;
+          const tone = isOpen ? "text-primary" : isRunning ? "text-secondary" : "text-faint";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
           const button = m(
             "button",
@@ -538,7 +569,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               type: "button",
               class:
                 chip.kind === "tool"
-                  ? `${CHIP_BASE} ${tone} ${fill}`
+                  ? `${CHIP_BASE}${isRunning ? " tool-chip--running" : ""} ${tone} ${fill}`
                   : `${CHIP_BASE} ${chip.chipClass} ${tone} ${fill}`,
               "aria-pressed": isOpen ? "true" : "false",
               // The untruncated phrase, plus the tool it came from, which the
@@ -551,18 +582,20 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
                 if (!isOpen) setBlockExpanded(chipKey(chip), true);
               },
             },
-            [
-              m.trust(
-                icon(entryIcon(chip), {
-                  size: 13,
-                  strokeWidth: 1.75,
-                  className: "tool-chip-icon shrink-0",
-                }),
-              ),
-              chip.kind === "tool"
-                ? renderChipLabel(chipText(chip.call))
-                : m("span", { class: CHIP_LABEL_CLASS }, chip.label),
-            ],
+            isRunning && chip.kind === "tool"
+              ? renderRunningChipFace(chip.call, chatId)
+              : [
+                  m.trust(
+                    icon(entryIcon(chip), {
+                      size: 13,
+                      strokeWidth: 1.75,
+                      className: "tool-chip-icon shrink-0",
+                    }),
+                  ),
+                  chip.kind === "tool"
+                    ? renderChipLabel(chipText(chip.call))
+                    : m("span", { class: CHIP_LABEL_CLASS }, chip.label),
+                ],
           );
           if (!isOpen) return [button];
           return [button, renderDetail(chip, toolResults, chatId)];
