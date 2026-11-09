@@ -172,6 +172,7 @@ Rules (D4): any human session may `take_control`, which preempts an agent (queue
 `session.implicit_hosting` stays off: with it on, any human's first key would take host from another human, and taking control must be explicit (D4).
 With it off, a request from a non-host while a host exists is refused and the host is notified, which the viewer never provokes since it sends input only while it is the controller.
 The service subscribes to neko's `control/host` and `session/*` events on an admin WebSocket session of its own and keeps its state in step: a host change it did not make is a human taking control of an uncontrolled Screen.
+Its own changes (the `give`, `reset` and locking it makes through the REST API) come back on that socket too, with neko's API session (`id` `API`) as the initiator; those only update its record of neko's host, since reading one as a human's would re-grant a session the lease has already moved past and drop the next human's first input.
 `session.control_protection` stays off, `session.private_mode` off, `session.inactive_cursors` on, `session.merciful_reconnect` on.
 
 ### 6.3 Sessions and identity
