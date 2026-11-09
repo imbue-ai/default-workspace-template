@@ -293,8 +293,10 @@ class ShellState(MutableModel):
         """Give each desktop ``users.json`` says was made for a visitor, and which carries no owner, that visitor's
         key (the multiplayer spec, section 8.1), on the first start that runs this: a shell older than desktop owners
         seeded visitors' desktops with none, which reads as the workspace owner's."""
-        # CLEANUP: remove this (and DesktopStore.adopt_visitor_desktops) once no workspace can still update from a
-        # template older than minds-v0.10.0, whose visitor desktops carry no owner.
+        # CLEANUP: remove this, its call in start(), DesktopStore.adopt_visitor_desktops,
+        # VISITOR_DESKTOPS_ADOPTED_FILENAME, ownership's visitor_desktop_owners and with_visitor_owners, and their tests
+        # once no workspace can still update from a template older than minds-v0.10.0, whose visitor desktops carry no
+        # owner.
         try:
             with STATE_FILES_LOCK:
                 outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
