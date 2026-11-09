@@ -68,8 +68,7 @@ class RosterClient(MutableModel):
             try:
                 self._document = self.shell.roster()
             except ShellOpError as e:
-                # Every name, handle, and mention reads this roster, so the first failure of a run is a warning;
-                # the rest of the run would repeat it every few seconds.
+                # One warning per run of failures: the rest of the run would repeat it every few seconds.
                 if self._is_shell_failing:
                     logger.debug("Could not read the roster from the shell again; keeping the last one: {}", e)
                 else:

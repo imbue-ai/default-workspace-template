@@ -1533,7 +1533,7 @@ export class DesktopStore {
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
    *  shell seeds for a visitor who has none left. When none of those is somewhere else to go (the shell could not
    *  be asked, or it answered the desktop already on screen), the window stays and the chip says it could not
-   *  leave, rather than the click doing nothing. */
+   *  leave. */
   async stopViewing(): Promise<void> {
     const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
