@@ -76,6 +76,7 @@ def test_a_run_of_roster_failures_warns_once_and_a_recovery_ends_the_run(loguru_
 
     warnings = [record for record in loguru_records if record.startswith("WARNING Could not read the roster")]
     assert len(warnings) == 2
+    assert loguru_records.count("INFO Read the roster from the shell again") == 1
 
 
 def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_part() -> None:

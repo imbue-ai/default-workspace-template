@@ -76,7 +76,7 @@ class RosterClient(MutableModel):
                 self._is_shell_failing = True
             else:
                 if self._is_shell_failing:
-                    logger.debug("Read the roster from the shell again")
+                    logger.info("Read the roster from the shell again")
                 self._is_shell_failing = False
             self._fetched_at = now
             return self._document if self._document is not None else RosterDocument(participants=())
