@@ -1,8 +1,8 @@
 """Send a message to a chat, by chat id, through the chat app; or create a chat there.
 
 Imbue Studio runs this script: its path, arguments, output and exit codes are the app's workspace
-command contract. ``system/test_studio_command_contract.py`` checks the paths and arguments, not the output or
-exit codes; change any of them upstream only.
+command contract. ``system/test_studio_command_contract.py`` checks the path and arguments but little
+of the output or exit codes; change any of them upstream only.
 
 Usage, from the repo root (every skill's cwd)::
 

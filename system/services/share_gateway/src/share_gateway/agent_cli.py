@@ -1,8 +1,8 @@
 """``agent-access``: the visiting-agent operations from inside the workspace.
 
 Imbue Studio runs this command: its name, arguments, output and exit codes are the app's workspace
-command contract. ``system/test_studio_command_contract.py`` checks the paths and arguments, not the output or
-exit codes; change any of them upstream only.
+command contract. ``system/test_studio_command_contract.py`` checks the name and arguments but little
+of the output or exit codes; change any of them upstream only.
 
 The same module the gateway's ``/_agent/*`` routes call, exposed to callers
 that reach the workspace some other way: the Imbue Studio desktop over

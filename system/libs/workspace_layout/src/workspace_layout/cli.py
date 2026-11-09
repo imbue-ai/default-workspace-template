@@ -1,8 +1,8 @@
 """The agent-facing ``workspace-layout`` command: reads the desktop and arranges windows through the shell's op route.
 
 Imbue Studio runs this command: its name, arguments, output and exit codes are the app's workspace
-command contract. ``system/test_studio_command_contract.py`` checks the paths and arguments, not the output or
-exit codes; change any of them upstream only.
+command contract. ``system/test_studio_command_contract.py`` checks the name and arguments but little
+of the output or exit codes; change any of them upstream only.
 
 The command imports the standard library and this library's dependency-free modules only, never pydantic or the
 typed client: an agent runs it once per layout action, and importing pydantic and building the library's models took
