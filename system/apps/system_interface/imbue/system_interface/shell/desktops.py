@@ -76,12 +76,12 @@ DESKTOP_THEMES_FILENAME: Final[str] = "desktop_themes.json"
 DESKTOP_THEMES_FILE_VERSION: Final[int] = 1
 # The default shortcuts the shell has offered (desktop plan section 3.2).
 DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
-# Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
-# runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
-VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 2
 # The record's version while it named apps (``AppsOfferedDocument``).
 _APPS_OFFERED_FILE_VERSION: Final[int] = 1
+# Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
+# runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
+VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
 
 # The one desktop a fresh workspace starts with (desktop plan section 3.2).
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
