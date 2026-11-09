@@ -97,9 +97,7 @@ live loop:
 ## Hand quick changes to a Sonnet subagent
 
 Do the work yourself by default. When a request, or part of one, is a quick,
-bounded change (a one-off that takes a few minutes: restyling, a design or taste
-choice on existing parts, text with given wording, showing, hiding or moving
-elements, a small setting or toggle), hand that part at once to a native
+bounded change (a one-off that takes a few minutes), hand that part at once to a native
 subagent (the `Agent` tool) with `model: "sonnet"` and carry on with your own
 work, so the user sees it right away while your longer work continues. Send
 later quick changes to that same subagent. Keep the brief short: the user's
