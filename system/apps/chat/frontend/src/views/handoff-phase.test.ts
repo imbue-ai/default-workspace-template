@@ -1,24 +1,33 @@
 // @vitest-environment jsdom
 import m from "mithril";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: (id: string) => chats.get(id),
+  getProvisionalChat: (id: string) => provisionals.get(id),
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   getHarnessCatalog: (await import("../models/harnessCatalogFixture")).harnessCatalogFixture,
 }));
 
-import type { ChatSnapshot } from "../models/Chats";
+import type { ChatSnapshot, HeldSend, ProvisionalChat } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
-import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
+import {
+  chatSnapshotFixture,
+  handoffStateFixture,
+  provisionalChatFixture,
+  rebindStateFixture,
+} from "../models/chatSnapshotFixture";
+import { setParticipantsForTesting } from "../models/Participants";
+import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { appendEvents } from "../models/Response";
 import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
-import { renderHeldSends } from "./HeldSendView";
+import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 
 const chats = new Map<string, ChatSnapshot>();
+const provisionals = new Map<string, ProvisionalChat>();
 
 function rowClassOf(bubble: { attrs: unknown }): string {
   const attrs = bubble.attrs as { class?: string; className?: string };
@@ -198,5 +207,36 @@ describe("the held-send bubbles", () => {
     chats.set("agent-2", chatSnapshotFixture("agent-2"));
     expect(renderHeldSends("agent-2")).toEqual([]);
     expect(renderHeldSends("agent-unknown")).toEqual([]);
+  });
+});
+
+describe("the held-send bubbles in a shared workspace", () => {
+  // The owner's confirming message, then a visitor's send, as the backend lists them: the words, and who sent them.
+  const heldSends: HeldSend[] = [
+    { message_id: "trigger-1", text: "Carry on in Codex", author: null, author_name: null },
+    { message_id: "m-2", text: "and this", author: "user:glenn-2", author_name: "glenn" },
+  ];
+
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("draws a switch's and a new chat's held sends under their senders on the owner's page", () => {
+    setParticipantsForTesting("user:owner-1", ownerAndVisitorRosterFixture());
+    const switching = `agent-switching-${Math.random()}`;
+    chats.set(switching, chatSnapshotFixture(switching, { handoff: handoffStateFixture({ held_sends: heldSends }) }));
+    const creating = `agent-creating-${Math.random()}`;
+    provisionals.set(creating, provisionalChatFixture(creating, { held_sends: heldSends }));
+
+    for (const bubbles of [renderHeldSends(switching), renderProvisionalHeldSends(creating)]) {
+      const root = document.createElement("div");
+      m.render(root, bubbles);
+      const [owners, glenns] = Array.from(root.querySelectorAll(".held-send"));
+      expect(owners?.classList.contains("message-other")).toBe(false);
+      expect(owners?.querySelector(".message-author")).toBeNull();
+      expect(glenns?.classList.contains("message-other")).toBe(true);
+      expect(glenns?.querySelector(".message-author")?.textContent).toBe("Glenn");
+      expect(glenns?.querySelector(".message-user-bubble")?.textContent).toBe("and this");
+    }
   });
 });

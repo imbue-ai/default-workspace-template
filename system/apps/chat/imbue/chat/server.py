@@ -33,6 +33,7 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -1843,8 +1844,9 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     # The confirming message is the first the chat's next agent receives, so it is attributed for that agent's
-    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix. The annotation
-    # is recorded once the switch has begun, since the manager may still refuse it.
+    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix, under the
+    # sender its annotation names. The annotation is recorded once the manager has let the switch begin, which may
+    # still refuse it, and before any page is told of the switch.
     attributed = (
         _attributed_send(
             state,
@@ -1856,6 +1858,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         if switch_request.message
         else None
     )
+    annotation = attributed.annotation if attributed is not None else None
     try:
         kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
@@ -1865,13 +1868,12 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
             kind=switch_request.kind,
+            on_begun=None if annotation is None else lambda: state.authors.record(ChatId(chat_id), annotation),
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
     except HandoffError as e:
         return error_response(str(e), 400)
-    if attributed is not None and attributed.annotation is not None:
-        state.authors.record(ChatId(chat_id), attributed.annotation)
     record_client_message_activity(state.shell, ChatId(chat_id), switch_request, state.is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
@@ -3134,11 +3136,24 @@ def create_application(state: ChatAppState) -> Flask:
     """
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
+    install_request_guard(application, exempt_rules=frozenset())
     attach_state(application, state)
     # A message's markdown embeds images from anywhere, and passes raw HTML through the sanitizer,
     # whose default tag list admits <video> and <audio> as it does <img>; the sanitizer decides
-    # which tags render, and these two directives admit exactly what it renders.
-    attach_document_policy(application, {"img-src": "* data: blob:", "media-src": "* data: blob:"})
+    # which tags render, and these two directives admit exactly what it renders. The composer's
+    # dictation runs its speech models in the page (the workspace-voice-input spec in the mngr
+    # repository, D7): compiling their WebAssembly needs 'wasm-unsafe-eval', which admits nothing
+    # but WebAssembly, and the model files come straight from Hugging Face, whose downloads
+    # redirect to its regional CDN hosts under hf.co; scripts still load only from the chat's origin.
+    attach_document_policy(
+        application,
+        {
+            "script-src": "'self' 'wasm-unsafe-eval'",
+            "connect-src": "'self' https://huggingface.co https://*.hf.co",
+            "img-src": "* data: blob:",
+            "media-src": "* data: blob:",
+        },
+    )
     # The handoff borrows the watchers and the send path from here; wired where the routes
     # are, so a manager built by a test that never assembles the app refuses to hand off.
     state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))

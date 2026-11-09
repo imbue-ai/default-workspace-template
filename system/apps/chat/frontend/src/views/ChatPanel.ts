@@ -85,7 +85,7 @@ import type { AssistantMessageEvent, TranscriptEvent } from "../models/Response"
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { renderOutgoingMessages, type OwnBubbleRun } from "./OutgoingMessageView";
+import { closedPendingRun, renderOutgoingMessages, type PendingBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
@@ -178,11 +178,13 @@ function isRunningCallInline(chatId: string, rows: readonly RowDescriptor[]): bo
   );
 }
 
-/** Whether the viewer's own turn is the last thing said above their pending sends, which then carry on its run: the
- *  last row is that turn, the window reaches the live end, and no stretch of the agent's output is drawn after it. */
-function isOwnTurnLast(chatId: string, rows: readonly RowDescriptor[], liveEnd: LiveEnd): boolean {
+/** The run the pending sends carry on: that of the person whose turn is the last thing said above them (the last
+ *  row is their turn, the window reaches the live end, and no stretch of the agent's output is drawn after it), else
+ *  none. */
+function pendingRunAfterRows(chatId: string, rows: readonly RowDescriptor[], liveEnd: LiveEnd): PendingBubbleRun {
   const turn = rows[rows.length - 1]?.speakerTurn ?? null;
-  return turn !== null && authorOfTurn(turn) === null && !hasMoreAfter(chatId) && !liveEnd.isAgentTurn;
+  if (turn === null || hasMoreAfter(chatId) || liveEnd.isAgentTurn) return closedPendingRun();
+  return { isOpen: true, author: authorOfTurn(turn) };
 }
 
 /** The live end drawn after the rows, and whether it is a stretch of the agent's output of its own. */
@@ -500,15 +502,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     };
   }
 
-  /** The viewer's sends not yet on the transcript, in the order they show: what the agent has queued, what the chat
-   *  app holds through a switch, then this page's own. The first bubble wears "You" unless it carries on the viewer's
-   *  turn drawn above. */
-  function renderPendingSends(chatId: string, isAfterOwnTurn: boolean): m.Vnode[] {
-    const ownRun: OwnBubbleRun = { isOpen: isAfterOwnTurn };
+  /** The sends not yet on the transcript, in the order they show: what the agent has queued, what the chat app
+   *  holds through a switch, then this page's own. Each one's first bubble names its sender ("You" for the viewer's
+   *  own) unless it carries on the run of the turn drawn above. */
+  function renderPendingSends(chatId: string, run: PendingBubbleRun): m.Vnode[] {
     return [
-      ...renderQueuedMessages(chatId, ownRun),
-      ...renderHeldSends(chatId, ownRun),
-      ...renderOutgoingMessages(chatId, ownRun),
+      ...renderQueuedMessages(chatId, run),
+      ...renderHeldSends(chatId, run),
+      ...renderOutgoingMessages(chatId, run),
     ];
   }
 
@@ -525,13 +526,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
    *  agent lands (see MessageInput), and shows from its record on any page. */
   function renderStarting(chatId: string): m.Vnode {
     lastStartingChatId = chatId;
-    const ownRun: OwnBubbleRun = { isOpen: false };
+    const run = closedPendingRun();
     return renderEmptyConversation(
       "message-list-creating",
-      withTurnStatus(chatId, [
-        ...renderProvisionalHeldSends(chatId, ownRun),
-        ...renderOutgoingMessages(chatId, ownRun),
-      ]),
+      withTurnStatus(chatId, [...renderProvisionalHeldSends(chatId, run), ...renderOutgoingMessages(chatId, run)]),
       STARTING_STATUS,
     );
   }
@@ -760,7 +758,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       getEventCount(chatId) === 0
         ? [
             ...asAgentTurn([renderHandoffTailNode(chatId, false)].filter((node) => node !== null)),
-            ...renderPendingSends(chatId, false),
+            ...renderPendingSends(chatId, closedPendingRun()),
           ].filter((node) => node !== null)
         : [];
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
@@ -890,7 +888,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // the messages the chat app holds while the chat switches harness, then this page's own
         // not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
-        ...renderPendingSends(chatId, isOwnTurnLast(chatId, rows, liveEnd)),
+        ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
         // The status row under the user's own send while it waits on the agent.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),

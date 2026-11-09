@@ -20,7 +20,9 @@ export const MAX_HELD_FRAMES = 4;
 // nested frame can hold no more than its parent, so this asks for the same.
 const FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
-const FRAME_ALLOW = "clipboard-read; clipboard-write";
+// The microphone too: the chat's manifest declares it, so the shell delegates it to the root's frame, and the
+// page that dictates is the one nested here.
+const FRAME_ALLOW = "clipboard-read; clipboard-write; microphone";
 
 interface HeldFrame {
   frame: HTMLIFrameElement;

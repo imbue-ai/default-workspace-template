@@ -970,6 +970,36 @@ exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
 
+## Dictation
+
+The composer dictates (the workspace-voice-input spec in the mngr repository):
+a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
+the chat page, turn speech into text on the user's own device. The speech model
+(Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
+a pinned commit, checked against its size and SHA-256, kept in the browser's
+Cache Storage for the workspace's origin (one checked copy, which the browser
+evicts under storage pressure like any site's and which is checked again on
+every read), and run in a SharedWorker every chat page of the workspace shares
+for as long as any of them is open; the workspace stores and runs nothing for
+voice.
+Silero VAD splits speech into utterances, and a bounded streaming window keeps
+every inference job short, so dictation has no length limit. The words land at
+the caret, fitted to the sentence around them; the unfinished tail is rewritten
+in place, and only final words reach the saved draft. The box is read-only while
+listening; Enter or Send finishes the words first and then sends; Escape drops
+the words that are not yet final. The mic carries every state (a ring while the
+model downloads, a spinner while starting and stopping, the neutral pressed tint
+with its capsule filling to the input level while listening), and a problem is
+told in a notice over the composer. The library is `system/libs/workspace_voice/`
+(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
+mic and the notice, and `MessageInput.ts` drives the dictation and writes its
+words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
+and Hugging Face's hosts (see `create_application`), the manifest declares
+`uses_microphone`, and the root's inner frames allow the microphone. For a
+side-by-side evaluation, a browser's `localStorage` may name another registered
+engine under `workspace-voice:engine` and insist on a device (`webgpu` or
+`wasm`) under `workspace-voice:device`.
+
 ## Development
 
 ```bash
@@ -1037,7 +1067,10 @@ Every request reaches the chat app with the shell's `X-Imbue-Identity` header
 person the workspace is shared with (`user:<id>`), or a visiting agent
 (`agent:<id>`). A present header that does not parse is refused with 400; only a
 missing or blank one reads as the owner (an in-workspace caller, such as a
-script). Every route that delivers a person's words attributes them the same
+script), and only from loopback under a loopback `Host`, since the workspace's
+own browser is on loopback too; a request a browser marks as a page of another
+origin's is refused with 403 before any route runs (the request guard every app
+installs, `app_schema.request_guard`). Every route that delivers a person's words attributes them the same
 way: the message route, a new chat's first message (the create's and the
 new-chat intake's), and the message that confirms a switch. A send from anyone but the owner is delivered
 to the harness as `[from: <name>] <text>` when the harness the words are for reads
@@ -1055,9 +1088,14 @@ read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
 several queued messages), else not at all: an unstamped turn is the owner's. The
-prefix is stripped into `display_body` so the page never shows it, and a send held
-while the chat converges is listed in the snapshot's `held_sends` without it too; the
-terminal view shows the pane as it is.
+prefix is stripped into `display_body` so the page never shows it; the
+terminal view shows the pane as it is. A message the page shows before its turn
+exists is drawn under its sender the same way: each of the harness queue's entries
+(`active_agent.queued_messages`) is joined to its annotation like a turn and gets the
+words behind its prefix as `display_body`, and each send held while the chat
+converges (`handoff.held_sends`) or is being created (the provisional chat's
+`held_sends`) is listed without the prefix and with the author of the annotation
+recorded under its message id.
 
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own

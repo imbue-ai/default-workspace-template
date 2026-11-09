@@ -1,6 +1,6 @@
 /** A whole chat snapshot for tests, as the chat app pushes one, with every field overridable. */
 
-import type { ActiveAgent, ChatSnapshot, HandoffState } from "./Chats";
+import type { ActiveAgent, ChatSnapshot, HandoffState, ProvisionalChat } from "./Chats";
 
 export function chatSnapshotFixture(
   chatId: string,
@@ -78,6 +78,23 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     failed_step: null,
     is_fresh_start: false,
     has_landed: false,
+    ...overrides,
+  };
+}
+
+/** A chat still being created (the backend's ``ProvisionalChat`` as the pages are sent it), for tests: an agent chat on
+ *  an Anthropic account with nothing held yet, every field overridable. */
+export function provisionalChatFixture(chatId: string, overrides: Partial<ProvisionalChat> = {}): ProvisionalChat {
+  return {
+    chat_id: chatId,
+    name: "Chat 1",
+    account_id: "acct-1",
+    kind: "agent",
+    phase: "creating",
+    error: null,
+    is_seeded: false,
+    held_sends: [],
+    model_pick: null,
     ...overrides,
   };
 }

@@ -61,9 +61,10 @@ from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
 from imbue.system_interface.shell.testing import client_report
+from imbue.system_interface.shell.testing import default_target_pairs
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import offered_targets_recorded
 from imbue.system_interface.shell.testing import placement_record
-from imbue.system_interface.shell.testing import read_default_shortcuts_offered
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shortcut_apps_on
@@ -352,7 +353,7 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     hints: list[WindowClosedHintPost] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     shell.list_desktops()
-    work = shell.desktops.create_desktop("Work", "#123456", 1, (), (), None)
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), (), None, ())
     first = _open(shell, work.id, "terminal", "/?session=terminal-1")
     second = _open(shell, work.id, "terminal", "/?session=terminal-2")
     _open(shell, work.id, "files", "/")
@@ -492,6 +493,11 @@ def _seed_of_the_registry(shell: ShellState) -> tuple[DesktopShortcut, ...]:
     return seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
 
 
+def _default_targets_of_the_registry(shell: ShellState) -> list[tuple[str, str]]:
+    """The default shortcut targets of the rows the shell's inventory holds, as the offered record keeps them."""
+    return default_target_pairs([entry.row for entry in shell.inventory.entries()])
+
+
 def _register_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
 
@@ -557,7 +563,7 @@ def test_a_registry_change_before_the_first_read_of_the_desktops_seeds_nothing(
     assert _desktops_updates(client_queue) == []
     (home,) = shell.list_desktops()
     assert home.shortcuts == _seed_of_the_registry(shell)
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registry_change_alone(
@@ -608,7 +614,7 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
     assert shortcut_apps_on(stored_home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
     assert _pinned_apps_on(stored_home) == ["chat"]
     assert stored_work == work and shortcut_apps_on(work) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert "chat" in read_default_shortcuts_offered(tmp_path / "state")["apps"]
+    assert ("chat", "root") in offered_targets_recorded(tmp_path / "state")
 
 
 def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_shortcut_too(
@@ -622,7 +628,8 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
         ClientId("visitor-tab"), RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
     )
     assert arrival is not None and arrival.created_desktop is not None
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
+    assert "chat" not in {app for app, _ in offered_targets_recorded(tmp_path / "state")}
 
     _register_chat_and_read(shell)
 
@@ -630,7 +637,7 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
     home, visitors = shell.desktops.list_desktops()
     assert visitors.id == arrival.created_desktop.id
     assert home.shortcuts == seeded_with_chat and visitors.shortcuts == seeded_with_chat
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new_shell(
@@ -668,10 +675,7 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
     (home,) = shell.list_desktops()
 
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert read_default_shortcuts_offered(state_directory) == {
-        "version": 1,
-        "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT),
-    }
+    assert offered_targets_recorded(state_directory) == _default_targets_of_the_registry(shell)
     assert read_desktops_file_in_its_released_shape(state_directory) == (home,)
     # Removed once added, it stays removed: the record now names it.
     shell.desktops.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
@@ -699,7 +703,7 @@ def test_a_registry_change_whose_reconcile_cannot_write_is_logged_and_the_next_r
     offered_path.rmdir()
     (home,) = shell.list_desktops()
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_a_late_registration_reaches_the_desktops_through_the_registry_watch(

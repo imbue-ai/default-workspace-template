@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import m from "mithril";
 import { setParticipantsForTesting, type Participant } from "../models/Participants";
+import { personFixture } from "../models/participantFixture";
 import type { UserMessageEvent } from "../models/Response";
 import { authorOfTurn, renderUserMessage, StableUserMessage } from "./user-message-display";
 
@@ -114,7 +115,8 @@ describe("user-message-display status messages", () => {
 
 describe("user-message-display prompt bubbles", () => {
   const SEED_BLOCK = "<chat-seed-context>\nthe conversation the chat opened on\n</chat-seed-context>";
-  const ATTACHMENT = "See attachment here: ![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT_MARKDOWN = "![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+  const ATTACHMENT = `See attachment here: ${ATTACHMENT_MARKDOWN}`;
 
   function wrappedSend(spoken: string): UserMessageEvent {
     return {
@@ -140,31 +142,15 @@ describe("user-message-display prompt bubbles", () => {
     const inner = renderBubble(wrappedSend(`here you go\n\n${ATTACHMENT}`));
 
     expect(allText(inner)).toBe("here you go");
-    expect(markdownContents(inner)).toEqual([ATTACHMENT]);
+    expect(markdownContents(inner)).toEqual([ATTACHMENT_MARKDOWN]);
   });
 });
 
 describe("user-message-display other people's turns", () => {
   function roster(): Participant[] {
-    const base = {
-      kind: "person" as const,
-      profile_picture_url: null,
-      email: null,
-      color: "#000",
-      is_owner: false,
-      is_connected: true,
-      last_seen: null,
-      last_input_at: null,
-    };
     return [
-      { ...base, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
-      {
-        ...base,
-        key: "user:bob-2",
-        display_name: "Bob",
-        handle: "Bob",
-        profile_picture_url: "https://p.example/bob.png",
-      },
+      personFixture("user:owner-1", "Josh", { is_owner: true }),
+      personFixture("user:bob-2", "Bob", { profile_picture_url: "https://p.example/bob.png" }),
     ];
   }
 
