@@ -45,12 +45,14 @@ which zone the routine will run in, and that they can change the workspace's
 zone in Workspace settings > Timezone.
 
 Only when the user asks you to set the workspace's timezone, set it through
-Imbue Studio, which checks the zone and records it as the user's choice. This
-needs the `minds-workspaces-update` permission for this workspace (the
+Imbue Studio, which checks the zone and records it as the user's choice. A
+workspace is addressed by its primary agent's id, which is not your own if you
+are a chat, so ask for the `minds-workspaces-update` permission on that id (the
 `imbue-studio` skill says how to ask for one):
 
 ```bash
-latchkey curl -XPATCH http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/$MNGR_AGENT_ID \
+WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary)' --ids)"
+latchkey curl -XPATCH "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/$WORKSPACE_AGENT_ID" \
   -H 'Content-Type: application/json' -d '{"timezone": "<Area/City>"}'
 ```
 
