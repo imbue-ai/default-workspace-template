@@ -33,6 +33,9 @@ _PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
 # pi's step nudge is a `tool_result` handler in tk_workflow.ts rather than a
 # `tool_call` guard, because the reminder has to ride the tool's result.
 _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE = {"agent_require_steps_pretool.sh"}
+# A hidden note for the chat's own agent rather than a guard. pi's tool_call result cannot
+# carry context, and no tool_result handler in tk_workflow.ts runs it, so pi has no note.
+_PRETOOLUSE_SCRIPTS_PI_DOES_NOT_RUN = {"agent_quick_change_notes.sh"}
 
 
 def _hook_commands(config: dict[str, Any], event: str) -> list[str]:
@@ -86,7 +89,12 @@ def test_pi_runs_the_same_pretooluse_scripts_as_claude() -> None:
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
     claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))
     pi_guards = set(_PI_SCRIPT_RE.findall(_PI_POLICY_GUARDS.read_text()))
-    assert pi_guards == claude_guards - _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE
+    assert (
+        pi_guards
+        == claude_guards
+        - _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE
+        - _PRETOOLUSE_SCRIPTS_PI_DOES_NOT_RUN
+    )
     for name in pi_guards:
         assert (_SCRIPTS_DIR / name).is_file(), (
             f"policy_guards.ts runs a missing script: {name}"
