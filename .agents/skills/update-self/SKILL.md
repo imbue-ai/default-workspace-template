@@ -876,10 +876,10 @@ that no longer imports, a consumer the report names that the update broke:
   so a chat mid-turn is left running, and so is one waiting on its harness's
   own background work (a background shell, a subagent), which a restart would
   end with no report. A restart does end a `run_in_background.py` command an
-  idle chat was waiting on; the next message the chat gets brings a notice
-  that the command ended without a report, so it can run it again. The results
-  message names each chat left running or failed, says it is still on the
-  previous version, and asks the user whether to interrupt and restart it
+  idle chat was waiting on; the command's runner outlives the restart and
+  sends the chat its report saying it was killed, so it can run it again. The
+  results message names each chat left running or failed, says it is still on
+  the previous version, and asks the user whether to interrupt and restart it
   (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on a yes). A
   non-zero exit with no JSON means no chat was restarted; say so in the same
   place.

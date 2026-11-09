@@ -8107,8 +8107,8 @@ def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_mark
 def test_only_a_harness_task_keeps_a_waiting_chat_from_its_restart_and_is_read_without_waiting_for_the_poller(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """A ``run_in_background`` command a restart ends is reported with the chat's next message; one of the
-    harness's own tasks dies unreported. The check re-reads the markers, so a task recorded since the poller's
+    """A ``run_in_background`` command a restart ends is reported by its runner, which outlives the restart; one
+    of the harness's own tasks dies unreported. The check re-reads the markers, so a task recorded since the poller's
     last pass still counts."""
     manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
     try:

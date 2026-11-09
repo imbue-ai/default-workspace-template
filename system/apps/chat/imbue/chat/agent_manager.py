@@ -764,8 +764,8 @@ def restart_busy_reason(
 
     A turn that ended on the harness's own background work (RUNNING_BACKGROUND, or a harness task marker
     from a chat on an older turn-end hook, which reports WAITING) is not idle either: that work dies with
-    the process and nothing reports it. A ``run_in_background.py`` command does not count: its marker
-    outlives the restart, and the next message the chat gets brings a notice that it ended.
+    the process and nothing reports it. A ``run_in_background.py`` command does not count: its runner
+    outlives the restart and sends the chat the command's report.
     """
     if is_permission_pending:
         return "waiting on a dialog"
