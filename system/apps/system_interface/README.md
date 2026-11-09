@@ -422,11 +422,11 @@ request ever hangs or fails on it. The roster and the presence listing never
 wait on the connector at all: they answer from the cache as it stands, a stale
 entry included while the workspace is still shared, fetch what is missing or
 stale on one background thread, and announce the roster and the connected set
-again when that changed what the cache answers. The profile rides on each present user
-over the wire (`display_name`, `profile_picture_url`, null when there is none)
-and names a visitor's desktop on their first arrival. The picture itself is
-served from the shell's own origin, since the pages' content security policy
-admits no outside image: the roster points at
+again when that changed what the cache answers. The profile rides on each
+present user over the wire (`display_name`, `profile_picture_url`, null when
+there is none) and names a visitor's desktop on their first arrival. The
+picture itself is served from the shell's own origin, since the pages' content
+security policy admits no outside image: the roster points at
 `GET /api/roster/<key>/picture?v=<version>`, which fetches the bytes once from
 the profile's URL (5 second bound) and keeps them under
 `data/.state/presence/profiles/<user_id>.picture.json` until the profile names
