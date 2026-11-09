@@ -235,6 +235,7 @@ describe("Taskbar", () => {
         owner: alice,
         color: alice.color,
         onStopViewing,
+        isStopFailed: false,
       },
     });
     expect(taskbar.querySelector('[data-tray-widget="overview"]')).toBeNull();
@@ -245,6 +246,26 @@ describe("Taskbar", () => {
     expect(chip.textContent).toContain("Alice's desk");
     expect(chip.style.backgroundColor).toBe("rgb(59, 91, 169)");
     (chip.querySelector("[data-stop-viewing]") as HTMLElement).click();
+    expect(onStopViewing).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the viewing chip could not leave, and offers to try again, after a stop that found nowhere to go", () => {
+    const onStopViewing = vi.fn();
+    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
+    const taskbar = render({
+      viewing: {
+        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
+        owner: alice,
+        color: alice.color,
+        onStopViewing,
+        isStopFailed: true,
+      },
+    });
+    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
+    expect(chip.querySelector("[data-stop-viewing-failed]")?.textContent).toBe("Couldn't leave this desktop");
+    const retry = chip.querySelector("[data-stop-viewing]") as HTMLElement;
+    expect(retry.textContent).toBe("Try again");
+    retry.click();
     expect(onStopViewing).toHaveBeenCalledTimes(1);
   });
 

@@ -11,6 +11,8 @@ import { TrayAvatar } from "./TrayAvatar";
 
 const OWNER_PICTURE_SIZE_PX = 28;
 const STOP_VIEWING_LABEL = "Stop viewing";
+const STOP_VIEWING_RETRY_LABEL = "Try again";
+const STOP_VIEWING_FAILED_MESSAGE = "Couldn't leave this desktop";
 
 export interface ViewingChipAttrs {
   readonly desktop: Desktop;
@@ -19,6 +21,8 @@ export interface ViewingChipAttrs {
   /** The owner's colour, which the outline wears too. */
   readonly color: string;
   readonly onStopViewing: () => void;
+  /** Whether the last "Stop viewing" found nowhere to go: the chip says so and its button tries again. */
+  readonly isStopFailed: boolean;
 }
 
 /** The name the chip gives a desktop's owner: the roster's, or nobody's for a desktop left behind. */
@@ -28,7 +32,7 @@ function viewedOwnerName(owner: RosterParticipant | null): string {
 
 export const ViewingChip: m.Component<ViewingChipAttrs> = {
   view(vnode) {
-    const { desktop, owner, color, onStopViewing } = vnode.attrs;
+    const { desktop, owner, color, onStopViewing, isStopFailed } = vnode.attrs;
     return m(
       "div",
       {
@@ -51,6 +55,13 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
           m("span", { class: "truncate", "data-viewing-owner": "" }, viewedOwnerName(owner)),
           m("span", { class: "truncate font-normal opacity-75" }, ` · ${desktop.name}`),
         ]),
+        isStopFailed
+          ? m(
+              "span",
+              { class: "shrink-0 text-(length:--font-size-row) opacity-90", "data-stop-viewing-failed": "" },
+              STOP_VIEWING_FAILED_MESSAGE,
+            )
+          : null,
         m(
           "button",
           {
@@ -61,7 +72,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
               "font-medium text-on-accent hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
             onclick: onStopViewing,
           },
-          STOP_VIEWING_LABEL,
+          isStopFailed ? STOP_VIEWING_RETRY_LABEL : STOP_VIEWING_LABEL,
         ),
       ],
     );

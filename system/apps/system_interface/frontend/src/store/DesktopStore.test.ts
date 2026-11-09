@@ -3954,6 +3954,49 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.viewedDesktop()).toBeNull();
   });
 
+  it("stop viewing that the shell answers with the viewed desktop says it could not leave, and a retry still can", async () => {
+    // A visitor's own desktop reads as the workspace owner's, so she has none of her own, and the shell lands her
+    // on the one she is already viewing: the click must not silently do nothing.
+    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    expect(store.isStopViewingFailed()).toBe(false);
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.isStopViewingFailed()).toBe(true);
+
+    api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.viewedDesktop()).toBeNull();
+    expect(store.isStopViewingFailed()).toBe(false);
+  });
+
+  it("stop viewing that cannot reach the shell says it could not leave", async () => {
+    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    api.refusal = "the shell is down";
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.isStopViewingFailed()).toBe(true);
+  });
+
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {
     api.desktops = [...api.desktops, alices];
     const store = await startedStore();

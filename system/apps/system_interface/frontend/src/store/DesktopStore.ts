@@ -516,6 +516,8 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
+  /** The viewed desktop a "Stop viewing" last found no way off, so the chip says so and offers to try again. */
+  private stopViewingFailedOn: string | null = null;
   /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
   private themePreview: { readonly desktopId: string; readonly choice: string | null } | null = null;
   /** The workspace's themes as the shell last answered or pushed them. */
@@ -1529,10 +1531,28 @@ export class DesktopStore {
   }
 
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
-   *  shell seeds for a visitor who has none left. */
+   *  shell seeds for a visitor who has none left. When none of those is somewhere else to go (the shell could not
+   *  be asked, or it answered the desktop already on screen), the window stays and the chip says it could not
+   *  leave, rather than the click doing nothing. */
   async stopViewing(): Promise<void> {
+    const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
-    if (target !== null) await this.switchDesktop(target);
+    if (target === null || target === viewedId) {
+      this.stopViewingFailedOn = viewedId;
+      this.redraw();
+      return;
+    }
+    this.stopViewingFailedOn = null;
+    await this.switchDesktop(target);
+  }
+
+  /** Whether the last "Stop viewing" on the desktop this window still views found nowhere to go. */
+  isStopViewingFailed(): boolean {
+    return (
+      this.stopViewingFailedOn !== null &&
+      this.stopViewingFailedOn === this.state.activeDesktopId &&
+      this.viewedDesktop() !== null
+    );
   }
 
   isOverviewOpen(): boolean {
