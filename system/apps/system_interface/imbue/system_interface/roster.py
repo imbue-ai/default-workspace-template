@@ -1,18 +1,21 @@
 """The roster (the multiplayer spec, section 4.2): everyone who may be in the workspace, in display order.
 
 The owner first (under ``user:<id>`` once they have heartbeated as an account, else the synthetic ``owner`` key),
-then every account the people's grants name, then every invited email, then every visiting agent the gateway's
-grants name, and the workspace's own agent last. A person's name and picture are their profile; an invited email
-has neither; a visiting agent has the name it joined under; the workspace agent is named after the workspace and
-pictured by the selected avatar design. Presence comes from the heartbeat files for people and from the gateway's
-last-seen record for visiting agents, under one connected window. Handles are assigned in roster order, so a
-collision suffixes the later entry; the workspace agent's ``agent`` is reserved before anyone else's.
+then every account the people's grants name, then every account a domain grant admitted (anyone with a presence
+record whose email's domain the grants still name), then every invited email, then every visiting agent the
+gateway's grants name, and the workspace's own agent last. A person's name and picture are their profile, else what
+their arrival or the desktop's identities sidecar recorded of them; an invited email has neither; a visiting agent
+has the name it joined under; the workspace agent is named after the workspace and pictured by the selected avatar
+design. Presence comes from the heartbeat files for people and from the gateway's last-seen record for visiting
+agents, under one connected window. Handles are assigned in roster order, so a collision suffixes the later entry;
+the workspace agent's ``agent`` is reserved before anyone else's.
 
 ``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
-(someone came or went, or a person's newest input time moved), a grants file changes (the desktop and the gateway
-both write them, so the shell watches them), and on connect. The announcer pushes a document only when it differs
-from the one it last pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway
-rewrites its last-seen record every ten seconds per working visiting agent) into one announcement.
+(someone came or went, or a person's newest input time moved), a grants file or the desktop's identities sidecar
+changes (the desktop and the gateway write them, so the shell watches them), and on connect. The announcer pushes a
+document only when it differs from the one it last pushed, and the watch folds a burst of file events (an atomic
+replace fires twice; the gateway rewrites its last-seen record every ten seconds per working visiting agent) into one
+announcement.
 """
 
 import threading
@@ -55,8 +58,11 @@ from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.profiles import picture_version_of
+from imbue.system_interface.shell.data_types import GrantedIdentity
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.workspace_name import WorkspaceNameSource
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -95,6 +101,7 @@ class _Entry(FrozenModel):
     is_connected: bool = Field(description="Whether they are here now")
     last_seen: str | None = Field(description="When they were last here")
     last_input_at: str | None = Field(description="When their newest page last saw input")
+    is_admitted_by_domain: bool = Field(description="Whether a domain grant, not a grant naming them, admits them")
 
 
 @pure
@@ -114,14 +121,26 @@ def _email_local_part(email: str | None) -> str | None:
 
 @pure
 def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None, user_id: str) -> str:
-    """A person's name: their profile's, else the one recorded at their last arrival, else their email's local
-    part, else their id."""
+    """A person's name: their profile's, else the one recorded at their last arrival or by the desktop's identities
+    sidecar, else their email's local part, else their id."""
     if profile is not None and profile.display_name:
         return profile.display_name
     if known_name:
         return known_name
     local_part = _email_local_part(email)
     return local_part if local_part is not None else user_id
+
+
+@pure
+def _first_known(*candidates: str | None) -> str | None:
+    """The first candidate that says anything."""
+    return next((candidate for candidate in candidates if candidate), None)
+
+
+@pure
+def _is_admitted_by_domain(presence: ParticipantPresence, grants: Grants | None) -> bool:
+    """Whether a person's last heartbeat carried an address a current workspace-level domain grant admits."""
+    return grants is not None and bool(presence.email) and grants.workspace.allows_email_domain(presence.email)
 
 
 @pure
@@ -144,6 +163,49 @@ def _anonymous_owner_entry(presence: ParticipantPresence | None) -> _Entry:
         is_connected=presence.is_connected if presence is not None else False,
         last_seen=presence.last_seen if presence is not None else None,
         last_input_at=presence.last_input_at if presence is not None else None,
+        is_admitted_by_domain=False,
+    )
+
+
+@pure
+def _person_entry(
+    key: ParticipantKey,
+    presence: ParticipantPresence | None,
+    profile: UserProfile | None,
+    known: UserRecord | None,
+    identity: GrantedIdentity | None,
+    is_owner: bool,
+    is_admitted_by_domain: bool,
+) -> _Entry:
+    """One account's entry: named from its profile, else what its last arrival recorded, else what the desktop
+    recorded when it granted them, else its email's local part, else its id; the email read the same way."""
+    user_id = str(key).removeprefix("user:")
+    email = _first_known(
+        presence.email if presence is not None else None,
+        known.email if known is not None else None,
+        identity.email if identity is not None else None,
+    )
+    known_name = _first_known(
+        known.display_name if known is not None else None,
+        identity.display_name if identity is not None else None,
+    )
+    display_name = _person_name(profile, known_name, email, user_id)
+    return _Entry(
+        key=key,
+        kind=ParticipantKind.PERSON,
+        display_name=display_name,
+        handle_name=display_name,
+        profile_picture_url=(
+            participant_picture_route(key, profile.profile_picture_url)
+            if profile is not None and profile.profile_picture_url is not None
+            else None
+        ),
+        email=email,
+        is_owner=is_owner,
+        is_connected=presence.is_connected if presence is not None else False,
+        last_seen=presence.last_seen if presence is not None else None,
+        last_input_at=presence.last_input_at if presence is not None else None,
+        is_admitted_by_domain=is_admitted_by_domain,
     )
 
 
@@ -166,6 +228,7 @@ def _with_handles(entries: list[_Entry]) -> list[RosterParticipant]:
             is_connected=entry.is_connected,
             last_seen=entry.last_seen,
             last_input_at=entry.last_input_at,
+            is_admitted_by_domain=entry.is_admitted_by_domain,
         )
         for entry in entries
     ]
@@ -180,6 +243,9 @@ class RosterSource(MutableModel):
     profiles: ProfileResolver = Field(frozen=True, description="Each account's name and picture")
     users: UserStore = Field(frozen=True, description="What the shell recorded of each visitor at their arrivals")
     share_grants: ShareGrantsReader = Field(frozen=True, description="The people's grants")
+    share_identities: ShareIdentitiesReader = Field(
+        frozen=True, description="What the desktop knew of each granted account when it saved the grants"
+    )
     agent_grants: AgentGrantsReader = Field(frozen=True, description="The visiting agents' grants")
     agent_last_seen_path: Path = Field(frozen=True, description="The gateway's record of each agent's last request")
     workspace_name: WorkspaceNameSource = Field(frozen=True, description="What the workspace agent is named after")
@@ -213,7 +279,9 @@ class RosterSource(MutableModel):
     def _people(
         self, grants: Grants | None, presence_by_key: dict[ParticipantKey, ParticipantPresence], now: datetime
     ) -> list[_Entry]:
-        """The owner first, then every account the grants name, each named and pictured from its profile."""
+        """The owner first, then every account the grants name, then every account a domain grant admitted (one
+        with a presence record whose email's domain the grants still name), each named and pictured from its
+        profile."""
         owner_key = self._owner_key(presence_by_key)
         granted_ids = sorted(grants.workspace.users) if grants is not None else []
         document = self._share_grants_document()
@@ -221,38 +289,34 @@ class RosterSource(MutableModel):
         keys = [owner_key, *(key for key in granted_keys if key is not None)]
         # The owner may be granted too; they are listed once, first.
         ordered = list(dict.fromkeys(keys))
-        user_ids = [UserId(str(key).removeprefix("user:")) for key in ordered if key != OWNER_PARTICIPANT_KEY]
+        # A domain grant names nobody: who it covers is whoever the presence records say was admitted under it,
+        # listed while the domain stays granted, since presence files outlive a revoked grant.
+        domain_admitted = [
+            key
+            for key, presence in sorted(presence_by_key.items(), key=lambda item: str(item[0]))
+            if key not in ordered and key != OWNER_PARTICIPANT_KEY and _is_admitted_by_domain(presence, grants)
+        ]
+        people = [*ordered, *domain_admitted]
+        user_ids = [UserId(str(key).removeprefix("user:")) for key in people if key != OWNER_PARTICIPANT_KEY]
         profile_by_user_id = self.profiles.resolve_many(user_ids, now)
         known_by_user_id = {str(record.user_id): record for record in self.users.list_users()}
+        identity_by_user_id = self.share_identities.read_identities()
         entries: list[_Entry] = []
-        for key in ordered:
+        for key in people:
             presence = presence_by_key.get(key)
             if key == OWNER_PARTICIPANT_KEY:
                 entries.append(_anonymous_owner_entry(presence))
                 continue
             user_id = str(key).removeprefix("user:")
-            profile = profile_by_user_id.get(user_id)
-            known = known_by_user_id.get(user_id)
-            email = (presence.email if presence is not None and presence.email else None) or (
-                known.email if known is not None else None
-            )
-            display_name = _person_name(profile, known.display_name if known is not None else None, email, user_id)
             entries.append(
-                _Entry(
-                    key=key,
-                    kind=ParticipantKind.PERSON,
-                    display_name=display_name,
-                    handle_name=display_name,
-                    profile_picture_url=(
-                        participant_picture_route(key, profile.profile_picture_url)
-                        if profile is not None and profile.profile_picture_url is not None
-                        else None
-                    ),
-                    email=email,
+                _person_entry(
+                    key,
+                    presence,
+                    profile_by_user_id.get(user_id),
+                    known_by_user_id.get(user_id),
+                    identity_by_user_id.get(user_id),
                     is_owner=key == owner_key,
-                    is_connected=presence.is_connected if presence is not None else False,
-                    last_seen=presence.last_seen if presence is not None else None,
-                    last_input_at=presence.last_input_at if presence is not None else None,
+                    is_admitted_by_domain=key in domain_admitted,
                 )
             )
         return entries
@@ -282,6 +346,7 @@ class RosterSource(MutableModel):
                 is_connected=False,
                 last_seen=None,
                 last_input_at=None,
+                is_admitted_by_domain=False,
             )
             for email, key in keyed
             if key is not None
@@ -339,6 +404,7 @@ class RosterSource(MutableModel):
             is_connected=last_seen is not None and now - last_seen < self.connected_window,
             last_seen=_format_moment(last_seen) if last_seen is not None else None,
             last_input_at=None,
+            is_admitted_by_domain=False,
         )
 
     def _workspace_agent(self) -> _Entry:
@@ -355,6 +421,7 @@ class RosterSource(MutableModel):
             is_connected=True,
             last_seen=None,
             last_input_at=None,
+            is_admitted_by_domain=False,
         )
 
 
@@ -391,12 +458,13 @@ def build_roster_announcer(
 
 
 class RosterWatch(MutableModel):
-    """Announces the roster whenever one of the files it is computed from changes: the two grants documents and the
-    gateway's last-seen record. The gateway creates the agent-access directories when the workspace is first shared,
-    which is after the shell started on a fresh workspace, so a file whose directory does not exist yet is tried
-    again every ``retry_interval_seconds`` until it is watched, and a watch that starts late announces the roster
-    once, since the file may have been written before it began. A burst of events (an atomic replace fires twice)
-    is announced once, ``coalesce_seconds`` after its first event."""
+    """Announces the roster whenever one of the files it is computed from changes: the two grants documents, the
+    desktop's identities sidecar beside the people's grants, and the gateway's last-seen record. The gateway creates
+    the agent-access directories when the workspace is first shared, which is after the shell started on a fresh
+    workspace, so a file whose directory does not exist yet is tried again every ``retry_interval_seconds`` until it
+    is watched, and a watch that starts late announces the roster once, since the file may have been written before
+    it began. A burst of events (an atomic replace fires twice) is announced once, ``coalesce_seconds`` after its
+    first event."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 

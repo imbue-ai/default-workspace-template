@@ -39,6 +39,7 @@ from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -72,8 +73,8 @@ from routines_app.data_types import FixChatResponse
 from routines_app.data_types import HealthResponse
 from routines_app.documents import inject_chat_label_meta_tag
 from routines_app.errors import FixChatError
+from routines_app.fix_chat import ChatAppFixChatStarter
 from routines_app.fix_chat import FixChatStarterInterface
-from routines_app.fix_chat import SubprocessFixChatStarter
 
 HOST: Final[str] = os.environ.get("ROUTINES_APP_HOST", "127.0.0.1")
 PORT: Final[int] = int(os.environ.get("ROUTINES_APP_PORT", "8050"))
@@ -148,6 +149,7 @@ def create_app(
     service: RoutinesService, static_directory: Path, is_preview: bool, fix_chat_starter: FixChatStarterInterface
 ) -> Flask:
     app = Flask("routines_app", static_folder=None)
+    install_request_guard(app, exempt_rules=frozenset())
     register_api_schema_route(
         app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
     )
@@ -360,7 +362,9 @@ def main() -> None:
     setup_logging(level=os.environ.get("ROUTINES_APP_LOG_LEVEL", "INFO"))
     paths: RoutinesPaths = paths_from_environment()
     service = build_service(paths, dict(os.environ))
-    app = create_app(service, STATIC_DIR, IS_PREVIEW, SubprocessFixChatStarter(repo_root=paths.repo_root))
+    app = create_app(
+        service, STATIC_DIR, IS_PREVIEW, ChatAppFixChatStarter(repo_root=paths.repo_root, environ=dict(os.environ))
+    )
     logger.info("Serving the Routines app at http://{}:{}/", HOST, PORT)
     run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)
 

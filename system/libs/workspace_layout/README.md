@@ -74,7 +74,15 @@ answer shapes live in one place the shell and its callers share.
   `InvalidLayoutValueError`, which the shell and the chat app answer with 400),
   `participant_key_of` (the account, else the agent, else `owner`),
   `is_owner_participant` (the owner under either of their keys), and
-  `visiting_user_id` (a signed-in requester other than the owner).
+  `visiting_user_id` (a signed-in requester other than the owner). Also the
+  provenance check that decides whether a request is read at all,
+  `describe_provenance_refusal` over a `RequestProvenance`: a request a browser
+  marks as a page of another origin's (`Sec-Fetch-Site`, other than a GET or
+  HEAD navigation) is refused whatever it carries, a request a proxy stamped is
+  read by its header, and a header-less one is admitted from loopback alone,
+  under a loopback `Host` (`is_loopback_address`, `is_loopback_host`,
+  `is_from_another_origin`), because the workspace's own browser is on loopback
+  too. `app_schema.request_guard` installs it on every app's Flask app.
 - `workspace_layout.roster`: the roster the shell answers at `GET /api/roster`
   and pushes as `roster_updated` (the multiplayer spec, section 4.2):
   `RosterParticipant` and `RosterDocument`, `handle_of_name` and

@@ -22,14 +22,14 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener, getChatById, isHandoffCancellable } from "./Chats";
-import type { ChatSnapshot, DisplayDecision, HandoffState, HeldSend } from "./Chats";
+import type { ChatSnapshot, DisplayDecision, HandoffState, HeldSend, MessageAuthor } from "./Chats";
 import type { SendStatus } from "./Response";
 import { isChatBusyWithTurn } from "./activityState";
 
 export interface OutgoingMessage {
   id: string;
-  /** The text the user typed (shown verbatim unless ``displayDecision`` makes it a notice), not
-   *  the attachment-expanded form. */
+  /** The message as sent, attachments included (drawn as the delivered turn draws it unless
+   *  ``displayDecision`` makes it a notice). */
   content: string;
   /** The send-time message_id (contract A4) when the caller minted one. A backend record that
    *  carries the same id (a message held while the chat switches harness) replaces this bubble
@@ -39,6 +39,9 @@ export interface OutgoingMessage {
   sentAt: number;
   /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
   displayDecision?: DisplayDecision;
+  /** Who sent it, for a held send that comes back as a bubble when its switch ends; absent for the viewer's own
+   *  send. */
+  author?: MessageAuthor;
   /** Whether the send opens the agent's next turn, rather than waiting behind one already running: the status
    *  row reporting that turn stays under it until it reaches the transcript. */
   opensTurn: boolean;
@@ -69,6 +72,7 @@ export function addOutgoing(
   content: string,
   messageId?: string,
   displayDecision?: DisplayDecision,
+  author?: MessageAuthor,
   opensTurn?: boolean,
 ): string {
   const id = `outgoing-${nextId++}`;
@@ -83,6 +87,7 @@ export function addOutgoing(
     opensTurn: opensTurn ?? !isTurnOpenedAhead,
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
+    ...(author === undefined ? {} : { author }),
   });
   m.redraw();
   return id;
@@ -284,7 +289,14 @@ export function trackBackendArrivals(
         for (const held of heldSendsStillToShow(returned, shownElsewhere)) {
           // A first send that already landed opened the turn itself.
           const isOpening = opensTurn && held === returned[0];
-          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held), isOpening);
+          addOutgoing(
+            chat.chat_id,
+            held.text,
+            held.message_id,
+            displayDecisionOf(held),
+            { author: held.author, author_name: held.author_name },
+            isOpening,
+          );
         }
       }
     }

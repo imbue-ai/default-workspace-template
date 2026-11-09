@@ -1,7 +1,8 @@
 """The owner gate over the service's routes: a share admits a visitor to this origin, so every route that acts on
 the Screen outside the lease refuses an identity whose ``owner`` is false, while the viewer's routes, where the
 lease arbitrates (a visitor in control pastes, drops files and cancels a held page), keep answering one and a
-header-less (loopback) request keeps reading as the owner."""
+header-less (loopback) request keeps reading as the owner; and the request guard ahead of it, which refuses a page
+of another origin and a header-less request under a Host that is not loopback."""
 
 import io
 import json
@@ -15,7 +16,10 @@ from flask.testing import FlaskClient
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
+from app_schema.testing import REBOUND_BASE_URL
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from mock_chromium_test import FakeCdpConnector
 from mock_messenger_test import RecordingLauncher
 from mock_neko_test import FakeNeko
@@ -31,6 +35,8 @@ from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
 from testing import start_browser
 from testing import start_service_stack
+from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
+from workspace_layout.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from workspace_layout.testing import LoopbackShell
 
 _OWNER: Final[dict[str, str]] = {
@@ -131,6 +137,41 @@ def test_a_visitor_is_refused_on_an_owner_route(client: FlaskClient, method: str
 def test_the_owner_and_a_header_less_caller_pass_the_gate(client: FlaskClient, method: str, path: str) -> None:
     assert client.open(path, method=method, headers=_OWNER).status_code != 403
     assert client.open(path, method=method).status_code != 403
+
+
+@pytest.mark.parametrize(("method", "path"), [(method, path) for method, _, path in _OWNER_ONLY_REQUESTS])
+def test_a_page_of_another_origin_on_the_workspaces_own_browser_is_refused(
+    client: FlaskClient, method: str, path: str
+) -> None:
+    """The browser on the Screen is on loopback too: a page it shows reaches the service as an in-container caller
+    would, so one its browser marks as another origin's is refused before any gate reads it, and so is a header-less
+    request under a Host that is not loopback (a rebound name)."""
+    cross_site = client.open(path, method=method, headers=CROSS_SITE_FETCH_HEADERS)
+    assert cross_site.status_code == 403
+    assert cross_site.get_json()["detail"] == OTHER_ORIGIN_REFUSAL
+    rebound = client.open(path, method=method, base_url=REBOUND_BASE_URL)
+    assert rebound.status_code == 403
+    assert rebound.get_json()["detail"] == UNTRUSTED_LOOPBACK_REFUSAL
+
+
+def test_the_viewers_own_requests_and_the_shells_frame_pass_the_request_guard(client: FlaskClient) -> None:
+    own_origin = {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"}
+    assert client.get("/api/state", headers={**_OWNER, **own_origin}).status_code == 200
+    framed = client.get("/", headers={**_OWNER, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"})
+    assert framed.status_code == 200
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/state")
+
+
+def test_a_present_identity_header_that_does_not_parse_is_refused_rather_than_read_as_the_owner(
+    client: FlaskClient,
+) -> None:
+    refused = client.post("/api/session", headers={"X-Imbue-Identity": "{not json"})
+    assert refused.status_code == 400
+    assert "X-Imbue-Identity" in refused.get_json()["detail"]
+    assert (
+        client.post("/api/run", json={"command": ["xterm"]}, headers={"X-Imbue-Identity": "[false]"}).status_code
+        == 400
+    )
 
 
 def test_a_visitor_uses_the_viewer_and_takes_control_through_the_lease(

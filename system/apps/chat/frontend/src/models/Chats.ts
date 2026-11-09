@@ -89,10 +89,17 @@ export interface DisplayDecision {
   display_body?: string | null;
 }
 
+/** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will
+ *  be (a user_message's fields of the same names; the backend's ``MessageAuthorFields``); null for an
+ *  unattributed one, which is the owner's. */
+export interface MessageAuthor {
+  author?: string | null;
+  author_name?: string | null;
+}
+
 /** One message the chat app holds while the chat switches or is still being created (the backend's
- *  ``HeldSendSnapshot``, or a provisional chat's ``HeldSend``). Rendered from the backend's record until it
- *  lands in the transcript. */
-export interface HeldSend extends DisplayDecision {
+ *  ``HeldSendSnapshot``). Rendered from the backend's record until it lands in the transcript. */
+export interface HeldSend extends DisplayDecision, MessageAuthor {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
@@ -183,7 +190,7 @@ export interface ChatSnapshot {
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
  *  ``QueuedMessageState``). The frontend keys the bubble on ``queued_id`` and never derives or
  *  reconciles these. */
-export interface QueuedMessage extends DisplayDecision {
+export interface QueuedMessage extends DisplayDecision, MessageAuthor {
   queued_id: string;
   content: string;
   timestamp: string;
@@ -196,7 +203,8 @@ export interface QueuedMessage extends DisplayDecision {
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
 export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
-/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
+/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat`` as its
+ *  ``ProvisionalChatAsShown`` sends it, its held sends as the page draws them. */
 export interface ProvisionalChat {
   chat_id: string;
   name: string;

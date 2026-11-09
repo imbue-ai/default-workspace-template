@@ -281,17 +281,16 @@ conversation:**
    `connect-external-service` skill's `request_secret.py` with the entry's
    `file` and `variables` (and its `note` in your rationale), each in a tool
    call of its own, then end the turn. When a `Secret stored:` message arrives
-   for an entry, connect the `mcp-servers.json` servers that run under that
-   file (the wrapper in a local server's command, or a hosted server's
-   `secretsFile`) and start the programs that run under it. A `Secret
-   declined:` message leaves that server and program out; the install still
-   completes, and you tell the user what stays unstarted and why. Nothing in
-   `mcp-servers.json` connects on its own, so connect every other server in it
-   too: one that needs no credential right away, one that signs in once the
-   user has signed in (the skill's `references/mcp.md` covers each). A legacy
-   entry with only a `name` is one bare variable: request it as a file named
-   after the app. Then start the remaining services and get the app running
-   against THEIR data.
+   for an entry, start the programs that run under that file. A `Secret
+   declined:` message leaves that program out; the install still completes,
+   and you tell the user what stays unstarted and why. A template that still
+   carries an `mcp-servers.json` predates the current guidance: the servers in
+   it are not connected (a hosted one is a latchkey connection to request as
+   the `connect-external-service` skill's `references/mcp.md` says; one that
+   runs as a package is replaced by the service's API through that skill). A
+   legacy entry with only a `name` is one bare variable: request it as a file
+   named after the app. Then start the remaining services and get the app
+   running against THEIR data.
 4. **Definition of done for a data-backed app: the user can open it and see
    their OWN data.** A service that starts cleanly or an endpoint that returns
    200 is NOT done — open the app's actual output yourself and confirm it

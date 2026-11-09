@@ -123,6 +123,7 @@ def spawn_run_process(paths: RoutinesPaths, routine_id: RoutineId, trigger: RunT
     """A detached runner process for one run, its own output going to the run's log: a caller never waits on a run."""
     log_path = paths.run_log_path(routine_id, run_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # own-process: outlives-caller -- a run is detached, and its caller never waits on it
     argv = [
         sys.executable,
         "-m",

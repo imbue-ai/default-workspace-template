@@ -1,0 +1,1 @@
+`provision_backups.py` (the hosted web client's in-workspace `restic init`) no longer retries through credential propagation: the backup store's tokens are valid the moment they are issued, so a refusal is reported at once.

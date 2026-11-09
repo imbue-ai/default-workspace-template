@@ -490,6 +490,27 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     expect(partOf(strip, "label")).toBe("Thinking…");
   });
 
+  it("leaves a running call its stretch shows as a chip to the chip, and holds no caption once the call ends", () => {
+    const events = [userMsg(isoAt(NOW - 1_000)), toolUse(isoAt(NOW - 500), "Read", "c1", "{}", "Reading app.py")];
+    const viewOf = (component: ReturnType<typeof ActivityIndicator>, isRunningCallInline: boolean): m.Vnode | null =>
+      component.view({
+        attrs: { chatId: CHAT_ID, events, isInStretch: true, isRunningCallInline },
+      } as unknown as Parameters<typeof component.view>[0]) as m.Vnode | null;
+
+    const shownInline = ActivityIndicator();
+    agentState.activity_state = "TOOL_RUNNING";
+    expect(viewOf(shownInline, true)).toBeNull();
+    agentState.activity_state = "THINKING";
+    expect(partOf(viewOf(shownInline, true), "label")).toBe("Thinking…");
+
+    // With no chip to show it, a call that ends at once keeps its caption up for a beat rather than flashing past.
+    const shownOnRow = ActivityIndicator();
+    agentState.activity_state = "TOOL_RUNNING";
+    expect(partOf(viewOf(shownOnRow, false), "label")).toBe("Reading app.py");
+    agentState.activity_state = "THINKING";
+    expect(partOf(viewOf(shownOnRow, false), "label")).toBe("Reading app.py");
+  });
+
   it("counts a turn's running time from the message that opened it, once it has run a while", () => {
     agentState.activity_state = "THINKING";
 

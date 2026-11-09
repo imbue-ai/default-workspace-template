@@ -148,7 +148,7 @@ function bootstrap(): void {
   // active desktop reads as the viewer's own, so a window that landed on somebody else's re-reads the layout as
   // the owner's once it knows (the multiplayer spec, section 8.3).
   onOwnIdentityChanged(() => desktopStore.takeViewerIdentityKnown());
-  startPresenceHeartbeat();
+  startPresenceHeartbeat(clientId);
   // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
   // each framed page does the same for itself.
   installCursorHidingWhileTyping(document);

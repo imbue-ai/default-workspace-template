@@ -11,9 +11,11 @@ on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPAT
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- beyond the standard library it imports only `workspace_bare_scripts` and, through it, the stdlib-only `oom_priority` and `chat_background_tasks`
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )
+# import-path: no-venv -- beyond the standard library it imports only `workspace_bare_scripts` and, through it, the stdlib-only `oom_priority` and `chat_background_tasks`
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[1] / "libs" / "chat_background_tasks" / "src"),
