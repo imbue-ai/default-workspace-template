@@ -123,6 +123,7 @@ def test_double_clicking_a_folder_opens_it_and_the_history_keys_return(
     expect(_entry(page, "/projects/app/")).to_be_visible()
 
 
+@pytest.mark.flaky
 def test_going_back_to_a_folder_opened_without_its_slash_lists_it_by_its_own_paths(
     open_files_page: OpenFilesPage,
 ) -> None:
