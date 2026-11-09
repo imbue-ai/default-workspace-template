@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
+from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.liveness import fetch_supervisor_program_states
+from imbue.system_interface.shell.liveness import fetch_supervisor_programs
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.liveness import start_supervisor_program
@@ -32,6 +34,16 @@ def test_fetch_supervisor_program_states_reports_a_down_program(
 ) -> None:
     fake_supervisor.statename_by_program["files"] = statename
     assert fetch_supervisor_program_states(fake_supervisor.socket_path) == {"files": False}
+
+
+def test_fetch_supervisor_programs_reads_each_programs_state_and_pid(fake_supervisor: FakeSupervisorServer) -> None:
+    fake_supervisor.statename_by_program.update({"files": "STARTING", "browser": "STOPPED"})
+    fake_supervisor.pid_by_program["files"] = 4321
+
+    assert fetch_supervisor_programs(fake_supervisor.socket_path) == {
+        "files": SupervisorProgramState(statename="STARTING", pid=4321),
+        "browser": SupervisorProgramState(statename="STOPPED", pid=0),
+    }
 
 
 def test_probe_tcp_url_reports_a_listening_backend(listening_port: int) -> None:

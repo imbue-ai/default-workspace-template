@@ -10,6 +10,7 @@ metadata:
 ## Instructions
 
 Use this skill when the user asks you to work with files located directly on their computer.
+To *run* something on their computer rather than read or write its files, see the `run-on-users-computer` skill instead; file sharing is the first thing it tells you to try.
 
 **First, look for a synced copy.** If the folder you need is already under
 `~/synced_folders/`, it is in this workspace as ordinary files: work on it

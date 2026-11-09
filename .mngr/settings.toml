@@ -48,8 +48,9 @@ host_env__extend = [
     # channel to third-party services that bypasses the latchkey gateway for
     # the services latchkey DOES support. MCP itself is not disallowed: for a
     # service latchkey has no builtin for, the connect-external-service skill
-    # connects that service's MCP server through mcpc, the workspace's shared
-    # MCP client, rather than through any one harness.
+    # connects that service's MCP server as a custom latchkey service, so its
+    # credential sits in the same store and is reachable from every harness,
+    # rather than through any one harness's own MCP config.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
@@ -737,8 +738,9 @@ build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_
 #
 # `--restart=unless-stopped` brings the container back after a docker daemon
 # restart or host reboot; the container entrypoint then self-heals sshd, so the
-# host is reachable again without a manual `mngr start`. The agent itself is
-# relaunched by the Imbue Studio desktop client in this (debugging-oriented) mode.
+# host is reachable again without a manual `mngr start`, and runs the image's
+# container start hook (`system/scripts/minds_container_start_hook.sh`), which
+# relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
@@ -894,7 +896,8 @@ idle_mode = "disabled"
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
-# agent container back after a VPS reboot; the entrypoint then self-heals sshd.
+# agent container back after a VPS reboot; the entrypoint then self-heals sshd
+# and runs the image's container start hook, which relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
@@ -1054,8 +1057,9 @@ idle_mode = "disabled"
 # or the slice VM's own provisioning).
 #
 # `--restart=unless-stopped` brings the agent container back after a pool-VM
-# reboot; the container entrypoint then self-heals sshd. The agent itself is
-# relaunched by the outer boot unit installed below.
+# reboot; the container entrypoint then self-heals sshd and runs the image's
+# container start hook, which relaunches the services agent. The outer boot
+# unit installed below relaunches it after a VM reboot as well.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
@@ -1230,7 +1234,8 @@ idle_mode = "disabled"
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
-# agent container back after an EC2 reboot; the entrypoint then self-heals sshd.
+# agent container back after an EC2 reboot; the entrypoint then self-heals sshd
+# and runs the image's container start hook, which relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]

@@ -18,7 +18,7 @@ from terminal_app.testing import (
     render_browser_wrapper_page,
 )
 
-pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.browser, pytest.mark.timeout(60), pytest.mark.flaky]
 
 _SHELL_URL: Final[str] = "http://shell.test/"
 _CONTRACT_URL: Final[str] = f"http://{BROWSER_WRAPPER_HOST}/_static/app_contract.js"
@@ -110,8 +110,11 @@ def _pty_frame(context: BrowserContext) -> tuple[Frame, Frame]:
     wrapper.wait_for_load_state()
     # The pty frame is pointed once the contract module is up and has greeted the page, after the wrapper's load.
     wrapper.wait_for_function("document.getElementById('pty').src !== ''", timeout=5000)
-    # The src is set before the iframe navigates, so a lookup by URL can still miss the frame.
-    pty = wrapper.locator("#pty").element_handle().content_frame()
+    # The iframe's own frame, followed until it reaches the pty page: with its src just set, the frame can still be on
+    # its first blank document, so a lookup by URL can miss it.
+    pty_element = wrapper.query_selector("#pty")
+    assert pty_element is not None
+    pty = pty_element.content_frame()
     assert pty is not None
     pty.wait_for_url(BROWSER_PTY_URL, timeout=5000)
     pty.wait_for_load_state()

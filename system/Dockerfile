@@ -90,6 +90,7 @@ COPY system/apps/routines/pyproject.toml /home/user/workspace/system/apps/routin
 # package.json) -- install needs only these.
 COPY system/package.json system/package-lock.json /home/user/workspace/system/
 COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/workspace_ui/
+COPY system/libs/workspace_voice/package.json /home/user/workspace/system/libs/workspace_voice/
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
@@ -173,3 +174,11 @@ RUN sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*\):/root:|root:\1:/home/user:|' /et
 # is checked out without exec bits.
 COPY system/scripts/default_workspace_template_seed.sh /usr/local/bin/default-workspace-template-seed
 RUN chmod +x /usr/local/bin/default-workspace-template-seed
+
+# The container start hook mngr's self-healing entrypoint runs, detached, on
+# every container start once sshd is back (mngr's CONTAINER_START_HOOK_PATH).
+# It relaunches the services agent after a restart docker's policy made on its
+# own (an OOM kill, a daemon restart, a VM reboot), so the workspace recovers
+# without the desktop app; see the script's own comment for what it skips.
+COPY system/scripts/minds_container_start_hook.sh /usr/local/bin/mngr-container-start-hook
+RUN chmod +x /usr/local/bin/mngr-container-start-hook

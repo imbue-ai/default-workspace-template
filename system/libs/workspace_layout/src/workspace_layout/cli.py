@@ -204,7 +204,13 @@ _LISTED_CLIENT_FIELDS: Final[tuple[str, ...]] = (
     "shown_history",
     "last_seen",
 )
-_LISTED_APP_FIELDS: Final[tuple[str, ...]] = ("name", "display_name", "is_running", "launch_paths", "default_shortcut")
+_LISTED_APP_FIELDS: Final[tuple[str, ...]] = (
+    "name",
+    "display_name",
+    "is_running",
+    "launch_paths",
+    "default_shortcuts",
+)
 
 # A read answers from memory and the state files; an ``open`` waits on nothing slower than a
 # file write either, but keeps a wider bound for a shell busy with a client's save.
@@ -617,6 +623,18 @@ def _app_link(app: Mapping[str, Any]) -> str:
     return f"http://{app['label'] or app['name']}.localhost/"
 
 
+# CLEANUP: drop this (and the test of a shell older than the shortcut list) once every workspace's shell runs a
+# release whose inventory lists each app's ``default_shortcuts``.
+@pure
+def _with_default_shortcuts(app: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The app as a shell that lists ``default_shortcuts`` answers it: an older shell's one ``default_shortcut``
+    (a table, or null for none) reads as a list of one or of none."""
+    if "default_shortcuts" in app:
+        return app
+    shortcut = app.get("default_shortcut")
+    return {**app, "default_shortcuts": [] if shortcut is None else [shortcut]}
+
+
 @pure
 def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
     """Every app a user can open, with the link to write for it and where its windows are."""
@@ -627,7 +645,11 @@ def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
                 {**_listed(window, _LISTED_WINDOW_FIELDS), "desktop": desktop["id"]}
             )
     return [
-        {**_listed(app, _LISTED_APP_FIELDS), "link": _app_link(app), "windows": windows_by_app.get(app["name"], [])}
+        {
+            **_listed(_with_default_shortcuts(app), _LISTED_APP_FIELDS),
+            "link": _app_link(app),
+            "windows": windows_by_app.get(app["name"], []),
+        }
         for app in inventory["apps"]
         if not app["internal"]
     ]

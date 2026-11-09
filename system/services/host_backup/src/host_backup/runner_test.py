@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from env_converge.capture import CaptureCommandError
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
@@ -28,12 +29,12 @@ from host_backup.events import (
 )
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
-    ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
     SLOW_BACKUP_NOTICE_INTERVAL_SECONDS,
     _age_out_restore_markers,
     _check_secrets_present,
     _cleanup_snapshot,
     _emit_tick_error,
+    _free_space_over_quota,
     _load_config_if_changed,
     _LoopState,
     _maybe_run_prune,
@@ -46,6 +47,7 @@ from host_backup.runner import (
     _take_snapshot,
 )
 from host_backup.snapshot import SnapshotResult
+from host_backup.usage import StoreUsage
 
 
 def _direct_capabilities() -> BackupCapabilities:
@@ -289,6 +291,21 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
         )
         observed.add(last_event_type(state.events_dir))
 
+    # The account is over its backup storage quota: the tick frees space instead
+    # of backing up, and the skip event (the first one written) ends the tick.
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "over-quota"
+    _free_space_over_quota(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        usage=_over_quota_usage(),
+        forget_fn=_ScriptedRestic([_completed(0)]),
+        prune_fn=_ScriptedRestic([_completed(0)]),
+        unlock_fn=_ScriptedRestic([]),
+    )
+    observed.add(str(_read_events(state.events_dir)[0]["type"]))
+
     # An unhandled error caught by the loop's outer handler.
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "tick-error"
@@ -375,29 +392,24 @@ def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
-    calls: list[list[str]] = []
+    captures: list[None] = []
 
-    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append(argv)
-        assert kwargs["timeout"] == ENV_RECORD_CAPTURE_TIMEOUT_SECONDS
-        return subprocess.CompletedProcess(
-            args=argv, returncode=0, stdout="", stderr=""
-        )
+    _refresh_environment_record(state=state, capture_fn=lambda: captures.append(None))
 
-    _refresh_environment_record(state=state, run_fn=fake_run)
-
-    assert calls == [["uv", "run", "--no-sync", "env-converge", "capture"]]
-    events = _read_events(state.events_dir)
-    capture_events = [e for e in events if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"]
+    assert len(captures) == 1
+    capture_events = [
+        e
+        for e in _read_events(state.events_dir)
+        if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"
+    ]
     assert len(capture_events) == 1
     assert capture_events[0]["tick_id"] == "tick-under-test"
     assert capture_events[0]["success"] is True
-    assert capture_events[0]["exit_code"] == 0
-    assert capture_events[0]["stderr"] == ""
+    assert capture_events[0]["error_message"] == ""
 
 
 def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> None:
-    """A failed capture emits success=False with the stderr tail and does not raise.
+    """A failed capture emits success=False with its reason and does not raise.
 
     The record refresh must never block the backup itself: a slightly stale
     record in the snapshot beats no snapshot.
@@ -406,14 +418,10 @@ def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> No
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
 
-    def failing_run(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=argv, returncode=3, stdout="", stderr="probe exploded"
-        )
+    def failing_capture() -> None:
+        raise CaptureCommandError("npm ls -g --json --depth=0", "probe exploded")
 
-    _refresh_environment_record(state=state, run_fn=failing_run)
+    _refresh_environment_record(state=state, capture_fn=failing_capture)
 
     capture_events = [
         e
@@ -422,28 +430,20 @@ def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> No
     ]
     assert len(capture_events) == 1
     assert capture_events[0]["success"] is False
-    assert capture_events[0]["exit_code"] == 3
-    assert capture_events[0]["stderr"] == "probe exploded"
+    assert "probe exploded" in str(capture_events[0]["error_message"])
 
 
-def test_refresh_environment_record_tolerates_unlaunchable_capture(
-    tmp_path: Path,
+def test_refresh_environment_record_without_a_record_dir_is_best_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A capture that cannot run at all (missing binary, timeout) still just events.
-
-    Covers pre-cutover workspaces where env-converge does not exist: the
-    backup must proceed and the event records exit_code=None.
-    """
+    """The real capture with no record dir to write to (``MNGR_HOST_DIR`` unset) still just
+    events, and the backup proceeds."""
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
 
-    def raising_run(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        raise FileNotFoundError("uv not found")
-
-    _refresh_environment_record(state=state, run_fn=raising_run)
+    _refresh_environment_record(state=state)
 
     capture_events = [
         e
@@ -452,8 +452,7 @@ def test_refresh_environment_record_tolerates_unlaunchable_capture(
     ]
     assert len(capture_events) == 1
     assert capture_events[0]["success"] is False
-    assert capture_events[0]["exit_code"] is None
-    assert "uv not found" in str(capture_events[0]["stderr"])
+    assert capture_events[0]["error_message"]
 
 
 def _direct_snapshot() -> SnapshotResult:
@@ -1053,3 +1052,202 @@ def test_age_out_restore_markers_tolerates_list_failure(tmp_path: Path) -> None:
 
     # A failed listing must not forget anything and must not raise.
     assert forget_calls == []
+
+
+def _over_quota_usage(*, headroom_bytes: int = 64 * 1024 * 1024) -> StoreUsage:
+    return StoreUsage(
+        used_bytes=900,
+        account_used_bytes=1_500,
+        quota_bytes=1_000,
+        hard_limit_bytes=1_000 + headroom_bytes,
+        mode="active",
+    )
+
+
+def _under_quota_usage() -> StoreUsage:
+    return StoreUsage(
+        used_bytes=900,
+        account_used_bytes=1_000,
+        quota_bytes=1_000,
+        hard_limit_bytes=2_000,
+        mode="active",
+    )
+
+
+def _write_store_restic_env(root: Path) -> None:
+    env_path = root / "data/.secrets/restic.env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text(
+        "RESTIC_REPOSITORY=rest:https://backups.example.com/u/agent-x/\n"
+        "RESTIC_REST_USERNAME=agent-x\nRESTIC_REST_PASSWORD=tok\nRESTIC_PASSWORD=pw\n"
+    )
+
+
+def test_a_tick_over_the_soft_quota_frees_space_instead_of_backing_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `_check_secrets_present` reads the relative data/.secrets/restic.env.
+    monkeypatch.chdir(tmp_path)
+    _write_store_restic_env(tmp_path)
+    state = _state_recording_events(tmp_path)
+    freed: list[dict[str, object]] = []
+
+    _run_one_tick(
+        state=state,
+        config=_build_config(),
+        trigger_reason="interval",
+        usage_fn=lambda env: _over_quota_usage(),
+        free_space_fn=lambda **kwargs: freed.append(kwargs),
+    )
+
+    (call,) = freed
+    assert call["usage"] == _over_quota_usage()
+    env_overrides = call["env_overrides"]
+    assert isinstance(env_overrides, dict)
+    assert env_overrides["RESTIC_REST_PASSWORD"] == "tok"
+    assert [e["type"] for e in _events_in(state.events_dir)] == [
+        "CONFIG_RELOADED",
+        "BACKUP_STARTED",
+    ]
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(None, id="no-quota-information"),
+        pytest.param(_under_quota_usage(), id="under-quota"),
+    ],
+)
+def test_a_tick_proceeds_to_its_snapshot_when_not_over_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, usage: StoreUsage | None
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_store_restic_env(tmp_path)
+    # OUTER_TRIGGER with no paths configured fails at the snapshot step, which
+    # proves the tick went past the usage probe without running restic.
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.OUTER_TRIGGER))
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-under-test"
+
+    _run_one_tick(
+        state=state,
+        config=_build_config(),
+        trigger_reason="interval",
+        usage_fn=lambda env: usage,
+        free_space_fn=lambda **kwargs: pytest.fail("the tick must not free space"),
+    )
+
+    assert "SNAPSHOT_FAILED" in [e["type"] for e in _events_in(state.events_dir)]
+    assert "BACKUP_SKIPPED_OVER_QUOTA" not in [
+        e["type"] for e in _events_in(state.events_dir)
+    ]
+
+
+def test_the_over_quota_tick_records_the_usage_then_forgets_and_prunes_within_half_the_headroom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The prune gate file lives under the relative data/.state/; a fresh one
+    # must not stop the over-quota prune, which exists to free space now.
+    monkeypatch.chdir(tmp_path)
+    gate = tmp_path / "data/.state/last-restic-prune"
+    gate.parent.mkdir(parents=True)
+    gate.write_text("just now")
+    forget = _ScriptedRestic([_completed(0)])
+    prune = _ScriptedRestic([_completed(0)])
+    state = _state_recording_events(tmp_path)
+
+    _free_space_over_quota(
+        state=state,
+        config=_build_config(),
+        env_overrides={"RESTIC_REPOSITORY": "rest:https://x/u/w/"},
+        usage=_over_quota_usage(headroom_bytes=64 * 1024 * 1024),
+        forget_fn=forget,
+        prune_fn=prune,
+        unlock_fn=_ScriptedRestic([]),
+    )
+
+    events = _events_in(state.events_dir)
+    assert [e["type"] for e in events] == [
+        "BACKUP_SKIPPED_OVER_QUOTA",
+        "FORGET_COMPLETED",
+        "PRUNE_COMPLETED",
+    ]
+    skipped = events[0]
+    assert skipped["tick_id"] == "tick-under-test"
+    assert (skipped["used_bytes"], skipped["account_used_bytes"]) == (900, 1_500)
+    assert (skipped["quota_bytes"], skipped["hard_limit_bytes"]) == (
+        1_000,
+        1_000 + 64 * 1024 * 1024,
+    )
+    assert forget.calls == 1
+    assert prune.calls == 1
+    assert prune.call_kwargs[0]["max_repack_bytes"] == 32 * 1024 * 1024
+    assert state.consecutive_backup_failures == 0
+
+
+def test_a_store_refusing_the_upload_is_recorded_as_a_quota_failure(
+    tmp_path: Path,
+) -> None:
+    refused = _completed(
+        1,
+        stderr=(
+            "Save(<data/f5098c7a77>) failed: unexpected HTTP response (507): 507 Insufficient Storage\n"
+            "Fatal: unable to save snapshot: unexpected HTTP response (507): 507 Insufficient Storage"
+        ),
+    )
+    state, succeeded = _run_backup_under_test(tmp_path, _ScriptedRestic([refused]))
+
+    assert succeeded is False
+    (failed,) = [
+        e for e in _events_in(state.events_dir) if e["type"] == "RESTIC_BACKUP_FAILED"
+    ]
+    assert failed["reason"] == "quota_exceeded"
+
+
+def test_an_ordinary_backup_failure_carries_no_reason(tmp_path: Path) -> None:
+    state, succeeded = _run_backup_under_test(
+        tmp_path, _ScriptedRestic([_completed(1, stderr="network unreachable")])
+    )
+
+    assert succeeded is False
+    (failed,) = [
+        e for e in _events_in(state.events_dir) if e["type"] == "RESTIC_BACKUP_FAILED"
+    ]
+    assert failed["reason"] == ""
+
+
+def test_a_fresh_prune_gate_stops_the_routine_prune_but_not_a_forced_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    gate = tmp_path / "data/.state/last-restic-prune"
+    gate.parent.mkdir(parents=True)
+    gate.write_text("just now")
+    routine = _ScriptedRestic([_completed(0)])
+    forced = _ScriptedRestic([_completed(0)])
+    state = _state_recording_events(tmp_path)
+
+    _maybe_run_prune(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        prune_fn=routine,
+        unlock_fn=_ScriptedRestic([]),
+    )
+    _maybe_run_prune(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        prune_fn=forced,
+        unlock_fn=_ScriptedRestic([]),
+        is_forced=True,
+        max_repack_bytes=5,
+    )
+
+    assert routine.calls == 0
+    assert forced.calls == 1
+    assert forced.call_kwargs[0]["max_repack_bytes"] == 5
+    assert [e["type"] for e in _events_in(state.events_dir)] == [
+        "PRUNE_SKIPPED",
+        "PRUNE_COMPLETED",
+    ]

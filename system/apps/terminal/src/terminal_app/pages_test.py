@@ -4,11 +4,16 @@ from pathlib import Path
 
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import (
+    CROSS_SITE_FETCH_HEADERS,
+    assert_api_schema_describes_app,
+    assert_request_guard_refuses_unknown_provenance,
+)
 from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
 from terminal_app.pages import (
+    NEW_PATH,
     PageConfig,
     SessionPage,
     render_page,
@@ -36,10 +41,14 @@ def _config_of(page_html: str) -> dict[str, object]:
 
 
 def test_the_wrapper_page_frames_the_session_with_the_ptys_origin_label(
-    pages_client: FlaskClient, fake_tmux: FakeTmux, session_store: JsonTerminalSessionStore
+    pages_client: FlaskClient,
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-2", "$5")])
-    session_store.save_record(make_terminal_record("terminal-2", "Build", "/srv", session_id="$5"))
+    session_store.save_record(
+        make_terminal_record("terminal-2", "Build", "/srv", session_id="$5")
+    )
 
     response = pages_client.get("/?session=terminal-2")
 
@@ -80,7 +89,9 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     session_source: TmuxSessionSource, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
     registry_path = write_registry_labels(tmp_path / "apps.toml", {})
-    client = build_pages_test_client(session_source, registry_path, tmp_path / "app_contract.js", [])
+    client = build_pages_test_client(
+        session_source, registry_path, tmp_path / "app_contract.js", []
+    )
     fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
 
     page = client.get("/?session=terminal-3")
@@ -97,7 +108,9 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     assert session.json == config["page"]
 
 
-def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient) -> None:
+def test_a_name_that_cannot_be_a_session_is_not_found(
+    pages_client: FlaskClient,
+) -> None:
     response = pages_client.get("/?session=not%20a%20name")
 
     assert response.status_code == 404
@@ -111,13 +124,26 @@ def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_pat
 
     # The shell's envelope fields ride beside the param and are ignored.
     response = pages_client.post(
-        "/new", json={"workdir": "/srv", "client_id": "client-1", "desktop_id": "home", "window_path": "/"}
+        "/new",
+        json={
+            "workdir": "/srv",
+            "client_id": "client-1",
+            "desktop_id": "home",
+            "window_path": "/",
+        },
     )
 
     assert response.status_code == 200
     assert response.json == {"path": "/?session=terminal-2"}
     assert fake_tmux.session_names() == ["terminal-1", "terminal-2"]
-    assert fake_tmux.creates()[0][:6] == ["new-session", "-d", "-s", "terminal-2", "-c", "/srv"]
+    assert fake_tmux.creates()[0][:6] == [
+        "new-session",
+        "-d",
+        "-s",
+        "terminal-2",
+        "-c",
+        "/srv",
+    ]
 
 
 @pytest.mark.parametrize("body", [{}, {"workdir": ""}], ids=["absent", "empty"])
@@ -128,10 +154,19 @@ def test_new_without_a_workdir_starts_in_the_default_one(
 
     assert response.status_code == 200
     assert response.json == {"path": "/?session=terminal-1"}
-    assert fake_tmux.creates()[0][:6] == ["new-session", "-d", "-s", "terminal-1", "-c", DEFAULT_TEST_WORKDIR]
+    assert fake_tmux.creates()[0][:6] == [
+        "new-session",
+        "-d",
+        "-s",
+        "terminal-1",
+        "-c",
+        DEFAULT_TEST_WORKDIR,
+    ]
 
 
-def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient) -> None:
+def test_new_refuses_a_bad_workdir_with_a_detail_body(
+    pages_client: FlaskClient,
+) -> None:
     response = pages_client.post("/new", json={"workdir": "x" * 2000})
 
     assert response.status_code == 400
@@ -139,21 +174,31 @@ def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient)
 
 
 @pytest.mark.parametrize("body", [[], "text", None], ids=["array", "string", "nothing"])
-def test_new_refuses_a_body_that_is_not_a_json_object(pages_client: FlaskClient, body: object) -> None:
-    response = pages_client.post("/new", json=body) if body is not None else pages_client.post("/new", data="")
+def test_new_refuses_a_body_that_is_not_a_json_object(
+    pages_client: FlaskClient, body: object
+) -> None:
+    response = (
+        pages_client.post("/new", json=body)
+        if body is not None
+        else pages_client.post("/new", data="")
+    )
 
     assert response.status_code == 400
     assert "JSON object" in response.get_json()["detail"]
 
 
-def test_new_is_a_post_and_a_get_of_it_is_refused(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
+def test_new_is_a_post_and_a_get_of_it_is_refused(
+    pages_client: FlaskClient, fake_tmux: FakeTmux
+) -> None:
     response = pages_client.get("/new")
 
     assert response.status_code == 405
     assert fake_tmux.creates() == []
 
 
-def test_new_answers_a_detail_body_when_tmux_refuses(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
+def test_new_answers_a_detail_body_when_tmux_refuses(
+    pages_client: FlaskClient, fake_tmux: FakeTmux
+) -> None:
     fake_tmux.refuse_creates()
 
     response = pages_client.post("/new", json={})
@@ -186,7 +231,12 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
     response = pages_client.post(
-        "/api/window-closed", json={"path": "/?session=terminal-1", "window_id": "win-0000000000000001", "desktop_id": "home"}
+        "/api/window-closed",
+        json={
+            "path": "/?session=terminal-1",
+            "window_id": "win-0000000000000001",
+            "desktop_id": "home",
+        },
     )
 
     assert response.status_code == 204
@@ -199,10 +249,20 @@ def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     # A path naming no session and a path naming something no session can be called: each brings a sweep and
     # marks nothing.
     nameless = pages_client.post(
-        "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-0000000000000001", "desktop_id": "home"}
+        "/api/window-closed",
+        json={
+            "path": "/new?workdir=%2Fsrv",
+            "window_id": "win-0000000000000001",
+            "desktop_id": "home",
+        },
     )
     odd_name = pages_client.post(
-        "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-0000000000000002", "desktop_id": "home"}
+        "/api/window-closed",
+        json={
+            "path": "/?session=not%20a%20name",
+            "window_id": "win-0000000000000002",
+            "desktop_id": "home",
+        },
     )
 
     assert [r.status_code for r in (nameless, odd_name)] == [204, 204]
@@ -214,8 +274,12 @@ def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(
 ) -> None:
     # A body of another shape than the shell's hint, a hint missing its window, and no JSON at all: each is a 400.
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
-    partial = pages_client.post("/api/window-closed", json={"path": "/?session=terminal-1"})
-    not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
+    partial = pages_client.post(
+        "/api/window-closed", json={"path": "/?session=terminal-1"}
+    )
+    not_json = pages_client.post(
+        "/api/window-closed", data="terminal-1", content_type="text/plain"
+    )
 
     assert [r.status_code for r in (odd_shape, partial, not_json)] == [400, 400, 400]
     assert "JSON object" in odd_shape.get_json()["detail"]
@@ -223,7 +287,9 @@ def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(
     assert window_closed_posts == []
 
 
-def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:
+def test_the_app_contract_module_is_served_from_the_terminals_own_origin(
+    pages_client: FlaskClient,
+) -> None:
     response = pages_client.get("/_static/app_contract.js")
 
     assert response.status_code == 200
@@ -232,14 +298,21 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
     assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
 
 
-def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(pages_client: FlaskClient) -> None:
+def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(
+    pages_client: FlaskClient,
+) -> None:
     """Typing happens in the pty frame, on another origin, so the wrapper's own contract never sees it: the pty page
     reports it as ``shell:input``, and the wrapper forwards exactly that type from its frame to the shell (the
     multiplayer spec, section 4.3)."""
     assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in PTY_PAGE_SCRIPT
-    assert 'window.addEventListener(type, reportInput, { capture: true, passive: true })' in PTY_PAGE_SCRIPT
+    assert (
+        "window.addEventListener(type, reportInput, { capture: true, passive: true })"
+        in PTY_PAGE_SCRIPT
+    )
     wrapper = pages_client.get("/?session=terminal-1").text
-    assert 'event.source === frame.contentWindow && data.type === "shell:input"' in wrapper
+    assert (
+        'event.source === frame.contentWindow && data.type === "shell:input"' in wrapper
+    )
     assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in wrapper
 
 
@@ -273,7 +346,12 @@ def test_a_framed_wrapper_holds_its_first_pointing_of_the_pty_until_the_shells_h
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     session_source: TmuxSessionSource, tmp_path: Path
 ) -> None:
-    client = build_pages_test_client(session_source, tmp_path / "apps.toml", tmp_path / "missing" / "app_contract.js", [])
+    client = build_pages_test_client(
+        session_source,
+        tmp_path / "apps.toml",
+        tmp_path / "missing" / "app_contract.js",
+        [],
+    )
 
     response = client.get("/_static/app_contract.js")
 
@@ -281,14 +359,18 @@ def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     assert "not built" in response.get_json()["detail"]
 
 
-def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
+def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> (
+    None
+):
     page = SessionPage(
         name=TmuxSessionName("terminal-1"),
         title=TerminalTitle("R&D <tests>"),
         pty_path="/?arg=_&arg=session&arg=terminal-1&arg=",
         pty_label="</script>",
     )
-    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
+    page_html = render_page(
+        PageConfig(session=TmuxSessionName("terminal-1"), page=page)
+    )
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
@@ -300,14 +382,24 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
 def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     title = "__CONTRACT_PATH__ and __CONFIG__"
     page = SessionPage(
-        name=TmuxSessionName("terminal-1"), title=TerminalTitle(title), pty_path="/?arg=session", pty_label="pty"
+        name=TmuxSessionName("terminal-1"),
+        title=TerminalTitle(title),
+        pty_path="/?arg=session",
+        pty_label="pty",
     )
 
-    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
+    page_html = render_page(
+        PageConfig(session=TmuxSessionName("terminal-1"), page=page)
+    )
 
     assert f"<title>{title}</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
-    assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
+    assert (
+        json.loads(page_html[start : page_html.index("</script>", start)])["page"][
+            "title"
+        ]
+        == title
+    )
     assert 'import("/_static/app_contract.js")' in page_html
 
 
@@ -330,3 +422,15 @@ def test_the_app_describes_its_api_the_way_its_manifest_says(
     assert_api_schema_describes_app(
         pages_client, Path(__file__).resolve().parents[2] / "app.toml"
     )
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(
+    pages_client: FlaskClient, fake_tmux: FakeTmux
+) -> None:
+    """The workspace's own browser is on loopback too, so the pages read a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard): such a page cannot open a terminal."""
+    assert_request_guard_refuses_unknown_provenance(pages_client, "GET", "/")
+    cross_site = pages_client.post(NEW_PATH, json={}, headers=CROSS_SITE_FETCH_HEADERS)
+    assert cross_site.status_code == 403
+    assert fake_tmux.creates() == []
