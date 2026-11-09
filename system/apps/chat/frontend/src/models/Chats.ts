@@ -103,8 +103,8 @@ export interface HeldSend extends DisplayDecision, MessageAuthor {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
-  // Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue. Absent
-  // from a provisional chat's held sends and from an older backend's snapshot.
+  // Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue. False
+  // for a provisional chat's held sends; absent from an older backend's snapshot.
   is_delivered?: boolean;
 }
 
