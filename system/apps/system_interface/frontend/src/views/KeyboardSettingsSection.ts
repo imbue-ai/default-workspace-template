@@ -130,6 +130,14 @@ export function areChordListsEqual(left: readonly string[], right: readonly stri
   return left.length === right.length && left.every((chord, index) => chord === right[index]);
 }
 
+/** Whether a reset would change what the action runs: it has a change in this workspace, and that change differs
+ *  from what removing it restores (a Replace elsewhere can leave a change equal to it). */
+export function isResetOffered(action: KeybindingActionView): boolean {
+  if (action.source !== "workspace") return false;
+  const restored = new Set(action.reset_chords);
+  return action.chords.length !== restored.size || action.chords.some((chord) => !restored.has(chord));
+}
+
 /** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, a reset of this
  *  workspace's change, or a discard of an undelivered "everywhere" save. */
 type ClashCause = "record" | "restore-default" | "reset" | "discard";
@@ -624,7 +632,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         rowMarker(appView, action, isPendingReplace),
         m("span", { class: "shrink-0" }, shortcutsView(chords, isApple)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
-          action.source === "workspace"
+          isResetOffered(action)
             ? m(
                 Button,
                 {

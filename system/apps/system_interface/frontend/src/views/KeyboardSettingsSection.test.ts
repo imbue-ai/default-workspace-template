@@ -10,6 +10,7 @@ import {
   KeyboardSettingsSection,
   actionsSharingShortcuts,
   clashesOf,
+  isResetOffered,
   reservedChordNotice,
   unsentEntryLabel,
 } from "./KeyboardSettingsSection";
@@ -102,6 +103,17 @@ describe("actionsSharingShortcuts", () => {
     expect(actionsSharingShortcuts(APP_SHARING_F2, "rename", chordsOf).map((action) => action.id)).toEqual(["delete"]);
     expect(actionsSharingShortcuts(APP_SHARING_F2, "new-folder", chordsOf)).toEqual([]);
     expect(actionsSharingShortcuts(APP, "rename", chordsOf)).toEqual([]);
+  });
+});
+
+describe("isResetOffered", () => {
+  it("offers a reset only for a change in this workspace that differs from what the reset restores", () => {
+    const [rename, deleteAction, newFolder] = APP.actions;
+    expect(isResetOffered(deleteAction)).toBe(true);
+    expect(isResetOffered(rename)).toBe(false);
+    expect(isResetOffered(newFolder)).toBe(false);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"] })).toBe(false);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] })).toBe(true);
   });
 });
 

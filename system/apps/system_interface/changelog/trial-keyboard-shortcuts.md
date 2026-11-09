@@ -4,7 +4,7 @@ Editing one action opens its editor below the row:
 
 - Each of its shortcuts can be removed on its own, and "Add shortcut" records another. The recorder takes every key, Escape included, and has a Cancel of its own. Removing them all turns the action off, which the list shows as "Off".
 
-- No step leaves one shortcut on two actions of an app without asking. Recording a shortcut another action uses, "Restore default", a row's "Reset", and "Discard" on a change still waiting to reach the account each offer "Replace" or "Cancel" when what they would bring in is in use. Replace takes it off every action that has it, at once: that row shows its remaining shortcuts marked "Changes when you save", the editor says what will be removed, and the two are saved together. A shortcut that still runs two actions (from the account's settings, say) is flagged on both rows.
+- No step leaves one shortcut on two actions of an app without asking. Recording a shortcut another action uses, "Restore default", a row's "Reset", and "Discard" on a change still waiting to reach the account each offer "Replace" or "Cancel" when what they would bring in is in use. Replace takes it off every action that has it, at once: that row shows its remaining shortcuts marked "Changes when you save", the editor says what will be removed, and the two are saved together. A shortcut that still runs two actions (from the account's settings, say) is flagged on both rows. A row offers "Reset" only when resetting would change what the action runs.
 
 - A shortcut Imbue Studio or the browser keeps for itself (Command-W, Command-T, and the like) is saved with a warning that it may not reach the workspace.
 
