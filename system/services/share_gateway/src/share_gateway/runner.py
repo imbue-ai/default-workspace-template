@@ -387,16 +387,21 @@ def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetrySt
         )
         return None
     retry_state.reset()
+    _write_up_status(materials.workspace_domain, utc_now())
+    return stack
+
+
+def _write_up_status(workspace_domain: str, now: datetime) -> None:
+    """Write the "up" status document, stamped ``now``; the heartbeat rewrites this same document."""
     write_gateway_status(
         materials_module.GATEWAY_STATUS_FILE,
         state=STATUS_UP,
-        workspace_domain=materials.workspace_domain,
+        workspace_domain=workspace_domain,
         failed_attempt_count=0,
         last_error="",
         next_retry_in_seconds=None,
-        now=utc_now(),
+        now=now,
     )
-    return stack
 
 
 def _stop_stack(stack: ShareStack | None) -> None:
@@ -446,15 +451,7 @@ def _heartbeat_gateway_status(stack: ShareStack, now: datetime) -> None:
     if not is_status_heartbeat_due(stack.last_status_heartbeat, now):
         return
     stack.last_status_heartbeat = now
-    write_gateway_status(
-        materials_module.GATEWAY_STATUS_FILE,
-        state=STATUS_UP,
-        workspace_domain=stack.materials.workspace_domain,
-        failed_attempt_count=0,
-        last_error="",
-        next_retry_in_seconds=None,
-        now=now,
-    )
+    _write_up_status(stack.materials.workspace_domain, now)
 
 
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
