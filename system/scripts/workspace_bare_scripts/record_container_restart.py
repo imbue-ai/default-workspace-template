@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Record that the workspace container was restarted out of band, in the services agent's events.
+"""Record that the workspace container started with its services agent already in place.
 
 The container start hook (``system/scripts/minds_container_start_hook.sh``) runs
 this before it relaunches the services agent, so the user has a record of the
-restart (an OOM kill, a docker daemon restart, a VM reboot) beside the
-workspace's other event logs. One ``container_restarted`` line lands at
-``<agent dir>/events/host_lifecycle/events.jsonl`` under the standard event
-envelope. Stdlib only: the hook runs it under the system ``python3``.
+restart beside the workspace's other event logs. The hook cannot tell a restart
+docker made on its own (an OOM kill, a docker daemon restart, a VM reboot) from
+a start of a stopped workspace, so the event names neither as the cause. One
+``container_restarted`` line lands at ``<agent dir>/events/host_lifecycle/events.jsonl``
+under the standard event envelope. Stdlib only: the hook runs it under the
+system ``python3``.
 """
 
 from __future__ import annotations
@@ -52,8 +54,9 @@ def build_restart_event(
         "agent_id": agent_id,
         "container_uptime_seconds": uptime_seconds,
         "message": (
-            "The workspace container was restarted out of band (an out-of-memory kill, a docker "
-            "daemon restart, or a VM reboot) and its services are being relaunched."
+            "The workspace container started with its services down (a restart after an "
+            "out-of-memory kill, a docker daemon restart or a VM reboot, or a start of a stopped "
+            "workspace) and its services are being relaunched."
         ),
     }
 

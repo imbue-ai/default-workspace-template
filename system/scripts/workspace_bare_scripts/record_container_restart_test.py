@@ -35,7 +35,7 @@ def test_the_restart_lands_as_one_enveloped_event_in_the_agents_host_lifecycle_s
     assert first["event_id"] != lines[1]["event_id"]
     assert first["agent_id"] == "agent-0123456789abcdef0123456789abcdef"
     assert first["container_uptime_seconds"] == 12.34
-    assert "restarted out of band" in first["message"]
+    assert "started with its services down" in first["message"]
 
 
 def test_an_unreadable_uptime_is_recorded_as_unknown(tmp_path: Path) -> None:
