@@ -137,16 +137,19 @@ just the pages the user clicks. Each request carries `X-Imbue-Identity`
 ("Request identity" there): `owner` is always present; a person over a share
 adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
 `granter`, with no `user_id` ("Visiting agents", "Admission"); and a request
-with no header is the owner's. Read it with `workspace_layout.identity`, as
-the shell and the chat app do. The scaffold gives an app only `app-schema`, so
-when the app lacks it, add `workspace-layout` as an editable path dependency
-in the app's own directory (`.agents/shared/references/running-python.md`,
-"User packages are standalone projects"). Use `parse_identity_header` (it
-raises `workspace_layout.errors.InvalidIdentityHeaderError` for a header that
-does not parse: answer that with a 400, never read it as the owner's),
-`is_owner_participant`, and `participant_key_of`, which names the requester
-`user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
-the test client exercises all of this without turning sharing on.
+with no header is the owner's, which is safe only from loopback under a
+loopback `Host`. Every built-in app installs a guard for that and the scaffold
+does not, so add `install_request_guard(app, exempt_rules=frozenset())` from
+`app_schema.request_guard` right after the app is created, ahead of every
+other request hook (`system/libs/app_schema/README.md`; `exempt_rules` names a
+route meant for pages of other origins). It answers 403 to a page of another
+origin and to a header-less request from anywhere else, and 400 to a header
+that does not parse, which is never read as the owner's. Read the identity
+with `workspace_layout.identity`, as the shell and the chat app do; it comes
+with `app-schema`. Use `parse_identity_header`, `is_owner_participant`, and
+`participant_key_of`, which names the requester `user:<id>`, `agent:<id>`, or
+`owner`. Locally the header looks the same, so the test client exercises all
+of this without turning sharing on.
 
 - **The API.** Go through every route the app's API document lists and decide
   what a visitor may do with it. Reading what the app shows is usually what
@@ -172,7 +175,9 @@ the test client exercises all of this without turning sharing on.
   the participant key, whether it was the owner, and the route. Keep it under
   the app's data directory and bound it like any other store ("Bound disk
   growth" in `harden-creation.md`). Log reads too only when the app shows data
-  the owner would want to know was seen.
+  the owner would want to know was seen. The share gateway's own access log
+  (its README, "The access log") records every request but never who made it,
+  so it does not replace this one.
 
 Cover each with a test through the test client, sending a person's header
 (`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
@@ -180,6 +185,8 @@ Cover each with a test through the test client, sending a person's header
 an owner-only route answers both 403 and still works for the owner and for a
 request with no header, a header that does not parse answers 400, a change
 records the visitor's participant key, and the access log gains its line.
+Assert the guard with `app_schema.testing`'s
+`assert_request_guard_refuses_unknown_provenance` on one of the app's reads.
 
 ## Critical apps
 
