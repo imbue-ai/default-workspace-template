@@ -757,9 +757,11 @@ def restart_busy_reason(
 ) -> str | None:
     """What a chat is in the middle of that a restart would cut short, in plain words; None when it is idle.
 
-    Idle needs the harness to have ended its turn (WAITING, with no ``active`` turn marker), not just a
-    transcript that reads idle: between an assistant message and the tool call after it the transcript
-    shows no turn in flight. The marker covers a turn the observe-reported WAITING has not caught up with.
+    Idle needs the harness to have ended its turn (WAITING or RUNNING_BACKGROUND, with no ``active`` turn
+    marker), not just a transcript that reads idle: between an assistant message and the tool call after it
+    the transcript shows no turn in flight. The marker covers a turn the observe-reported lifecycle has not
+    caught up with. RUNNING_BACKGROUND counts as idle because a chat on an older turn-end hook reports the
+    same background work as WAITING, so both are restarted alike.
     """
     if is_permission_pending:
         return "waiting on a dialog"
@@ -768,7 +770,7 @@ def restart_busy_reason(
     if has_queued_messages:
         return "holding queued messages"
     if (
-        lifecycle_state != WAITING_LIFECYCLE_STATE
+        lifecycle_state not in (WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE)
         or is_active_marker_present
         or (activity_state is not None and is_working_activity_state(activity_state))
     ):

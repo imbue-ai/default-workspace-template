@@ -8047,6 +8047,9 @@ def test_status_mapping_follows_the_chat_row(
     [
         ("WAITING", ActivityState.IDLE, False, False, False, False, None),
         ("WAITING", None, False, False, False, False, None),
+        # The turn ended with background work outstanding; the restart ends that work.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, False, None),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, False, "working"),
         # The transcript reads idle between an assistant message and its next tool call.
         ("RUNNING", ActivityState.IDLE, False, False, False, False, "working"),
         # A turn the observe-reported lifecycle has not caught up with yet.
