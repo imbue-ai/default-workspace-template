@@ -73,7 +73,6 @@ import {
   refreshKeybindings,
   setKeybindingSurface,
 } from "../models/keybindings";
-import { interruptAgent } from "../models/Response";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
@@ -492,10 +491,10 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 }
 
 /** Run a chat shortcut the root heard (a key on its own rail, or one the desktop app intercepted): New chat as its
- *  button does, or interrupt the selected chat's agent. */
+ *  button does, or Stop the agent as the selected chat's Stop button does. */
 function runChatShortcut(shortcut: ChatShortcut): void {
   if (shortcut === "new-chat") void openNewChat();
-  else if (selectedChatId !== null) void interruptAgent(selectedChatId);
+  else if (selectedChatId !== null) pool?.stopAgent(selectedChatId);
 }
 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {

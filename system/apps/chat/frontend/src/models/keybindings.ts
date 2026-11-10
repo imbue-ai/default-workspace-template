@@ -25,7 +25,7 @@ let surface: ChordSurface = "browser";
 /** The chat's own shortcuts beyond the composer's send, with the manifest's defaults until the backend answers. */
 export const CHAT_SHORTCUT_DEFAULTS = {
   "new-chat": ["alt+meta+n"],
-  "interrupt-agent": ["meta+."],
+  "stop-agent": ["meta+."],
 } as const satisfies Record<string, readonly string[]>;
 
 export type ChatShortcut = keyof typeof CHAT_SHORTCUT_DEFAULTS;

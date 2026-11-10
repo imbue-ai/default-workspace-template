@@ -297,6 +297,7 @@ import {
   raiseFailureNotice,
   restoreComposerDraft,
   setComposerHint,
+  stopComposerAgent,
   takeComposerDraft,
 } from "./MessageInput";
 
@@ -1023,6 +1024,42 @@ describe("MessageInput stop-to-composer handback", () => {
     typeDraft(component, "agent-1", "keep me");
     const textarea = await clickStop(component, "agent-1");
     expect(textarea?.attrs?.value).toBe("keep me");
+  });
+
+  /** Render and mount the composer's textarea, which is when it registers its Stop for the shortcut. */
+  function mountComposer(
+    component: m.Component<{ chatId: string | null }>,
+    chatId: string,
+  ): () => AnyVnode | undefined {
+    const render = () => findByTag(component.view!({ attrs: { chatId } } as never), "textarea");
+    const textarea = render();
+    (textarea?.attrs?.oncreate as (vnode: unknown) => void)({
+      dom: { style: {}, scrollHeight: 28, clientHeight: 28, focus: () => undefined },
+    });
+    return render;
+  }
+
+  it("runs the Stop button's handback for the Stop the agent shortcut", async () => {
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
+    const render = mountComposer(MessageInput(), "agent-1");
+    stopComposerAgent();
+    await vi.waitFor(() => expect(render()?.attrs?.value).toBe("queued one"));
+    expect(mocks.drainToComposer).toHaveBeenCalledOnce();
+    expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("stops nothing from the shortcut while no turn is running", () => {
+    mocks.agent.activity_state = undefined;
+    mountComposer(MessageInput(), "agent-1");
+    stopComposerAgent();
+    expect(mocks.drainToComposer).not.toHaveBeenCalled();
+  });
+
+  it("stops nothing from the shortcut once the composer is gone", () => {
+    const render = mountComposer(MessageInput(), "agent-1");
+    (render()?.attrs?.onremove as () => void)();
+    stopComposerAgent();
+    expect(mocks.drainToComposer).not.toHaveBeenCalled();
   });
 });
 

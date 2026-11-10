@@ -570,7 +570,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             "open-overview",
             "launcher-secondary-send",
         ],
-        "chat": ["send-message", "new-chat", "interrupt-agent"],
+        "chat": ["send-message", "new-chat", "stop-agent"],
         "files": [
             "select-all",
             "go-up",

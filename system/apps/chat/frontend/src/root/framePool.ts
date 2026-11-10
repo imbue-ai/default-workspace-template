@@ -147,6 +147,12 @@ export class InnerFramePool {
     return true;
   }
 
+  /** Press the Stop button of ``chatId``'s page; nothing when the page is not loaded (its chat has no turn the
+   *  user has seen start). */
+  stopAgent(chatId: string): void {
+    this.api(chatId)?.stopAgent();
+  }
+
   private api(chatId: string): ChatPageEmbedApi | null {
     const held = this.held.get(chatId);
     if (held === undefined || !held.isLoaded) return null;
