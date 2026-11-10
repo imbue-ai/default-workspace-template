@@ -30,7 +30,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   its own origin, and which follows the link clicks and script popups of a
   page a shell frames (its handshake has arrived) by one rule
   (desktop-interface contracts.md section 7, "Link rule"),
-  so no app carries link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
+  so no app carries link code of its own, and runs the workspace-wide
+  shortcuts the shell sends with `shell:workspace-chords` ahead of the page's
+  own handlers, handing a keystroke that spells one to the shell as
+  `shell:shortcut` (unless the page passes `ownsKeys`, as the terminal and the
+  Screen do) and a chord the desktop app took from the OS for it to the page as
+  `shell:chord`; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
   a right-clicked element under a random `REF-<id>`, the menu's rows (the
@@ -70,8 +75,18 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   repo, section 10): `chordFromKeydown` spells one keystroke canonically,
   `keydownMatchesChords` and `keydownMatchesAction` match it against the chords
   an app's backend resolved at `/api/keybindings/me`, which the apps re-fetch
-  on the `shell:keybindings-changed` message of `src/app_contract.ts`; its
-  contract test holds the named-key vocabulary to the desktop's (the vendored
+  on the `shell:keybindings-changed` message of `src/app_contract.ts`. Chords
+  are read in a context, the platform and whether the workspace runs in the
+  desktop app or a browser (the keyboard-shortcuts spec in the mngr repo,
+  section 4): `meta` is the Command key on a Mac and the Control key
+  elsewhere, a chord holding the Mac's Control key (`ctrl`) is hidden off a
+  Mac, and one a browser keeps from its pages is hidden in a browser
+  (`isChordHiddenIn`); a hidden chord never matches. The module also carries
+  the refused, browser-reserved, OS-kept, and host-acted chord lists, the
+  non-blocking warnings they give (`chordNotices`), the workspace-wide chord
+  rule (`isWorkspaceWideChord`), and the labels a chord is drawn and spoken
+  with (`chordDisplayLabel`, `chordSpokenLabel`). Its contract test holds the
+  named-key vocabulary and those lists to the desktop's (the vendored
   `workspace_profile_contract.json`).
 - `src/download.ts`: `startDownload`, how the workspace's own pages download a
   file of their own origin: by loading it in a hidden frame rather than through
