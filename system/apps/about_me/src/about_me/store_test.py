@@ -1,4 +1,3 @@
-import datetime
 import json
 import threading
 from pathlib import Path
@@ -7,10 +6,9 @@ import pytest
 
 from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
+from about_me.errors import StaleMemoryError
 from about_me.profile import split_lines
-from about_me.store import MAX_FACT_CHARS
 from about_me.store import MEMORY_INDEX_PATH
-from about_me.store import NEW_INDEX_LINE
 from about_me.store import PROFILE_PATH
 from about_me.store import ProfileStore
 from about_me.store import SOURCES_PATH
@@ -175,7 +173,7 @@ def test_a_sources_file_that_is_not_an_array_is_left_alone(store: ProfileStore, 
 
 
 def test_forget_all_removes_the_profile_its_index_line_and_the_sources(store: ProfileStore, workspace: Path) -> None:
-    profile = store.forget_all()
+    profile = store.forget_lookup()
 
     assert profile.facts == ()
     assert not (workspace / PROFILE_PATH).exists()
@@ -189,7 +187,7 @@ def test_forget_all_leaves_an_index_without_the_line_untouched_and_tolerates_mis
     index = b"- [Other](other.md) -- something else\r\nno newline at the end"
     write_workspace_file(empty_workspace, MEMORY_INDEX_PATH, index)
 
-    ProfileStore(empty_workspace).forget_all()
+    ProfileStore(empty_workspace).forget_lookup()
 
     assert (empty_workspace / MEMORY_INDEX_PATH).read_bytes() == index
 
@@ -233,79 +231,8 @@ def test_concurrent_deletes_are_serialized_and_never_delete_the_wrong_line(works
     assert len(remaining) == 3 + len(refusals)
 
 
-_ADDED_ON = datetime.date(2026, 11, 10)
-
-
-def _store_on(root: Path) -> ProfileStore:
-    return ProfileStore(root, today=lambda: _ADDED_ON)
-
-
-def test_adding_a_fact_puts_one_told_line_after_the_last_fact(workspace: Path) -> None:
-    profile = _store_on(workspace).add_fact("  I teach   recitations\nfor algorithms  ")
-
-    line = b"- I teach recitations for algorithms (you told me) <!-- found 2026-11-10 -->\n"
-    lines = split_lines(SAMPLE_PROFILE)
-    last_fact = max(index for index, raw in enumerate(lines) if raw.startswith(b"- Something written by hand"))
-    assert (workspace / PROFILE_PATH).read_bytes() == b"".join(
-        lines[: last_fact + 1] + [line] + lines[last_fact + 1 :]
-    )
-    added = profile.facts[-1]
-    assert (added.text, added.is_told_by_user, added.found_on, added.source_url) == (
-        "I teach recitations for algorithms",
-        True,
-        "2026-11-10",
-        None,
-    )
-    assert (workspace / MEMORY_INDEX_PATH).read_bytes() == SAMPLE_INDEX
-    assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES
-
-
-def test_adding_a_fact_with_nothing_remembered_creates_the_profile_its_index_line_and_its_source(
-    empty_workspace: Path,
-) -> None:
-    profile = _store_on(empty_workspace).add_fact("Is learning Japanese")
-
-    assert [fact.text for fact in profile.facts] == ["Is learning Japanese"]
-    assert profile.facts[0].is_told_by_user
-    assert (empty_workspace / PROFILE_PATH).read_bytes().startswith(b"---\nname: user-public-profile\n")
-    assert (empty_workspace / MEMORY_INDEX_PATH).read_bytes() == NEW_INDEX_LINE
-    assert json.loads((empty_workspace / SOURCES_PATH).read_bytes()) == [
-        {"url": None, "title": "What you told me", "fetched_at": "2026-11-10", "origin": "user"}
-    ]
-
-
-def test_adding_a_fact_appends_the_index_line_to_an_index_without_one(empty_workspace: Path) -> None:
-    write_workspace_file(empty_workspace, MEMORY_INDEX_PATH, b"- [Projects](projects.md) -- what the user builds")
-
-    _store_on(empty_workspace).add_fact("Is learning Japanese")
-
-    assert (empty_workspace / MEMORY_INDEX_PATH).read_bytes() == (
-        b"- [Projects](projects.md) -- what the user builds\n" + NEW_INDEX_LINE
-    )
-
-
-def test_an_added_fact_is_deleted_like_any_other_and_takes_its_source_with_it(empty_workspace: Path) -> None:
-    store = _store_on(empty_workspace)
-    store.add_fact("Is learning Japanese")
-    store.add_fact("Runs on weekends")
-
-    profile = store.delete_fact(_fact_id_by_text(store, "Runs on weekends"))
-
-    assert [fact.text for fact in profile.facts] == ["Is learning Japanese"]
-    assert _source_titles(empty_workspace) == ["What you told me"]
-
-
-@pytest.mark.parametrize("text", ["", "   \n ", "x" * (MAX_FACT_CHARS + 1), "a <!-- note", "ends -->"])
-def test_a_fact_that_cannot_be_one_line_is_refused_and_changes_nothing(workspace: Path, text: str) -> None:
-    with pytest.raises(InvalidFactError):
-        _store_on(workspace).add_fact(text)
-
-    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
-    assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES
-
-
 def test_editing_a_web_fact_changes_only_its_words_keeping_its_source_and_date(workspace: Path) -> None:
-    store = _store_on(workspace)
+    store = ProfileStore(workspace)
     fact_id = _fact_id_by_text(store, "Writes a newsletter about type")
 
     profile = store.edit_fact(fact_id, "  Writes a weekly   newsletter about type ")
@@ -321,7 +248,7 @@ def test_editing_a_web_fact_changes_only_its_words_keeping_its_source_and_date(w
 
 
 def test_editing_a_told_fact_or_an_unparsed_line_keeps_its_kind(workspace: Path) -> None:
-    store = _store_on(workspace)
+    store = ProfileStore(workspace)
 
     store.edit_fact(_fact_id_by_text(store, "Is learning Japanese"), "Is learning Korean")
     profile = store.edit_fact(_fact_id_by_text(store, "Something written by hand, with no link"), "Written by hand")
@@ -334,7 +261,7 @@ def test_editing_a_told_fact_or_an_unparsed_line_keeps_its_kind(workspace: Path)
 
 def test_an_edit_keeps_a_crlf_line_ending(tmp_path: Path) -> None:
     write_workspace_file(tmp_path, PROFILE_PATH, b"- Old words (you told me) <!-- found 2026-11-03 -->\r\n")
-    store = _store_on(tmp_path)
+    store = ProfileStore(tmp_path)
 
     store.edit_fact(_fact_id_by_text(store, "Old words"), "New words")
 
@@ -342,7 +269,7 @@ def test_an_edit_keeps_a_crlf_line_ending(tmp_path: Path) -> None:
 
 
 def test_a_stale_or_invalid_edit_is_refused_and_changes_nothing(workspace: Path) -> None:
-    store = _store_on(workspace)
+    store = ProfileStore(workspace)
     fact_id = _fact_id_by_text(store, "Is learning Japanese")
 
     with pytest.raises(InvalidFactError):
@@ -351,3 +278,119 @@ def test_a_stale_or_invalid_edit_is_refused_and_changes_nothing(workspace: Path)
         store.edit_fact("0-0000000000000000", "Anything")
 
     assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
+
+
+def _memory(store: ProfileStore, file_name: str):
+    return next(memory for memory in store.read().memories if memory.file_name == file_name)
+
+
+def test_read_lists_every_other_memory_with_its_title_type_and_body(store: ProfileStore) -> None:
+    memories = {memory.file_name: memory for memory in store.read().memories}
+
+    assert set(memories) == {"coding-style.md", "projects.md"}
+    assert (memories["coding-style.md"].title, memories["coding-style.md"].memory_type) == ("Coding style", "feedback")
+    assert memories["projects.md"].body == "A grading helper."
+
+
+def test_adding_a_memory_writes_a_user_memory_file_and_its_index_line(empty_workspace: Path) -> None:
+    store = ProfileStore(empty_workspace)
+
+    profile = store.add_memory("  I teach   recitations for an algorithms class ")
+
+    [memory] = profile.memories
+    assert (memory.file_name, memory.memory_type, memory.body) == (
+        "user-i-teach-recitations-for-an-algorithms.md",
+        "user",
+        "I teach recitations for an algorithms class",
+    )
+    assert (empty_workspace / MEMORY_INDEX_PATH).read_text() == (
+        "- [I teach recitations for an algorithms class](user-i-teach-recitations-for-an-algorithms.md)"
+        " -- I teach recitations for an algorithms class\n"
+    )
+
+
+def test_adding_the_same_words_twice_makes_two_files(empty_workspace: Path) -> None:
+    store = ProfileStore(empty_workspace)
+    store.add_memory("Runs on weekends")
+
+    profile = store.add_memory("Runs on weekends")
+
+    assert sorted(memory.file_name for memory in profile.memories) == [
+        "user-runs-on-weekends-2.md",
+        "user-runs-on-weekends.md",
+    ]
+
+
+def test_adding_appends_to_an_index_without_a_trailing_newline(workspace: Path) -> None:
+    write_workspace_file(workspace, MEMORY_INDEX_PATH, b"- [Projects](projects.md) -- what the user builds")
+
+    ProfileStore(workspace).add_memory("Likes sailing")
+
+    assert (workspace / MEMORY_INDEX_PATH).read_text() == (
+        "- [Projects](projects.md) -- what the user builds\n- [Likes sailing](user-likes-sailing.md) -- Likes sailing\n"
+    )
+
+
+def test_editing_a_memory_rewrites_its_description_body_and_index_hook_only(
+    store: ProfileStore, workspace: Path
+) -> None:
+    memory = _memory(store, "coding-style.md")
+
+    store.edit_memory("coding-style.md", memory.revision, "Likes small functions", "Prefers functions under 20 lines.")
+
+    content = (workspace / MEMORY_INDEX_PATH.parent / "coding-style.md").read_text()
+    assert content == (
+        "---\nname: coding-style\ndescription: Likes small functions\nmetadata:\n  type: feedback\n"
+        "  updated: 2026-11-01\n---\n\nPrefers functions under 20 lines.\n"
+    )
+    assert (
+        "- [Coding style](coding-style.md) -- Likes small functions\n" in (workspace / MEMORY_INDEX_PATH).read_text()
+    )
+
+
+def test_deleting_a_memory_removes_the_file_and_its_index_line(store: ProfileStore, workspace: Path) -> None:
+    memory = _memory(store, "projects.md")
+
+    profile = store.delete_memory("projects.md", memory.revision)
+
+    assert "projects.md" not in {memory.file_name for memory in profile.memories}
+    assert not (workspace / MEMORY_INDEX_PATH.parent / "projects.md").exists()
+    assert (workspace / MEMORY_INDEX_PATH).read_bytes() == _without_line(SAMPLE_INDEX, 2)
+
+
+def test_deleting_the_lookups_memory_forgets_the_lookup(store: ProfileStore, workspace: Path) -> None:
+    revision = store.read().profile_revision
+    assert revision is not None
+
+    store.delete_memory("user-public-profile.md", revision)
+
+    assert not (workspace / PROFILE_PATH).exists()
+    assert not (workspace / SOURCES_PATH).exists()
+
+
+def test_a_stale_or_foreign_memory_is_refused_and_changes_nothing(store: ProfileStore, workspace: Path) -> None:
+    memory = _memory(store, "projects.md")
+
+    with pytest.raises(StaleMemoryError):
+        store.delete_memory("projects.md", "0000000000000000")
+    with pytest.raises(StaleMemoryError):
+        store.edit_memory("../projects.md", memory.revision, "x", "y")
+    with pytest.raises(StaleMemoryError):
+        store.delete_memory("MEMORY.md", "0000000000000000")
+    with pytest.raises(InvalidFactError):
+        store.edit_memory("projects.md", memory.revision, " ", "y")
+
+    assert (workspace / MEMORY_INDEX_PATH.parent / "projects.md").exists()
+    assert (workspace / MEMORY_INDEX_PATH).read_bytes() == SAMPLE_INDEX
+
+
+def test_forget_everything_removes_every_memory_the_index_and_the_sources(
+    store: ProfileStore, workspace: Path
+) -> None:
+    (workspace / MEMORY_INDEX_PATH.parent / "notes.txt").write_text("not a memory")
+
+    profile = store.forget_everything()
+
+    assert (profile.memories, profile.facts) == ((), ())
+    assert sorted(path.name for path in (workspace / MEMORY_INDEX_PATH.parent).iterdir()) == ["notes.txt"]
+    assert not (workspace / SOURCES_PATH).exists()

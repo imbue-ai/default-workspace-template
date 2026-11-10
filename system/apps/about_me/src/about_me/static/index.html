@@ -14,46 +14,46 @@
       <header>
         <h1>What Studio knows about me</h1>
         <p class="explanation">
-          What I remember about you, from what you've told me and the web lookup you asked for. Add anything you'd like
-          me to know, and delete anything you don't want me to keep.
+          Everything I remember about you and how you like to work. I read this before every chat, so what you change
+          here changes what I know. Add anything you'd like me to know, and edit or delete anything that's wrong.
         </p>
       </header>
 
       <p id="notice" class="notice" role="status" hidden></p>
 
-      <section id="facts-section" hidden>
-        <ul id="fact-list" class="fact-list"></ul>
-        <div id="forget-controls" class="forget-controls">
-          <button type="button" id="forget-all">Forget all of this</button>
-          <span id="forget-confirm" class="forget-confirm" hidden>
-            <span>Forget everything I remember about you?</span>
-            <button type="button" id="forget-confirm-yes" data-variant="destructive">Yes, forget it all</button>
-            <button type="button" id="forget-confirm-cancel" data-variant="ghost">Cancel</button>
-          </span>
-        </div>
-      </section>
+      <div id="groups"></div>
 
       <p id="empty-state" class="empty-state" hidden>
-        I don't remember anything about you yet. Add something below, or ask me for ideas in chat and I can offer to
-        look you up.
+        I don't remember anything about you yet. Add something below, or just tell me about yourself in chat.
       </p>
 
-      <form id="add-fact" class="add-fact">
-        <label for="add-fact-text">Add something about yourself</label>
+      <form id="add-memory" class="add-fact">
+        <label for="add-memory-text">Add something about yourself</label>
         <div class="add-fact-row">
           <input
-            id="add-fact-text"
+            id="add-memory-text"
             type="text"
             maxlength="500"
             autocomplete="off"
             placeholder="For example: I teach recitations for an algorithms class"
           />
-          <button type="submit" id="add-fact-submit">Add</button>
+          <button type="submit" id="add-memory-submit">Add</button>
         </div>
       </form>
 
+      <div id="forget-controls" class="forget-controls" hidden>
+        <button type="button" id="forget-all">Forget everything</button>
+        <span id="forget-confirm" class="forget-confirm" hidden>
+          <span>Delete everything I remember about you?</span>
+          <button type="button" id="forget-confirm-yes" data-variant="destructive">Yes, forget it all</button>
+          <button type="button" id="forget-confirm-cancel" data-variant="ghost">Cancel</button>
+        </span>
+      </div>
+
       <details id="raw-files" class="raw-files" hidden>
-        <summary>View raw file</summary>
+        <summary>View raw files</summary>
+        <h2>MEMORY.md</h2>
+        <pre id="raw-index"></pre>
         <h2>user-public-profile.md</h2>
         <pre id="raw-profile"></pre>
         <h2>sources.json</h2>

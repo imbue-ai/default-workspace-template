@@ -1,24 +1,35 @@
-// The What Studio knows about me page: reads /api/profile and draws each fact with its source, date, Edit and Delete,
-// the box to add a fact the user tells it, the "Forget all of this" control with its confirm, the empty state, and the raw files. Everything is drawn with
-// textContent, never as markup, since the facts come from web pages. It talks only to this app's own routes.
+// The What Studio knows about me page: reads /api/profile and draws every memory the agent keeps, grouped by what it
+// is about, each with Edit and Delete; the web lookup's facts with their sources; the box to add a memory; the two
+// forget controls; the empty state; and the raw files. Everything is drawn with textContent, never as markup, since
+// memories quote web pages and what people typed. It talks only to this app's own routes.
 
 const HTTP_CONFLICT = 409;
 
+// The groups, in page order: the memory type each holds and its heading.
+const GROUPS = [
+  ["user", "About you"],
+  ["feedback", "How you like to work"],
+  ["project", "Your projects"],
+  ["reference", "Links and references"],
+  ["other", "Other notes"],
+];
+
 const elements = {
   notice: document.getElementById("notice"),
-  factsSection: document.getElementById("facts-section"),
-  factList: document.getElementById("fact-list"),
+  groups: document.getElementById("groups"),
+  forgetControls: document.getElementById("forget-controls"),
   forgetAll: document.getElementById("forget-all"),
   forgetConfirm: document.getElementById("forget-confirm"),
   forgetConfirmYes: document.getElementById("forget-confirm-yes"),
   forgetConfirmCancel: document.getElementById("forget-confirm-cancel"),
   emptyState: document.getElementById("empty-state"),
   rawFiles: document.getElementById("raw-files"),
+  rawIndex: document.getElementById("raw-index"),
   rawProfile: document.getElementById("raw-profile"),
   rawSources: document.getElementById("raw-sources"),
-  addFact: document.getElementById("add-fact"),
-  addFactText: document.getElementById("add-fact-text"),
-  addFactSubmit: document.getElementById("add-fact-submit"),
+  addMemory: document.getElementById("add-memory"),
+  addMemoryText: document.getElementById("add-memory-text"),
+  addMemorySubmit: document.getElementById("add-memory-submit"),
 };
 
 function showNotice(text) {
@@ -150,15 +161,142 @@ function startEditing(row, fact, text, actions) {
   input.select();
 }
 
+
+function button(label, variant) {
+  const control = document.createElement("button");
+  control.type = "button";
+  control.textContent = label;
+  if (variant !== undefined) control.dataset.variant = variant;
+  return control;
+}
+
+function memoryCard(memory) {
+  const card = document.createElement("li");
+  card.className = "memory";
+  card.dataset.fileName = memory.file_name;
+
+  const body = document.createElement("div");
+  body.className = "memory-body";
+  const title = document.createElement("p");
+  title.className = "memory-title";
+  title.textContent = memory.title;
+  const text = document.createElement("p");
+  text.className = "memory-text";
+  text.textContent = memory.body;
+  body.append(title);
+  // A memory added on this page is titled with its own words; showing them twice says nothing more.
+  if (memory.body.trim() !== memory.title) body.append(text);
+
+  const edit = button("Edit", "ghost");
+  edit.setAttribute("aria-label", `Edit: ${memory.title}`);
+  const remove = button("Delete", "ghost");
+  remove.setAttribute("aria-label", `Delete: ${memory.title}`);
+  remove.addEventListener("click", () =>
+    post("/api/memories/delete", { file_name: memory.file_name, revision: memory.revision }, remove),
+  );
+  const actions = document.createElement("div");
+  actions.className = "fact-actions";
+  actions.append(edit, remove);
+  edit.addEventListener("click", () => startEditingMemory(card, memory, body, actions));
+
+  card.append(body, actions);
+  return card;
+}
+
+// Swaps a memory for a form holding its summary and text, with Save and Cancel.
+function startEditingMemory(card, memory, body, actions) {
+  const form = document.createElement("form");
+  form.className = "memory-form";
+  const summaryLabel = document.createElement("label");
+  summaryLabel.textContent = "Summary";
+  const summary = document.createElement("input");
+  summary.type = "text";
+  summary.maxLength = 300;
+  summary.value = memory.description ?? memory.title;
+  summaryLabel.append(summary);
+  const textLabel = document.createElement("label");
+  textLabel.textContent = "What I remember";
+  const text = document.createElement("textarea");
+  text.rows = Math.min(10, Math.max(3, memory.body.split("\n").length + 1));
+  text.maxLength = 5000;
+  text.value = memory.body;
+  textLabel.append(text);
+  const save = button("Save");
+  save.type = "submit";
+  const cancel = button("Cancel", "ghost");
+  const editing = document.createElement("div");
+  editing.className = "fact-actions";
+  editing.append(save, cancel);
+  form.append(summaryLabel, textLabel, editing);
+
+  function stopEditing() {
+    form.replaceWith(body);
+    actions.hidden = false;
+  }
+
+  cancel.addEventListener("click", stopEditing);
+  form.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") stopEditing();
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    post(
+      "/api/memories/edit",
+      { file_name: memory.file_name, revision: memory.revision, description: summary.value, body: text.value },
+      save,
+    );
+  });
+
+  body.replaceWith(form);
+  actions.hidden = true;
+  text.focus();
+}
+
+function lookupBlock(facts) {
+  const block = document.createElement("div");
+  block.className = "lookup";
+  const heading = document.createElement("h3");
+  heading.textContent = "From the web lookup you asked for";
+  const list = document.createElement("ul");
+  list.className = "fact-list";
+  list.replaceChildren(...facts.map(factRow));
+  const forget = button("Forget what the lookup found", "ghost");
+  forget.addEventListener("click", () => post("/api/forget", { scope: "lookup" }, forget));
+  block.append(heading, list, forget);
+  return block;
+}
+
+function group(heading, memories, facts) {
+  const section = document.createElement("section");
+  section.className = "group";
+  const title = document.createElement("h2");
+  title.textContent = heading;
+  section.append(title);
+  if (facts.length > 0) section.append(lookupBlock(facts));
+  if (memories.length > 0) {
+    const list = document.createElement("ul");
+    list.className = "memory-list";
+    list.replaceChildren(...memories.map(memoryCard));
+    section.append(list);
+  }
+  return section;
+}
+
 function render(profile) {
-  const hasFacts = profile.facts.length > 0;
-  elements.factList.replaceChildren(...profile.facts.map(factRow));
-  elements.factsSection.hidden = !hasFacts;
-  elements.emptyState.hidden = hasFacts;
+  const sections = GROUPS.flatMap(([type, heading]) => {
+    const memories = profile.memories.filter((memory) => memory.memory_type === type);
+    const facts = type === "user" ? profile.facts : [];
+    return memories.length > 0 || facts.length > 0 ? [group(heading, memories, facts)] : [];
+  });
+  elements.groups.replaceChildren(...sections);
+  const hasAny = sections.length > 0;
+  elements.emptyState.hidden = hasAny;
+  elements.forgetControls.hidden = !hasAny;
   closeForgetConfirm();
 
-  const hasRaw = profile.profile_markdown !== null || profile.sources_json !== null;
+  const hasRaw = profile.memory_index_markdown !== null || profile.profile_markdown !== null || profile.sources_json !== null;
   elements.rawFiles.hidden = !hasRaw;
+  elements.rawIndex.textContent = profile.memory_index_markdown ?? "(no file)";
   elements.rawProfile.textContent = profile.profile_markdown ?? "(no file)";
   elements.rawSources.textContent = profile.sources_json === null ? "(no file)" : prettySources(profile.sources_json);
 }
@@ -222,21 +360,23 @@ function closeForgetConfirm() {
   elements.forgetAll.hidden = false;
 }
 
-async function addFact(event) {
+async function addMemory(event) {
   event.preventDefault();
-  const text = elements.addFactText.value.trim();
+  const text = elements.addMemoryText.value.trim();
   if (text === "") {
-    elements.addFactText.focus();
+    elements.addMemoryText.focus();
     return;
   }
-  if (await post("/api/facts/add", { text }, elements.addFactSubmit)) {
-    elements.addFactText.value = "";
+  if (await post("/api/memories/add", { text }, elements.addMemorySubmit)) {
+    elements.addMemoryText.value = "";
   }
 }
 
-elements.addFact.addEventListener("submit", addFact);
+elements.addMemory.addEventListener("submit", addMemory);
 elements.forgetAll.addEventListener("click", openForgetConfirm);
 elements.forgetConfirmCancel.addEventListener("click", closeForgetConfirm);
-elements.forgetConfirmYes.addEventListener("click", () => post("/api/forget", {}, elements.forgetConfirmYes));
+elements.forgetConfirmYes.addEventListener("click", () =>
+  post("/api/forget", { scope: "everything" }, elements.forgetConfirmYes),
+);
 
 load().catch(() => showNotice("Could not read what I remember."));

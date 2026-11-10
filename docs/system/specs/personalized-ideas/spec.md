@@ -63,19 +63,20 @@ This is a change to the skill's instructions only.
 
 ### A "What Studio knows about me" page
 
-A small workspace app (`system/apps/about_me/`) that shows the lookup's memory as a page:
+A small workspace app (`system/apps/about_me/`) that is the user's view onto the agent's own memory: Claude's built-in memory in `data/memories/`, one memory per file, indexed by `MEMORY.md`. It adds no store of its own, so what the page shows is exactly what the agent reads at the start of every chat, and a change on the page is a change to what the agent knows.
 
-- Each remembered fact, with the link it came from and the date it was found or confirmed; facts the user shared themselves are marked as such.
-- A box to add a fact the user tells it about themselves, saved as a `(you told me)` line after the last fact; with nothing remembered yet, it creates `user-public-profile.md`, its line in `MEMORY.md`, and the user's own entry in `sources.json`. A lookup run later keeps those lines and adds its own after them.
-- What the user tells the agent about themselves in chat (after "I’ll tell you myself", or anywhere else) is saved the same way, as `(you told me)` lines in this file rather than as separate memories, so the page shows everything Studio knows about them. Whenever it saves or changes one, the agent ends that reply with a fixed sentence naming and linking the page: "I’ve added what you told me about yourself to What Studio knows about me, where you can edit or delete it."
-- An edit control on each fact, which rewrites only its words and keeps its source link and date.
-- A delete control on each fact, which removes its line from `user-public-profile.md` and its entry from `sources.json` when no remaining fact cites it.
-- "Forget all of this", which does what asking the agent to forget does: deletes `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`.
-- An empty state when nothing is remembered, saying the user can add something or ask for a lookup.
+- Every memory, grouped by its type: **About you** (`user`), **How you like to work** (`feedback`), **Your projects** (`project`), **Links and references** (`reference`), and **Other notes** for a file with no known type. Each shows its title (its `MEMORY.md` line's), its text, and **Edit** and **Delete**.
+- **Edit** rewrites only the memory's description, its body, and its `MEMORY.md` line's hook; every other frontmatter line stays. **Delete** removes the file and its `MEMORY.md` line.
+- The web lookup's memory, `user-public-profile.md`, under **About you** fact by fact: each with the link it came from and the date, its own **Edit** (words only; the link and date stay) and **Delete** (the line, and the sources no remaining fact cites), and **Forget what the lookup found** (the file, its `MEMORY.md` line, and `sources.json`).
+- **Add something about yourself**, which writes a new `user` memory in the format the agent writes its own, with its `MEMORY.md` line.
+- **Forget everything**, after a confirm, which deletes every memory, `MEMORY.md`, and `sources.json`.
+- An empty state when nothing is remembered, saying the user can add something or tell the agent about themselves.
 
-It reads and writes only those three files; it never searches or reads the web.
-For the page to read the memory reliably, the skill writes `user-public-profile.md` with one fact per line in a fixed shape, `- <fact> ([<source title>](<url>)) <!-- found <YYYY-MM-DD> -->` (or `(you told me)` in place of the link), and the page treats any line it cannot parse as one fact it can still show and delete whole.
-The skill links the page once, in step 6, where it mentions that it will remember this.
+What the user tells the agent about themselves in chat (after "I’ll tell you myself", or anywhere else) is saved as ordinary `user` memories, as the agent's memory instructions say, and so shows on the page with no second copy. Whenever it saves or changes one, the agent ends that reply with a fixed sentence naming and linking the page: "I’ve added what you told me about yourself to What Studio knows about me, where you can edit or delete it."
+
+It reads and writes only the memory directory and `sources.json`; it never searches or reads the web. A change names the file's current content by a hash, so a page left open while the agent rewrote a memory reloads instead of overwriting it.
+For the page to show the lookup fact by fact, the skill writes `user-public-profile.md` with one fact per line in a fixed shape, `- <fact> ([<source title>](<url>)) <!-- found <YYYY-MM-DD> -->`, and the page treats any line it cannot parse as one fact it can still show and delete whole.
+The skill links the page in step 6, and whenever it saves a memory about the user.
 
 Open for this page: whether it belongs in the workspace or in Imbue Studio's own settings once memories from other sources exist.
 
@@ -98,7 +99,7 @@ Check the whole flow by hand, in a workspace created on this computer from a dev
 8. **Remember.** `data/memories/user-public-profile.md` exists, each fact followed by its link, ending with a line saying it came from a lookup you asked for; `MEMORY.md` has its pointer; `sources.json` holds only the confirmed person's entries; `consent.json` says `"yes"`.
 9. **Ideas.** Three to five ideas, each tied to something about you, and one passing mention that it will remember this, linking the What Studio knows about me page.
 10. **Later chats.** A new chat knows the facts without being told.
-11. **Add on the page.** On the **What Studio knows about me** page, type a fact about yourself and click **Add**: it appears marked "You told me" with today's date, and a new chat knows it. With nothing remembered yet, adding creates the memory. An empty entry, or one holding `<!--` or `-->`, shows a message and changes nothing. Click **Edit** on a fact, change its words and click **Save**: only the words change, and its source and date stay.
-12. **Told in chat.** In a fresh workspace, click **No**, then **I’ll tell you myself**, and describe your job and what annoys you. The reply ends with "I’ve added what you told me about yourself to What Studio knows about me, where you can edit or delete it.", linking the page; the page shows each fact about you as "You told me", and nothing about what you want to build.
-13. **Forget.** Say "forget what you found": the facts from the search and their sources are gone, the "You told me" facts stay, and the agent says what it deleted. Then say "forget everything about me": the memory file, its `MEMORY.md` line and `sources.json` are gone.
+11. **Add on the page.** On the **What Studio knows about me** page, type something about yourself and click **Add**: it appears under **About you**, and a new chat knows it. Click **Edit** on any memory, change its text and click **Save**: a new chat knows the change. **Delete** removes it. On a lookup fact, **Edit** changes only its words; its link and date stay.
+12. **Told in chat.** In a fresh workspace, click **No**, then **I’ll tell you myself**, and describe your job and what annoys you. The reply ends with "I’ve added what you told me about yourself to What Studio knows about me, where you can edit or delete it.", linking the page; the page shows each fact about you under **About you**, and nothing about what you want to build.
+13. **Forget.** Say "forget what you found": the lookup's facts and `sources.json` are gone, what you told the agent stays, and the agent says what it deleted. Then click **Forget everything** on the page and confirm: every memory and `MEMORY.md` are gone, and a new chat remembers nothing about you.
 14. **No offer.** In fresh chats, none of these get an offer or a lookup: "I want to build a budget tracker"; "I have an idea"; **Yes** on the welcome; describing an idea instead of clicking a button; a message prefixed `[from: Someone]`; any message after answering **I’ll tell you myself** (which is saved in `consent.json`).

@@ -101,8 +101,86 @@
     display: none;
   }
 
+  .group {
+    margin: 0 0 24px;
+  }
+
+  .group h2 {
+    font-size: var(--font-size-body);
+    color: var(--c-text-primary);
+    margin: 0 0 8px;
+  }
+
+  .lookup h3 {
+    font-size: var(--font-size-row);
+    font-weight: var(--weight-semibold);
+    color: var(--c-text-secondary);
+    margin: 0 0 4px;
+  }
+
+  .lookup {
+    margin: 0 0 12px;
+  }
+
+  .memory-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .memory {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .memory-body,
+  .memory-form {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .memory-title {
+    margin: 0;
+    font-weight: var(--weight-semibold);
+    overflow-wrap: anywhere;
+  }
+
+  .memory-text {
+    margin: 2px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .memory-form label {
+    display: block;
+    font-size: var(--font-size-row);
+    color: var(--c-text-secondary);
+    margin: 0 0 8px;
+  }
+
+  .memory-form input,
+  .memory-form textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 2px;
+    font: inherit;
+  }
+
+  .fact-actions[hidden] {
+    display: none;
+  }
+
+  .forget-controls[hidden] {
+    display: none;
+  }
+
   .add-fact {
-    margin-top: 24px;
+    margin: 8px 0 24px;
   }
 
   .add-fact label {
