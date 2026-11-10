@@ -61,9 +61,10 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   into this app's static output; every app serves those same files from its
   own origin, since a cross-origin module import carries no cookie and the
   forwarder refuses it. The desktop's own chrome draws the element menu too: a
-  right-click the views leave alone opens it, and the entry, shortcut,
-  backdrop, and overview thumbnail menus end with its reference rows
-  (`docs/system/blueprint/element-reference-menu/`).
+  right-click the views leave alone opens it (in the Imbue Studio desktop app
+  on macOS, the app's native menu opens with its rows in it instead), and the
+  entry, shortcut, backdrop, and overview thumbnail menus end with its
+  reference rows (`docs/system/blueprint/element-reference-menu/`).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `/api/desktops/order`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
