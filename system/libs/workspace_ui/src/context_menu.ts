@@ -401,11 +401,13 @@ export function createDefaultRenderer(ownerDocument: Document): Required<Context
     // yields to the shared Menu's sheet) rather than describing one of the card's own buttons.
     // own-context-menu: dismisses -- a right-click on the open menu's own card describes nothing
     next.addEventListener("contextmenu", (event) => event.preventDefault());
-    for (const row of rows) next.appendChild(rowElementOf(row, isSubmenu));
+    // A card with a check row keeps the check's column on every row, so the labels line up.
+    const hasCheckColumn = rows.some((row) => row.kind === "check");
+    for (const row of rows) next.appendChild(rowElementOf(row, isSubmenu, hasCheckColumn));
     return next;
   };
 
-  const rowElementOf = (row: ContextMenuRow, isInSubmenu: boolean): HTMLElement => {
+  const rowElementOf = (row: ContextMenuRow, isInSubmenu: boolean, hasCheckColumn: boolean): HTMLElement => {
     if (row.kind === "divider") {
       const divider = ownerDocument.createElement("hr");
       divider.setAttribute("style", DIVIDER_STYLE);
@@ -422,11 +424,11 @@ export function createDefaultRenderer(ownerDocument: Document): Required<Context
       button.style.color = ROW_COLOR_BY_TONE[row.tone];
     }
     if (row.tooltip !== undefined) button.title = row.tooltip;
-    if (row.kind === "check") {
-      button.setAttribute("aria-checked", row.isChecked ? "true" : "false");
+    if (row.kind === "check") button.setAttribute("aria-checked", row.isChecked ? "true" : "false");
+    if (hasCheckColumn) {
       const mark = ownerDocument.createElement("span");
       mark.setAttribute("style", "display: inline-block; width: 1em; text-align: center");
-      mark.textContent = row.isChecked ? "✓" : "";
+      mark.textContent = row.kind === "check" && row.isChecked ? "✓" : "";
       button.appendChild(mark);
     }
     const label = ownerDocument.createElement("span");

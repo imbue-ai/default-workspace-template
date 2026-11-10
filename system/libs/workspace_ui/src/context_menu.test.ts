@@ -485,6 +485,9 @@ describe("the framework-free renderer", () => {
     expect(row("pinned").getAttribute("role")).toBe("menuitemcheckbox");
     expect(row("pinned").getAttribute("aria-checked")).toBe("false");
     expect(row("delete").style.color).toBe("rgb(198, 40, 40)");
+    // Every row keeps the check's column, so the labels line up under a check mark.
+    expect(row("delete").firstElementChild?.textContent).toBe("");
+    expect(row("delete").firstElementChild?.nextElementSibling?.textContent).toBe("Delete");
     row("pinned").click();
     expect(calls).toEqual(["pinned"]);
     expect(card()).toBeNull();
