@@ -55,6 +55,11 @@ export async function refreshShellKeybindings(): Promise<void> {
   }
 }
 
+/** Whether the shell's own chords have been read from its backend at least once. */
+export function areShellKeybindingsLoaded(): boolean {
+  return resolved !== null;
+}
+
 /** Where the shell reads chords: the browser's platform (unless a test named one), and the desktop app or a
  *  browser as the chrome said. */
 export function shellChordContext(): ChordContext {

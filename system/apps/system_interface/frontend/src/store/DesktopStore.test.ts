@@ -1062,6 +1062,28 @@ describe("workspace-wide actions", () => {
     expect(sentToPages).toEqual([{ chords: ["meta+k"], surface: "browser" }]);
   });
 
+  it("reports nothing to the chrome until the shell's own chords are read, so it keeps its close-tab chord", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    setResolvedShellKeybindingsForTest(null);
+
+    store.setEmbedderPresent(true);
+    await settle();
+    expect(reported).toEqual([]);
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setCanPopOut(true);
+    await settle();
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
   it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
     const reported: unknown[] = [];
     const store = makeStore(undefined, {
@@ -1076,9 +1098,8 @@ describe("workspace-wide actions", () => {
       api.pendingKeybindingsCatalogs.push(new Promise((resolve) => answers.push(resolve)));
     }
 
-    // Reported before the shell's own chords land, then again once they have.
-    store.setEmbedderPresent(true);
     setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
     store.setCanPopOut(true);
     answers[1](api.keybindingsCatalog);
     await settle();

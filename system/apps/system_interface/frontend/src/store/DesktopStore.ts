@@ -31,6 +31,7 @@ import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   type WorkspaceActionId,
+  areShellKeybindingsLoaded,
   claimedChordsOf,
   refreshShellKeybindings,
   setShellChordSurface,
@@ -3033,7 +3034,9 @@ export class DesktopStore {
   private publishWorkspaceChords(): void {
     const chordsByAction = workspaceChordsByAction();
     if (this.pageDriver !== null) this.sendWorkspaceChordsTo(this.pageDriver, chordsByAction);
-    if (!this.isEmbedderPresent) return;
+    // A report ends the chrome's own close-tab chord, so none goes before the shell's chords are read: an empty one
+    // would leave the chrome running no workspace-wide chord at all.
+    if (!this.isEmbedderPresent || !areShellKeybindingsLoaded()) return;
     const generation = ++this.shellShortcutsReportGeneration;
     const isLatest = (): boolean => generation === this.shellShortcutsReportGeneration;
     void this.deps.api.fetchKeybindingsCatalog().then(
