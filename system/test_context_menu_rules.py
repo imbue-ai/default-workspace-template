@@ -135,9 +135,14 @@ def _definition_of(source: str, name: str) -> str | None:
 
 
 def _handler_text(source: str, start: int, is_html: bool) -> str:
-    """The handler a site names: its inline expression, a quoted attribute in HTML, or a named function's text."""
+    """The handler a site names: its inline expression, a quoted attribute in HTML, or a named function's text, the
+    name bare or in JSX braces."""
     if is_html and source[start : start + 1] in "\"'":
         return source[start + 1 : _skip_string(source, start) - 1]
+    if source[start : start + 1] == "{":
+        braced = source[start + 1 : _expression_end(source, start + 1)].strip()
+        if _IDENTIFIER_RE.match(braced):
+            return _definition_of(source, braced) or ""
     expression = source[start : _expression_end(source, start)].strip()
     if _IDENTIFIER_RE.match(expression):
         return _definition_of(source, expression) or ""
@@ -302,7 +307,11 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             '<div oncontextmenu="event.preventDefault(); openMenu()">x</div>\n'
             '<div oncontextmenu="highlight()">y</div>\n'
         ),
-        "app/view.tsx": "<li onContextMenu={(e) => { e.preventDefault(); show(e); }}>z</li>\n",
+        "app/view.tsx": (
+            "<li onContextMenu={(e) => { e.preventDefault(); show(e); }}>z</li>\n"
+            "const onRow = (e) => { e.preventDefault(); };\n"
+            "<li onContextMenu={onRow}>w</li>\n"
+        ),
         "app/wrapped.ts": (
             'stage.addEventListener("contextmenu", (event) =>\n'
             "  helper(event, () => event.preventDefault()),\n"
@@ -351,6 +360,7 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
         ("app/listeners.js", 13, False),
         ("app/page.html", 1, False),
         ("app/view.tsx", 1, False),
+        ("app/view.tsx", 3, False),
         ("app/wrapped.ts", 1, False),
         ("app/wrapped.ts", 5, False),
         ("app/marked.ts", 3, True),
