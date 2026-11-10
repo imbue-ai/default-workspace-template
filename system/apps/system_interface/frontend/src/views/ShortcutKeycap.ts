@@ -1,6 +1,6 @@
 /**
  * One keyboard shortcut drawn as a single keycap, written the way a menu writes it ("⇧⌘N" on an Apple platform,
- * "Ctrl+Shift+N" elsewhere), with its name in words for screen readers and on hover.
+ * "Shift+Ctrl+N" elsewhere), with its name in words for screen readers and on hover.
  */
 
 import m from "mithril";
