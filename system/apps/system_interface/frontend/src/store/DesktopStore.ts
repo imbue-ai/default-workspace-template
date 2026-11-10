@@ -296,7 +296,7 @@ export interface PageDriver {
   resendTheme(appName: string): void;
   /** Tell every greeted page somebody changed a keybinding, so it re-fetches its resolved chords. */
   broadcastKeybindingsChanged(): void;
-  /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
+  /** Send the page ``shell:close-request`` (the workspace's Close window). */
   requestClose(windowId: string): void;
   /** Send every greeted page the workspace-wide chords and where the workspace runs (``shell:workspace-chords``),
    *  and every page greeted from now on the same. */
@@ -2801,8 +2801,8 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The Imbue Studio close chord: the focused window is told, then closed for everyone; a pinned window, which is never
-   *  closed, is minimized instead. */
+  /** The workspace's Close window (its shortcut, or the chrome's close-tab chord): the focused window is told, then
+   *  closed for everyone; a pinned window, which is never closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused
     // window here would be some other window of the desktop.

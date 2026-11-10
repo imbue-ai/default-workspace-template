@@ -34,8 +34,9 @@ export const shortcutsBridge: ShortcutsBridge = {
     sendToEmbedder(SHELL_SHORTCUTS, { chords_by_action: { ...chordsByAction }, claimed_chords: [...claimedChords] }),
 };
 
-/** An older chrome's close-tab chord (one that runs no workspace-wide shortcut of its own): close the focused window,
- *  unless the shell's own shortcut recorder is listening for keys, which such a chrome does not know. */
+/** The chrome's own close-tab chord (``minds:close-active-tab``, sent by a chrome that runs no workspace-wide shortcut
+ *  for this workspace): close the focused window, unless the shell's own shortcut recorder, which the chrome cannot
+ *  see, is listening for keys. */
 export function closeFocusedWindowUnlessRecording(closeFocusedWindow: () => void): void {
   if (isShortcutRecording()) return;
   closeFocusedWindow();

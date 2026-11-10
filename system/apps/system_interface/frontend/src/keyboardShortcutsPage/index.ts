@@ -1,14 +1,14 @@
 /**
  * The keyboard shortcuts page, served at `/keyboard-shortcuts`: the Keyboard settings section on a page of its own,
  * which Imbue Studio's Workspace settings frames. The page tells Imbue Studio its height, which the frame takes so
- * the settings pane scrolls it with everything else, and whether its recorder is listening, while which Imbue
+ * the settings pane scrolls it with everything else, and whether its recorder is listening. While it listens, Imbue
  * Studio closes nothing on Escape and runs no shortcut, handing the recorder every key instead
- * (`minds:record-chord`). Its first word also says the page has loaded, which tells a workspace that serves the page
- * from one too old to (whose shell answers the path with the desktop).
+ * (`minds:record-chord`). The page's first report also says it has loaded, which is how Imbue Studio tells a
+ * workspace that serves the page from one too old to serve it (whose shell answers the path with the desktop).
  *
  * The chrome says what it is with `minds:embedder-capabilities`, as it does to the main workspace frame: one that
  * can pull a window out is the desktop app, any other is a browser, which keeps its own shortcuts from the page.
- * Until it says, the page reads as the desktop app, which hides nothing.
+ * Until it says, the page reads as the desktop app, which hides no chord a browser keeps.
  *
  * The desktop app also hands the page Imbue Studio's own shortcuts (`minds:chrome-shortcuts`), which the section lists
  * last, and saves one when the page asks (`minds:save-chrome-shortcut`), sending them again after.

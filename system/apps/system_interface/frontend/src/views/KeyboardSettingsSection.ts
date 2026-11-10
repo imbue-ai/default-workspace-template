@@ -8,8 +8,9 @@
  * which decides what the keys are called and which chords cannot arrive here (a Mac's Control chord off a Mac), and
  * the surface, which hides the chords a browser keeps from its pages when the workspace runs in one. A row whose
  * shortcuts are all hidden here reads "Off", with the hidden ones named on hover. A chord a browser would keep, one
- * the OS is known to keep, or one the desktop app takes from the OS is saved with a warning; only Ctrl+Alt+Del is
- * refused.
+ * the OS is known to keep, or one the desktop app takes from the OS is saved with a warning. The recorder refuses
+ * Ctrl+Alt+Del, and, for a workspace-wide action or one of Imbue Studio's, a chord with no modifier other than
+ * Shift that is not a function key.
  *
  * Editing one action opens its editor below the row: the shortcuts it will have, each removable, a recorder that
  * adds one more, and the save surfaces. The recorder takes every key, Escape included (it has a Cancel of its own),
