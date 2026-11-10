@@ -268,8 +268,9 @@ export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 export const STOP_VIEWING_FIRST_NOTICE = "Stop viewing first";
 /** What "Stop viewing" says when it could not ask the shell where to go; pressing it again asks again. */
 export const STOP_VIEWING_UNANSWERED_NOTICE = "Couldn't leave this desktop: the workspace did not answer";
-/** What "Stop viewing" says when the only desktop it could go to is the one already on screen. */
-export const STOP_VIEWING_NOWHERE_NOTICE = "Couldn't leave this desktop: there is no other desktop to go to";
+/** What "Stop viewing" says when the viewer has no desktop of their own to go to (the workspace owner after
+ *  deleting all of theirs; a visitor is always seeded one). */
+export const STOP_VIEWING_NOWHERE_NOTICE = "Couldn't leave this desktop: you have no desktop of your own to go to";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
 export const TRAY_HOP_MS = 450;

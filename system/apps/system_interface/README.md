@@ -505,7 +505,8 @@ backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
 desktop the window came from, else the viewer's first, else the desktop the
 shell seeds for a visitor who has none left; when none of those is somewhere
 else to go, a toast says the window could not leave, and why (the shell did
-not answer, or there is no other desktop to go to). A viewed desktop is
+not answer, or the viewer has no desktop of their own to go to). A viewed
+desktop is
 shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it
