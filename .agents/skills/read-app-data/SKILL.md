@@ -1,6 +1,6 @@
 ---
 name: read-app-data
-description: Use when a task needs the user's Mac app data -- their Notes, Safari or other browser history, Reminders, Calendar, Messages, recent code projects in VS Code or Cursor, shell history, or the list of apps they have installed. Covers which sources exist, how to ask for exactly the ones the task needs, how to read them once granted, and the rule that this data is used only for the workspace's owner.
+description: Use when a task needs the user's Mac app data -- their Notes, Safari or other browser history, Reminders, Calendar, Messages, recent code projects in VS Code or Cursor, shell history, or the list of apps they have installed. "The apps I have installed" or "my recent projects" mean the user's own Mac, not this workspace's built-in apps or its folders. Covers which sources exist, how to ask for exactly the ones the task needs, how to read them once granted, and the rule that this data is used only for the workspace's owner.
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD) and the devices skill. The sources are macOS locations.
 metadata:
   author: imbue
@@ -13,6 +13,11 @@ their computers. You ask for sources by name, the user ticks the ones they
 agree to in one dialog, and you get read-only access to exactly those files.
 Never ask for `~/Library` or `~` through the `file-sharing` skill to get at this
 data instead: an `app-data` request is the only way to ask for it.
+
+Never answer a question about the user's apps or projects from this workspace's
+own apps or folders: those came with the workspace and say nothing about the
+user. If you have no grant yet, ask for one; if the user declines, say you
+cannot see their Mac rather than describing the workspace.
 
 ## The sources
 

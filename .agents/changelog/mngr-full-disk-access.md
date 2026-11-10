@@ -1,0 +1,1 @@
+`read-app-data` says that "the apps I have installed" and "my recent projects" mean the user's Mac, never the workspace's own apps or folders, and an agent with no grant asks for one rather than describing the workspace.
