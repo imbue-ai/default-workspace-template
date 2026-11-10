@@ -25,8 +25,10 @@ so all of these take the ``--ssh-*`` options):
 
 ``list-agents``
     Enumerate the source's agents from ``<host_dir>/agents/*/data.json`` and
-    ``<host_dir>/preserved/``, and map each to its session JSONLs via
-    ``claude_session_id_history``.
+    ``<host_dir>/preserved/`` with each one's harness, account and work dir,
+    and map each to the sessions it resumes: a claude agent's JSONLs via
+    ``claude_session_id_history``, a codex agent's rollout via
+    ``codex_root_session``.
 
 ``classify-branches``
     Split the source's ``mngr/*`` branches into merged (tip already reachable
@@ -52,10 +54,17 @@ Local (no SSH):
     Rewrite legacy path references inside already-migrated files, reporting every
     substitution it made.
 
+``data-excludes``
+    Print the rsync ``--exclude`` flags that keep the source's per-workspace
+    secrets (its backup, tunnel and published-share identity) out of the data
+    copy.
+
 ``recreate-agents``
-    Recreate each enumerated agent here via ``mngr create --template chat
-    --adopt <session.jsonl>`` and stop it, so its full history renders in a tab
-    and a message revives it. Idempotent: already-recreated agents are skipped.
+    Recreate each enumerated agent here via ``mngr create --type <harness>
+    --template chat --adopt <session.jsonl>``, bound to the account it ran on
+    and in the folder it worked in, and stop it, so its full history renders in
+    a tab and a message revives it. Idempotent: already-recreated agents are
+    skipped.
 
 Deliberately NOT scripted: deciding an ambiguous path mapping, judging whether a
 rewritten skill still means what it meant, semantic porting of template-file
