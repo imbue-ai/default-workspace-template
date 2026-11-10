@@ -127,6 +127,10 @@ To hand work off:
    time a usable part is committed. It also tells the worker not to take the
    service lease, touch the live app or the user's windows, harden, or hand
    off again. Hardening still happens at turn-end, as described below.
+   Handing work to a worker does not change its scope: the brief asks for
+   what you would have built yourself in the chat, no more and no less. Keep
+   it short and in the user's words; writing out a detailed plan tends to add
+   work nobody asked for.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
 4. While workers run, keep handling new messages. Build a request that no
