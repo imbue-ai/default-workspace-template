@@ -35,6 +35,10 @@ const HOST_DRAWN_HANDSHAKE = {
   drawsContextMenus: true,
 };
 
+function readContract(): PageMenuBridgeContract {
+  return JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as PageMenuBridgeContract;
+}
+
 let uninstall: (() => void) | null = null;
 
 afterEach(() => {
@@ -44,9 +48,8 @@ afterEach(() => {
 });
 
 describe.skipIf(!existsSync(FIXTURE_PATH))("the desktop app's page menu bridge contract", () => {
-  const contract = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as PageMenuBridgeContract;
-
   it("installs the bridge under the global the desktop app reads", () => {
+    const contract = readContract();
     uninstall = installElementContextMenu({
       connection: { hasShell: () => true, draftText: () => undefined },
       handshake: () => HOST_DRAWN_HANDSHAKE,
@@ -56,6 +59,7 @@ describe.skipIf(!existsSync(FIXTURE_PATH))("the desktop app's page menu bridge c
   });
 
   it("answers a right-click with the sections the desktop app places, every row within its bounds", () => {
+    const contract = readContract();
     document.body.innerHTML =
       '<a id="docs" href="https://example.com/docs"><img id="pic" src="https://example.com/a.png"></a>';
     uninstall = installElementContextMenu({
