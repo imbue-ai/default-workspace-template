@@ -99,8 +99,8 @@ function routesOf(options: ContextMenuOptions): {
   };
 }
 
-/** The global the desktop app reads a right-click's rows through and runs a picked one by (the mngr repo's
- *  ``apps/minds/electron/context-menu.js`` names it too). */
+/** The global the desktop app reads a right-click's rows through and runs a picked one by; the vendored
+ *  ``page-menu-bridge.json`` pins it, with the bounds the app keeps a row within (context_menu.contract.test.ts). */
 export const HOST_MENU_GLOBAL = "__studioContextMenu";
 
 /** A row as the desktop app receives it: its data, without its action. */

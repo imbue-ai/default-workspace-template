@@ -307,12 +307,13 @@ Apps built before this change keep their beacon and get no menu until they adopt
 ## 11. The minds desktop app
 
 Electron's main process pops one native menu for every `context-menu` event of the window's web contents, the workspace's frames included (the mngr repository's `apps/minds/electron/context-menu.js`).
-It carries the items a page cannot offer (spelling suggestions, Look Up, Share, Speech, Services, Inspect Element) and the edit, link, and image items, so the page's menu would only duplicate them; on macOS, where those items are, the chrome says it draws the menu with `drawsContextMenus` on `minds:embedder-capabilities`, which the shell passes to every page in its handshake (desktop-interface contracts.md section 7) and follows for its own element menu.
+It carries the items a page cannot offer (spelling suggestions, Look Up, Share, Speech, Services, and in a dev build Inspect Element) and the edit, link, and image items, so the page's menu would only duplicate them; on macOS, where those items are, the chrome says it draws the menu with `drawsContextMenus` on `minds:embedder-capabilities`, which the shell passes to every page in its handshake (desktop-interface contracts.md section 7) and follows for its own element menu.
 
 A page so told opens nothing on a right-click and does not `preventDefault` it.
 It keeps three sections of rows for the app instead: its own rows; "Open link" alone of the standard rows, since only the page can follow a link where its links go; and the reference rows.
 It exposes them on `globalThis.__studioContextMenu`: `sections()` answers the last right-click's rows as data (key, label, disabled, tooltip, symbol), or null when the right-click was left to the browser (handled by the page, or with Shift held); `select(key)` runs that right-click's row of that key, after waiting up to half a second for the page to take focus, because a right-click focuses neither the window nor the frame and the clipboard refuses a page without focus.
-Main reads the sections from the right-clicked frame, places them among its own items (the page's rows after the spelling suggestions, "Open link" with the link items, the reference rows above Inspect Element), and runs a pick back in the frame with the window raised.
+Main reads the sections from the right-clicked frame, places them among its own items (the page's rows after the spelling suggestions, "Open link" with the link items, the reference rows last but for Inspect Element), and runs a pick back in the frame with the window raised.
+The bridge's global name, its sections, and the bounds past which main drops a row (rows per section, label length, the shape of a symbol name) are pinned by the mngr repo's `apps/minds/electron/page-menu-bridge.json`, which the build fetches with the other mngr assets and `context_menu.contract.test.ts` holds the installer's answers to.
 
 A chrome that does not say so (the desktop app off macOS, an older one, plain-browser mode) leaves the page its own menu, as before.
 
