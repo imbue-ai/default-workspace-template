@@ -350,6 +350,28 @@ def test_every_superseded_default_names_an_action_its_app_still_declares() -> No
         assert set(chords_by_action) <= {str(action.id) for action in declared}, app_name
 
 
+def test_no_superseded_default_is_the_actions_current_default() -> None:
+    apps_directory = Path(__file__).resolve().parents[4] / "apps"
+    for app_name, chords_by_action in SUPERSEDED_DEFAULT_CHORDS.items():
+        current = {
+            str(action.id): frozenset(str(chord) for chord in action.default_chords)
+            for action in load_app_keybinding_actions(apps_directory / app_name / "app.toml")
+        }
+        for action_id, superseded in chords_by_action.items():
+            assert superseded != current[action_id], f"{app_name}.{action_id}"
+
+
+def test_an_override_saving_the_current_default_wins_over_the_accounts_choice(tmp_path: Path) -> None:
+    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"files": {"rename": ["f2"]}}})
+    snapshot = _snapshot({"files": {"rename": ["f3"]}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"rename": ["f2"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"rename": ["f2"]}
+
+
 def test_assignment_helpers_round_trip_one_layer() -> None:
     layer: dict[str, object] = {"other_setting": True}
     with_one = with_keybinding_assignment(layer, "chat", "send-message", ["ctrl+enter"])

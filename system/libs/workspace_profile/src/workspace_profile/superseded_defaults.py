@@ -5,7 +5,8 @@ default was written twice, a Ctrl form and a Command form, and a save could stor
 default list. Such a save is exactly the old default, not a choice, so resolution reads it as no
 assignment and the action gets its current default. A list that differs from the old default in any
 way is a real choice and is kept. Lists compare as sets: the order a save wrote them in carries no
-meaning.
+meaning. An action whose old default is its current one has no entry: a save of it is the default
+all the same, and reading it as none would let a layer below it win.
 """
 
 from collections.abc import Mapping, Sequence
@@ -26,9 +27,7 @@ SUPERSEDED_DEFAULT_CHORDS: Final[Mapping[str, Mapping[str, frozenset[str]]]] = {
         "forward": frozenset({"ctrl+]", "meta+]", "alt+arrowright"}),
         "new-folder": frozenset({"ctrl+shift+n", "shift+meta+n"}),
         "open": frozenset({"enter", "ctrl+arrowdown", "meta+arrowdown", "ctrl+o", "meta+o"}),
-        "rename": frozenset({"f2"}),
         "delete": frozenset({"delete", "ctrl+backspace", "meta+backspace"}),
-        "clear-selection": frozenset({"escape"}),
         "save-file": frozenset({"ctrl+s", "meta+s"}),
     },
     "system_interface": {
