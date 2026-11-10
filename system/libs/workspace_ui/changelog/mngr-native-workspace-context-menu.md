@@ -1,0 +1,3 @@
+`installElementContextMenu` leaves a right-click to the Imbue Studio desktop app's native menu when the app says it draws it: the handshake's new `drawsContextMenus` (read by `readHandshake` into `ShellHandshake`), or the new `isDrawnByHost` option. The installer then opens nothing and keeps the right-click's rows (the page's own, "Open link", and the reference rows) on the page's `__studioContextMenu` bridge. The app reads them with `sections()` and runs a pick with `select(key)`, which waits for the page to take focus first. A right-click with Shift held is always left to the browser's own menu.
+
+A row may name an SF Symbol in the new `symbol` field, which the native menu shows on macOS. The reference rows name `doc.on.doc`, `questionmark.bubble`, and `pencil`.
