@@ -181,7 +181,7 @@ Prefer things that can be built in this workspace in one sitting.
 Ask which one they want, and take it from there with the skill that fits the choice.
 
 Do not recite what you learned about them back at length; the ideas should show it.
-Mention once, in passing, that you will remember this for future chats, and link the **What Studio knows about me** page (its `link` from `uv run --no-sync workspace-layout list`), where they can see each fact with its source, add facts about themselves, and delete any of it.
+Mention once, in passing, that you will remember this for future chats, and link the **What Studio knows about me** page (its `link` from `uv run --no-sync workspace-layout list`), where they can see each fact with its source, add facts about themselves, and edit or delete any of it.
 
 ## Deleting
 

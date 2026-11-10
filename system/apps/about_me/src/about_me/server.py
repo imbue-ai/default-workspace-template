@@ -1,9 +1,10 @@
 """The "What Studio knows about me" app: what the opt-in web lookup remembered about the user, and their controls.
 
-One page at ``/`` lists every fact in the lookup's memory with its source and date, a Delete per fact, a box to add
-a fact the user tells it, "Forget all of this", and the raw files behind a disclosure. The page is plain HTML on the page kit (the shell-built
-``/_static/workspace_theme.css`` and ``.js``), so it wears the workspace's theme. It reads and writes only the three
-files ``about_me.store`` names, under the workspace root it runs from, and never reaches the network.
+One page at ``/`` lists every fact in the lookup's memory with its source and date, an Edit and a Delete per fact, a
+box to add a fact the user tells it, "Forget all of this", and the raw files behind a disclosure. The page is plain
+HTML on the page kit (the shell-built ``/_static/workspace_theme.css`` and ``.js``), so it wears the workspace's
+theme. It reads and writes only the three files ``about_me.store`` names, under the workspace root it runs from, and
+never reaches the network.
 
 - Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned port
   but honor ``ABOUT_ME_HOST`` and ``ABOUT_ME_PORT``, so a preview can boot on a spare port beside the live one.
@@ -28,6 +29,7 @@ from werkzeug.serving import run_simple
 
 from about_me.data_types import AddFactRequest
 from about_me.data_types import DeleteFactRequest
+from about_me.data_types import EditFactRequest
 from about_me.data_types import HealthResponse
 from about_me.data_types import ProfileResponse
 from about_me.errors import InvalidFactError
@@ -98,6 +100,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="the page's own script or stylesheet"),
     ("GET", "/api/profile"): RouteModels(response_model=ProfileResponse),
     ("POST", "/api/facts/add"): RouteModels(request_model=AddFactRequest, response_model=ProfileResponse),
+    ("POST", "/api/facts/edit"): RouteModels(request_model=EditFactRequest, response_model=ProfileResponse),
     ("POST", "/api/facts/delete"): RouteModels(request_model=DeleteFactRequest, response_model=ProfileResponse),
     ("POST", "/api/forget"): RouteModels(response_model=ProfileResponse),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
@@ -166,6 +169,21 @@ def create_app(
             return model_response(store.add_fact(body.text))
         except InvalidFactError as invalid:
             return error_response(str(invalid), HTTP_BAD_REQUEST)
+
+    @app.post("/api/facts/edit")
+    def edit_fact() -> ResponseReturnValue:
+        """Give one fact new words, keeping its source and date.
+
+        400 when the text cannot be one line of the memory; 409 when the memory changed since the page read it.
+        """
+        body = parse_request_body(EditFactRequest)
+        try:
+            return model_response(store.edit_fact(body.fact_id, body.text))
+        except InvalidFactError as invalid:
+            return error_response(str(invalid), HTTP_BAD_REQUEST)
+        except StaleFactError as stale:
+            logger.info("Refused a stale edit: {}", stale)
+            return error_response("What I remember changed since this page loaded; showing it again.", HTTP_CONFLICT)
 
     @app.post("/api/facts/delete")
     def delete_fact() -> ResponseReturnValue:

@@ -78,8 +78,15 @@
     color: var(--c-accent);
   }
 
-  .fact-delete {
+  .fact-actions {
     flex: none;
+    display: flex;
+    gap: 4px;
+  }
+
+  .fact-edit-input {
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .forget-controls,

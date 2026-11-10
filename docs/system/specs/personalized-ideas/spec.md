@@ -67,6 +67,7 @@ A small workspace app (built with the `build-app` skill, under `system/apps/`) t
 
 - Each remembered fact, with the link it came from and the date it was found or confirmed; facts the user shared themselves are marked as such.
 - A box to add a fact the user tells it about themselves, saved as a `(you told me)` line after the last fact; with nothing remembered yet, it creates `user-public-profile.md`, its line in `MEMORY.md`, and the user's own entry in `sources.json`. A lookup run later keeps those lines and adds its own after them.
+- An edit control on each fact, which rewrites only its words and keeps its source link and date.
 - A delete control on each fact, which removes its line from `user-public-profile.md` and its entry from `sources.json` when no remaining fact cites it.
 - "Forget all of this", which does what asking the agent to forget does: deletes `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`.
 - An empty state when nothing is remembered, saying the user can add something or ask for a lookup.
@@ -96,6 +97,6 @@ Check the whole flow by hand, in a workspace created on this computer from a dev
 8. **Remember.** `data/memories/user-public-profile.md` exists, each fact followed by its link, ending with a line saying it came from a lookup you asked for; `MEMORY.md` has its pointer; `sources.json` holds only the confirmed person's entries; `consent.json` says `"yes"`.
 9. **Ideas.** Three to five ideas, each tied to something about you, and one passing mention of where the memory is.
 10. **Later chats.** A new chat knows the facts without being told.
-11. **Add on the page.** On the **What Studio knows about me** page, type a fact about yourself and click **Add**: it appears marked "You told me" with today's date, and a new chat knows it. With nothing remembered yet, adding creates the memory. An empty entry, or one holding `<!--` or `-->`, shows a message and changes nothing.
+11. **Add on the page.** On the **What Studio knows about me** page, type a fact about yourself and click **Add**: it appears marked "You told me" with today's date, and a new chat knows it. With nothing remembered yet, adding creates the memory. An empty entry, or one holding `<!--` or `-->`, shows a message and changes nothing. Click **Edit** on a fact, change its words and click **Save**: only the words change, and its source and date stay.
 12. **Forget.** Say "forget what you found". The memory file, its `MEMORY.md` line and `sources.json` are gone, and the agent says what it deleted.
 13. **No offer.** In fresh chats, none of these get an offer or a lookup: "I want to build a budget tracker"; "I have an idea"; **Yes** on the welcome; describing an idea instead of clicking a button; a message prefixed `[from: Someone]`; any message after answering **I’ll tell you myself** (which is saved in `consent.json`).

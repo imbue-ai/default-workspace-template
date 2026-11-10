@@ -10,6 +10,10 @@ me' page" section of `docs/system/specs/personalized-ideas/spec.md`.
   a fact the user shared), the date it was found, and a Delete button. A line
   in neither of the skill's fixed shapes is still a fact, shown as written and
   deleted whole; the frontmatter and the closing plain sentence are not facts.
+- **Add** keeps a fact the user types as a `(you told me)` line after the
+  last fact, creating the memory, its `MEMORY.md` line and the user's own
+  sources entry when nothing is remembered yet.
+- **Edit** rewrites only a fact's words, keeping its source link and date.
 - **Delete** removes exactly that line (every other byte of the file stays as
   it was) and, from `data/.skills/personalized-ideas/sources.json`, every entry
   whose `url` the deleted line cited and no remaining line cites (and the
@@ -36,8 +40,10 @@ design tokens only, so it wears every workspace theme (`[theming] mode =
 "tokens"`).
 
 The app describes its own HTTP API at `GET /api/schema`: `GET /api/profile`
-(the facts and the raw files), `POST /api/facts/delete` (`{"fact_id"}`; 409
-when the memory changed since the page read it), `POST /api/forget`, and
+(the facts and the raw files), `POST /api/facts/add` (`{"text"}`; 400 when it
+cannot be one line), `POST /api/facts/edit` (`{"fact_id", "text"}`),
+`POST /api/facts/delete` (`{"fact_id"}`; both 409 when the memory changed
+since the page read it), `POST /api/forget`, and
 `GET /api/health`.
 
 Served on port 8070 by the `about-me` program.

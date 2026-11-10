@@ -1,4 +1,4 @@
-// The What Studio knows about me page: reads /api/profile and draws each fact with its source, date and Delete,
+// The What Studio knows about me page: reads /api/profile and draws each fact with its source, date, Edit and Delete,
 // the box to add a fact the user tells it, the "Forget all of this" control with its confirm, the empty state, and the raw files. Everything is drawn with
 // textContent, never as markup, since the facts come from web pages. It talks only to this app's own routes.
 
@@ -71,6 +71,13 @@ function factRow(fact) {
   }
   if (meta.childNodes.length > 0) body.append(meta);
 
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "fact-edit";
+  edit.dataset.variant = "ghost";
+  edit.textContent = "Edit";
+  edit.setAttribute("aria-label", `Edit: ${fact.text}`);
+
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "fact-delete";
@@ -79,8 +86,68 @@ function factRow(fact) {
   remove.setAttribute("aria-label", `Delete: ${fact.text}`);
   remove.addEventListener("click", () => deleteFact(fact.id, remove));
 
-  row.append(body, remove);
+  const actions = document.createElement("div");
+  actions.className = "fact-actions";
+  actions.append(edit, remove);
+  edit.addEventListener("click", () => startEditing(row, fact, text, actions));
+
+  row.append(body, actions);
   return row;
+}
+
+// Swaps the fact's words for a box holding them, with Save and Cancel in place of Edit and Delete.
+function startEditing(row, fact, text, actions) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "fact-edit-input";
+  input.maxLength = 500;
+  input.value = fact.text;
+  input.setAttribute("aria-label", "Fact");
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.dataset.variant = "ghost";
+  cancel.textContent = "Cancel";
+  const editing = document.createElement("div");
+  editing.className = "fact-actions";
+  editing.append(save, cancel);
+
+  function stopEditing() {
+    input.replaceWith(text);
+    editing.replaceWith(actions);
+  }
+
+  async function saveEdit() {
+    const words = input.value.trim();
+    if (words === "") {
+      input.focus();
+      return;
+    }
+    if (words === fact.text) {
+      stopEditing();
+      return;
+    }
+    await post("/api/facts/edit", { fact_id: fact.id, text: words }, save);
+  }
+
+  save.addEventListener("click", saveEdit);
+  cancel.addEventListener("click", stopEditing);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveEdit();
+    } else if (event.key === "Escape") {
+      stopEditing();
+    }
+  });
+
+  text.replaceWith(input);
+  actions.replaceWith(editing);
+  input.focus();
+  input.select();
 }
 
 function render(profile) {

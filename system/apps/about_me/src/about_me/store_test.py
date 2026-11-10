@@ -302,3 +302,52 @@ def test_a_fact_that_cannot_be_one_line_is_refused_and_changes_nothing(workspace
 
     assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
     assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES
+
+
+def test_editing_a_web_fact_changes_only_its_words_keeping_its_source_and_date(workspace: Path) -> None:
+    store = _store_on(workspace)
+    fact_id = _fact_id_by_text(store, "Writes a newsletter about type")
+
+    profile = store.edit_fact(fact_id, "  Writes a weekly   newsletter about type ")
+
+    expected = SAMPLE_PROFILE.replace(
+        b"- Writes a newsletter about type ([Newsletter]",
+        b"- Writes a weekly newsletter about type ([Newsletter]",
+    )
+    assert (workspace / PROFILE_PATH).read_bytes() == expected
+    edited = next(fact for fact in profile.facts if fact.text == "Writes a weekly newsletter about type")
+    assert (edited.source_url, edited.found_on) == ("https://example.com/news", "2026-11-02")
+    assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES
+
+
+def test_editing_a_told_fact_or_an_unparsed_line_keeps_its_kind(workspace: Path) -> None:
+    store = _store_on(workspace)
+
+    store.edit_fact(_fact_id_by_text(store, "Is learning Japanese"), "Is learning Korean")
+    profile = store.edit_fact(_fact_id_by_text(store, "Something written by hand, with no link"), "Written by hand")
+
+    content = (workspace / PROFILE_PATH).read_bytes()
+    assert b"- Is learning Korean (you told me) <!-- found 2026-11-03 -->\n" in content
+    assert b"- Written by hand\n" in content
+    assert [fact.text for fact in profile.facts][-2:] == ["Is learning Korean", "Written by hand"]
+
+
+def test_an_edit_keeps_a_crlf_line_ending(tmp_path: Path) -> None:
+    write_workspace_file(tmp_path, PROFILE_PATH, b"- Old words (you told me) <!-- found 2026-11-03 -->\r\n")
+    store = _store_on(tmp_path)
+
+    store.edit_fact(_fact_id_by_text(store, "Old words"), "New words")
+
+    assert (tmp_path / PROFILE_PATH).read_bytes() == b"- New words (you told me) <!-- found 2026-11-03 -->\r\n"
+
+
+def test_a_stale_or_invalid_edit_is_refused_and_changes_nothing(workspace: Path) -> None:
+    store = _store_on(workspace)
+    fact_id = _fact_id_by_text(store, "Is learning Japanese")
+
+    with pytest.raises(InvalidFactError):
+        store.edit_fact(fact_id, "  ")
+    with pytest.raises(StaleFactError):
+        store.edit_fact("0-0000000000000000", "Anything")
+
+    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
