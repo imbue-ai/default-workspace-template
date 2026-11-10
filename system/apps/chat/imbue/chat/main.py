@@ -19,6 +19,7 @@ from workspace_layout.client import DisconnectedShell
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
+from imbue.chat.agent_discovery import load_mngr_plugins
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.authors import AuthorStore
 from imbue.chat.auto_open import AutoOpenLedger
@@ -297,6 +298,7 @@ def main() -> None:
     """
     args = _parse_args(None)
     config = load_config()
+    load_mngr_plugins()
     if args.preflight:
         logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
     elif args.secondary:

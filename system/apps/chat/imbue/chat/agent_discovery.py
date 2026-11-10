@@ -31,6 +31,7 @@ from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.api.providers import close_provider_instances_for_context
+from imbue.mngr.cli.plugin_manager import get_or_create_plugin_manager
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.errors import AgentNoLongerIdleError
@@ -40,7 +41,6 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.interfaces.agent import HasCompactionMixin
 from imbue.mngr.interfaces.agent import require_compaction_agent
-from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
@@ -82,6 +82,16 @@ class AgentInfo(FrozenModel):
         description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
     )
     create_time: datetime | None = Field(default=None, description="When the agent was created, if known")
+
+
+def load_mngr_plugins() -> None:
+    """Build the process's mngr plugin manager, which loads every installed mngr plugin.
+
+    ``main`` calls this once, before the app serves: a broken plugin table or a missing dependency
+    fails the boot (and the update's pre-flight boot) there, and the request threads that build an
+    mngr context later all find the one manager already built rather than racing to build it.
+    """
+    get_or_create_plugin_manager()
 
 
 def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
