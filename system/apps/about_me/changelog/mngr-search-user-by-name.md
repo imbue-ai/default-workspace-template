@@ -12,4 +12,4 @@ A new built-in app, What Studio knows about me (`about-me`, port 8070): one page
 
 - A delete names its fact by line and content, so a page left open while the memory changed gets a 409 and reloads instead of deleting the wrong line. Writes are atomic and serialized. The app never reaches the network.
 
-- The page is plain HTML on the page kit and the design tokens (`[theming] mode = "tokens"`), so it wears every workspace theme. It is listed in the launcher (after the ranked apps), seeds no desktop shortcut, stops when no window shows it, and sits under the Share tab's System group.
+- The page is plain HTML on the page kit and the design tokens (`[theming] mode = "tokens"`), so it wears every workspace theme. It is listed in the launcher (after the ranked apps), seeds a desktop shortcut on a new desktop, stops when no window shows it, and sits under the Share tab's System group.
