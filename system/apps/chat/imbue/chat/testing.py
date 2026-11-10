@@ -1494,6 +1494,7 @@ def running_workspace(
     background_tasks_root: Path | None = None,
     # Further registry rows beside the chat's, for apps a test serves itself.
     extra_rows: Sequence[str] = (),
+    is_chat_pinned: bool = False,
 ) -> Generator[RunningWorkspace, None, None]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -1507,7 +1508,8 @@ def running_workspace(
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
     shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
     background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
-    without it the chat reads none.
+    without it the chat reads none. ``is_chat_pinned`` registers the chat with its ``[pin]`` as ``app.toml`` declares
+    it, so every desktop holds one chat root window, minimized until something shows it.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1572,6 +1574,7 @@ def running_workspace(
                 "lounge": "POST",
                 "app-chat": "POST",
             },
+            pin=("/", "avatar", "independent", "floating") if is_chat_pinned else None,
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
