@@ -479,6 +479,12 @@ describe("MessageInput send guard", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "beforeafter", expect.stringMatching(/^m-/));
   });
 
+  it("still declines a command that a NUL character splits", async () => {
+    const after = await typeAndSend(MessageInput(), "agent-1", "/sta\0tus");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(renderedText(after)).toContain("/status can't be sent from chat");
+  });
+
   it("still sends a slash command that does not take over the input box", async () => {
     await typeAndSend(MessageInput(), "agent-1", "/clear");
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/clear", expect.stringMatching(/^m-/));
