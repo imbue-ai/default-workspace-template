@@ -1755,6 +1755,16 @@ def _cmd_data_excludes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _skipped_result(agent: Mapping[str, object], reason: str) -> dict[str, object]:
+    """The recreate-agents result for an agent left alone this run, with why."""
+    return {
+        "source_agent_id": agent["agent_id"],
+        "name": agent["name"],
+        "status": "skipped",
+        "reason": reason,
+    }
+
+
 def _cmd_recreate_agents(args: argparse.Namespace) -> int:
     inventory = json.loads(Path(args.agents_json).read_text(encoding="utf-8"))
     ledger_path = _checkpoint_path(args, "recreated-agents.jsonl")
@@ -1789,12 +1799,7 @@ def _cmd_recreate_agents(args: argparse.Namespace) -> int:
         missing = [name for name in session_names if name not in staged_by_name]
         if missing:
             results.append(
-                {
-                    "source_agent_id": agent["agent_id"],
-                    "name": agent["name"],
-                    "status": "skipped",
-                    "reason": f"session files not staged locally: {missing}",
-                }
+                _skipped_result(agent, f"session files not staged locally: {missing}")
             )
             continue
         work_dir = (
@@ -1804,12 +1809,10 @@ def _cmd_recreate_agents(args: argparse.Namespace) -> int:
         )
         if work_dir and not Path(work_dir).is_dir():
             results.append(
-                {
-                    "source_agent_id": agent["agent_id"],
-                    "name": agent["name"],
-                    "status": "skipped",
-                    "reason": f"its work dir {work_dir} is not present here; bring it over first",
-                }
+                _skipped_result(
+                    agent,
+                    f"its work dir {work_dir} is not present here; bring it over first",
+                )
             )
             continue
         account_dir = (
@@ -1819,12 +1822,10 @@ def _cmd_recreate_agents(args: argparse.Namespace) -> int:
         )
         if account_dir and not Path(account_dir).is_dir():
             results.append(
-                {
-                    "source_agent_id": agent["agent_id"],
-                    "name": agent["name"],
-                    "status": "skipped",
-                    "reason": f"its account folder {account_dir} is not present here; bring the accounts over first",
-                }
+                _skipped_result(
+                    agent,
+                    f"its account folder {account_dir} is not present here; bring the accounts over first",
+                )
             )
             continue
         session_files = [str(staged_by_name[name]) for name in session_names]
