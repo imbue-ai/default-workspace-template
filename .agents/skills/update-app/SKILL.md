@@ -47,11 +47,9 @@ background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
 Requests can arrive several to a message, one per message over the course of the
-conversation, or mixed in with feedback on a change already in progress. Whenever
-new requests arrive, first group them into units of work. Put requests in one
-unit when they only make sense together, and keep them apart when each can be
-confirmed and shipped on its own. Then decide which of these each unit is -- it
-changes what you do *before* touching code:
+conversation, or mixed in with feedback on a change already in progress. Size
+each one as it comes in; its size changes what you do *before* touching code.
+Size is a range, and these are its two ends:
 
 - **Small / contained change** -- a bug fix, a copy tweak, a new field, a
   backend logic fix, a config or `command` change, a restart. Go straight
@@ -96,28 +94,28 @@ changes what you do *before* touching code:
   background worker once the shape is settled (see "Hand large work to a
   background worker" below).
 
-When in doubt about which bucket you're in, treat a change that alters what
-the user *sees or perceives* as larger-scope (confirm the shape first) and a
-change that only alters behavior behind an unchanged surface as contained.
-Either way, the mechanics of surfacing the change to the user are the same
-live loop.
+Many requests fall somewhere in between, for example a new control on an
+existing page. Decide by how much it changes what the user sees: go straight to
+the live change loop if that change is minor, and confirm the shape first if it
+is substantial or you can't tell. Either way, the mechanics of surfacing the
+change to the user are the same live loop.
 
 ## Hand large work to a background worker
 
-Keep the main chat free for the user. A unit that needs long stretches of
+Keep the main chat free for the user. A request that needs long stretches of
 heavy reasoning goes to a background worker through the `launch-task` skill:
 a new feature that spans several files, a redesign of a page or view, a change
 applied across many records or many parts of the app, or anything else you
-expect to take more than a few minutes of building. Hand off each such unit
-on its own, never the whole set of requests: build the other units yourself
+expect to take more than a few minutes of building. Hand off each such
+request on its own, never every request at once: build the others yourself
 through the live loop while the workers run, so they reach the user without
 waiting on the large ones. You stay available to answer the
 user's next messages and bring each worker's result in when it lands.
 
 To hand work off:
 
-1. If the unit needs its shape confirmed (a larger-scope change above),
-   settle its shape with the user first, then hand off the build.
+1. If the change needs its shape confirmed (a larger-scope change above),
+   settle the shape with the user first, then hand off the build.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the request in the user's words, the files and
    decisions you already know about, and what done looks like. It asks the
