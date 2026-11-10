@@ -1,6 +1,6 @@
 ---
 name: personalized-ideas
-description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or says yes to the welcome's offer to look them up online. Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, and then suggests a few things to build. Skip when the user already has something in mind.
+description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or answers no to the welcome's "Do you have any ideas?". Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, and then suggests a few things to build. Skip when the user already has something in mind.
 metadata:
   author: imbue
 ---
@@ -39,35 +39,38 @@ Otherwise, do not offer the lookup, and go straight to step 6 with general ideas
 
 If `consent.json` says `"yes"` and `user-public-profile.md` is in your memory, skip to step 6 and suggest from it.
 
-## The welcome's offer
+## The welcome's question
 
 A new workspace's first chat opens on the conversation from Imbue Studio's start flow, which you receive ahead of the user's first message.
-When the account has a name, its closing welcome already makes this offer ("**Not sure what to build? I’d like to get to know you a little first,** ...").
-That offer states everything step 2 requires, so do not make it again:
+Its closing welcome asks "The best way to start is to build something. Do you have any ideas?", with two reply buttons that send a whole sentence:
 
-- `yes` (or another clear yes, such as "sure" or "go ahead") is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3. A yes that comes with an idea ("yes, but I want to build a budget tracker") is not a yes to the lookup: they have an idea, so step 1 says to help with it instead.
-- `no` (or another clear no, such as "no thanks" or "skip it") is a no: write it.
-- Anything else (most often, describing something that annoys them, or saying they already have an idea) is not an answer to the offer. Help with what they said, do not bring the offer up again, and write nothing to `consent.json`, so it can still be offered if they later say they are stuck.
+- `Yes, I have an idea` (or another clear yes): they have an idea, so step 1 applies. Ask what it is, and help with it; do not offer the lookup.
+- `No, I don’t have an idea yet` (or another clear no): check step 1's exclusions, then read the name on the account (the `owner-name` call in step 3; it reads only the name, and searches nothing). When none of the exclusions holds and `display_name` is set, make the offer in step 2. Otherwise send only its first paragraph, the question about what is annoying them, and nothing else. Either way, end your turn.
+- Anything else (most often, describing what they want to build or something that annoys them): help with what they said, and do not offer the lookup.
 
 ## 2. Ask
 
-Make the offer once, as this exact message, word for word, with nothing added before or after it (its last line is two reply buttons; the chat turns `#reply=` links into buttons that send `yes` or `no` for the user):
+Make the offer once, as this exact message, word for word, with nothing added before or after it (its last line is two reply buttons; the chat turns `#reply=` links into buttons that send their text for the user):
 
-> **Not sure what to build? I’d like to get to know you a little first,** so I can suggest things that actually help you. If you’re comfortable with it, I can search public web pages for the name on your account, using an outside search service. I’ll show you what I find so you can tell me what’s really you, and I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime, or skip this and just tell me a bit about yourself. Reply **yes** to go ahead, or **no** to skip it.
+> What’s annoying, overwhelming, or tedious in your digital life? Work or personal, big or small, tell me about it and I’ll help you build something that makes it better.
 >
-> [Yes, go ahead](#reply=yes) [No thanks](#reply=no)
+> Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can search public web pages for the name on your account, using an outside search service. I’ll show you what I find so you can tell me what’s really you, and I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
+>
+> [Search for me](#reply=Search%20for%20me) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
 
-It is the same message Imbue Studio's welcome uses (`LOOKUP_OFFER` in mngr-internal's `apps/minds/frontend/src/models/creationTranscript.ts`), and it is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
-Do not reword it, shorten it, personalize it, or mention anything about the user in it; change it only in both places at once.
+It is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
+Do not reword it, shorten it, personalize it, or mention anything about the user in it.
+Outside the welcome (the user asks for ideas later in a chat), make the same offer only when the `owner-name` call answers a `display_name`; without one, ask the first paragraph's question alone.
 
 Then end your turn and wait.
-Only `yes`, or another clear yes, is a yes; `no`, or another clear no, is a no.
-Anything else (no, not now, a question, or telling you about themselves instead) means no search: answer them, and use what they told you.
-Write `consent.json` with their answer either way, except when they only asked a question.
+
+- `Search for me`, or another clear yes to the search: write `"lookup": "yes"` to `consent.json` and go to step 3.
+- `I’ll tell you myself`, or another clear no to the search: write `"lookup": "no"`, and ask them to go ahead in one short line.
+- Anything else (describing what annoys them, a question): no search. Answer them and use what they told you; write `consent.json` only when they clearly declined the search.
 
 ## 3. Get their name
 
-Read the name in the same turn as the user's yes, with no question and no approval before it: the offer they accepted names "the name on your account", so read it straight away from Imbue Studio:
+Read the name in the same turn as the user's yes, with no question and no approval before it (when you already read it to decide whether to offer, use that answer): the offer they accepted names "the name on your account", so read it straight away from Imbue Studio:
 
 ```bash
 latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/owner-name"
