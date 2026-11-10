@@ -44,9 +44,13 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `PageTemplate` of the app's page the shell shows for it, with `showing`, the
   templates of the app's other pages that count as already showing it, only
   beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
-  within the manifest; `label`, a `KeybindingActionLabel`; and
+  within the manifest; `label`, a `KeybindingActionLabel`;
   `default_chords`, the chords that trigger it out of the box, whose grammar
-  the `workspace_profile` library checks),
+  the `workspace_profile` library checks; and `scope`, a `KeybindingScope` of
+  `app` (the default: the chord fires in the app's own page) or `workspace`
+  (it fires anywhere in the workspace), which only the shell
+  (`WORKSPACE_WIDE_KEYBINDINGS_APP`) may declare: another manifest declaring a
+  workspace-wide action fails validation),
   `DefaultShortcut`
   (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
   array of them, read as `default_shortcuts`), `ShortcutMode`,
