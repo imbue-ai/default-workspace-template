@@ -1,31 +1,45 @@
-"""The three files the page reads and writes, and the only changes it makes to them.
+"""The files the page reads and writes, and the only changes it makes to them.
 
-- ``data/memories/user-public-profile.md``: the lookup's memory, one fact per line (``about_me.profile``).
-- ``data/memories/MEMORY.md``: the memory index, whose line naming ``(user-public-profile.md)`` points at it.
+- ``data/memories/*.md``: the agent's memories, one per file (``about_me.memories``), indexed by
+  ``data/memories/MEMORY.md``.
+- ``data/memories/user-public-profile.md``: the web lookup's memory, one fact per line (``about_me.profile``).
 - ``data/.skills/personalized-ideas/sources.json``: the search results and pages the lookup used.
 
-Editing a fact rewrites only its words, keeping its source and date. Adding a fact the user typed appends one ``(you told me)`` line after the last fact, creating the profile, its index
-line and its sources entry when there are none yet. Deleting a fact removes exactly its line from the profile and, from the sources, the entries nothing left cites;
-deleting the last fact, or forgetting all, removes the profile, its index line, and the sources, as asking the agent
-to forget does. Every write replaces its file whole (a temporary file renamed over it), and one lock serializes them,
-so a reader never sees half a file and two requests never interleave. Nothing here reaches the network.
+Adding a memory writes a new ``user`` memory file and its index line. Editing one rewrites only its description and
+body (and its index line's hook); deleting one removes the file and its index lines. Editing a lookup fact rewrites
+only its words; deleting one removes exactly its line and, from the sources, the entries nothing left cites.
+Forgetting the lookup removes its memory, its index line and the sources; forgetting everything removes every
+memory and the index too. Every write replaces its file whole (a temporary file renamed over it), and one lock
+serializes them, so a reader never sees half a file and two requests never interleave. Nothing here reaches the
+network.
 """
 
-import datetime
 import json
 import os
+import re
 import tempfile
 import threading
-from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
 
 from about_me.data_types import Fact
+from about_me.data_types import Memory
 from about_me.data_types import ProfileResponse
 from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
+from about_me.errors import StaleMemoryError
+from about_me.memories import index_line
+from about_me.memories import index_titles
+from about_me.memories import is_memory_file_name
+from about_me.memories import memory_from_file
+from about_me.memories import new_user_memory
+from about_me.memories import parse_memory
+from about_me.memories import render_memory
+from about_me.memories import revision
+from about_me.memories import with_description
+from about_me.memories import without_index_lines
 from about_me.profile import ProfileLine
 from about_me.profile import cited_urls
 from about_me.profile import parse_profile
@@ -38,21 +52,12 @@ SOURCES_PATH: Final[Path] = Path("data/.skills/personalized-ideas/sources.json")
 PROFILE_INDEX_MARKER: Final[bytes] = b"(user-public-profile.md)"
 USER_ORIGIN: Final[str] = "user"
 MAX_FACT_CHARS: Final[int] = 500
+MAX_DESCRIPTION_CHARS: Final[int] = 300
+MAX_BODY_CHARS: Final[int] = 5000
+MAX_TITLE_CHARS: Final[int] = 60
+MAX_SLUG_WORDS: Final[int] = 6
 # A comment marker inside a fact would end or start the line's date comment early.
 _COMMENT_MARKERS: Final[tuple[str, ...]] = ("<!--", "-->")
-NEW_PROFILE_HEADER: Final[bytes] = (
-    b"---\n"
-    b"name: user-public-profile\n"
-    b"description: What the user has told Studio about themselves, and what a web lookup they asked for found\n"
-    b"metadata:\n"
-    b"  type: user\n"
-    b"---\n"
-    b"\n"
-)
-NEW_INDEX_LINE: Final[bytes] = (
-    b"- [Public profile](user-public-profile.md) -- what the user told Studio and what a web lookup found\n"
-)
-TOLD_SOURCE_TITLE: Final[str] = "What you told me"
 
 
 def normalized_fact_text(text: str) -> str:
@@ -65,11 +70,6 @@ def normalized_fact_text(text: str) -> str:
     if any(marker in line for marker in _COMMENT_MARKERS):
         raise InvalidFactError("A fact can't contain <!-- or -->.")
     return line
-
-
-def told_fact_line(text: str, day: datetime.date) -> bytes:
-    """The memory line for a fact the user told: the shape ``about_me.profile`` parses as told by the user."""
-    return f"- {text} (you told me) <!-- found {day.isoformat()} -->\n".encode("utf-8")
 
 
 def _read_bytes(path: Path) -> bytes | None:
@@ -100,6 +100,40 @@ def write_atomically(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _one_line(text: str, limit: int, what: str) -> str:
+    """``text`` as one line, its whitespace collapsed; raises ``InvalidFactError`` when it is empty or too long."""
+    line = " ".join(text.split())
+    if not line:
+        raise InvalidFactError(f"Type {what}.")
+    if len(line) > limit:
+        raise InvalidFactError(f"Keep {what} to {limit} characters.")
+    return line
+
+
+def normalized_body(text: str) -> str:
+    """A memory's body with its outer whitespace trimmed; raises ``InvalidFactError`` when it is empty or too long."""
+    body = text.strip()
+    if not body:
+        raise InvalidFactError("Type what I should remember.")
+    if len(body) > MAX_BODY_CHARS:
+        raise InvalidFactError(f"Keep it to {MAX_BODY_CHARS} characters.")
+    return body
+
+
+def short_title(text: str) -> str:
+    """``text`` cut at a word boundary to fit a memory index title."""
+    if len(text) <= MAX_TITLE_CHARS:
+        return text
+    cut_at = text.rfind(" ", 0, MAX_TITLE_CHARS)
+    return text[: cut_at if cut_at > 0 else MAX_TITLE_CHARS].rstrip(" ,.;:") + "..."
+
+
+def slug(text: str) -> str:
+    """A file-name-safe slug from the first words of ``text``."""
+    words = re.findall(r"[a-z0-9]+", text.lower())[:MAX_SLUG_WORDS]
+    return "-".join(words) or "fact"
+
+
 def _kept_sources(entries: list[object], dropped_urls: frozenset[str], is_dropping_told: bool) -> list[object]:
     def is_dropped(entry: object) -> bool:
         if not isinstance(entry, dict):
@@ -124,47 +158,19 @@ def _edited_line(fact: Fact, raw: bytes, text: str) -> bytes:
     return line.encode("utf-8") + ending
 
 
-def _with_line_after_last_fact(content: bytes, line: bytes) -> bytes:
-    """``content`` with ``line`` inserted after its last fact line, or at the end of a profile with none."""
-    file_lines = split_lines(content)
-    facts = parse_profile(content)
-    if not facts:
-        if file_lines and not file_lines[-1].endswith(b"\n"):
-            file_lines[-1] += b"\n"
-        return b"".join(file_lines) + line
-    after = facts[-1].index + 1
-    if not file_lines[after - 1].endswith(b"\n"):
-        file_lines[after - 1] += b"\n"
-    return b"".join(file_lines[:after] + [line] + file_lines[after:])
-
-
 class ProfileStore:
     """The profile, the index and the sources under one workspace root, behind one lock."""
 
-    def __init__(self, workspace_root: Path, today: Callable[[], datetime.date] = datetime.date.today) -> None:
+    def __init__(self, workspace_root: Path) -> None:
         self._profile = workspace_root / PROFILE_PATH
         self._index = workspace_root / MEMORY_INDEX_PATH
+        self._memories = self._index.parent
         self._sources = workspace_root / SOURCES_PATH
-        self._today = today
         self._lock = threading.Lock()
 
     def read(self) -> ProfileResponse:
         """What the page shows: every fact, and both raw files as they are."""
         with self._lock:
-            return self._read_locked()
-
-    def add_fact(self, text: str) -> ProfileResponse:
-        """Keep a fact the user typed, after the last fact; raises ``InvalidFactError`` when it cannot be one line."""
-        line = told_fact_line(normalized_fact_text(text), self._today())
-        with self._lock:
-            content = _read_bytes(self._profile)
-            if content is None:
-                self._profile.parent.mkdir(parents=True, exist_ok=True)
-                write_atomically(self._profile, NEW_PROFILE_HEADER + line)
-            else:
-                write_atomically(self._profile, _with_line_after_last_fact(content, line))
-            self._ensure_index_line()
-            self._ensure_told_source()
             return self._read_locked()
 
     def edit_fact(self, fact_id: str, text: str) -> ProfileResponse:
@@ -209,16 +215,124 @@ class ProfileStore:
             self._prune_sources(target, remaining)
             return self._read_locked()
 
-    def forget_all(self) -> ProfileResponse:
-        """Delete the profile, its line in the memory index (the rest of the index untouched), and the sources."""
+    def forget_lookup(self) -> ProfileResponse:
+        """Delete the lookup's memory, its line in the memory index (the rest of the index untouched), and the sources."""
         with self._lock:
             self._forget_all_locked()
             return self._read_locked()
 
+    def forget_everything(self) -> ProfileResponse:
+        """Delete every memory, the memory index, and the lookup's sources."""
+        with self._lock:
+            for path in self._memory_paths():
+                path.unlink(missing_ok=True)
+            self._index.unlink(missing_ok=True)
+            self._sources.unlink(missing_ok=True)
+            return self._read_locked()
+
+    def add_memory(self, text: str) -> ProfileResponse:
+        """Keep something the user typed about themselves as a new ``user`` memory, with its line in the index."""
+        line = _one_line(text, MAX_FACT_CHARS, "something to add")
+        with self._lock:
+            self._memories.mkdir(parents=True, exist_ok=True)
+            base = f"user-{slug(line)}"
+            name = base
+            suffix = 2
+            while (self._memories / f"{name}.md").exists():
+                name = f"{base}-{suffix}"
+                suffix += 1
+            file_name = f"{name}.md"
+            write_atomically(self._memories / file_name, new_user_memory(name, line, line).encode("utf-8"))
+            index = _read_bytes(self._index)
+            existing = b"" if index is None else index if not index or index.endswith(b"\n") else index + b"\n"
+            new_line = index_line(short_title(line), file_name, line) + "\n"
+            write_atomically(self._index, existing + new_line.encode("utf-8"))
+            return self._read_locked()
+
+    def edit_memory(self, file_name: str, expected_revision: str, description: str, body: str) -> ProfileResponse:
+        """Give one memory a new description and body, and its index line the new description as its hook.
+
+        Raises ``InvalidFactError`` for an empty or overlong description or body, and ``StaleMemoryError`` when the
+        file is gone or changed since the page read it.
+        """
+        new_description = _one_line(description, MAX_DESCRIPTION_CHARS, "a short summary")
+        new_body = normalized_body(body)
+        with self._lock:
+            path, content = self._current_memory(file_name, expected_revision)
+            parsed = parse_memory(content.decode("utf-8", errors="replace"))
+            frontmatter = with_description(parsed.frontmatter, new_description) if parsed.frontmatter else []
+            rendered = render_memory(frontmatter, new_body) if frontmatter else new_body + "\n"
+            write_atomically(path, rendered.encode("utf-8"))
+            self._rewrite_index_hook(file_name, new_description)
+            return self._read_locked()
+
+    def delete_memory(self, file_name: str, expected_revision: str) -> ProfileResponse:
+        """Delete one memory and its lines in the index; deleting the lookup's memory forgets the lookup.
+
+        Raises ``StaleMemoryError`` when the file is gone or changed since the page read it.
+        """
+        with self._lock:
+            path, _ = self._current_memory(file_name, expected_revision)
+            if path == self._profile:
+                self._forget_all_locked()
+                return self._read_locked()
+            path.unlink()
+            index = _read_bytes(self._index)
+            if index is not None:
+                kept = without_index_lines(index.decode("utf-8", errors="replace"), file_name)
+                write_atomically(self._index, kept.encode("utf-8"))
+            return self._read_locked()
+
+    def _memory_paths(self) -> list[Path]:
+        if not self._memories.is_dir():
+            return []
+        return sorted(path for path in self._memories.iterdir() if is_memory_file_name(path.name) and path.is_file())
+
+    def _current_memory(self, file_name: str, expected_revision: str) -> tuple[Path, bytes]:
+        if not is_memory_file_name(file_name):
+            raise StaleMemoryError(f"{file_name!r} is not a memory file")
+        path = self._memories / file_name
+        content = _read_bytes(path)
+        if content is None or revision(content) != expected_revision:
+            raise StaleMemoryError(f"{file_name} changed since the page read it")
+        return path, content
+
+    def _rewrite_index_hook(self, file_name: str, hook: str) -> None:
+        index = _read_bytes(self._index)
+        if index is None:
+            return
+        text = index.decode("utf-8", errors="replace")
+        title = index_titles(text).get(file_name)
+        if title is None:
+            return
+        target = f"]({file_name})"
+        lines = text.splitlines(keepends=True)
+        rewritten = [
+            index_line(title, file_name, hook) + ("\n" if line.endswith("\n") else "") if target in line else line
+            for line in lines
+        ]
+        write_atomically(self._index, "".join(rewritten).encode("utf-8"))
+
+    def _read_memories(self, index: bytes | None) -> tuple[Memory, ...]:
+        titles = index_titles(index.decode("utf-8", errors="replace") if index is not None else None)
+        memories = []
+        for path in self._memory_paths():
+            if path == self._profile:
+                continue
+            content = _read_bytes(path)
+            if content is not None:
+                memories.append(memory_from_file(path, content, titles))
+        return tuple(memories)
+
     def _read_locked(self) -> ProfileResponse:
         content = _read_bytes(self._profile)
         sources = _read_bytes(self._sources)
+        index = _read_bytes(self._index)
         return ProfileResponse(
+            memories=self._read_memories(index),
+            profile_file_name=self._profile.name,
+            profile_revision=revision(content) if content is not None else None,
+            memory_index_markdown=index.decode("utf-8", errors="replace") if index is not None else None,
             facts=tuple(line.fact for line in parse_profile(content)) if content is not None else (),
             profile_markdown=content.decode("utf-8", errors="replace") if content is not None else None,
             sources_json=sources.decode("utf-8", errors="replace") if sources is not None else None,
@@ -233,35 +347,6 @@ class ProfileStore:
             if len(kept) != len(index_lines):
                 write_atomically(self._index, b"".join(kept))
         self._sources.unlink(missing_ok=True)
-
-    def _ensure_index_line(self) -> None:
-        index = _read_bytes(self._index)
-        if index is not None and PROFILE_INDEX_MARKER in index:
-            return
-        existing = b"" if index is None else index if index.endswith(b"\n") or not index else index + b"\n"
-        write_atomically(self._index, existing + NEW_INDEX_LINE)
-
-    def _ensure_told_source(self) -> None:
-        """Add the user's own null-``url`` sources entry once; leave a sources file it cannot read alone."""
-        content = _read_bytes(self._sources)
-        entries: list[object] = []
-        if content is not None:
-            try:
-                parsed = json.loads(content)
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                logger.warning("Leaving {} as it is: it is not JSON ({})", self._sources, error)
-                return
-            if not isinstance(parsed, list):
-                logger.warning("Leaving {} as it is: it is not a JSON array", self._sources)
-                return
-            entries = parsed
-        if any(isinstance(entry, dict) and entry.get("origin") == USER_ORIGIN for entry in entries):
-            return
-        entries.append(
-            {"url": None, "title": TOLD_SOURCE_TITLE, "fetched_at": self._today().isoformat(), "origin": USER_ORIGIN}
-        )
-        self._sources.parent.mkdir(parents=True, exist_ok=True)
-        write_atomically(self._sources, (json.dumps(entries, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def _prune_sources(self, deleted: ProfileLine, remaining: tuple[ProfileLine, ...]) -> None:
         """Drop the sources the deleted line cited and no remaining line does; leave a file it cannot read alone."""

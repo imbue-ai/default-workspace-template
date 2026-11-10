@@ -1,10 +1,11 @@
-"""The "What Studio knows about me" app: what the opt-in web lookup remembered about the user, and their controls.
+"""The "What Studio knows about me" app: a view onto the agent's memory, with the user's controls.
 
-One page at ``/`` lists every fact in the lookup's memory with its source and date, an Edit and a Delete per fact, a
-box to add a fact the user tells it, "Forget all of this", and the raw files behind a disclosure. The page is plain
+One page at ``/`` lists every memory in ``data/memories/`` grouped by what it is about (the user, how they like to
+work, their projects, pointers), each with Edit and Delete, and the web lookup's memory fact by fact with its sources.
+The user can add a memory about themselves, forget what the lookup found, or forget everything. The page is plain
 HTML on the page kit (the shell-built ``/_static/workspace_theme.css`` and ``.js``), so it wears the workspace's
-theme. It reads and writes only the three files ``about_me.store`` names, under the workspace root it runs from, and
-never reaches the network.
+theme. It reads and writes only the memory directory and the lookup's sources, under the workspace root it runs
+from, and never reaches the network.
 
 - Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned port
   but honor ``ABOUT_ME_HOST`` and ``ABOUT_ME_PORT``, so a preview can boot on a spare port beside the live one.
@@ -27,13 +28,17 @@ from flask.typing import ResponseReturnValue
 from loguru import logger
 from werkzeug.serving import run_simple
 
-from about_me.data_types import AddFactRequest
+from about_me.data_types import AddMemoryRequest
 from about_me.data_types import DeleteFactRequest
+from about_me.data_types import DeleteMemoryRequest
 from about_me.data_types import EditFactRequest
+from about_me.data_types import EditMemoryRequest
+from about_me.data_types import ForgetRequest
 from about_me.data_types import HealthResponse
 from about_me.data_types import ProfileResponse
 from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
+from about_me.errors import StaleMemoryError
 from about_me.store import ProfileStore
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -56,8 +61,8 @@ WORKSPACE_DIR: Final[Path] = Path(os.environ.get("ABOUT_ME_WORKSPACE_DIR", "."))
 
 APP_DISPLAY_NAME: Final[str] = "What Studio knows about me"
 APP_DESCRIPTION: Final[str] = (
-    "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its "
-    "source and date, and controls to add to it, edit or delete any of it, or forget all of it."
+    "Everything Studio remembers about you and how you like to work, as its own memory holds it, with controls to "
+    "add to it, edit or delete any of it, or forget all of it."
 )
 STATIC_DIR: Final[Path] = Path(__file__).parent / "static"
 # The page's own script and stylesheet, by file name under /assets/.
@@ -79,6 +84,7 @@ HEALTH_PATH: Final[str] = "/api/health"
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_CONFLICT: Final[int] = 409
+_STALE_DETAIL: Final[str] = "What I remember changed since this page loaded; showing it again."
 
 # Connects the page to the shell framing it (so its links open where the workspace opens them, and the shell
 # reopens the window where it was), and installs the element context menu. Harmless outside the shell.
@@ -99,10 +105,12 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the What Studio knows about me page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="the page's own script or stylesheet"),
     ("GET", "/api/profile"): RouteModels(response_model=ProfileResponse),
-    ("POST", "/api/facts/add"): RouteModels(request_model=AddFactRequest, response_model=ProfileResponse),
+    ("POST", "/api/memories/add"): RouteModels(request_model=AddMemoryRequest, response_model=ProfileResponse),
+    ("POST", "/api/memories/edit"): RouteModels(request_model=EditMemoryRequest, response_model=ProfileResponse),
+    ("POST", "/api/memories/delete"): RouteModels(request_model=DeleteMemoryRequest, response_model=ProfileResponse),
     ("POST", "/api/facts/edit"): RouteModels(request_model=EditFactRequest, response_model=ProfileResponse),
     ("POST", "/api/facts/delete"): RouteModels(request_model=DeleteFactRequest, response_model=ProfileResponse),
-    ("POST", "/api/forget"): RouteModels(response_model=ProfileResponse),
+    ("POST", "/api/forget"): RouteModels(request_model=ForgetRequest, response_model=ProfileResponse),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
     ("GET", "/_static/{filename}"): SchemalessRoute(reason="one of the browser modules the shell builds"),
     **THEME_STATIC_ROUTE_TABLE,
@@ -152,23 +160,47 @@ def create_app(
 
     @app.get("/api/profile")
     def get_profile() -> ResponseReturnValue:
-        """Everything remembered from the lookup: each fact with its source and date, and the raw files as they are."""
+        """Everything the agent remembers: each memory, the web lookup's facts with their sources, and the raw files."""
         response = model_response(store.read())
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.post("/api/facts/add")
-    def add_fact() -> ResponseReturnValue:
-        """Keep a fact the user typed about themselves, as a "(you told me)" line after the last fact.
+    @app.post("/api/memories/add")
+    def add_memory() -> ResponseReturnValue:
+        """Keep something the user typed about themselves as a new memory, with its line in the memory index.
 
-        Creates the memory, its line in the memory index and its sources entry when there is none yet. 400 when the
-        text is empty, longer than 500 characters, or holds a comment marker.
+        400 when the text is empty or longer than 500 characters.
         """
-        body = parse_request_body(AddFactRequest)
+        body = parse_request_body(AddMemoryRequest)
         try:
-            return model_response(store.add_fact(body.text))
+            return model_response(store.add_memory(body.text))
         except InvalidFactError as invalid:
             return error_response(str(invalid), HTTP_BAD_REQUEST)
+
+    @app.post("/api/memories/edit")
+    def edit_memory() -> ResponseReturnValue:
+        """Give one memory a new summary and text.
+
+        400 when either is empty or too long; 409 when the memory changed since the page read it.
+        """
+        body = parse_request_body(EditMemoryRequest)
+        try:
+            return model_response(store.edit_memory(body.file_name, body.revision, body.description, body.body))
+        except InvalidFactError as invalid:
+            return error_response(str(invalid), HTTP_BAD_REQUEST)
+        except StaleMemoryError as stale:
+            logger.info("Refused a stale memory edit: {}", stale)
+            return error_response(_STALE_DETAIL, HTTP_CONFLICT)
+
+    @app.post("/api/memories/delete")
+    def delete_memory() -> ResponseReturnValue:
+        """Delete one memory and its line in the memory index; 409 when it changed since the page read it."""
+        body = parse_request_body(DeleteMemoryRequest)
+        try:
+            return model_response(store.delete_memory(body.file_name, body.revision))
+        except StaleMemoryError as stale:
+            logger.info("Refused a stale memory delete: {}", stale)
+            return error_response(_STALE_DETAIL, HTTP_CONFLICT)
 
     @app.post("/api/facts/edit")
     def edit_fact() -> ResponseReturnValue:
@@ -183,13 +215,13 @@ def create_app(
             return error_response(str(invalid), HTTP_BAD_REQUEST)
         except StaleFactError as stale:
             logger.info("Refused a stale edit: {}", stale)
-            return error_response("What I remember changed since this page loaded; showing it again.", HTTP_CONFLICT)
+            return error_response(_STALE_DETAIL, HTTP_CONFLICT)
 
     @app.post("/api/facts/delete")
     def delete_fact() -> ResponseReturnValue:
         """Forget one fact: remove its line from the memory, and the sources no remaining fact cites.
 
-        Deleting the last fact forgets everything, as "Forget all of this" does. 409 when the memory changed since
+        Deleting the last fact forgets the lookup, as "Forget what the lookup found" does. 409 when the memory changed since
         the page read it, so a stale page never deletes another line; the page then reloads it.
         """
         body = parse_request_body(DeleteFactRequest)
@@ -197,12 +229,13 @@ def create_app(
             return model_response(store.delete_fact(body.fact_id))
         except StaleFactError as stale:
             logger.info("Refused a stale delete: {}", stale)
-            return error_response("What I remember changed since this page loaded; showing it again.", HTTP_CONFLICT)
+            return error_response(_STALE_DETAIL, HTTP_CONFLICT)
 
     @app.post("/api/forget")
-    def forget_all() -> ResponseReturnValue:
-        """Forget everything from the lookup: delete the memory, its line in the memory index, and the sources."""
-        return model_response(store.forget_all())
+    def forget() -> ResponseReturnValue:
+        """Forget what the web lookup found (its memory, its index line, the sources), or every memory."""
+        body = parse_request_body(ForgetRequest)
+        return model_response(store.forget_lookup() if body.scope == "lookup" else store.forget_everything())
 
     @app.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:

@@ -29,9 +29,9 @@ def test_the_page_carries_the_header_the_page_kit_and_the_shell_script(client: F
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "<title>What Studio knows about me</title>" in page
-    assert "What I remember about you, from what you've told me and the web lookup you asked for." in page
+    assert "Everything I remember about you and how you like to work." in page
     assert "I don't remember anything about you yet." in page
-    assert '<form id="add-fact"' in page
+    assert '<form id="add-memory"' in page
     assert "View raw file" in page
     assert '<script src="/_static/workspace_theme.js"></script>' in page
     assert page.index('import { connectToShell } from "/_static/app_contract.js"') < page.index("</body>")
@@ -97,7 +97,15 @@ def test_the_profile_lists_each_fact_with_its_source_and_date(client: FlaskClien
 def test_the_profile_of_an_empty_workspace_is_empty(empty_workspace: Path) -> None:
     body = create_app(empty_workspace).test_client().get("/api/profile").get_json()
 
-    assert body == {"facts": [], "profile_markdown": None, "sources_json": None}
+    assert body == {
+        "memories": [],
+        "profile_file_name": "user-public-profile.md",
+        "profile_revision": None,
+        "memory_index_markdown": None,
+        "facts": [],
+        "profile_markdown": None,
+        "sources_json": None,
+    }
 
 
 def test_deleting_a_fact_answers_the_profile_without_it(client: FlaskClient, workspace: Path) -> None:
@@ -128,11 +136,13 @@ def test_a_delete_without_a_fact_id_is_a_400(client: FlaskClient) -> None:
     assert client.post("/api/facts/delete", json={}).status_code == 400
 
 
-def test_forget_all_answers_an_empty_profile_and_removes_the_files(client: FlaskClient, workspace: Path) -> None:
-    response = client.post("/api/forget")
+def test_forgetting_the_lookup_keeps_the_other_memories(client: FlaskClient, workspace: Path) -> None:
+    response = client.post("/api/forget", json={"scope": "lookup"})
 
     assert response.status_code == 200
-    assert response.get_json() == {"facts": [], "profile_markdown": None, "sources_json": None}
+    body = response.get_json()
+    assert (body["facts"], body["profile_markdown"], body["sources_json"]) == ([], None, None)
+    assert {memory["file_name"] for memory in body["memories"]} == {"coding-style.md", "projects.md"}
     assert not (workspace / PROFILE_PATH).exists()
     assert not (workspace / SOURCES_PATH).exists()
     assert (workspace / MEMORY_INDEX_PATH).read_bytes() == SAMPLE_INDEX.replace(
@@ -140,21 +150,44 @@ def test_forget_all_answers_an_empty_profile_and_removes_the_files(client: Flask
     )
 
 
-def test_adding_a_fact_answers_the_profile_with_it(client: FlaskClient) -> None:
-    response = client.post("/api/facts/add", json={"text": "Is learning to sail"})
+def test_forgetting_everything_answers_no_memories(client: FlaskClient, workspace: Path) -> None:
+    response = client.post("/api/forget", json={"scope": "everything"})
 
     assert response.status_code == 200
-    added = response.get_json()["facts"][-1]
-    assert (added["text"], added["is_told_by_user"], added["source_url"]) == ("Is learning to sail", True, None)
+    assert response.get_json()["memories"] == []
+    assert not (workspace / MEMORY_INDEX_PATH).exists()
 
 
-def test_an_empty_or_missing_fact_is_a_400_and_changes_nothing(client: FlaskClient, workspace: Path) -> None:
-    empty = client.post("/api/facts/add", json={"text": "   "})
-    missing = client.post("/api/facts/add", json={})
+def test_forget_without_a_scope_is_a_400(client: FlaskClient, workspace: Path) -> None:
+    assert client.post("/api/forget", json={}).status_code == 400
+    assert (workspace / PROFILE_PATH).exists()
 
-    assert (empty.status_code, missing.status_code) == (400, 400)
-    assert empty.get_json()["detail"] == "Type something to add."
-    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
+
+def test_adding_editing_and_deleting_a_memory(client: FlaskClient) -> None:
+    added = client.post("/api/memories/add", json={"text": "Is learning to sail"})
+    memory = next(m for m in added.get_json()["memories"] if m["body"] == "Is learning to sail")
+    edited = client.post(
+        "/api/memories/edit",
+        json={
+            "file_name": memory["file_name"],
+            "revision": memory["revision"],
+            "description": "Sails",
+            "body": "Sails on weekends",
+        },
+    )
+    new = next(m for m in edited.get_json()["memories"] if m["file_name"] == memory["file_name"])
+    deleted = client.post("/api/memories/delete", json={"file_name": new["file_name"], "revision": new["revision"]})
+
+    assert (added.status_code, edited.status_code, deleted.status_code) == (200, 200, 200)
+    assert (new["memory_type"], new["description"], new["body"]) == ("user", "Sails", "Sails on weekends")
+    assert memory["file_name"] not in {m["file_name"] for m in deleted.get_json()["memories"]}
+
+
+def test_an_empty_memory_is_a_400_and_a_stale_one_a_409(client: FlaskClient) -> None:
+    empty = client.post("/api/memories/add", json={"text": "   "})
+    stale = client.post("/api/memories/delete", json={"file_name": "projects.md", "revision": "0000000000000000"})
+
+    assert (empty.status_code, stale.status_code) == (400, 409)
 
 
 def test_editing_a_fact_answers_the_profile_with_its_new_words(client: FlaskClient) -> None:

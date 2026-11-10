@@ -24,6 +24,21 @@ SAMPLE_INDEX = (
     b"- [Public profile](user-public-profile.md) -- what the web lookup found\n"
     b"- [Projects](projects.md) -- what the user is building\n"
 )
+SAMPLE_FEEDBACK_MEMORY = (
+    b"---\n"
+    b"name: coding-style\n"
+    b"description: How the user likes code\n"
+    b"metadata:\n"
+    b"  type: feedback\n"
+    b"  updated: 2026-11-01\n"
+    b"---\n"
+    b"\n"
+    b"Prefers small functions.\n"
+    b"**Why:** they review on a phone.\n"
+)
+SAMPLE_PROJECT_MEMORY = (
+    b"---\nname: projects\ndescription: 'What the user is building'\ntype: project\n---\n\nA grading helper.\n"
+)
 SAMPLE_SOURCES = (
     b'[\n  {"url": "https://example.com/portfolio", "title": "Portfolio", "fetched_at": "2026-11-01", '
     b'"origin": "page"},\n'

@@ -1,10 +1,10 @@
-# The "What Studio knows about me" app: one page at ``/`` showing what Studio remembers about the user, from what
-# they told it and the opt-in web lookup by name (the personalized-ideas skill), with controls to add to it, edit
-# it and delete it. It touches only the profile memory files and never reaches the network. It declares no launch path, so
-# the desktop offers the synthesized ``open`` at its root.
+# The "What Studio knows about me" app: one page at ``/`` showing the agent's whole memory (data/memories/), grouped
+# by what each memory is about, with the web lookup's memory fact by fact, and controls to add, edit and delete
+# memories or forget them. It touches only the memory files and the lookup's sources and never reaches the network.
+# It declares no launch path, so the desktop offers the synthesized ``open`` at its root.
 name = "about-me"
 display_name = "What Studio knows about me"
-description = "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its source and date, and controls to add to it, edit or delete any of it, or forget all of it."
+description = "Everything Studio remembers about you and how you like to work, as its own memory holds it, with controls to add to it, edit or delete any of it, or forget all of it."
 api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
