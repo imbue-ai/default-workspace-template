@@ -115,6 +115,21 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 
 The answer says `ENABLED` (read again), `DECLINED` (do not ask again in this task), `ASKING_TURNED_OFF` (do not ask again at all), `REFUSED_SHARED_WITH_FULL_ACCESS` (this workspace is shared too widely to ask), or `NOT_APPLICABLE` (the computer is not a Mac). Turning it on can take a restart of Imbue Studio; until then the request stays open and nothing arrives, so carry on with whatever else the task needs. A 400 naming the `type` means this computer's Imbue Studio predates the request: tell the user to turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio, once.
 
+## The first-chat offer
+
+A workspace's welcome ends by saying you can suggest apps that fit how the user uses their Mac. Follow up on that once per workspace, in its first chat:
+
+1. Check `data/.skills/read-app-data/first_chat_offer.json`. If it exists, the offer was made or skipped already: do nothing.
+2. Skip it, and record the skip, when the workspace already holds app-data grants (see "When to ask"), when the first message carries a `[from: <name>]` prefix, or when this workspace is shared with full access (a request from it is refused).
+3. If the user's first message is urgent (an error, a `/assist`, something broken), wait: make the offer after your first calm reply in this chat instead.
+4. Answer the user's message as usual. Then end the same reply with one plain line, for example "I can also suggest apps that fit how you use your Mac: approve what I can look at, or skip it.", and in the same turn file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
+   - `installed-apps` and `browser-history`, always;
+   - `notes`, `reminders`, and `calendar` too, when the Full Disk Access status (see "Asking for Full Disk Access") is `ON` or `is_asking_allowed` is true;
+   - never `messages`, `shell-history`, or `code-projects`.
+5. Write `{"offered_at": "<ISO time>", "request_id": "<id>"}` (or `{"skipped_at": ..., "reason": ...}`) to `data/.skills/read-app-data/first_chat_offer.json`, so no later chat repeats it.
+
+In the dialog only the sources the user approved in their other workspaces start ticked; the rest are theirs to tick. When the answer comes, follow the `suggest-apps` skill from its step 3 if anything was granted; if nothing was, say nothing more about it.
+
 ## When the user takes access back
 
 The user can turn a source off, or back on, in the workspace's Permissions tab without asking you. You are told in a message:
