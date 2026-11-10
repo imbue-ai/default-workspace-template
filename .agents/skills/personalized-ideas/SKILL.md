@@ -92,11 +92,11 @@ Go straight from the name to the results, and keep it quick: the user is waiting
 Use such a result only as far as its search result (title and snippet) shows, and do not try to read the page itself: it would answer a sign-in wall, not the profile.
 Never sign in to anything, and never use the user's own connected accounts (their LinkedIn included) to see more.
 If that profile matters, say so when you show the results in step 5, and offer the user's own way to share it: paste the parts of it they are happy to share, or upload the PDF LinkedIn can make of their own profile (**Save to PDF**, in the menu on their profile page).
-What they share themselves goes in `sources.json` as coming from them, with no URL needed.
+What they share themselves goes in `sources.json` with `"origin": "user"` and a null `url`, and its facts end with `(you told me)` in the memory.
 
 Read only pages that are public: do not look for contact details, addresses, family, finances, or health, even when a page offers them.
 
-Save every result you use to `sources.json` as you go, and every page you later read, with its URL and the date fetched.
+Save every result you use to `sources.json` as you go, and every page you later read: a JSON array of `{"url", "title", "fetched_at": "YYYY-MM-DD", "origin": "search" | "page" | "user"}` (what the user shares themselves has `"origin": "user"` and a null `url`).
 
 Most names belong to many people.
 Group the results into the distinct people they seem to describe, from the titles and snippets.
@@ -128,7 +128,14 @@ Once they confirm one, read up to 5 of that person's pages from the results, all
 When none is them, either search once more with the detail they give, or drop the lookup and go to step 6 with what they have told you.
 
 Write `user-public-profile.md` in your memory directory from the confirmed person only, in the memory format `CLAUDE.md` sets up (frontmatter with `name: user-public-profile`, a one-line `description`, `type: user`).
-The body is a few lines on what they do and care about, each fact followed by the link it came from, and a last line saying the facts came from a web lookup the user asked for on that date.
+The body is one fact per line, in exactly this shape, so the "What Studio knows about me" page can show and delete each one:
+
+```markdown
+- <fact> ([<source title>](<url>)) <!-- found YYYY-MM-DD -->
+- <fact the user shared themselves> (you told me) <!-- found YYYY-MM-DD -->
+```
+
+A few lines on what they do and care about, then a last plain line (not starting with `- `) saying the facts came from a web lookup the user asked for on that date.
 Add its pointer to `MEMORY.md`.
 Keep every fact from the lookup in this one memory, not spread across others, so forgetting it is complete.
 Things the user tells you about themselves directly are ordinary memories, as in any chat.
@@ -141,7 +148,7 @@ Prefer things that can be built in this workspace in one sitting.
 Ask which one they want, and take it from there with the skill that fits the choice.
 
 Do not recite what you learned about them back at length; the ideas should show it.
-Mention once, in passing, that you will remember this for future chats and where the memory is, linked by its path.
+Mention once, in passing, that you will remember this for future chats, and link the **What Studio knows about me** page (its `link` from `uv run --no-sync workspace-layout list`), where they can see each fact with its source and delete any of it.
 
 ## Deleting
 
