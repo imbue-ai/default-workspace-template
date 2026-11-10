@@ -21,6 +21,13 @@ def _application() -> Flask:
     return application
 
 
+def _read_to_close(connection: socket.socket) -> bytes:
+    received = b""
+    while chunk := connection.recv(4096):
+        received += chunk
+    return received
+
+
 def _listening_socket() -> socket.socket:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
@@ -41,7 +48,7 @@ def test_the_server_serves_on_the_socket_the_program_line_bound(monkeypatch: pyt
         assert INHERITED_SOCKET_ENV not in os.environ
         with early:
             early.sendall(b"GET / HTTP/1.0\r\n\r\n")
-            assert b"served" in early.recv(4096)
+            assert _read_to_close(early).endswith(b"served")
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
             assert response.read() == b"served"
     finally:
