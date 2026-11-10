@@ -58,6 +58,7 @@ import {
 import {
   defaultHighlightIndex,
   isRowEnabled,
+  launchRowKey,
   launcherRowsOf,
   moveHighlight,
   secondaryTextRow,
@@ -895,16 +896,16 @@ export function App(): m.Component<AppAttrs> {
     if (element.closest("[data-tray-agent]") !== null) return { kind: "tray-agent" };
     const desktopId = element.closest("[data-overview-desktop]")?.getAttribute("data-overview-desktop");
     if (desktopId) return { kind: "overview-desktop", desktopId };
-    // A launcher row that opens an app, not one that hands the typed text to it.
-    const launchRow = element.closest("[data-launcher-overlay] [data-launch]:not([data-text-action])");
+    // A launcher row that opens an app, not one that hands the typed text to it (which carries `data-launch` too).
+    const launchRow = element.closest("[data-launcher-overlay] [data-launch]");
     const launchKey = launchRow?.getAttribute("data-launch") ?? "";
     const separator = launchKey.indexOf(":");
     if (separator > 0) {
-      return {
-        kind: "app-shortcut",
-        app: launchKey.substring(0, separator),
-        launch: launchKey.substring(separator + 1),
-      };
+      const app = launchKey.substring(0, separator);
+      const launch = launchKey.substring(separator + 1);
+      if (launchRow?.getAttribute("data-launcher-row") === launchRowKey("launch", app, launch)) {
+        return { kind: "app-shortcut", app, launch };
+      }
     }
     return menuSubjectOfBinding(current, bindingForTarget(element));
   }

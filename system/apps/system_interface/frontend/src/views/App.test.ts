@@ -8,7 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
-import type { Desktop, DesktopShortcut } from "../model/records";
+import type { AppRecord, Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -1074,6 +1074,27 @@ describe("the desktop shortcut rows", () => {
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
       ["browse", "focus"],
     ]);
+  });
+
+  it("opens no shortcut menu over a free-text row, the third and later included, whose launch path is a shortcut", () => {
+    const asker = (name: string): AppRecord =>
+      appRecord(name, {
+        launch_paths: [launchPathRecord({ id: "ask", path: "/ask", params: ["q"], text_param: "q" })],
+        default_shortcuts: [{ launch: "ask", mode: "new" }],
+      });
+    socket.deliver().onAppsUpdated([appRecord("docs"), asker("first"), asker("second"), asker("third")]);
+    store.openLauncher();
+    m.redraw.sync();
+    const field = document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
+    field.value = "hello";
+    field.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    m.redraw.sync();
+
+    const third = document.querySelector('[data-launcher-overlay] [data-launch="third:ask"]') as HTMLElement;
+    expect(third.hasAttribute("data-text-action")).toBe(false);
+    rightClick(third);
+    expect(document.querySelector(".app-shortcut-menu")).toBeNull();
+    expect(document.querySelector(".element-menu")).not.toBeNull();
   });
 });
 
