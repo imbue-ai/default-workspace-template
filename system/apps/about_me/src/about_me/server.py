@@ -15,6 +15,7 @@ forwarder routes ``http://about-me.<workspace-host>/`` straight to this port), s
 """
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -102,7 +103,7 @@ ROUTE_TABLE: RouteTable = {
 }
 
 
-def _send_named_file(directory: Path, filename: str, mimetypes: dict[str, str]) -> Response:
+def _send_named_file(directory: Path, filename: str, mimetypes: Mapping[str, str]) -> Response:
     """One of the files ``mimetypes`` names, from ``directory``, revalidated on every load; any other name is a 404."""
     mimetype = mimetypes.get(filename)
     path = directory / filename
@@ -145,7 +146,7 @@ def create_app(
 
     @app.get("/api/profile")
     def get_profile() -> ResponseReturnValue:
-        """Everything remembered from the lookup: each fact with its source and date, and the raw files as they are."""
+        """Everything remembered from the lookup: each fact with its source and date, and both raw files."""
         response = model_response(store.read())
         response.headers["Cache-Control"] = "no-store"
         return response

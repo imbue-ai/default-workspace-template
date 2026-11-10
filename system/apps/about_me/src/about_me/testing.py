@@ -1,8 +1,9 @@
 """Sample files for the tests: a profile with every line shape, a memory index, and sources with odd entries."""
 
 from pathlib import Path
+from typing import Final
 
-SAMPLE_PROFILE = (
+SAMPLE_PROFILE: Final[bytes] = (
     b"---\n"
     b"name: user-public-profile\n"
     b"description: What the public web says about the user, from a lookup they asked for\n"
@@ -19,12 +20,12 @@ SAMPLE_PROFILE = (
     b"\n"
     b"These facts came from a web lookup you asked for on 2026-11-03.\n"
 )
-SAMPLE_INDEX = (
+SAMPLE_INDEX: Final[bytes] = (
     b"- [Coding style](coding-style.md) -- how the user likes code\n"
     b"- [Public profile](user-public-profile.md) -- what the web lookup found\n"
     b"- [Projects](projects.md) -- what the user is building\n"
 )
-SAMPLE_SOURCES = (
+SAMPLE_SOURCES: Final[bytes] = (
     b'[\n  {"url": "https://example.com/portfolio", "title": "Portfolio", "fetched_at": "2026-11-01", '
     b'"origin": "page"},\n'
     b'  {"url": "https://example.com/news", "title": "Newsletter", "fetched_at": "2026-11-02", "origin": "search", '

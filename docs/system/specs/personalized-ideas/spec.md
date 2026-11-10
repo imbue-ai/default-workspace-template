@@ -48,11 +48,11 @@ The skill does not use them:
 - A message from someone other than the owner (`[from: <name>]`), and any shared workspace: the name belongs to the owner, and what is saved would be visible to others. The agent suggests general ideas instead.
 - Backend: the connector's web lookup routes (mngr-internal `apps/remote_service_connector`), the desktop routes that reach them, and the owner-name route. The name and the pages read pass through Imbue's connector on their way to treg; the connector records the account, time, kind of call, workspace and answering engine for its daily limits, never the query or the URL. The one outside service is treg, under Imbue's account and billing; the offer says the search goes through an outside search service.
 
-## Planned: seeing and controlling what is remembered
+## Seeing and controlling what is remembered
 
 Two additions make the promise that the user can see and delete everything visible rather than something they have to ask for. Neither collects anything new.
 
-### Refresh on request
+### Refresh on request (planned)
 
 When the user asks to update what the agent knows ("update what you know about me", "look me up again"), the agent reruns steps 3 to 5 for the person already confirmed: it reads the owner's name, searches the same way, and shows only what is new or changed since `user-public-profile.md` was written, each with its link, for the user to confirm or drop.
 Confirmed changes are written into the same memory, with the date of the refresh in its last line; dropped ones are deleted from `sources.json`.
@@ -62,7 +62,7 @@ This is a change to the skill's instructions only.
 
 ### A "What Studio knows about me" page
 
-A small workspace app (built with the `build-app` skill, under `system/apps/`) that shows the lookup's memory as a page:
+A small workspace app (`system/apps/about_me/`) that shows the lookup's memory as a page:
 
 - Each remembered fact, with the link it came from and the date it was found or confirmed; facts the user shared themselves are marked as such.
 - A delete control on each fact, which removes its line from `user-public-profile.md` and its entry from `sources.json` when no remaining fact cites it.
@@ -71,7 +71,7 @@ A small workspace app (built with the `build-app` skill, under `system/apps/`) t
 
 It reads and writes only those three files; it never searches or reads the web.
 For the page to read the memory reliably, the skill writes `user-public-profile.md` with one fact per line in a fixed shape, `- <fact> ([<source title>](<url>)) <!-- found <YYYY-MM-DD> -->`, and the page treats any line it cannot parse as one fact it can still show and delete whole.
-The skill links the page once, in step 6, where it now mentions the memory's path.
+The skill links the page once, in step 6, where it mentions that it will remember this.
 
 Open for this page: whether it belongs in the workspace or in Imbue Studio's own settings once memories from other sources exist.
 
@@ -90,7 +90,7 @@ Check the whole flow by hand, in a workspace created on this computer from a dev
 4. **Search.** The agent's searches go out together (at most 3), it reads no page yet, and it saves the results it uses to `data/.skills/personalized-ideas/sources.json` with URLs and dates. It does not sign in to anything; a LinkedIn result is shown from its search snippet only.
 5. **Confirm.** In that same turn the agent shows the distinct people it found, one line and one link each, asks which is you, and ends its turn. After you pick one, it reads up to 5 of that person's pages together. Answer with one of them (another run: answer "none of these", and confirm it narrows the search once or drops it).
 6. **Remember.** `data/memories/user-public-profile.md` exists, each fact followed by its link, ending with a line saying it came from a lookup you asked for; `MEMORY.md` has its pointer; `sources.json` holds only the confirmed person's entries; `consent.json` says `"yes"`.
-7. **Ideas.** Three to five ideas, each tied to something about you, and one passing mention of where the memory is.
+7. **Ideas.** Three to five ideas, each tied to something about you, and one passing mention that it will remember this, linking the What Studio knows about me page.
 8. **Later chats.** A new chat knows the facts without being told.
 9. **Forget.** Say "forget what you found". The memory file, its `MEMORY.md` line and `sources.json` are gone, and the agent says what it deleted.
 10. **No offer.** In fresh chats, none of these get an offer or a lookup: "I want to build a budget tracker"; "I have an idea"; "yes, but I want to build a budget tracker" (as the reply to the welcome); a message prefixed `[from: Someone]`; any message after answering "no" (which is saved in `consent.json`).

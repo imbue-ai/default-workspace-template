@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -62,7 +63,7 @@ def write_atomically(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _kept_sources(entries: list[object], dropped_urls: frozenset[str], is_dropping_told: bool) -> list[object]:
+def _kept_sources(entries: Sequence[object], dropped_urls: frozenset[str], is_dropping_told: bool) -> list[object]:
     def is_dropped(entry: object) -> bool:
         if not isinstance(entry, dict):
             return False

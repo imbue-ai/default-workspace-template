@@ -2654,6 +2654,20 @@ describe("MessageInput sending a reply button's message", () => {
     mocks.getComposerAttachments.mockReturnValue([]);
   });
 
+  /** Make ``chatId`` a seeded chat that is not launched yet, awaiting its first send. */
+  function awaitFirstSendOfSeededChat(chatId: string): void {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: chatId,
+      name: "Welcome",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+      held_sends: [],
+    };
+  }
+
   /** Mount the composer on ``chatId`` with ``draft`` typed into it; returns its render. */
   function composerWithDraft(chatId: string, draft: string): () => unknown {
     const component = MessageInput();
@@ -2688,16 +2702,7 @@ describe("MessageInput sending a reply button's message", () => {
   });
 
   it("launches a seeded chat awaiting its first send, with the reply as its first message", async () => {
-    mocks.isChatRegistered = false;
-    mocks.provisional = {
-      chat_id: "agent-reply-2",
-      name: "Welcome",
-      account_id: "",
-      phase: "awaiting_first_send",
-      error: null,
-      is_seeded: true,
-      held_sends: [],
-    };
+    awaitFirstSendOfSeededChat("agent-reply-2");
     mocks.selectedAccount = { id: "acct-1" };
     composerWithDraft("agent-reply-2", "");
 
@@ -2736,16 +2741,7 @@ describe("MessageInput sending a reply button's message", () => {
   });
 
   it("offers no sender while the composer is replaced by a way to connect a provider", () => {
-    mocks.isChatRegistered = false;
-    mocks.provisional = {
-      chat_id: "agent-reply-5",
-      name: "Welcome",
-      account_id: "",
-      phase: "awaiting_first_send",
-      error: null,
-      is_seeded: true,
-      held_sends: [],
-    };
+    awaitFirstSendOfSeededChat("agent-reply-5");
     mocks.selectedAccount = null;
     composerWithDraft("agent-reply-5", "");
 

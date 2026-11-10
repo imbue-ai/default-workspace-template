@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Final
 
 import pytest
 from flask.testing import FlaskClient
@@ -12,7 +13,7 @@ from about_me.testing import SAMPLE_PROFILE
 from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 
-MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
+MANIFEST_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "app.toml"
 
 
 def test_the_api_document_describes_every_route(client: FlaskClient) -> None:

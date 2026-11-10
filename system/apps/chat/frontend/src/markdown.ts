@@ -39,10 +39,10 @@ export function renderMarkdown(source: string): string {
 export const MAX_REPLY_TEXT_LENGTH = 200;
 
 /** The attribute a reply button carries its reply in. */
-export const REPLY_TEXT_ATTRIBUTE = "data-reply";
+const REPLY_TEXT_ATTRIBUTE = "data-reply";
 
 /** A reply button's own class: compact, inline beside its siblings, and wrapping a long label (style.css). */
-export const REPLY_BUTTON_CLASS = "message-reply-button";
+const REPLY_BUTTON_CLASS = "message-reply-button";
 
 /** The reply a link's href offers, or null when the href is not a usable reply link: not exactly the
  *  ``#reply=`` form, not decodable, empty, longer than ``MAX_REPLY_TEXT_LENGTH``, or a slash command (which the
@@ -310,7 +310,7 @@ function replyButtonsOf(container: Element): HTMLButtonElement[] {
 }
 
 /** Whether a message's reply buttons can be pressed now. */
-function areRepliesOpen(replies: MarkdownReplies | undefined): boolean {
+function areRepliesOpen(replies: MarkdownReplies | undefined): replies is MarkdownReplies {
   return replies !== undefined && !replies.isAnswered && canSendReply(replies.chatId);
 }
 
@@ -338,7 +338,7 @@ function handleReplyButtonClick(event: MouseEvent): void {
   const replies = repliesByElement.get(container);
   const reply = button.getAttribute(REPLY_TEXT_ATTRIBUTE) ?? "";
   for (const sibling of replyButtonsOf(container)) sibling.disabled = true;
-  if (replies !== undefined && areRepliesOpen(replies)) sendReplyFromMessage(replies.chatId, reply);
+  if (areRepliesOpen(replies)) sendReplyFromMessage(replies.chatId, reply);
 }
 
 function renderInto(element: HTMLElement, attrs: MarkdownContentAttrs): void {

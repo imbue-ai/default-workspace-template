@@ -26,7 +26,7 @@ interface ReplyIndex {
 const indexByChat = new Map<string, ReplyIndex>();
 
 /** Whether ``text`` may hold a reply link, a cheap check that spares every other message the transcript walk. */
-export function offersReplies(text: string): boolean {
+function offersReplies(text: string): boolean {
   return text.includes(REPLY_HREF_PREFIX);
 }
 

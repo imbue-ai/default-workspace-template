@@ -122,7 +122,7 @@ What they share themselves goes in `sources.json` with `"origin": "user"` and a 
 
 Read only pages that are public: do not look for contact details, addresses, family, finances, or health, even when a page offers them.
 
-Save every result you use to `sources.json` as you go, and every page you later read: a JSON array of `{"url", "title", "fetched_at": "YYYY-MM-DD", "origin": "search" | "page" | "user", "served_by"}` (`served_by` is the engine the lookup names) (what the user shares themselves has `"origin": "user"` and a null `url`).
+Save every result you use to `sources.json` as you go, and every page you later read: a JSON array of `{"url", "title", "fetched_at": "YYYY-MM-DD", "origin": "search" | "page" | "user", "served_by"}` (`served_by` is the engine the lookup names).
 
 Most names belong to many people.
 Group the results into the distinct people they seem to describe, from the titles and snippets.

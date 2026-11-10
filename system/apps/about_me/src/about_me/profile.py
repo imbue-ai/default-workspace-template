@@ -13,6 +13,7 @@ the file's bytes, so a deletion leaves every other byte as it was.
 
 import hashlib
 import re
+from collections.abc import Sequence
 from typing import Final
 from typing import NamedTuple
 
@@ -45,7 +46,7 @@ def fact_id(index: int, raw: bytes) -> str:
     return f"{index}-{hashlib.sha256(raw).hexdigest()[:_LINE_HASH_LENGTH]}"
 
 
-def _body_start(lines: list[bytes]) -> int:
+def _body_start(lines: Sequence[bytes]) -> int:
     """The index of the first line after the frontmatter; 0 for a file with none, 1 for an unclosed one."""
     if not lines or lines[0].strip() != _FRONTMATTER_FENCE:
         return 0
