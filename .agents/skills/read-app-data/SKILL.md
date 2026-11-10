@@ -23,7 +23,7 @@ cannot see their Mac rather than describing the workspace.
 
 | id | what it is |
 | --- | --- |
-| `installed-apps` | The apps in the user's Applications folders: name, bundle id, version |
+| `installed-apps` | The apps the user has installed, as Finder and Launchpad show them: name, bundle id, version |
 | `safari-history` | Safari's `History.db` |
 | `browser-history` | Chrome, Arc, Brave, Edge, and Firefox history, for the profile each one uses |
 | `notes` | Apple Notes' `NoteStore.sqlite` |
