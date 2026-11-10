@@ -170,7 +170,7 @@ def test_the_catalog_answers_what_a_reset_restores_beside_the_override_in_force(
     assert action["source"] == "workspace"
 
 
-# Files' Go up as the release before the defaults were written once declared it, written once (ctrl and meta).
+# Files' Go up as its manifest declares it now, with one default chord.
 _FILES_ROW = """
 [[apps]]
 name = "files"

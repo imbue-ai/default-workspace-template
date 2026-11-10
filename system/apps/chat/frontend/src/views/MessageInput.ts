@@ -95,7 +95,7 @@ import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from 
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
 import {
   describeHost,
-  dictationShortcutChord,
+  DICTATION_SHORTCUT_CHORD,
   dictationShortcutLabel,
   isApplePlatform,
   isDictationSupported,
@@ -723,7 +723,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   }
 
   function handleDictationShortcut(event: KeyboardEvent): void {
-    if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
+    if (!keydownMatchesChords(event, [DICTATION_SHORTCUT_CHORD])) return;
     event.preventDefault();
     toggleDictation();
   }

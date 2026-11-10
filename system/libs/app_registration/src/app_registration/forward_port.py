@@ -1167,9 +1167,9 @@ def refresh_keybindings(path: Path, manifest_path: Path) -> str | None:
     leaving every other key alone; return the app's name, or None when it has no row to refresh.
 
     An app writes its row only when its program starts, so one that is stopped (or stops when no
-    window shows it) would otherwise keep the keybindings of the release it last ran under. The boot
-    calls this for every built-in app before any program starts. A row is never created here: only
-    the app's own registration knows its URL. Raises RegistrationError when the manifest is refused.
+    window shows it) would otherwise keep the keybindings of the release it last ran under. A row is
+    never created here: only the app's own registration knows its URL. Raises RegistrationError when
+    the manifest is refused.
     """
     manifest_fields, _icon_path, manifest_error = _read_manifest(manifest_path, None)
     if manifest_error is not None:

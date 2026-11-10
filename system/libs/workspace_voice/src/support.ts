@@ -78,11 +78,8 @@ export function isApplePlatform(navigator: { platform?: string; userAgent?: stri
   );
 }
 
-/** The chord that starts and stops dictation, in the keybinding grammar (modifiers in its fixed
- *  ctrl/alt/shift/meta order), for the platform. */
-export function dictationShortcutChord(isApple: boolean): string {
-  return isApple ? "shift+meta+m" : "ctrl+shift+m";
-}
+/** The chord that starts and stops dictation, in the keybinding grammar: `meta` is Cmd on a Mac and Ctrl elsewhere. */
+export const DICTATION_SHORTCUT_CHORD = "shift+meta+m";
 
 /** The chord as the tooltip spells it. */
 export function dictationShortcutLabel(isApple: boolean): string {
