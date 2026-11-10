@@ -127,8 +127,8 @@ label = "Start a new chat"
 default_chords = ["alt+meta+n"]
 
 [[keybindings]]
-id = "stop-agent"
-label = "Stop the agent"
+id = "interrupt-agent"
+label = "Interrupt the agent"
 default_chords = ["meta+."]
 
 # The chat's own look beyond the shared components: themes may style these elements in their apps/chat.css

@@ -492,7 +492,7 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 }
 
 /** Run a chat shortcut the root heard (a key on its own rail, or one the desktop app intercepted): New chat as its
- *  button does, or stop the selected chat's agent. */
+ *  button does, or interrupt the selected chat's agent. */
 function runChatShortcut(shortcut: ChatShortcut): void {
   if (shortcut === "new-chat") void openNewChat();
   else if (selectedChatId !== null) void interruptAgent(selectedChatId);

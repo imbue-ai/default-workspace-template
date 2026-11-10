@@ -7,7 +7,7 @@
  * chat in place instead, see root/relay.ts).
  *
  * The chat's shortcuts run here too, since a keystroke in this page never reaches the root that
- * frames it: Stop the agent interrupts this page's chat, and New chat starts one and asks for it
+ * frames it: Interrupt the agent ends this page's chat's turn, and New chat starts one and asks for it
  * as a sibling.
  */
 
@@ -170,9 +170,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   return connection;
 }
 
-/** Run a chat shortcut pressed in this page: stop this chat's agent, or start a new chat beside this one. */
+/** Run a chat shortcut pressed in this page: interrupt this chat's agent, or start a new chat beside this one. */
 function runChatShortcut(chatId: string, shortcut: ChatShortcut): void {
-  if (shortcut === "stop-agent") {
+  if (shortcut === "interrupt-agent") {
     void interruptAgent(chatId);
     return;
   }
