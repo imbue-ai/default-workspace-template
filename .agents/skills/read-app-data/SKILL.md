@@ -52,6 +52,7 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 ```
 
 - `payload.sources` is a non-empty list of `{"id": ...}` objects, each id from the table above, each at most once.
+- Add `"sync": true` to a source to also ask for a synchronized copy in this workspace. Only `reminders` and `calendar` can sync (they are folders); asking for any other is a 400. Ask for it only when you will read the data repeatedly or in the background: otherwise read it live. The user can switch it off in the dialog.
 - The reason is shown to the user: name the task, in one plain sentence.
 - A 400 naming the `type` means this computer's Imbue Studio predates app-data requests: tell the user it needs updating, once, and carry on without the data.
 
@@ -67,7 +68,7 @@ Your app-data request on device host-abc was answered. GRANTED: installed-apps, 
 - browser-history (read-only): /Users/kim/Library/Application Support/Google/Chrome/Profile 2/History, /Users/kim/Library/Application Support/Google/Chrome/Profile 2/History-journal
 ```
 
-Use the paths exactly as given: a browser profile folder such as `Profile 2` cannot be guessed. After every answer, tell the user in one plain sentence what you can now read, or that you will go on without it. A source the user did not tick is their decision: do not argue for it.
+Use the paths exactly as given: a browser profile folder such as `Profile 2` cannot be guessed. A synced source's line ends with `; synchronized copy in this workspace at ~/synced_folders/...`: read the copy there with ordinary file tools, as the `file-sharing` skill describes for synced folders. `; the synchronized copy you asked for was not enabled` means the user switched it off: read through the file server instead. After every answer, tell the user in one plain sentence what you can now read, or that you will go on without it. A source the user did not tick is their decision: do not argue for it.
 
 ## Reading
 
@@ -84,6 +85,20 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -o History.db "http://latchkey
 - Apple Notes stores each note's body as a gzipped protobuf in `ZICNOTEDATA.ZDATA`; titles and dates are plain columns of `ZICCLOUDSYNCINGOBJECT`. Skip locked notes: they are encrypted.
 - A 502 means the computer is asleep or Imbue Studio is closed: say so once per task and stop reading.
 - **A 403 on a path you were granted means Imbue Studio cannot read it.** Most of these files are protected by macOS, and Imbue Studio needs Full Disk Access to open them. Tell the user once: "Imbue Studio needs Full Disk Access to read this: turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio." Do not ask again in that task.
+
+## When the user takes access back
+
+The user can turn a source off, or back on, in the workspace's Permissions tab without asking you. You are told in a message:
+
+```
+App data on device host-abc: REVOKED: notes. You keep what you already read, but get nothing new from these sources.
+App data on device host-abc: RESTORED: notes. You can read these sources again; none of them is synced until you ask.
+```
+
+- **On `REVOKED`:** stop reading those sources; live reads now return 403, and a synced copy no longer updates. Keep what you already have: your copies and anything you wrote from them stay yours to use for the owner. Record the sources in `data/.skills/read-app-data/revoked.json` (`{"<source id>": {"revoked_at": "<ISO time>", "asked_again": false}}`).
+- **On `RESTORED`:** remove those sources from `revoked.json`. Nothing is synced again by itself: ask with `"sync": true` in a new request if the task needs it.
+- **Asking again:** for a revoked source, ask at most once more, and only for a new task that needs it, with a reason naming that task. Set `asked_again` to true before you ask. If the user declines or does not answer, do not ask about that source again in this workspace unless they bring it up.
+- **A 403 is not a revoke.** Without a `REVOKED` message, a refused read means Imbue Studio cannot open the file (see Full Disk Access above): the grant is still there.
 
 ## Only for the owner
 
