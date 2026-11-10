@@ -1047,7 +1047,6 @@ export function App(): m.Component<AppAttrs> {
       owner,
       color: owner?.color ?? "var(--c-text-faint)",
       onStopViewing: () => void current.stopViewing(),
-      stopFailure: current.stopViewingFailure(),
     };
   }
 

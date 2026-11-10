@@ -235,7 +235,6 @@ describe("Taskbar", () => {
         owner: alice,
         color: alice.color,
         onStopViewing,
-        stopFailure: null,
       },
     });
     expect(taskbar.querySelector('[data-tray-widget="overview"]')).toBeNull();
@@ -247,42 +246,6 @@ describe("Taskbar", () => {
     expect(chip.style.backgroundColor).toBe("rgb(59, 91, 169)");
     (chip.querySelector("[data-stop-viewing]") as HTMLElement).click();
     expect(onStopViewing).toHaveBeenCalledTimes(1);
-  });
-
-  it("says the viewing chip could not leave, and offers to try again, after a stop that could not ask the shell", () => {
-    const onStopViewing = vi.fn();
-    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
-    const taskbar = render({
-      viewing: {
-        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
-        owner: alice,
-        color: alice.color,
-        onStopViewing,
-        stopFailure: { canRetry: true },
-      },
-    });
-    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
-    expect(chip.querySelector("[data-stop-viewing-failed]")?.textContent).toBe("Couldn't leave this desktop");
-    const retry = chip.querySelector("[data-stop-viewing]") as HTMLElement;
-    expect(retry.textContent).toBe("Try again");
-    retry.click();
-    expect(onStopViewing).toHaveBeenCalledTimes(1);
-  });
-
-  it("says the viewing chip could not leave, and offers no button, after a stop that asking again cannot fix", () => {
-    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
-    const taskbar = render({
-      viewing: {
-        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
-        owner: alice,
-        color: alice.color,
-        onStopViewing: vi.fn(),
-        stopFailure: { canRetry: false },
-      },
-    });
-    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
-    expect(chip.querySelector("[data-stop-viewing-failed]")?.textContent).toBe("Couldn't leave this desktop");
-    expect(chip.querySelector("[data-stop-viewing]")).toBeNull();
   });
 
   it("draws the share button under a chrome, the people before the viewer, and the agent last", () => {

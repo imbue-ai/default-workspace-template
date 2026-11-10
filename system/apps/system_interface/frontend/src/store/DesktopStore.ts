@@ -266,6 +266,10 @@ export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat abou
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 /** What a change refused while this window views somebody else's desktop gets (the multiplayer spec, section 8.3). */
 export const STOP_VIEWING_FIRST_NOTICE = "Stop viewing first";
+/** What "Stop viewing" says when it could not ask the shell where to go; pressing it again asks again. */
+export const STOP_VIEWING_UNANSWERED_NOTICE = "Couldn't leave this desktop: the workspace did not answer";
+/** What "Stop viewing" says when the only desktop it could go to is the one already on screen. */
+export const STOP_VIEWING_NOWHERE_NOTICE = "Couldn't leave this desktop: there is no other desktop to go to";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
 export const TRAY_HOP_MS = 450;
@@ -516,9 +520,6 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
-  /** The viewed desktop a "Stop viewing" last found no way off, so the chip says so; any switch off it forgets it. */
-  private stopViewingFailedOn: { readonly desktopId: string | null; readonly failure: StopViewingFailure } | null =
-    null;
   /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
   private themePreview: { readonly desktopId: string; readonly choice: string | null } | null = null;
   /** The workspace's themes as the shell last answered or pushed them. */
@@ -1533,30 +1534,17 @@ export class DesktopStore {
 
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
    *  shell seeds for a visitor who has none left. When none of those is somewhere else to go, the window stays and
-   *  the chip says it could not leave: retryable when the shell could not be asked, and not when it answered the
-   *  desktop already on screen, which asking again would only repeat. */
+   *  a toast says why. */
   async stopViewing(): Promise<void> {
     const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
     if (target === null || target === viewedId) {
-      // A window that moved off while the shell was asked has left already: there is no failure to show.
+      // A window that moved off while the shell was asked has left already: there is nothing to tell.
       if (this.state.activeDesktopId !== viewedId) return;
-      this.stopViewingFailedOn = { desktopId: viewedId, failure: { canRetry: target === null } };
-      this.redraw();
+      this.toast(target === null ? STOP_VIEWING_UNANSWERED_NOTICE : STOP_VIEWING_NOWHERE_NOTICE);
       return;
     }
     await this.switchDesktop(target);
-  }
-
-  /** How the last "Stop viewing" on the desktop this window still views failed, or null when it did not. A failure
-   *  that could not be retried lapses once a desktop of the viewer's own arrives, since a stop now lands there. */
-  stopViewingFailure(): StopViewingFailure | null {
-    const failed = this.stopViewingFailedOn;
-    if (failed === null || failed.desktopId !== this.state.activeDesktopId || this.viewedDesktop() === null) {
-      return null;
-    }
-    if (!failed.failure.canRetry && this.ownDesktops().length > 0) return null;
-    return failed.failure;
   }
 
   isOverviewOpen(): boolean {
@@ -2217,7 +2205,6 @@ export class DesktopStore {
     if (previous === desktopId) return;
     this.cancelGesture();
     this.closeOverview();
-    this.stopViewingFailedOn = null;
     this.rememberReturnDesktop(previous, desktopId);
     // The size the desktop left was arranged in says nothing about the next one; its own read brings its own.
     this.viewedViewport = null;
@@ -3427,12 +3414,6 @@ export class DesktopStore {
     if (gesture === null || gesture.kind !== "move" || gesture.zone === null) return null;
     return frameToPixels(snapFrame(gesture.zone), this.backdrop);
   }
-}
-
-/** How a "Stop viewing" found nowhere to go: whether asking again can find somewhere, which it can only when the
- *  shell could not be asked at all. */
-export interface StopViewingFailure {
-  readonly canRetry: boolean;
 }
 
 /** What the notice that a visitor's desktop was deleted names: the deleted desktop, and the one the shell seeded

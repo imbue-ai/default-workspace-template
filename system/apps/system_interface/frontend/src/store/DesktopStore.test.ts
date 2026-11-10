@@ -34,6 +34,8 @@ import {
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   STOP_VIEWING_FIRST_NOTICE,
+  STOP_VIEWING_NOWHERE_NOTICE,
+  STOP_VIEWING_UNANSWERED_NOTICE,
   TRAY_HOP_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
@@ -3959,28 +3961,18 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.viewedDesktop()).toBeNull();
   });
 
-  it("stop viewing that the shell answers with the viewed desktop offers no retry until a desktop of hers arrives", async () => {
-    // The shell lands her on the desktop she is already viewing: the click must not silently do nothing, and asking
-    // the shell again would only get the same answer.
+  it("stop viewing that the shell answers with the viewed desktop says there is nowhere else to go", async () => {
     visitorWithNoDesktopOfHerOwn();
     api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
-    expect(store.stopViewingFailure()).toBeNull();
 
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
-    expect(store.stopViewingFailure()).toEqual({ canRetry: false });
-
-    socket.deliver().onDesktopsUpdated([...api.desktops, alices]);
-    await settle();
-    expect(store.viewedDesktop()?.id).toBe("home");
-    expect(store.stopViewingFailure()).toBeNull();
-    await store.stopViewing();
-    expect(store.getState().activeDesktopId).toBe("alice");
+    expect(notices()).toEqual([STOP_VIEWING_NOWHERE_NOTICE]);
   });
 
-  it("stop viewing that cannot reach the shell offers a retry, which leaves once the shell answers", async () => {
+  it("stop viewing that cannot reach the shell says so, and leaves when pressed again once the shell answers", async () => {
     visitorWithNoDesktopOfHerOwn();
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
@@ -3988,32 +3980,16 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
 
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
-    expect(store.stopViewingFailure()).toEqual({ canRetry: true });
+    expect(notices()).toEqual([STOP_VIEWING_UNANSWERED_NOTICE]);
 
     api.refusal = null;
     api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("alice-2");
     expect(store.viewedDesktop()).toBeNull();
-    expect(store.stopViewingFailure()).toBeNull();
   });
 
-  it("stop viewing that failed is forgotten once the window moves off the desktop", async () => {
-    visitorWithNoDesktopOfHerOwn();
-    const store = await startedStore();
-    api.refusal = "the shell is down";
-    await store.stopViewing();
-    expect(store.stopViewingFailure()).toEqual({ canRetry: true });
-
-    // Viewing that desktop again after the window went elsewhere is a fresh viewing: no stop has failed on it.
-    api.refusal = null;
-    await store.switchDesktop("bob");
-    await store.switchDesktop("home");
-    expect(store.viewedDesktop()?.id).toBe("home");
-    expect(store.stopViewingFailure()).toBeNull();
-  });
-
-  it("stop viewing that finds nowhere to go after the window already moved off leaves no failure behind", async () => {
+  it("stop viewing that finds nowhere to go after the window already moved off says nothing", async () => {
     visitorWithNoDesktopOfHerOwn();
     api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
     const store = await startedStore();
@@ -4033,13 +4009,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     answerArrival();
     await stopping;
     expect(store.getState().activeDesktopId).toBe("bob");
-
-    // Bob's desktop goes, and with the shell unreachable the window falls back onto the desktop the stop began on.
-    api.refusal = "the shell is down";
-    socket.deliver().onDesktopsUpdated([api.desktops[0]]);
-    await settle();
-    expect(store.viewedDesktop()?.id).toBe("home");
-    expect(store.stopViewingFailure()).toBeNull();
+    expect(notices()).toEqual([]);
   });
 
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {
