@@ -83,6 +83,7 @@ ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
 # Where the built-in apps live (``_built_in_app_manifests`` says which of its directories are built in).
 BUILT_IN_APPS_DIR = Path("system/apps")
 # The registry writer, stdlib-only, run with a bare python3 as every app's program line runs it.
+# own-process: other-tree -- the boot rolls back an interrupted update and re-syncs the venv after this process started, so an import would load the registry writer as it was at start
 FORWARD_PORT_SCRIPT = Path("system/scripts/forward_port.py")
 # Bound on the one registry rewrite of every built-in app's keybindings: local file reads and one write.
 _KEYBINDINGS_REFRESH_TIMEOUT_SECONDS = 60.0
