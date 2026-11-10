@@ -101,7 +101,7 @@ EXIT_SSH_UNREACHABLE = 3
 EXIT_NO_TEMPLATE_BASE = 4
 
 
-# --- Source layout detection -----------------------------------------------
+# Source layout detection
 
 LAYOUT_PRE_DECLUTTER = "pre-declutter"
 LAYOUT_CURRENT = "current"
@@ -182,7 +182,7 @@ LAYOUT_PROBE_PATHS: tuple[str, ...] = (
 )
 
 
-# --- Legacy path mapping ---------------------------------------------------
+# Legacy path mapping
 
 
 class PathMapping(NamedTuple):
@@ -392,7 +392,7 @@ def rewrite_legacy_references(text: str) -> tuple[str, list[Substitution]]:
     return "".join(rewritten_lines), substitutions
 
 
-# --- Template base resolution ----------------------------------------------
+# Template base resolution
 
 # The template-base rule is shared with publish-template and
 # update-published-template, so it lives in ``agents_shared.resolve_template_base``;
@@ -442,7 +442,7 @@ def parse_baseline_diff(
     return entries
 
 
-# --- Branch classification -------------------------------------------------
+# Branch classification
 
 
 class BranchClassification(NamedTuple):
@@ -487,7 +487,7 @@ def classify_branches(
     return classification
 
 
-# --- The data tree's per-workspace secrets ---------------------------------
+# The data tree's per-workspace secrets
 
 # The files under the data tree's secrets directory that are identity minted
 # for one workspace rather than user content, so the copy must leave them
@@ -527,7 +527,7 @@ def data_rsync_exclude_args(layout: str) -> list[str]:
     ]
 
 
-# --- Agent enumeration and session resolution ------------------------------
+# Agent enumeration and session resolution
 
 # The one agent never brought over: it is the source workspace's primary agent
 # (``is_primary=true``), and a second primary makes this workspace ambiguous to
@@ -789,7 +789,7 @@ def build_recreate_argv(
     return argv
 
 
-# --- App ports -------------------------------------------------------------
+# App ports
 
 
 class AppPort(NamedTuple):
@@ -937,7 +937,7 @@ def reconcile_ports(
     return result
 
 
-# --- Scheduled jobs --------------------------------------------------------
+# Scheduled jobs
 
 
 class CronEntry(NamedTuple):
@@ -979,7 +979,7 @@ def parse_cron_entries(job_name: str, text: str) -> list[CronEntry]:
     return entries
 
 
-# --- Audit scanning --------------------------------------------------------
+# Audit scanning
 
 # What each audit kind looks for, and why the skill cares:
 #
@@ -1075,7 +1075,7 @@ def scan_audit(
     return findings
 
 
-# --- SSH plumbing ----------------------------------------------------------
+# SSH plumbing
 
 
 def build_ssh_argv(
@@ -1255,7 +1255,7 @@ def _remote_git(target: SshTarget, repo_root: str, git_args: str) -> str:
     return run_remote(target, f"git -C {_shell_quote(repo_root)} {git_args}")
 
 
-# --- Checkpointing ---------------------------------------------------------
+# Checkpointing
 
 # Where a pass keeps its cached scans and its agent-recreation ledger. Under
 # ``data/.tasks/`` with the other flow-internal scratch.
@@ -1302,7 +1302,7 @@ def _cached(args: argparse.Namespace, checkpoint_name: str) -> bool:
     return True
 
 
-# --- Subcommands -----------------------------------------------------------
+# Subcommands
 
 
 def _cmd_detect_layout(args: argparse.Namespace) -> int:
@@ -1911,7 +1911,7 @@ def _local_agent_names(mngr_binary: str) -> list[str]:
     ]
 
 
-# --- CLI -------------------------------------------------------------------
+# CLI
 
 
 def _add_ssh_options(parser: argparse.ArgumentParser, required: bool) -> None:
