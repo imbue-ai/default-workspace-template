@@ -52,6 +52,7 @@ SOURCES_PATH: Final[Path] = Path("data/.skills/personalized-ideas/sources.json")
 PROFILE_INDEX_MARKER: Final[bytes] = b"(user-public-profile.md)"
 USER_ORIGIN: Final[str] = "user"
 MAX_FACT_CHARS: Final[int] = 500
+NEW_FILE_MODE: Final[int] = 0o644
 MAX_DESCRIPTION_CHARS: Final[int] = 300
 MAX_BODY_CHARS: Final[int] = 5000
 MAX_TITLE_CHARS: Final[int] = 60
@@ -84,8 +85,8 @@ def _read_bytes(path: Path) -> bytes | None:
 
 
 def write_atomically(path: Path, content: bytes) -> None:
-    """Replace ``path`` with ``content`` in one rename, keeping the file's mode."""
-    mode = path.stat().st_mode & 0o7777 if path.exists() else None
+    """Replace ``path`` with ``content`` in one rename, keeping the file's mode (a new file is readable by all)."""
+    mode = path.stat().st_mode & 0o7777 if path.exists() else NEW_FILE_MODE
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temporary = Path(temporary_name)
     try:
@@ -93,8 +94,7 @@ def write_atomically(path: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        if mode is not None:
-            temporary.chmod(mode)
+        temporary.chmod(mode)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

@@ -394,3 +394,21 @@ def test_forget_everything_removes_every_memory_the_index_and_the_sources(
     assert (profile.memories, profile.facts) == ((), ())
     assert sorted(path.name for path in (workspace / MEMORY_INDEX_PATH.parent).iterdir()) == ["notes.txt"]
     assert not (workspace / SOURCES_PATH).exists()
+
+
+def test_the_folders_readme_is_not_a_memory_and_survives_forgetting_everything(
+    store: ProfileStore, workspace: Path
+) -> None:
+    readme = workspace / MEMORY_INDEX_PATH.parent / "README.md"
+    readme.write_text("# data/memories/\n")
+
+    assert "README.md" not in {memory.file_name for memory in store.read().memories}
+    store.forget_everything()
+    assert readme.exists()
+
+
+def test_a_new_memory_file_is_readable_by_all(empty_workspace: Path) -> None:
+    profile = ProfileStore(empty_workspace).add_memory("Likes sailing")
+
+    path = empty_workspace / MEMORY_INDEX_PATH.parent / profile.memories[0].file_name
+    assert path.stat().st_mode & 0o777 == 0o644

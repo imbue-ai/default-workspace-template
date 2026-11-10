@@ -27,6 +27,8 @@ from about_me.data_types import Memory
 from about_me.data_types import MemoryType
 
 MEMORY_INDEX_NAME: Final[str] = "MEMORY.md"
+# Files in the memory directory that are not memories: the index, and the README the template ships there.
+NOT_MEMORIES: Final[frozenset[str]] = frozenset({MEMORY_INDEX_NAME, "README.md"})
 _MEMORY_TYPES: Final[dict[str, MemoryType]] = {
     "user": "user",
     "feedback": "feedback",
@@ -53,8 +55,8 @@ class ParsedMemory(NamedTuple):
 
 
 def is_memory_file_name(name: str) -> bool:
-    """Whether ``name`` is a memory file the page may read and write: a plain ``.md`` name, not the index."""
-    return bool(_FILE_NAME.match(name)) and name != MEMORY_INDEX_NAME
+    """Whether ``name`` is a memory file the page may read and write: a plain ``.md`` name, not the index or README."""
+    return bool(_FILE_NAME.match(name)) and name not in NOT_MEMORIES
 
 
 def revision(content: bytes) -> str:
