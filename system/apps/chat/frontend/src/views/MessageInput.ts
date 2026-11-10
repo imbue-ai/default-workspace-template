@@ -1082,8 +1082,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         await waitForComposerUploads(chatId);
 
         const attachmentPaths = getReadyAttachmentPaths(chatId);
-        // A NUL character cannot be typed into the agent's terminal, so the agent refuses the whole
-        // message over one. A textarea does not show NULs anyway (they arrive by pasting binary
+        // A NUL character cannot be typed into a terminal, so an agent that takes its input as
+        // keystrokes refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting binary
         // content), so dropping them sends exactly what the user saw.
         const text = messageText.replaceAll("\0", "");
 
