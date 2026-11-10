@@ -1084,6 +1084,27 @@ describe("workspace-wide actions", () => {
     expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
   });
 
+  it("still reports the workspace-wide chords to the chrome, claiming no app's, when the catalog cannot be read", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.pendingKeybindingsCatalogs.push(Promise.reject(new Error("catalog unavailable")));
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
+    await settle();
+    warn.mockRestore();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] }, claimed: [] });
+  });
+
   it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
     const reported: unknown[] = [];
     const store = makeStore(undefined, {
