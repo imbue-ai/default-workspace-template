@@ -1082,7 +1082,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         await waitForComposerUploads(chatId);
 
         const attachmentPaths = getReadyAttachmentPaths(chatId);
-        const text = messageText;
+        // A NUL character cannot be typed into the agent's terminal, so the agent refuses the whole
+        // message over one. A textarea does not show NULs anyway (they arrive by pasting binary
+        // content), so dropping them sends exactly what the user saw.
+        const text = messageText.replaceAll("\0", "");
 
         // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
         // below, so without this the file would leave the message silently and the only clue

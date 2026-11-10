@@ -270,14 +270,21 @@ Imbue Studio app.
 When needed (e.g. when remote services reject requests because they
 originate from a datacenter), `latchkey curl` calls can be routed
 through the user's desktop. This happens automatically once the user
-enables desktop proxying in the settings of the relevant connector.
+turns on "Proxy through my desktop" for that service's connection in
+the Permissions tab. The setting is offered only for a workspace that
+runs on a machine of its own, such as a cloud workspace.
 
-You can also explicitly ask the user to enable it by setting the
-optional `proxy` parameter to `true` when creating a permission
-request (by POSTing to `/permission-requests` as described above).
-Once the user approves the request, the necessary permissions and
-proxy rules are set up so that traffic flows through the user's
+For a builtin service, you can also ask the user to turn it on by
+setting the optional `proxy` field to `true` in a `predefined`
+request's `payload` (by POSTing to `/permission-requests` as described
+above). Once the user approves the request, the necessary permissions
+and proxy rules are set up so that traffic flows through the user's
 desktop whenever possible.
+
+A `custom-service` request does not accept `proxy`; the gateway
+refuses the whole request when it is present. For a custom service,
+create the connection first, then ask the user to turn on "Proxy
+through my desktop" for it in the Permissions tab.
 
 ## Notes
 
