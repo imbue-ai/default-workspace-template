@@ -1,10 +1,40 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { chatShortcutOfChord, setKeybindingSurface, setResolvedKeybindingsForTest } from "./keybindings";
+import {
+  CHAT_SHORTCUT_DEFAULTS,
+  chatShortcutOfChord,
+  setKeybindingSurface,
+  setResolvedKeybindingsForTest,
+} from "./keybindings";
+
+const APP_TOML = join(__dirname, "../../../app.toml");
+
+/** Each `[[keybindings]]` table's default chords in the manifest, by action id. */
+function manifestDefaultChords(): Record<string, string[]> {
+  const tables = readFileSync(APP_TOML, "utf8").split("[[keybindings]]").slice(1);
+  return Object.fromEntries(
+    tables.map((table) => {
+      const id = /^id\s*=\s*"([^"]+)"/m.exec(table)?.[1];
+      const chords = /^default_chords\s*=\s*(\[[^\]]*\])/m.exec(table)?.[1];
+      if (id === undefined || chords === undefined) throw new Error(`${APP_TOML} has a keybinding without both`);
+      return [id, JSON.parse(chords) as string[]];
+    }),
+  );
+}
 
 afterEach(() => {
   setResolvedKeybindingsForTest(null);
   setKeybindingSurface("browser");
+});
+
+describe("CHAT_SHORTCUT_DEFAULTS", () => {
+  it("are the manifest's defaults, which run until the backend answers", () => {
+    const declared = manifestDefaultChords();
+    const shortcuts = Object.keys(CHAT_SHORTCUT_DEFAULTS);
+    expect(CHAT_SHORTCUT_DEFAULTS).toEqual(Object.fromEntries(shortcuts.map((id) => [id, declared[id]])));
+  });
 });
 
 describe("chatShortcutOfChord", () => {
