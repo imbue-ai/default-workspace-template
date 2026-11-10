@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -124,7 +124,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _http_server() -> Iterator[int]:
+def _http_server() -> Generator[int, None, None]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
