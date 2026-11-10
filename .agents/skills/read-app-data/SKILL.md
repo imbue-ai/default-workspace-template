@@ -61,7 +61,7 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 - The reason is shown to the user: name the task, in one plain sentence.
 - A 400 naming the `type` means this computer's Imbue Studio predates app-data requests: tell the user it needs updating, once, and carry on without the data.
 
-Then wait for the automated system message with the user's answer.
+Then wait for the automated system message with the user's answer. Imbue Studio sometimes answers at once without showing the user anything (for example `REFUSED_SHARED` in a shared workspace), so do not tell the user the request is on their screen or ask them to approve it until a moment has passed with no answer; say only that you asked.
 
 ## The answer
 

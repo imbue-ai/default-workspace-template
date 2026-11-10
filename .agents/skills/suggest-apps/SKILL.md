@@ -48,8 +48,10 @@ projects too").
 
 The reason names the task in one plain sentence, for example: "To suggest apps
 that fit how you work, I'd like to see which apps you have installed and the
-sites you visit most." Then tell the user, in one sentence, that they can untick
-anything in the request, and wait for the answer.
+sites you visit most." Then wait for the answer before telling the user anything
+about the request: Imbue Studio may answer it at once (a shared workspace is
+refused without a dialog). If no answer has come, tell the user, in one sentence,
+that they can untick anything in the request.
 
 ## 3. Read for patterns, not details
 

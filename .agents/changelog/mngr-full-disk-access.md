@@ -11,3 +11,5 @@ A workspace's first chat ends its first reply with a one-time offer to suggest a
 `read-app-data` says a workspace shared with anyone besides its owner is refused app data and Full Disk Access as `REFUSED_SHARED`, and the agent does not ask again until the owner stops sharing it; sharing also stops the workspace's synchronized app-data copies, with no message, so the agent stops reading them.
 
 `read-app-data` reads the `READABLE_AGAIN` notice Imbue Studio sends when Full Disk Access comes back on: protected sources can be read again, and their syncs stay stopped.
+
+The app-data skills tell the agent to wait for Imbue Studio's answer before telling the user a request is on their screen, since a shared workspace's request is refused at once without one.
