@@ -22,7 +22,7 @@ The skill's own state lives in `data/.skills/personalized-ideas/`:
 
 The memory it writes:
 
-- `~/workspace/data/memories/user-public-profile.md`: a `user` memory holding what you learned about the confirmed person, each fact followed by the link it came from, plus its one-line pointer in `MEMORY.md`.
+- `~/workspace/data/memories/user-public-profile.md`: a `user` memory holding what you know about the user, each fact followed by the link it came from or `(you told me)`, plus its one-line pointer in `MEMORY.md`. It is what the **What Studio knows about me** page shows, so every fact about the user goes here: those from a lookup they confirmed, those they tell you in chat (see "What the user tells you" below), and those they add on the page.
 
 ## 1. Decide whether to offer
 
@@ -65,7 +65,7 @@ Outside the welcome (the user asks for ideas later in a chat), make the same off
 Then end your turn and wait.
 
 - `Search for me`, or another clear yes to the search: write `"lookup": "yes"` to `consent.json` and go to step 3.
-- `I’ll tell you myself`, or another clear no to the search: write `"lookup": "no"`, and ask them to go ahead in one short line.
+- `I’ll tell you myself`, or another clear no to the search: write `"lookup": "no"`, and ask them to go ahead in one short line. What they then tell you about themselves is saved as in "What the user tells you" below.
 - Anything else (describing what annoys them, a question): no search. Answer them and use what they told you; write `consent.json` only when they clearly declined the search.
 
 ## 3. Get their name
@@ -197,7 +197,24 @@ A few lines on what they do and care about, then a last plain line (not starting
 The file may already exist, holding facts the user added on the **What Studio knows about me** page (`(you told me)` lines): keep every line already in it, add yours after its last fact, and do not duplicate one they already gave.
 Add its pointer to `MEMORY.md`, unless it already has one.
 Keep every fact from the lookup in this one memory, not spread across others, so forgetting it is complete.
-Things the user tells you about themselves directly are ordinary memories, as in any chat.
+
+## What the user tells you
+
+When the user tells you about themselves (what they do or study, where they are, what they care about, what keeps annoying or overwhelming them), whether after **I’ll tell you myself**, while answering what annoys them, or anywhere else in a chat, save each such fact as one line of `user-public-profile.md`, so they can see, edit and delete it on the **What Studio knows about me** page:
+
+```markdown
+- <fact about them, in a short plain sentence> (you told me) <!-- found YYYY-MM-DD -->
+```
+
+- Only facts about the person, not details of what they are building or asking you to do ("wants a grading app" is not one; "grades 20 problem sets a week" is).
+- Do not add a fact the file already holds; when they correct one, change that line rather than adding another.
+- When the file does not exist yet, create it with the frontmatter above and add its pointer to `MEMORY.md`. When `sources.json` has no entry with `"origin": "user"`, add `{"url": null, "title": "What you told me", "fetched_at": "YYYY-MM-DD", "origin": "user"}`.
+- Do not keep these facts in other memories too; this file is the one place for them.
+- Every time you save or change facts, say so at the end of that reply, naming the page and linking it (its `link` from `uv run --no-sync workspace-layout list`), with exactly this sentence:
+
+  > I’ve added what you told me about yourself to [What Studio knows about me](<link>), where you can edit or delete it.
+
+  (When you changed a fact rather than adding one, say "updated" in place of "added".) Never save a fact about the user without that sentence in the same reply.
 Delete the unconfirmed entries from `sources.json`.
 
 ## 6. Suggest
@@ -211,5 +228,7 @@ Mention once, in passing, that you will remember this for future chats, and link
 
 ## Deleting
 
-When the user asks you to forget what you found, delete `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`, then check your other memories for any fact that came from the lookup (one citing a link in `sources.json`) and remove it too. Say what you deleted.
+When the user asks you to forget what you found, remove the lines of `user-public-profile.md` that cite a link, and `sources.json`'s entries that are not `"origin": "user"`, keeping the `(you told me)` lines; when no fact line is left, delete the file, its line in `MEMORY.md`, and `sources.json`. Then check your other memories for any fact that came from the lookup (one citing a link in `sources.json`) and remove it too.
+When they ask you to forget everything about them, delete `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`, as the page's "Forget all of this" does.
+Say what you deleted.
 When they say not to look them up again, also set `consent.json` to `"no"`.

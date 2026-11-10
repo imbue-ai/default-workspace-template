@@ -5,3 +5,5 @@ The lookup tells people with the same name apart using the organization behind t
 The welcome now asks only whether the user has an idea, with Yes and No buttons. After a no, the agent asks what is annoying, overwhelming, or tedious in their digital life and, when the account has a name, offers the lookup in the same fixed message, with Search for me and I’ll tell you myself buttons.
 
 When sharing is on, the question before a lookup has a third button, Others can, but go ahead, for an owner who wants the search even though others can see what is saved. A lookup keeps any facts the user added on the What Studio knows about me page.
+
+What the user tells the agent about themselves in chat is saved as "you told me" facts on the What Studio knows about me page, and the agent says so, naming and linking the page, every time it saves one. Forgetting what the lookup found keeps those facts; forgetting everything removes them too.
