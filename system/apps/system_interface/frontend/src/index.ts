@@ -241,7 +241,12 @@ function bootstrap(): void {
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
   void loaded.then(() =>
-    announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true, reportsChatOnScreen: true }),
+    announceReadyToEmbedder({
+      opensLinks: true,
+      opensCustomSchemeLinks: true,
+      reportsChatOnScreen: true,
+      reportsProviderChooserOnScreen: true,
+    }),
   );
 }
 

@@ -1,0 +1,1 @@
+`announceReadyToEmbedder` takes `reportsProviderChooserOnScreen`. The new `reportProviderChooserOnScreen` sends `minds:provider-chooser-on-screen {}` (embed contract v16). It is probed by name, so an older vendored snapshot still builds.

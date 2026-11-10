@@ -1,0 +1,1 @@
+The shell's `minds:workspace-ready` now announces `reportsProviderChooserOnScreen: true`. This tells the Imbue Studio app that the chat list sends `minds:provider-chooser-on-screen` once its provider chooser is on screen, and that it opens that chooser before any chat exists on a workspace with nothing signed in. The shell forwards the message up like the other `minds:` messages.

@@ -14,7 +14,7 @@ import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
-import { reportChatOnScreen } from "@imbue/workspace-ui/src/embed";
+import { reportChatOnScreen, reportProviderChooserOnScreen } from "@imbue/workspace-ui/src/embed";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
@@ -65,6 +65,20 @@ export function reportChatOnScreenOnce(chatId: string, isTranscriptLoaded: boole
   if (isChatOnScreenReported || !isTranscriptLoaded || !isShown || !isFrameRendered()) return;
   isChatOnScreenReported = true;
   reportChatOnScreen(chatId);
+}
+
+let isProviderChooserOnScreenReported = false;
+
+/**
+ * After a draw of the chat root's provider chooser: tell the Imbue Studio chrome, once per page, that the chooser is
+ * on screen. ``isShownByShell`` is the root's own shown state (the root, not a chat page, owns this chooser). The
+ * chrome lifts its wash over a new workspace on this as it does on the welcome chat's report, so a root the shell
+ * has not shown yet does not count.
+ */
+export function reportProviderChooserOnScreenOnce(isShownByShell: boolean): void {
+  if (isProviderChooserOnScreenReported || !isShownByShell || !isFrameRendered()) return;
+  isProviderChooserOnScreenReported = true;
+  reportProviderChooserOnScreen();
 }
 
 export interface ChatShellOptions {

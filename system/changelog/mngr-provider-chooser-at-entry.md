@@ -1,0 +1,1 @@
+The desktop-interface contracts now list `reportsProviderChooserOnScreen` in the shell's `minds:workspace-ready` announcement, and the chat list's `minds:provider-chooser-on-screen {}` report that the shell forwards up (embed contract v16).

@@ -1837,6 +1837,124 @@ def test_the_provider_chooser_stays_up_when_the_seeded_welcome_chat_arrives_over
         assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
 
 
+# Installed in every frame before its scripts run: the shell's document (the top frame here, with no Imbue Studio chrome
+# above it) records each ``minds:provider-chooser-on-screen`` a frame of it posts, into ``window.__chooserReports``.
+_RECORD_CHOOSER_REPORTS_SCRIPT = """
+(() => {
+  if (window !== window.top) return;
+  window.__chooserReports = [];
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "minds:provider-chooser-on-screen") window.__chooserReports.push(event.data);
+  });
+})();
+"""
+
+_WELCOME_TURNS = {"turns": [{"role": "assistant", "text": "Your workspace is ready! How would you like to start?"}]}
+
+
+def _seed_welcome_chat(page: Page, server: RunningWorkspace) -> str:
+    """Seed the welcome chat and show it, as the Imbue Studio app does once the seed answers; its id."""
+    seeded = _post_chat_json(server, "/api/chats/seed", _WELCOME_TURNS, expected_status=201)
+    _post_chat_json(
+        server,
+        "/api/focus-chat",
+        {"type": "minds:focus-chat", "client_id": _client_id(page), "chatId": seeded["chat_id"]},
+    )
+    return str(seeded["chat_id"])
+
+
+def _enter_new_workspace(page: Page, server: RunningWorkspace) -> Locator:
+    """Land on a brand-new workspace's shell and ask for the chat list as the Imbue Studio app does on entry (a
+    ``minds:focus-chat`` with no chat, as the shell's relay hands it to the chat app); the chat list's chooser."""
+    page.add_init_script(_RECORD_CHOOSER_REPORTS_SCRIPT)
+    _land(page, server)
+    _post_chat_json(server, "/api/focus-chat", {"type": "minds:focus-chat", "client_id": _client_id(page)})
+    return _chat_root(page).locator('[data-e2e="provider-chooser"]')
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_workspace_with_nothing_signed_in_shows_the_provider_chooser_before_any_chat_exists(
+    tmp_path: Path, page: Page
+) -> None:
+    """Entering a brand-new workspace, the chat list comes up from its pinned window with the provider chooser over it
+    before the welcome chat is seeded and before the first agent listing, and tells the chrome once that the chooser
+    is on screen. The listing finding no chats starts no empty chat beside the welcome chat to come; the welcome chat
+    lands under the same chooser, whose page opens no second one."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        expect(chooser).not_to_contain_text("Loading providers", timeout=15000)
+        page.wait_for_function("() => window.__chooserReports.length === 1", timeout=15000)
+        assert page.evaluate("() => window.__chooserReports") == [{"type": "minds:provider-chooser-on-screen"}]
+        (window,) = _chat_windows(server)
+        assert window["path"] == "/"
+        manager = server.chat_state.agent_manager
+        assert not manager.is_agent_list_known()
+        expect(_chat_root(page).locator(".chat-root-empty")).to_contain_text(
+            "Connect an AI provider to start chatting."
+        )
+        drawn = chooser.element_handle()
+
+        manager._adopt_initial_listing([])
+        expect(_chat_root(page).locator(".chat-root-empty")).to_be_visible()
+        page.wait_for_timeout(1000)
+        assert manager.get_provisional_chats() == []
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(0)
+
+        welcome_id = _seed_welcome_chat(page, server)
+        expect(_chat_root(page).locator(f'iframe.chat-root-frame[data-chat-id="{welcome_id}"]')).to_be_visible(
+            timeout=15000
+        )
+        welcome_frame = _chat(page, welcome_id)
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(1)
+        expect(chooser).to_be_visible()
+        assert drawn.evaluate("element => element.isConnected") is True
+        assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+        assert page.evaluate("() => window.__chooserReports.length") == 1
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_provider_chooser_shown_at_entry_closes_reopens_from_the_empty_list_and_stays_closed_for_the_welcome_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The chooser a new workspace opens before any chat exists can be closed: the empty list then says a provider
+    comes first, with a button that opens it again. Closed when the welcome chat arrives, it stays closed, and the
+    welcome chat's own notice offers it."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+        empty = _chat_root(page).locator(".chat-root-empty")
+        expect(empty).to_contain_text("Connect an AI provider to start chatting.")
+        empty.locator(".chat-root-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+
+        welcome_frame = _chat(page, _seed_welcome_chat(page, server))
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(1000)
+        expect(chooser).to_have_count(0)
+        welcome_frame.locator(".message-input-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(tmp_path: Path, page: Page) -> None:
     """A message sent from the launcher with nothing signed in raises no dialog: it waits in the new chat's disabled
