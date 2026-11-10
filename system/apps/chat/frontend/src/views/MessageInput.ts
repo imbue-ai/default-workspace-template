@@ -1083,9 +1083,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
         const attachmentPaths = getReadyAttachmentPaths(chatId);
         // A NUL character cannot be typed into a terminal, so an agent that takes its input as
-        // keystrokes refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting binary
-        // content), so dropping them sends exactly what the user saw.
-        const text = messageText.replaceAll("\0", "");
+        // keystrokes refuses the whole message over one. A textarea does not show NULs anyway
+        // (they arrive by pasting binary content), so dropping them sends exactly what the user saw.
+        const text = messageText.split("\0").join("");
 
         // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
         // below, so without this the file would leave the message silently and the only clue
