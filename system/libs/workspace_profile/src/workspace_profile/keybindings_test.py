@@ -85,8 +85,8 @@ def test_normalize_chord_canonicalizes_recorder_spellings(spelled: str, canonica
     assert is_canonical_chord(normalized)
 
 
-@pytest.mark.parametrize("spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey"])
-def test_normalize_chord_refuses_what_it_cannot_spell(spelled: str) -> None:
+@pytest.mark.parametrize("spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey", "Alt+Cmd+Delete"])
+def test_normalize_chord_refuses_what_it_cannot_spell_or_may_not_bind(spelled: str) -> None:
     with pytest.raises(InvalidChordError):
         normalize_chord(spelled)
 
@@ -106,8 +106,17 @@ def test_a_valid_keybindings_value_has_no_problem() -> None:
         ({"files": {"Rename!": ["f2"]}}, "not an action id"),
         ({"files": {"rename": "f2"}}, "list of chords"),
         ({"files": {"rename": ["F2"]}}, "not a canonical chord"),
+        ({"files": {"rename": ["alt+meta+delete"]}}, "belongs to the operating system"),
     ],
-    ids=["not-a-map", "bad-app-name", "no-action-level", "bad-action-id", "chords-not-a-list", "bad-chord"],
+    ids=[
+        "not-a-map",
+        "bad-app-name",
+        "no-action-level",
+        "bad-action-id",
+        "chords-not-a-list",
+        "bad-chord",
+        "refused-chord",
+    ],
 )
 def test_keybindings_value_problems_are_named(value: object, problem_fragment: str) -> None:
     problem = describe_keybindings_value_problem(value)

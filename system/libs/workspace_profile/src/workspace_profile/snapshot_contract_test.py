@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from workspace_profile.keybindings import CHORD_MODIFIER_ORDER, CHORD_NAMED_KEYS
+from workspace_profile.keybindings import CHORD_MODIFIER_ORDER, CHORD_NAMED_KEYS, REFUSED_CHORDS
 from workspace_profile.snapshot import (
     CONSUMED_SETTING_KEYS,
     SNAPSHOT_HEADER_KEYS,
@@ -54,3 +54,4 @@ def test_the_snapshot_contract_matches_the_desktops_fixture() -> None:
     # validates every stored chord against its mirror of this grammar.
     assert tuple(contract["chord_modifier_order"]) == CHORD_MODIFIER_ORDER
     assert tuple(contract["chord_named_keys"]) == CHORD_NAMED_KEYS
+    assert tuple(contract["refused_chords"]) == REFUSED_CHORDS

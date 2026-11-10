@@ -10,10 +10,13 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
+import type { ChordContext } from "@imbue/workspace-ui/src/keybindings";
 import { KeyboardSettingsSection } from "./KeyboardSettingsSection";
 
 export interface KeyboardShortcutsDialogAttrs {
   readonly onClose: () => void;
+  /** Where the shortcuts are read: the dialog's host is the desktop app only when it can pull windows out. */
+  readonly context: ChordContext;
 }
 
 export const KEYBOARD_SHORTCUTS_DIALOG_WIDTH = 640;
@@ -36,7 +39,7 @@ export function KeyboardShortcutsDialog(): m.Component<KeyboardShortcutsDialogAt
           m(
             "div",
             { class: "keyboard-shortcuts-body -mr-2 mb-4 max-h-[65vh] overflow-y-auto pr-2" },
-            m(KeyboardSettingsSection),
+            m(KeyboardSettingsSection, { context: attrs.context }),
           ),
         ],
       );

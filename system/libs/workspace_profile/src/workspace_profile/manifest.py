@@ -19,7 +19,7 @@ from pydantic import Field
 from workspace_layout.identity import RequestIdentity
 
 from workspace_profile.errors import InvalidKeybindingDeclarationError
-from workspace_profile.keybindings import is_canonical_chord, resolve_app_keybindings
+from workspace_profile.keybindings import is_canonical_chord, is_refused_chord, resolve_app_keybindings
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
 
 # Where every app serves its resolved chords, relative to its own API prefix
@@ -36,9 +36,12 @@ class KeybindingsMeResponse(FrozenModel):
 
 @pure
 def find_off_grammar_default_chords(actions: Sequence[KeybindingAction]) -> list[str]:
-    """The declared default chords not in the canonical spelling, as ``<action>: <chord>`` lines."""
+    """The declared default chords not in the canonical spelling, or refused, as ``<action>: <chord>`` lines."""
     return [
-        f"{action.id}: {chord}" for action in actions for chord in action.default_chords if not is_canonical_chord(chord)
+        f"{action.id}: {chord}"
+        for action in actions
+        for chord in action.default_chords
+        if not is_canonical_chord(chord) or is_refused_chord(chord)
     ]
 
 

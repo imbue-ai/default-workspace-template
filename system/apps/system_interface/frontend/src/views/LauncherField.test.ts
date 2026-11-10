@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { setResolvedShellKeybindingsForTest } from "../model/keybindings";
+import { setResolvedShellKeybindingsForTest, setShellChordPlatformForTest } from "../model/keybindings";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LauncherField, isLineBreakChord, isSecondaryChord } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 
-afterEach(unmountViews);
+// Read chords the way a Mac does, whatever the test runner's browser says about itself.
+beforeEach(() => setShellChordPlatformForTest("mac"));
+afterEach(() => {
+  unmountViews();
+  setShellChordPlatformForTest(null);
+});
 
 function render(overrides: Partial<LauncherFieldAttrs> = {}): { root: HTMLElement; attrs: LauncherFieldAttrs } {
   const attrs: LauncherFieldAttrs = {
@@ -42,6 +47,13 @@ describe("isSecondaryChord", () => {
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(true);
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false, ...plain })).toBe(false);
     expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
+  });
+
+  it("off a Mac is Enter with the Control key, where the Windows key is no modifier", () => {
+    setShellChordPlatformForTest("windows");
+    const plain = { altKey: false, shiftKey: false };
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(true);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(false);
   });
 
   it("follows a re-bound launcher-secondary-send chord", () => {

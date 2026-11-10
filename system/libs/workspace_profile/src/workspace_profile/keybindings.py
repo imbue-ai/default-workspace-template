@@ -74,6 +74,11 @@ CHORD_NAMED_KEYS: Final[tuple[str, ...]] = (
     "f12",
 )
 
+# The chords no binding may claim: Ctrl+Alt+Del, which Windows keeps for itself, refused on every
+# platform so one account's bindings mean the same everywhere (the Windows key needs no entry:
+# it is not a modifier of the grammar). Pinned cross-repo by the snapshot contract fixture.
+REFUSED_CHORDS: Final[tuple[str, ...]] = ("alt+meta+delete",)
+
 # Recorder-side spellings normalized into the canonical vocabulary.
 _TOKEN_ALIASES: Final[dict[str, str]] = {
     "cmd": "meta",
@@ -118,12 +123,18 @@ def is_canonical_chord(chord: str) -> bool:
 
 
 @pure
+def is_refused_chord(chord: str) -> bool:
+    """Whether the chord is one no binding may claim (``REFUSED_CHORDS``)."""
+    return chord in REFUSED_CHORDS
+
+
+@pure
 def normalize_chord(spelled: str) -> str:
     """The canonical spelling of a recorder-side chord. Raises ``InvalidChordError``.
 
     Lowercases, maps the aliases (``cmd`` to ``meta``, ``esc`` to ``escape``, ...),
     and reorders the modifiers; the key itself must already be one the grammar
-    knows.
+    knows, and the result must not be a refused chord.
     """
     raw_tokens = spelled.split("+")
     # "ctrl++" splits as ["ctrl", "", ""]: the chord ends in the literal "+"
@@ -140,7 +151,10 @@ def normalize_chord(spelled: str) -> str:
     if len(set(modifiers)) != len(modifiers) or any(modifier not in CHORD_MODIFIER_ORDER for modifier in modifiers):
         raise InvalidChordError(f"{spelled!r} does not spell held modifiers")
     ordered = [modifier for modifier in CHORD_MODIFIER_ORDER if modifier in modifiers]
-    return "+".join([*ordered, key])
+    chord = "+".join([*ordered, key])
+    if is_refused_chord(chord):
+        raise InvalidChordError(f"{spelled!r} belongs to the operating system")
+    return chord
 
 
 @pure
@@ -148,8 +162,9 @@ def describe_keybindings_value_problem(value: object) -> str | None:
     """Why the value is not a valid keybindings map, or None when it is.
 
     The valid shape is app name, then action id, then a list of canonical
-    chords (an empty list unbinds the action). The desktop's write path runs
-    the same check, so the two sides refuse the same shapes.
+    chords none of which is refused (an empty list unbinds the action). The
+    desktop's write path runs the same check, so the two sides refuse the same
+    shapes.
     """
     if not isinstance(value, Mapping):
         return f"keybindings must be an object of apps, not {type(value).__name__}"
@@ -166,6 +181,8 @@ def describe_keybindings_value_problem(value: object) -> str | None:
             for chord in chords:
                 if not isinstance(chord, str) or not is_canonical_chord(chord):
                     return f"{chord!r} is not a canonical chord"
+                if is_refused_chord(chord):
+                    return f"{chord!r} belongs to the operating system"
     return None
 
 

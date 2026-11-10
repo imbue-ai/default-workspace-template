@@ -4,6 +4,13 @@
  * page that Imbue Studio's Workspace settings frames, and of the Keyboard shortcuts dialog a plain browser opens
  * from the backdrop's context menu.
  *
+ * Shortcuts are read in a context (the keyboard-shortcuts spec in the mngr repo, sections 4 and 7): the platform,
+ * which decides what the keys are called and which chords cannot arrive here (a Mac's Control chord off a Mac), and
+ * the surface, which hides the chords a browser keeps from its pages when the workspace runs in one. A row whose
+ * shortcuts are all hidden here reads "Off", with the hidden ones named on hover. A chord a browser would keep, one
+ * the OS is known to keep, or one the desktop app takes from the OS is saved with a warning; only Ctrl+Alt+Del is
+ * refused.
+ *
  * Editing one action opens its editor below the row: the shortcuts it will have, each removable, a recorder that
  * adds one more, and the save surfaces. The recorder takes every key, Escape included (it has a Cancel of its own),
  * and says when it is listening, so whatever frames it can leave those keys alone.
@@ -12,7 +19,7 @@
  * restoring the defaults, and resetting a change each offer Replace (take it from the other action, saved together)
  * or Cancel when what they would bring in is in use. A replaced shortcut leaves the other action's row at once,
  * marked as changing on save; a shortcut that still ends up on two actions (from layers this screen does not edit)
- * is flagged on both rows. A shortcut Imbue Studio or the browser keeps for itself is saved with a warning.
+ * is flagged on both rows.
  *
  * The owner saves "only in this workspace" (the override file) or "everywhere" (the account, through the delivery
  * flow); a visitor's save is always their own override here. A saved or reset action is marked as such until the
@@ -24,7 +31,17 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { chordFromKeydown, chordSpokenLabel, isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
+import {
+  type ChordContext,
+  chordDisplayLabel,
+  chordFromKeydown,
+  chordNotices,
+  chordPlatformName,
+  chordSpokenLabel,
+  detectChordPlatform,
+  isChordHiddenIn,
+  isRefusedChord,
+} from "@imbue/workspace-ui/src/keybindings";
 import {
   type KeybindingActionView,
   type KeybindingAppView,
@@ -46,17 +63,28 @@ export interface ClashEntry {
   readonly otherAction: KeybindingActionView;
 }
 
+/** The chords of the list that can arrive in the context; every chord when no context is given. */
+function visibleIn(chords: readonly string[], context: ChordContext | null): readonly string[] {
+  return context === null ? chords : chords.filter((chord) => !isChordHiddenIn(chord, context));
+}
+
 /** Every other action of the app using one of `chords` now, once per chord it uses (conflicts are per app). An
- *  action's chords are read from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved. */
+ *  action's chords are read from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved.
+ *  Only chords visible in `context` clash: a chord that cannot arrive here runs nothing here. */
 export function clashesOf(
   app: KeybindingAppView,
   actionId: string,
   chords: readonly string[],
   chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
+  context: ChordContext | null = null,
 ): ClashEntry[] {
-  return chords.flatMap((chord) =>
+  return visibleIn(chords, context).flatMap((chord) =>
     app.actions
-      .filter((action) => action.id !== actionId && (chordsByActionId.get(action.id) ?? action.chords).includes(chord))
+      .filter(
+        (action) =>
+          action.id !== actionId &&
+          visibleIn(chordsByActionId.get(action.id) ?? action.chords, context).includes(chord),
+      )
       .map((otherAction) => ({ chord, otherAction })),
   );
 }
@@ -75,48 +103,16 @@ export function actionsSharingShortcuts(
   );
 }
 
-// Chords Imbue Studio (its menus and the keys it relays itself), the browser a share link opens in, or the
-// operating system take before a page sees them.
-const RESERVED_APPLE_CHORDS: ReadonlySet<string> = new Set([
-  "meta+w",
-  "meta+q",
-  "meta+n",
-  "meta+t",
-  "meta+h",
-  "meta+m",
-  "meta+l",
-  "meta+r",
-  "meta+tab",
-  "meta+space",
-  "meta+=",
-  "meta+-",
-  "meta+0",
-  "alt+meta+i",
-  "ctrl+meta+f",
-]);
-const RESERVED_OTHER_CHORDS: ReadonlySet<string> = new Set([
-  "ctrl+w",
-  "ctrl+q",
-  "ctrl+n",
-  "ctrl+t",
-  "ctrl+l",
-  "ctrl+r",
-  "ctrl+tab",
-  "ctrl+shift+tab",
-  "ctrl+shift+c",
-  "ctrl+=",
-  "ctrl+-",
-  "ctrl+0",
-  "alt+f4",
-  "f5",
-  "f11",
-]);
+/** The one chord the recorder refuses, and why. */
+export const REFUSED_CHORD_NOTICE = "Ctrl+Alt+Delete belongs to Windows and can't be a shortcut.";
 
-/** Why a chord may never reach the workspace, or null when nothing outside the workspace takes it. */
-export function reservedChordNotice(chord: string, isApple: boolean): string | null {
-  const reserved = isApple ? RESERVED_APPLE_CHORDS : RESERVED_OTHER_CHORDS;
-  if (!reserved.has(chord)) return null;
-  return `${chordSpokenLabel(chord, isApple)} is used by Imbue Studio or your browser, so it may not reach the workspace.`;
+/** What a row says on hover when its shortcuts are set but none can arrive here. */
+export function hiddenChordsHint(hidden: readonly string[], context: ChordContext): string {
+  const isApple = context.platform === "mac";
+  const labels = hidden.map((chord) => chordDisplayLabel(chord, isApple)).join(", ");
+  const verb = hidden.length === 1 ? "is" : "are";
+  const where = context.surface === "browser" ? "in a browser" : `on ${chordPlatformName(context.platform)}`;
+  return `${labels} ${verb} set, but not available ${where}.`;
 }
 
 /** An unsent save named the way the list names it: its app's display name and its action's label. */
@@ -156,6 +152,8 @@ interface ActionEditor {
   readonly replacedChordsByActionId: Map<string, string[]>;
   isRecording: boolean;
   clash: PendingClash | null;
+  /** Why the last recorded key was refused, until the next one is recorded. */
+  refusal: string | null;
 }
 
 /** A reset or a discard whose restored shortcuts other actions use, waiting on Replace or Cancel. */
@@ -166,8 +164,8 @@ interface PendingRevert {
 }
 
 export interface KeyboardSettingsSectionAttrs {
-  /** Whether chords read with the Mac's symbols; the browser's platform when omitted. */
-  readonly isApple?: boolean;
+  /** Where the shortcuts are read: the browser's platform in the desktop app when omitted. */
+  readonly context?: ChordContext;
   /** Told each time the recorder starts or stops listening for a new shortcut. */
   readonly onRecordingChange?: (isRecording: boolean) => void;
 }
@@ -199,9 +197,12 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   let isBusy = false;
   let isRecorderListening = false;
   let onRecordingChange: ((isRecording: boolean) => void) | undefined;
+  let context: ChordContext = { platform: detectChordPlatform(), surface: "desktop" };
   const collapsedApps = new Set<string>();
   // The actions saved or reset since this section opened, marked until it is opened again.
   const savedActionKeys = new Set<string>();
+
+  const isApple = (): boolean => context.platform === "mac";
 
   async function load(): Promise<void> {
     try {
@@ -237,6 +238,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       replacedChordsByActionId: new Map(),
       isRecording: false,
       clash: null,
+      refusal: null,
     };
     notice = null;
   }
@@ -254,9 +256,15 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   function onRecorderKeydown(current: ActionEditor, event: KeyboardEvent): void {
     event.preventDefault();
     event.stopPropagation();
-    const chord = chordFromKeydown(event);
+    const chord = chordFromKeydown(event, context.platform);
     if (chord === null) return;
-    const entries = clashesOf(current.app, current.action.id, [chord], current.replacedChordsByActionId);
+    current.refusal = null;
+    if (isRefusedChord(chord)) {
+      current.refusal = REFUSED_CHORD_NOTICE;
+      setRecording(current, false);
+      return;
+    }
+    const entries = clashesOf(current.app, current.action.id, [chord], current.replacedChordsByActionId, context);
     if (entries.length === 0) addChord(current, chord);
     else current.clash = { cause: "record", entries };
     setRecording(current, false);
@@ -268,6 +276,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       current.action.id,
       current.action.default_chords,
       current.replacedChordsByActionId,
+      context,
     );
     if (entries.length === 0) current.stagedChords = [...current.action.default_chords];
     else current.clash = { cause: "restore-default", entries };
@@ -287,10 +296,15 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     current.clash = null;
   }
 
-  /** The chords a row shows: what is saved, or what Replace has left another action of the app being edited. */
-  function shownChords(appView: KeybindingAppView, action: KeybindingActionView): readonly string[] {
+  /** The chords an action has: what is saved, or what Replace has left another action of the app being edited. */
+  function heldChords(appView: KeybindingAppView, action: KeybindingActionView): readonly string[] {
     if (editor === null || editor.app.app !== appView.app) return action.chords;
     return editor.replacedChordsByActionId.get(action.id) ?? action.chords;
+  }
+
+  /** The chords a row shows: the held ones that can arrive here. */
+  function shownChords(appView: KeybindingAppView, action: KeybindingActionView): readonly string[] {
+    return visibleIn(heldChords(appView, action), context);
   }
 
   /** What a delivery attempt leaves on screen: nothing once it landed, else its own word on why not. */
@@ -342,7 +356,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     cause: "reset" | "discard",
     restoredChords: readonly string[],
   ): void {
-    const entries = clashesOf(appView, action.id, restoredChords);
+    const entries = clashesOf(appView, action.id, restoredChords, new Map(), context);
     if (entries.length > 0) {
       pendingRevert = { app: appView, action, clash: { cause, entries } };
       return;
@@ -377,13 +391,12 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   /** A pending revert's Replace / Cancel box, where it was asked for. */
-  function pendingRevertView(current: PendingRevert, isApple: boolean): m.Children {
+  function pendingRevertView(current: PendingRevert): m.Children {
     return m(
       "div",
       { class: "mb-3" },
       clashView(
         current.clash,
-        isApple,
         () => replaceAndRevert(current),
         () => {
           pendingRevert = null;
@@ -392,24 +405,32 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     );
   }
 
-  /** Each shortcut its own keycap, with "or" between the alternatives. */
-  function shortcutsView(chords: readonly string[], isApple: boolean): m.Children {
-    if (chords.length === 0) return m("span", { class: "keybinding-off type-helper text-faint" }, "Off");
+  /** Each visible shortcut its own keycap, with "or" between the alternatives; "Off" when none can arrive here,
+   *  naming on hover the ones that are set all the same. */
+  function shortcutsView(chords: readonly string[], hidden: readonly string[]): m.Children {
+    if (chords.length === 0) {
+      const hint = hidden.length === 0 ? {} : hoverTooltipAttrs(hiddenChordsHint(hidden, context));
+      return m(
+        "span",
+        { class: "keybinding-off type-helper text-faint", "data-hidden-chords": hidden.join(" "), ...hint },
+        "Off",
+      );
+    }
     return m(
       "span",
       { class: "flex flex-wrap items-center justify-end gap-x-1.5 gap-y-1" },
       chords.flatMap((chord, index) => {
-        const keycap = m(ShortcutKeycap, { key: chord, chord, isApple });
+        const keycap = m(ShortcutKeycap, { key: chord, chord, isApple: isApple() });
         if (index === 0) return [keycap];
         return [m("span", { key: `or-${chord}`, class: "type-helper text-faint" }, "or"), keycap];
       }),
     );
   }
 
-  function clashView(clash: PendingClash, isApple: boolean, onReplace: () => void, onCancel: () => void): m.Children {
+  function clashView(clash: PendingClash, onReplace: () => void, onCancel: () => void): m.Children {
     return m("div", { class: "keybinding-clash mt-3 rounded-md bg-warning-surface p-3" }, [
       ...clash.entries.map((entry) =>
-        m("p", { class: "type-helper text-primary" }, clashSentence(clash.cause, entry, isApple)),
+        m("p", { class: "type-helper text-primary" }, clashSentence(clash.cause, entry, isApple())),
       ),
       m(
         "p",
@@ -424,7 +445,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   /** What Replace will take away from the app's other actions when this edit is saved. */
-  function replacementNotes(current: ActionEditor, isApple: boolean): m.Children {
+  function replacementNotes(current: ActionEditor): m.Children {
     return Array.from(current.replacedChordsByActionId).flatMap(([otherActionId, remainingChords]) => {
       const other = current.app.actions.find((candidate) => candidate.id === otherActionId);
       if (other === undefined) return [];
@@ -434,26 +455,30 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           m(
             "p",
             { class: "keybinding-replaced type-helper mt-2 text-secondary" },
-            `${chordSpokenLabel(chord, isApple)} will be removed from "${other.label}".`,
+            `${chordSpokenLabel(chord, isApple())} will be removed from "${other.label}".`,
           ),
         );
     });
   }
 
-  function stagedShortcutsView(current: ActionEditor, isApple: boolean): m.Children {
+  function stagedShortcutsView(current: ActionEditor): m.Children {
     return m("div", { class: "flex flex-wrap items-center gap-2" }, [
       current.stagedChords.length === 0
         ? m("span", { class: "type-helper text-faint" }, "Off: no shortcut runs this")
-        : current.stagedChords.map((chord) =>
-            m(
+        : current.stagedChords.map((chord) => {
+            const isHidden = isChordHiddenIn(chord, context);
+            return m(
               "span",
               {
                 key: chord,
                 class:
-                  "keybinding-staged inline-flex items-center gap-0.5 rounded-md bg-fill-faint py-0.5 pr-0.5 pl-1",
+                  "keybinding-staged inline-flex items-center gap-0.5 rounded-md bg-fill-faint py-0.5 pr-0.5 pl-1" +
+                  (isHidden ? " opacity-60" : ""),
+                "data-hidden": isHidden ? "true" : undefined,
+                ...(isHidden ? hoverTooltipAttrs(hiddenChordsHint([chord], context)) : {}),
               },
               [
-                m(ShortcutKeycap, { chord, isApple }),
+                m(ShortcutKeycap, { chord, isApple: isApple() }),
                 m(
                   Button,
                   {
@@ -461,8 +486,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                     icon: true,
                     variant: "ghost",
                     extra: "keybinding-remove",
-                    "aria-label": `Remove ${chordSpokenLabel(chord, isApple)}`,
-                    ...hoverTooltipAttrs(`Remove ${chordSpokenLabel(chord, isApple)}`),
+                    "aria-label": `Remove ${chordSpokenLabel(chord, isApple())}`,
+                    ...hoverTooltipAttrs(`Remove ${chordSpokenLabel(chord, isApple())}`),
                     onclick: () => {
                       current.stagedChords = current.stagedChords.filter((staged) => staged !== chord);
                     },
@@ -470,8 +495,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                   m.trust(icon("close", { size: 12 })),
                 ),
               ],
-            ),
-          ),
+            );
+          }),
       current.isRecording
         ? null
         : m(
@@ -557,28 +582,26 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
-  function editorView(current: ActionEditor, isApple: boolean): m.Children {
-    const reservedNotices = current.stagedChords
-      .map((chord) => reservedChordNotice(chord, isApple))
-      .filter((reserved): reserved is string => reserved !== null);
+  function editorView(current: ActionEditor): m.Children {
+    const warnings = current.stagedChords.flatMap((chord) => chordNotices(chord, context));
     const clash = current.clash;
     return m("div", { class: "keybinding-editor mt-1 mb-3 rounded-lg border border-default p-3" }, [
-      stagedShortcutsView(current, isApple),
+      stagedShortcutsView(current),
       recorderView(current),
+      current.refusal === null
+        ? null
+        : m("p", { class: "keybinding-refused type-helper mt-2 text-danger" }, current.refusal),
       clash === null
         ? null
         : clashView(
             clash,
-            isApple,
             () => replaceClash(current, clash),
             () => {
               current.clash = null;
             },
           ),
-      replacementNotes(current, isApple),
-      ...reservedNotices.map((reserved) =>
-        m("p", { class: "keybinding-reserved type-helper mt-2 text-warning" }, reserved),
-      ),
+      replacementNotes(current),
+      ...warnings.map((warning) => m("p", { class: "keybinding-warning type-helper mt-2 text-warning" }, warning)),
       catalog?.is_owner === true && catalog.can_save_everywhere !== true
         ? m(
             "p",
@@ -612,10 +635,12 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     );
   }
 
-  function actionRow(appView: KeybindingAppView, action: KeybindingActionView, isApple: boolean): m.Children {
+  function actionRow(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
     const isEditing = editor !== null && editor.app.app === appView.app && editor.action.id === action.id;
-    const chords = shownChords(appView, action);
-    const isPendingReplace = !isEditing && chords !== action.chords;
+    const held = heldChords(appView, action);
+    const chords = visibleIn(held, context);
+    const hidden = held.filter((chord) => !chords.includes(chord));
+    const isPendingReplace = !isEditing && held !== action.chords;
     const resetClash =
       pendingRevert !== null &&
       pendingRevert.clash.cause === "reset" &&
@@ -630,7 +655,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           sharedShortcutWarning(appView, action),
         ]),
         rowMarker(appView, action, isPendingReplace),
-        m("span", { class: "shrink-0" }, shortcutsView(chords, isApple)),
+        m("span", { class: "shrink-0" }, shortcutsView(chords, hidden)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
           isResetOffered(action)
             ? m(
@@ -659,12 +684,12 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           ),
         ]),
       ]),
-      resetClash === null ? null : pendingRevertView(resetClash, isApple),
-      isEditing && editor !== null ? editorView(editor, isApple) : null,
+      resetClash === null ? null : pendingRevertView(resetClash),
+      isEditing && editor !== null ? editorView(editor) : null,
     ]);
   }
 
-  function appSection(appView: KeybindingAppView, isApple: boolean): m.Children {
+  function appSection(appView: KeybindingAppView): m.Children {
     const isCollapsed = collapsedApps.has(appView.app);
     const count = appView.actions.length;
     return m("section", { key: appView.app, class: "mb-5", "data-keybinding-app": appView.app }, [
@@ -694,7 +719,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         : m(
             "div",
             { class: "pl-6" },
-            appView.actions.map((action) => actionRow(appView, action, isApple)),
+            appView.actions.map((action) => actionRow(appView, action)),
           ),
     ]);
   }
@@ -709,7 +734,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     revert(appView, action, "discard", entry.restored_chords);
   }
 
-  function unsentBanner(loaded: KeybindingsCatalog, isApple: boolean): m.Children {
+  function unsentBanner(loaded: KeybindingsCatalog): m.Children {
     if (loaded.unsent.length === 0) return null;
     return m("div", { class: "mb-4 rounded-md bg-warning-surface p-3", "data-keybinding-unsent": true }, [
       m(
@@ -742,7 +767,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
               "Discard",
             ),
           ]),
-          discardClash === null ? null : pendingRevertView(discardClash, isApple),
+          discardClash === null ? null : pendingRevertView(discardClash),
         ]);
       }),
       m(
@@ -770,19 +795,19 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     },
     view(vnode) {
       onRecordingChange = vnode.attrs.onRecordingChange;
+      if (vnode.attrs.context !== undefined) context = vnode.attrs.context;
       if (loadError !== null) {
         return m("p", { class: "type-helper text-danger" }, `The shortcuts could not be loaded: ${loadError}`);
       }
       if (catalog === null) return m("p", { class: "type-helper text-secondary" }, "Loading the shortcuts...");
-      const isApple = vnode.attrs.isApple ?? isApplePlatform();
       const loaded = catalog;
       return m("div", { "data-keyboard-settings": true }, [
-        unsentBanner(loaded, isApple),
+        unsentBanner(loaded),
         notice !== null ? m("p", { class: "keybinding-notice type-helper mb-3 text-secondary" }, notice) : null,
         m(
           "div",
           { class: "keybinding-apps" },
-          loaded.apps.filter((appView) => appView.actions.length > 0).map((appView) => appSection(appView, isApple)),
+          loaded.apps.filter((appView) => appView.actions.length > 0).map((appView) => appSection(appView)),
         ),
       ]);
     },

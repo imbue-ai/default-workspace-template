@@ -8,12 +8,17 @@ import { isShortcutRecording } from "../model/shortcutRecording";
 import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
+  REFUSED_CHORD_NOTICE,
   actionsSharingShortcuts,
   clashesOf,
+  hiddenChordsHint,
   isResetOffered,
-  reservedChordNotice,
   unsentEntryLabel,
 } from "./KeyboardSettingsSection";
+
+const MAC_DESKTOP = { platform: "mac", surface: "desktop" } as const;
+const WINDOWS_DESKTOP = { platform: "windows", surface: "desktop" } as const;
+const MAC_BROWSER = { platform: "mac", surface: "browser" } as const;
 
 const APP: KeybindingAppView = {
   app: "files",
@@ -117,12 +122,23 @@ describe("isResetOffered", () => {
   });
 });
 
-describe("reservedChordNotice", () => {
-  it("warns about a chord Imbue Studio or the browser takes, on the platform that takes it", () => {
-    expect(reservedChordNotice("meta+w", true)).toContain("Command+W");
-    expect(reservedChordNotice("ctrl+w", false)).toContain("Ctrl+W");
-    expect(reservedChordNotice("meta+w", false)).toBeNull();
-    expect(reservedChordNotice("ctrl+shift+n", true)).toBeNull();
+describe("clashesOf in a context", () => {
+  it("counts only the chords that can arrive there, on either side", () => {
+    // Delete holds ctrl+backspace, a Mac's Control chord: off a Mac it runs nothing, so it clashes with nothing.
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), WINDOWS_DESKTOP)).toEqual([]);
+    const sharingMetaW = { ...APP, actions: [APP.actions[0], { ...APP.actions[1], chords: ["meta+w"] }] };
+    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_BROWSER)).toEqual([]);
+  });
+});
+
+describe("hiddenChordsHint", () => {
+  it("names the shortcuts that are set but cannot arrive here", () => {
+    expect(hiddenChordsHint(["ctrl+k"], WINDOWS_DESKTOP)).toBe("Ctrl+K is set, but not available on Windows.");
+    expect(hiddenChordsHint(["meta+w", "meta+t"], MAC_BROWSER)).toBe(
+      "⌘W, ⌘T are set, but not available in a browser.",
+    );
   });
 });
 
@@ -166,9 +182,11 @@ async function flush(): Promise<void> {
   m.redraw.sync();
 }
 
-/** Mount the section on a Mac and let its catalog read land. */
-async function mountSection(): Promise<HTMLElement> {
-  const root = mountView(() => m(KeyboardSettingsSection, { isApple: true }));
+/** Mount the section in the desktop app on a Mac (unless told otherwise) and let its catalog read land. */
+async function mountSection(
+  context: typeof MAC_DESKTOP | typeof WINDOWS_DESKTOP | typeof MAC_BROWSER = MAC_DESKTOP,
+): Promise<HTMLElement> {
+  const root = mountView(() => m(KeyboardSettingsSection, { context }));
   await flush();
   return root;
 }
@@ -356,7 +374,7 @@ describe("editing a shortcut", () => {
     const changes: boolean[] = [];
     const root = mountView(() =>
       m(KeyboardSettingsSection, {
-        isApple: true,
+        context: MAC_DESKTOP,
         onRecordingChange: (isRecording: boolean) => changes.push(isRecording),
       }),
     );
@@ -490,7 +508,7 @@ describe("editing a shortcut", () => {
     ]);
   });
 
-  it("warns when a staged shortcut is one Imbue Studio or the browser takes", async () => {
+  it("warns in the desktop app when a staged shortcut is one a browser would keep, and saves it", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -498,7 +516,51 @@ describe("editing a shortcut", () => {
     click(root.querySelector(".keybinding-add"));
     pressInRecorder(root, { key: "w", metaKey: true });
 
-    expect(root.querySelector(".keybinding-reserved")?.textContent).toContain("Command+W");
+    expect(root.querySelector(".keybinding-warning")?.textContent).toContain(
+      "⌘W is a shortcut the browser keeps for itself",
+    );
+    expect(buttonNamed(root, "Only in this workspace").disabled).toBe(false);
+  });
+
+  it("refuses Ctrl+Alt+Delete and says why, staging nothing", async () => {
+    stubFetch(catalogOf());
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "Delete", altKey: true, metaKey: true });
+
+    expect(root.querySelector(".keybinding-refused")?.textContent).toBe(REFUSED_CHORD_NOTICE);
+    expect(
+      Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).map((k) => k.getAttribute("data-chord")),
+    ).toEqual(["f2"]);
+  });
+
+  it("hides a Mac's Control shortcut off a Mac: the row reads Off and names it on hover", async () => {
+    const macOnly = { ...APP, actions: [{ ...APP.actions[0], chords: ["ctrl+r"] }, APP.actions[1]] };
+    stubFetch(catalogOf({ apps: [macOnly] }));
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    const off = row(root, "rename").querySelector(".keybinding-off");
+    expect(off?.textContent).toBe("Off");
+    expect(off?.getAttribute("data-hidden-chords")).toBe("ctrl+r");
+    // Delete keeps its one visible shortcut, with no "or" left over for the hidden one.
+    const deleteKeycaps = Array.from(row(root, "delete").querySelectorAll("[data-chord]")).map((k) =>
+      k.getAttribute("data-chord"),
+    );
+    expect(deleteKeycaps).toEqual(["delete"]);
+    expect(row(root, "delete").textContent).not.toContain("or");
+  });
+
+  it("hides what a browser keeps when the workspace runs in one", async () => {
+    const withMetaW = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "meta+w"] }] };
+    stubFetch(catalogOf({ apps: [withMetaW] }));
+    const root = await mountSection(MAC_BROWSER);
+
+    const keycaps = Array.from(row(root, "rename").querySelectorAll("[data-chord]")).map((k) =>
+      k.getAttribute("data-chord"),
+    );
+    expect(keycaps).toEqual(["f2"]);
   });
 
   it("restores an action's default shortcuts when nothing else uses them", async () => {

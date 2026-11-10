@@ -7,11 +7,14 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import {
   type ChordKeyEvent,
+  type ChordPlatform,
+  detectChordPlatform,
   keydownMatchesChords,
   type ResolvedKeybindings,
 } from "@imbue/workspace-ui/src/keybindings";
 
 let resolved: ResolvedKeybindings | null = null;
+let platformOverride: ChordPlatform | null = null;
 
 export async function refreshShellKeybindings(): Promise<void> {
   try {
@@ -23,16 +26,26 @@ export async function refreshShellKeybindings(): Promise<void> {
   }
 }
 
+/** The platform the shell reads chords on: the browser's, unless a test named one. */
+export function shellChordPlatform(): ChordPlatform {
+  return platformOverride ?? detectChordPlatform();
+}
+
 export function matchesShellKeybinding(
   event: ChordKeyEvent,
   actionId: string,
   fallbackChords: readonly string[],
 ): boolean {
   const chords = resolved?.chords_by_action[actionId] ?? fallbackChords;
-  return keydownMatchesChords(event, chords);
+  return keydownMatchesChords(event, chords, shellChordPlatform());
 }
 
 /** For tests: pretend the backend answered these chords. */
 export function setResolvedShellKeybindingsForTest(value: ResolvedKeybindings | null): void {
   resolved = value;
+}
+
+/** For tests: read chords as this platform would, whatever the test runner's browser says. */
+export function setShellChordPlatformForTest(platform: ChordPlatform | null): void {
+  platformOverride = platform;
 }
