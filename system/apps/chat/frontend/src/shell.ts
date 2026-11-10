@@ -16,9 +16,9 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import {
   type ChatShortcut,
-  chatShortcutOfChord,
-  chatShortcutOfKeydown,
+  listenForChatShortcutKeys,
   refreshKeybindings,
+  runChatShortcutOfChord,
   setKeybindingSurface,
 } from "./models/keybindings";
 import { startNewChat } from "./root/newChat";
@@ -120,19 +120,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
     onChordSurface: setKeybindingSurface,
-    onChord: (chord) => {
-      const shortcut = chatShortcutOfChord(chord);
-      if (shortcut !== null) runChatShortcut(shortcut);
-    },
+    onChord: (chord) => runChatShortcutOfChord(chord, runChatShortcut),
   });
   void refreshKeybindings();
-  document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented) return;
-    const shortcut = chatShortcutOfKeydown(event);
-    if (shortcut === null) return;
-    event.preventDefault();
-    if (!event.repeat) runChatShortcut(shortcut);
-  });
+  listenForChatShortcutKeys(runChatShortcut);
   mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in

@@ -68,9 +68,9 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import {
   type ChatShortcut,
-  chatShortcutOfChord,
-  chatShortcutOfKeydown,
+  listenForChatShortcutKeys,
   refreshKeybindings,
+  runChatShortcutOfChord,
   setKeybindingSurface,
 } from "../models/keybindings";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
@@ -502,10 +502,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
     capabilities: { navigation: true, closeChord: false },
     onKeybindingsChanged: () => void refreshKeybindings(),
     onChordSurface: setKeybindingSurface,
-    onChord: (chord) => {
-      const shortcut = chatShortcutOfChord(chord);
-      if (shortcut !== null) runChatShortcut(shortcut);
-    },
+    onChord: (chord) => runChatShortcutOfChord(chord, runChatShortcut),
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
@@ -572,13 +569,7 @@ function bootstrap(): void {
   const shell = connectRootToShell(accountsLoaded);
   void refreshKeybindings();
   // The chat's shortcuts pressed on the root's own rail; one pressed in the selected chat runs in that page.
-  document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented) return;
-    const shortcut = chatShortcutOfKeydown(event);
-    if (shortcut === null) return;
-    event.preventDefault();
-    if (!event.repeat) runChatShortcut(shortcut);
-  });
+  listenForChatShortcutKeys(runChatShortcut);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     () => pool?.innerWindows() ?? [],

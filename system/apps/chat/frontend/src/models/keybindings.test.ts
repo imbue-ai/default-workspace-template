@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   CHAT_SHORTCUT_DEFAULTS,
+  type ChatShortcut,
   chatShortcutOfChord,
+  listenForChatShortcutKeys,
+  runChatShortcutOfChord,
   setKeybindingSurface,
   setResolvedKeybindingsForTest,
 } from "./keybindings";
@@ -55,5 +58,61 @@ describe("chatShortcutOfChord", () => {
     expect(chatShortcutOfChord("meta+n")).toBeNull();
     setKeybindingSurface("desktop");
     expect(chatShortcutOfChord("meta+n")).toBe("new-chat");
+  });
+});
+
+describe("runChatShortcutOfChord", () => {
+  it("runs the shortcut a chord names, and nothing for any other chord", () => {
+    const ran: ChatShortcut[] = [];
+
+    runChatShortcutOfChord("meta+.", (shortcut) => ran.push(shortcut));
+    runChatShortcutOfChord("enter", (shortcut) => ran.push(shortcut));
+
+    expect(ran).toEqual(["stop-agent"]);
+  });
+});
+
+describe("listenForChatShortcutKeys", () => {
+  // The listener stays on the document for the rest of the file, so it is installed once.
+  const ran: ChatShortcut[] = [];
+  beforeAll(() => listenForChatShortcutKeys((shortcut) => ran.push(shortcut)));
+  beforeEach(() => {
+    ran.length = 0;
+    // A function key reads the same on every platform the test runner may report.
+    setResolvedKeybindingsForTest({ app: "chat", chords_by_action: { "new-chat": ["f6"], "stop-agent": [] } });
+  });
+
+  function press(key: string, options: { repeat?: boolean } = {}): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key, cancelable: true, bubbles: true, ...options });
+    document.body.dispatchEvent(event);
+    return event;
+  }
+
+  it("runs a shortcut's key once per press and takes it from the page", () => {
+    const pressed = press("F6");
+    const held = press("F6", { repeat: true });
+
+    expect(ran).toEqual(["new-chat"]);
+    expect(pressed.defaultPrevented).toBe(true);
+    expect(held.defaultPrevented).toBe(true);
+  });
+
+  it("leaves a key no shortcut has alone", () => {
+    const pressed = press("F7");
+
+    expect(ran).toEqual([]);
+    expect(pressed.defaultPrevented).toBe(false);
+  });
+
+  it("runs nothing for a key something took first, such as a workspace-wide chord", () => {
+    const takeEveryKey = (event: Event): void => event.preventDefault();
+    window.addEventListener("keydown", takeEveryKey, { capture: true });
+    try {
+      press("F6");
+    } finally {
+      window.removeEventListener("keydown", takeEveryKey, { capture: true });
+    }
+
+    expect(ran).toEqual([]);
   });
 });

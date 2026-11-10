@@ -65,9 +65,27 @@ export function chatShortcutOfChord(chord: string): ChatShortcut | null {
 }
 
 /** The chat shortcut a keystroke runs, or null. */
-export function chatShortcutOfKeydown(event: KeyboardEvent): ChatShortcut | null {
+function chatShortcutOfKeydown(event: KeyboardEvent): ChatShortcut | null {
   const chord = chordFromKeydown(event, keybindingContext().platform);
   return chord === null ? null : chatShortcutOfChord(chord);
+}
+
+/** Run the chat shortcuts pressed in this document: a key nothing took first (the app contract takes the
+ *  workspace-wide chords) runs its shortcut once per press, and a held key's repeats run nothing more. */
+export function listenForChatShortcutKeys(run: (shortcut: ChatShortcut) => void): void {
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const shortcut = chatShortcutOfKeydown(event);
+    if (shortcut === null) return;
+    event.preventDefault();
+    if (!event.repeat) run(shortcut);
+  });
+}
+
+/** Run the chat shortcut a chord the desktop app took for this page names (``onChord``), if it names one. */
+export function runChatShortcutOfChord(chord: string, run: (shortcut: ChatShortcut) => void): void {
+  const shortcut = chatShortcutOfChord(chord);
+  if (shortcut !== null) run(shortcut);
 }
 
 /** For tests: pretend the backend answered these chords. */
