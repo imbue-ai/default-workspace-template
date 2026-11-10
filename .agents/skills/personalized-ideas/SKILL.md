@@ -46,21 +46,21 @@ A new workspace's first chat opens on the conversation from Imbue Studio's start
 When the account has a name, its closing welcome already makes this offer ("**Not sure what to build? I’d like to get to know you a little first,** ...").
 That offer states everything step 2 requires, so do not make it again:
 
-- A clear yes to it is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3. A yes that comes with an idea ("yes, but I want to build a budget tracker") is not a yes to the lookup: they have an idea, so step 1 says to help with it instead.
-- A clear no is a no: write it.
+- `yes` (or another clear yes, such as "sure" or "go ahead") is the user's yes. Check step 1's exclusions, write `consent.json`, and go to step 3. A yes that comes with an idea ("yes, but I want to build a budget tracker") is not a yes to the lookup: they have an idea, so step 1 says to help with it instead.
+- `no` (or another clear no, such as "no thanks" or "skip it") is a no: write it.
 - Anything else (most often, describing something that annoys them, or saying they already have an idea) is not an answer to the offer. Help with what they said, do not bring the offer up again, and write nothing to `consent.json`, so it can still be offered if they later say they are stuck.
 
 ## 2. Ask
 
 Make the offer once, as this exact message, word for word, with nothing added before or after it:
 
-> **Not sure what to build? I’d like to get to know you a little first,** so I can suggest things that actually help you. If you’re comfortable with it, I can search public web pages for the name on your account, using an outside search service. I’ll show you what I find so you can tell me what’s really you, and I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime, or skip this and just tell me a bit about yourself. Just say yes if you’d like that.
+> **Not sure what to build? I’d like to get to know you a little first,** so I can suggest things that actually help you. If you’re comfortable with it, I can search public web pages for the name on your account, using an outside search service. I’ll show you what I find so you can tell me what’s really you, and I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime, or skip this and just tell me a bit about yourself. Reply **yes** to go ahead, or **no** to skip it.
 
 It is the same message Imbue Studio's welcome uses (`LOOKUP_OFFER` in mngr-internal's `apps/minds/frontend/src/models/creationTranscript.ts`), and it is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
 Do not reword it, shorten it, personalize it, or mention anything about the user in it; change it only in both places at once.
 
 Then end your turn and wait.
-Only a clear yes is a yes.
+Only `yes`, or another clear yes, is a yes; `no`, or another clear no, is a no.
 Anything else (no, not now, a question, or telling you about themselves instead) means no search: answer them, and use what they told you.
 Write `consent.json` with their answer either way, except when they only asked a question.
 
