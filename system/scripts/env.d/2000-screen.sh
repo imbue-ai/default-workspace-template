@@ -278,7 +278,7 @@ _install_neko() {
 readonly _FORTRESS_RELEASE="v156.0.8078.47"
 readonly _FORTRESS_UNPACKED_DIR="fortress-v156"
 readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v156-linux-x64.tar.gz"
-readonly _FORTRESS_X64_SHA256="181512397a027e65099c8f2c7c8591c98dfd19649fe7bdbb4fc629989237d3c9"
+readonly _FORTRESS_X64_SHA256="fa56589c44765627447be075afa9675b06b09befdb8b62347391b9a83e4812b2"
 readonly _FORTRESS_ARM64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v156-linux-arm64.tar.gz"
 readonly _FORTRESS_ARM64_SHA256="2fead923de56b92fad78940bde373c07d38a925f229b710353e601b07d13af87"
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
