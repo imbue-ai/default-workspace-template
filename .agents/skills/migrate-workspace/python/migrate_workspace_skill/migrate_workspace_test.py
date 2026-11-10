@@ -372,21 +372,144 @@ def test_derive_recreate_labels_keeps_the_original_creation_band() -> None:
     ]
 
 
+def _flag_values(argv: list[str], flag: str) -> list[str]:
+    return [argv[i + 1] for i, token in enumerate(argv) if token == flag]
+
+
 def test_build_recreate_argv_adopts_every_session_and_stays_dormant_capable() -> None:
     argv = migrate_workspace.build_recreate_argv(
-        "dashboard", ["/s/a.jsonl", "/s/b.jsonl"], {"user_created": "true"}
+        "dashboard", "claude", ["/s/a.jsonl", "/s/b.jsonl"], {"user_created": "true"}
     )
     assert argv[:3] == ["mngr", "create", "dashboard"]
-    # Harness then role; `transfer = none` comes from the chat role template.
-    templates = [argv[i + 1] for i, token in enumerate(argv) if token == "--template"]
-    assert templates == ["claude", "chat"]
+    # The harness is selected with --type, as the chat app does (there is no
+    # per-harness create template); `transfer = none` comes from the chat role template.
+    assert _flag_values(argv, "--type") == ["claude"]
+    assert _flag_values(argv, "--template") == ["chat"]
     assert "--transfer" not in argv
     assert "--no-connect" in argv
-    adopted = [argv[i + 1] for i, token in enumerate(argv) if token == "--adopt"]
-    assert adopted == ["/s/a.jsonl", "/s/b.jsonl"]
+    assert _flag_values(argv, "--adopt") == ["/s/a.jsonl", "/s/b.jsonl"]
     assert argv[argv.index("--label") + 1] == "user_created=true"
     # A fresh id is minted deliberately: the source's id may still be live there.
     assert "--id" not in argv
+    # No account and no other work dir: the workspace's default account, in the checkout.
+    assert "--env" not in argv
+    assert "--from" not in argv
+    assert "account=" not in " ".join(argv)
+
+
+def test_build_recreate_argv_binds_a_claude_chat_to_its_account_through_the_config_dir() -> (
+    None
+):
+    argv = migrate_workspace.build_recreate_argv(
+        "main-chat",
+        "claude",
+        ["/s/a.jsonl"],
+        {"user_created": "true"},
+        account_dir="/home/user/.minds/accounts/ff2ef7e5",
+    )
+    # The binding rides the create, as the chat app's does: claude reads the
+    # account's config dir from the env file mngr sources into its session.
+    assert _flag_values(argv, "--env") == [
+        "CLAUDE_CONFIG_DIR=/home/user/.minds/accounts/ff2ef7e5"
+    ]
+    assert "--extra-provision-command" not in argv
+    assert "account=ff2ef7e5" in _flag_values(argv, "--label")
+
+
+def test_build_recreate_argv_binds_a_codex_chat_by_relinking_auth_json_in_its_own_folder() -> (
+    None
+):
+    argv = migrate_workspace.build_recreate_argv(
+        "bp-worktree",
+        "codex",
+        ["/s/rollout-2026-11-01T10-00-00-abc.jsonl"],
+        {"user_created": "true"},
+        account_dir="/home/user/.minds/accounts/7d36a9d4",
+        work_dir="/home/user/project-worktrees/beautiful-pixels/codex-3",
+    )
+    assert _flag_values(argv, "--type") == ["codex"]
+    # Codex is bound after provisioning, by repointing the auth.json link mngr
+    # wrote under the agent's codex home at the account's copy; the state dir
+    # is only known then, so the command leaves it to the shell.
+    (command,) = _flag_values(argv, "--extra-provision-command")
+    assert command == (
+        'mkdir -p "$MNGR_AGENT_STATE_DIR"/plugin/codex/home && '
+        "ln -sfn '/home/user/.minds/accounts/7d36a9d4/auth.json' "
+        '"$MNGR_AGENT_STATE_DIR"/plugin/codex/home/auth.json'
+    )
+    assert "--env" not in argv
+    assert "account=7d36a9d4" in _flag_values(argv, "--label")
+    # A project-folder agent is recreated in its folder rather than the checkout.
+    assert _flag_values(argv, "--from") == [
+        ":/home/user/project-worktrees/beautiful-pixels/codex-3"
+    ]
+
+
+def test_account_binding_args_leaves_another_harness_on_the_default_account() -> None:
+    assert (
+        migrate_workspace.account_binding_args(
+            "pi-coding", "/home/user/.minds/accounts/x"
+        )
+        == []
+    )
+
+
+def test_resolve_codex_session_adopts_the_recorded_root_rollout() -> None:
+    rollouts = [
+        "/h/agents/a/plugin/codex/home/sessions/2026/11/01/rollout-2026-11-01T09-00-00-id-one.jsonl",
+        "/h/agents/a/plugin/codex/home/sessions/2026/11/02/rollout-2026-11-02T09-00-00-id-two.jsonl",
+    ]
+    assert migrate_workspace.resolve_codex_session("id-one", rollouts) == (
+        (rollouts[0],),
+        (),
+    )
+    # No recorded root: the newest rollout, by the timestamp in its name.
+    assert migrate_workspace.resolve_codex_session("", rollouts) == ((rollouts[1],), ())
+    # A recorded root with no file is reported, not silently dropped.
+    assert migrate_workspace.resolve_codex_session("id-gone", rollouts) == (
+        (),
+        ("id-gone",),
+    )
+    assert migrate_workspace.resolve_codex_session("", []) == ((), ())
+
+
+def test_data_rsync_exclude_args_anchor_every_per_workspace_secret_at_the_data_root() -> (
+    None
+):
+    current = migrate_workspace.data_rsync_exclude_args("current")
+    assert "--exclude=/.secrets/restic.env" in current
+    assert "--exclude=/.secrets/share.env" in current
+    assert "--exclude=/.secrets/share_tls/" in current
+    assert "--exclude=/.secrets/agent_access/" in current
+    assert len(current) == len(migrate_workspace.DATA_SECRETS_EXCLUDED_FROM_COPY)
+    # The sign-in file the migration is supposed to carry is not excluded.
+    assert not any("anthropic.env" in flag for flag in current)
+    # A pre-declutter source keeps its secrets under runtime/secrets/.
+    assert (
+        "--exclude=/secrets/share_grants.toml"
+        in migrate_workspace.data_rsync_exclude_args("pre-declutter")
+    )
+
+
+def test_data_excludes_subcommand_prints_the_flags_for_a_shell_expansion(
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        [
+            "python3",
+            str(Path(migrate_workspace.__file__)),
+            "data-excludes",
+            "--layout",
+            "current",
+            "--checkpoint-dir",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == migrate_workspace.data_rsync_exclude_args("current")
 
 
 # ports
