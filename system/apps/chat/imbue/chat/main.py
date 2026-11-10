@@ -330,7 +330,9 @@ def main() -> None:
     serving.start()
 
     # Registered once the server answers, so a window the shell opens on the chat right after the
-    # registration finds the app answering.
+    # registration finds the app answering. Under supervisord the program line has already bound the
+    # port and registered the same row before this process imported anything (chat.conf), which
+    # leaves this registration a no-op there; it is what registers a run started any other way.
     if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
 

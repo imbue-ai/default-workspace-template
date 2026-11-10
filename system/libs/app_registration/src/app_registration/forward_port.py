@@ -76,9 +76,11 @@ import secrets
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import Any, TypedDict
+
+from app_registration import announcement
 
 _logger = logging.getLogger(__name__)
 
@@ -1159,6 +1161,18 @@ def remove(path: Path, name: str) -> None:
         _remove(path, name)
 
 
+def announce_registered(path: Path, name: str, environ: Mapping[str, str]) -> None:
+    """Append ``name``'s row in the registry at ``path`` to the services stream ``environ`` names, as ``--announce``
+    does; nothing outside a workspace, where no agent state directory names a stream."""
+    events_path = announcement.announcements_path(environ)
+    if events_path is None:
+        return
+    for row in _load_apps(path):
+        if row.get("name") == name:
+            announcement.announce_row(row, events_path)
+            return
+
+
 def main() -> None:
     logging.basicConfig(format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Register or remove an app port")
@@ -1231,6 +1245,15 @@ def main() -> None:
             "no manifest to carry one (a preview of the app). Authoritative per call."
         ),
     )
+    parser.add_argument(
+        "--announce",
+        action="store_true",
+        help=(
+            "Also append the registered row's service_registered event to the services stream "
+            "($MNGR_AGENT_STATE_DIR/events/services/events.jsonl), so the app is routable before "
+            "the shell, the stream's writer, has read the registry (see app_registration.announcement)"
+        ),
+    )
     args = parser.parse_args()
 
     if args.manifest is None and args.name is None:
@@ -1251,6 +1274,9 @@ def main() -> None:
     if args.remove and args.display_name is not None:
         parser.error("--display-name cannot be combined with --remove")
 
+    if args.remove and args.announce:
+        parser.error("--announce cannot be combined with --remove")
+
     if args.manifest is not None and (
         args.remove
         or args.icon_file is not None
@@ -1267,7 +1293,7 @@ def main() -> None:
 
     try:
         if args.manifest is not None:
-            register_manifest(
+            registered_name = register_manifest(
                 apps_file(), Path(args.manifest), args.url, name_from_flag=args.name
             )
         elif args.remove:
@@ -1284,5 +1310,8 @@ def main() -> None:
                 display_name=args.display_name,
                 theming_mode=args.theming_mode,
             )
+            registered_name = args.name
     except RegistrationError as error:
         parser.error(str(error))
+    if args.announce:
+        announce_registered(apps_file(), registered_name, os.environ)

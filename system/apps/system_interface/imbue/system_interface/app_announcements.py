@@ -12,6 +12,11 @@ file on every restart. The first read after the shell starts remembers nothing a
 what a consumer reading the stream from its start needs. A stream over the archive threshold at that first read is
 moved aside before it and gzipped off-thread after, to a name mngr does not replay. The stream is plumbing the shell
 writes; it imports nothing from mngr.
+
+The shell's and the chat app's program lines also append their own row's registration before either app has
+imported (``forward_port.py --announce``, ``app_registration.announcement``), so both are routable from the first
+moment of a boot; those lines carry the same fields as the ones written here, and the shell's first read announces
+them again.
 """
 
 import os
