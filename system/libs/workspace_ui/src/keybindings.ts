@@ -446,7 +446,7 @@ export function chordDisplayLabel(chord: string, isApple: boolean): string {
   return chordKeycapLabels(chord, isApple).join(isApple ? "" : "+");
 }
 
-/** One canonical chord in words ("Command+Shift+N"), for tooltips, screen readers, and messages. */
+/** One canonical chord in words ("Shift+Command+N"), for tooltips, screen readers, and messages. */
 export function chordSpokenLabel(chord: string, isApple: boolean): string {
   return chord
     .split("+")
