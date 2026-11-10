@@ -65,7 +65,7 @@ Then wait for the automated system message with the user's answer.
 
 ## The answer
 
-The message names every source you asked for under `GRANTED` or `NOT_GRANTED`, and for each granted one, what you can now read:
+The message names every source you asked for under `GRANTED` or `NOT_GRANTED`, and for each granted one, what you can now read. Two more lists appear only when they apply: `GRANTED_PENDING_RESTART` for sources granted while Imbue Studio's Full Disk Access is still off (their reads are refused until the user turns it on and restarts Imbue Studio; do not ask for them again), and `NOT_GRANTED_ASKING_TURNED_OFF` for sources that need Full Disk Access when the user has turned off requests for it (do not ask for them again):
 
 ```
 Your app-data request on device host-abc was answered. GRANTED: installed-apps, browser-history; NOT_GRANTED: safari-history.
@@ -91,7 +91,29 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -o History.db "http://latchkey
 - A 502 means the computer is asleep or Imbue Studio is closed: say so once per task and stop reading.
 - **Two different refusals answer 403; read the body to tell them apart.**
   - **"Request not permitted by the user"** comes from the gateway: you have no grant for that path any more. The user turned the source off, usually with a `REVOKED` message to you; if none came, treat it as revoked all the same (see "When the user takes access back").
-  - **Any other 403 on a path you were granted** (typically "Operation not permitted") comes from the user's Mac: the grant is there, but Imbue Studio cannot open the file. Most of these files are protected by macOS, and Imbue Studio needs Full Disk Access to open them. Tell the user once: "Imbue Studio needs Full Disk Access to read this: turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio." Do not ask again in that task.
+  - **Any other 403 on a path you were granted** (typically "Operation not permitted") comes from the user's Mac: the grant is there, but Imbue Studio cannot open the file, because macOS protects it and Imbue Studio's Full Disk Access is off. Ask for it, at most once per task (see "Asking for Full Disk Access").
+
+## Asking for Full Disk Access
+
+Only after a refused read on a granted path, as above. To ask for sources you do not hold yet, file `app-data`: its dialog sets up Full Disk Access itself when a source needs it.
+
+First read the status, with `X-Latchkey-Device` set to the same device:
+
+```bash
+latchkey curl -H "X-Latchkey-Device: <device ID>" http://latchkey-self.invalid/minds-api-proxy/api/v1/full-disk-access
+```
+
+- `is_asking_allowed: false`: the user turned off requests for Full Disk Access. Do not ask; tell them once that you cannot read that source, and carry on without it.
+- `status: "ON"`: it is on now; read again.
+- Otherwise file the request, in a tool call of its own:
+
+```bash
+latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.invalid/permission-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "full-disk-access", "payload": {}, "rationale": "To read your Notes, which macOS protects, Imbue Studio needs Full Disk Access."}'
+```
+
+The answer says `ENABLED` (read again), `DECLINED` (do not ask again in this task), `ASKING_TURNED_OFF` (do not ask again at all), `REFUSED_SHARED_WITH_FULL_ACCESS` (this workspace is shared too widely to ask), or `NOT_APPLICABLE` (the computer is not a Mac). Turning it on can take a restart of Imbue Studio; until then the request stays open and nothing arrives, so carry on with whatever else the task needs. A 400 naming the `type` means this computer's Imbue Studio predates the request: tell the user to turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio, once.
 
 ## When the user takes access back
 

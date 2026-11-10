@@ -38,7 +38,8 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" http://latchkey-self.invalid/m
 Then file one `app-data` request (the `read-app-data` skill, "Asking") for:
 
 - `installed-apps` and `browser-history`, always;
-- `notes`, `reminders`, and `calendar` too, but only when the status is `ON`.
+- `notes`, `reminders`, and `calendar` too, when the status is `ON` or `is_asking_allowed` is true: these need
+  Full Disk Access, and the request's dialog walks the user through turning it on.
 
 Never ask for `messages`, `shell-history`, or `code-projects` here: they are the
 most private sources, or the most likely to name clients, and suggestions do not
