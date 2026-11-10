@@ -253,6 +253,9 @@ export interface KeyboardSettingsSectionAttrs {
   readonly context?: ChordContext;
   /** Told each time the recorder starts or stops listening for a new shortcut. */
   readonly onRecordingChange?: (isRecording: boolean) => void;
+  /** Handed, while the section is mounted, what records a chord the desktop app took from the OS while the recorder
+   *  listened (`minds:record-chord`), as if it were pressed; handed null as the section goes. */
+  readonly onChordRelay?: (record: ((chord: string) => void) | null) => void;
 }
 
 const SECTION_HEADER_CLASS =
@@ -371,7 +374,18 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     event.preventDefault();
     event.stopPropagation();
     const chord = chordFromKeydown(event, context.platform);
-    if (chord === null) return;
+    if (chord !== null) recordChord(current, chord);
+  }
+
+  /** A chord the desktop app took from the OS while the recorder listened, recorded as a pressed one is. */
+  function recordRelayedChord(chord: string): void {
+    if (editor === null || !editor.isRecording) return;
+    recordChord(editor, chord);
+    m.redraw();
+  }
+
+  /** Take one chord into the editor: refused, offered as a clash, or staged; the recorder stops either way. */
+  function recordChord(current: ActionEditor, chord: string): void {
     current.refusal = null;
     if (isRefusedChord(chord)) current.refusal = REFUSED_CHORD_NOTICE;
     else if (current.action.scope === "workspace" && !isWorkspaceWideChord(chord)) {
@@ -911,11 +925,13 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   return {
-    oninit() {
+    oninit(vnode) {
       void load();
+      vnode.attrs.onChordRelay?.(recordRelayedChord);
     },
-    onremove() {
+    onremove(vnode) {
       closeEditor();
+      vnode.attrs.onChordRelay?.(null);
     },
     view(vnode) {
       onRecordingChange = vnode.attrs.onRecordingChange;

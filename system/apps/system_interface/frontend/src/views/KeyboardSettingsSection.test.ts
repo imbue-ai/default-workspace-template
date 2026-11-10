@@ -250,10 +250,20 @@ async function flush(): Promise<void> {
 }
 
 /** Mount the section in the desktop app on a Mac (unless told otherwise) and let its catalog read land. */
+// What records a chord the desktop app relays, as the last mounted section handed it over.
+let recordRelayedChord: ((chord: string) => void) | null = null;
+
 async function mountSection(
   context: typeof MAC_DESKTOP | typeof WINDOWS_DESKTOP | typeof MAC_BROWSER = MAC_DESKTOP,
 ): Promise<HTMLElement> {
-  const root = mountView(() => m(KeyboardSettingsSection, { context }));
+  const root = mountView(() =>
+    m(KeyboardSettingsSection, {
+      context,
+      onChordRelay: (record) => {
+        recordRelayedChord = record;
+      },
+    }),
+  );
   await flush();
   return root;
 }
@@ -587,6 +597,24 @@ describe("editing a shortcut", () => {
       "⌘W is a shortcut the browser keeps for itself",
     );
     expect(buttonNamed(root, "Only in this workspace").disabled).toBe(false);
+  });
+
+  it("records a key the desktop app took from the OS while the recorder listened, and only then", async () => {
+    stubFetch(catalogOf());
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    recordRelayedChord?.("alt+f4");
+    m.redraw.sync();
+    click(root.querySelector(".keybinding-add"));
+    recordRelayedChord?.("alt+f4");
+    m.redraw.sync();
+
+    expect(
+      Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).map((k) => k.getAttribute("data-chord")),
+    ).toEqual(["f2", "alt+f4"]);
+    expect(root.querySelector(".keybinding-recorder")).toBeNull();
+    expect(root.querySelector(".keybinding-warning")?.textContent).toContain("normally used for closing the window");
   });
 
   it("refuses Ctrl+Alt+Delete and says why, staging nothing", async () => {
