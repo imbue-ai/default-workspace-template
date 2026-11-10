@@ -166,7 +166,7 @@ Show the user the people you found, one short line each with its link, and ask w
 
 **Rank by the email's organization.** When `email_domain` is set, list first any person whose title, snippet or link mentions that organization (its domain, or its name: `Imbue` for `imbue.com`), and say why in that line: "mentions Imbue, your email's organization". This only orders what the search already found; it sends nothing new.
 
-**Offer to search with it.** When `email_domain` is set, no result mentions that organization, either more than one person or none was found, and `consent.json` has no `"email_org"` answer yet, add this to the end of the message, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`:
+**Offer to search with it.** Only when the name searches (the widened batch included) found no one at all, `email_domain` is set, and `consent.json` has no `"email_org"` answer yet: say you found no one by that name, and add this to the end of the message, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`:
 
 > Your account email is at <domain>. Want me to also search for your name with <Org>?
 >
