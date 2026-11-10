@@ -11,10 +11,12 @@ from workspace_profile.manifest import (
 from workspace_profile.overrides import write_user_override_values
 
 
-def _write_app_toml(tmp_path: Path, keybindings: str) -> Path:
+def _write_app_toml(tmp_path: Path, keybindings: str, app_name: str = "notes") -> Path:
+    """An app.toml declaring ``keybindings``; a workspace-wide action needs the shell's name, the only app the
+    manifest lets declare one."""
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text(
-        f'name = "notes"\ndisplay_name = "Notes"\ninternal = true\n\n{keybindings}',
+        f'name = "{app_name}"\ndisplay_name = "Notes"\ninternal = true\n\n{keybindings}',
         encoding="utf-8",
     )
     return manifest_path
@@ -58,7 +60,7 @@ def test_the_actions_an_app_toml_declares_load_in_display_order(tmp_path: Path) 
 def test_a_default_chord_an_action_may_not_have_refuses_to_load(
     tmp_path: Path, keybinding: str, match: str
 ) -> None:
-    manifest_path = _write_app_toml(tmp_path, keybinding)
+    manifest_path = _write_app_toml(tmp_path, keybinding, app_name="system_interface")
 
     with pytest.raises(InvalidKeybindingDeclarationError, match=match):
         load_app_keybinding_actions(manifest_path)
@@ -69,6 +71,7 @@ def test_a_workspace_wide_default_holds_a_real_modifier_or_is_a_function_key(tmp
         tmp_path,
         '[[keybindings]]\nid = "launcher"\nlabel = "Launcher"\ndefault_chords = ["meta+k", "f6", "alt+shift+k"]\n'
         'scope = "workspace"\n',
+        app_name="system_interface",
     )
 
     (action,) = load_app_keybinding_actions(manifest_path)
