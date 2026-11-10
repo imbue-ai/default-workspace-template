@@ -158,5 +158,26 @@ def test_an_empty_or_missing_fact_is_a_400_and_changes_nothing(client: FlaskClie
     assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
 
 
+def test_editing_a_fact_answers_the_profile_with_its_new_words(client: FlaskClient) -> None:
+    facts = client.get("/api/profile").get_json()["facts"]
+    target = next(fact for fact in facts if fact["text"] == "Is learning Japanese")
+
+    response = client.post("/api/facts/edit", json={"fact_id": target["id"], "text": "Is learning Korean"})
+
+    assert response.status_code == 200
+    edited = [fact for fact in response.get_json()["facts"] if fact["text"] == "Is learning Korean"]
+    assert len(edited) == 1 and edited[0]["is_told_by_user"]
+
+
+def test_a_stale_edit_is_a_409_and_an_empty_one_a_400(client: FlaskClient, workspace: Path) -> None:
+    facts = client.get("/api/profile").get_json()["facts"]
+
+    stale = client.post("/api/facts/edit", json={"fact_id": "0-0000000000000000", "text": "Anything"})
+    empty = client.post("/api/facts/edit", json={"fact_id": facts[0]["id"], "text": " "})
+
+    assert (stale.status_code, empty.status_code) == (409, 400)
+    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
+
+
 def test_health(client: FlaskClient) -> None:
     assert client.get("/api/health").get_json() == {"status": "ok"}

@@ -1,6 +1,6 @@
 # The "What Studio knows about me" app: one page at ``/`` showing what Studio remembers about the user, from what
-# they told it and the opt-in web lookup by name (the personalized-ideas skill), with controls to add to it and
-# delete it. It touches only the profile memory files and never reaches the network. It declares no launch path, so
+# they told it and the opt-in web lookup by name (the personalized-ideas skill), with controls to add to it, edit
+# it and delete it. It touches only the profile memory files and never reaches the network. It declares no launch path, so
 # the desktop offers the synthesized ``open`` at its root.
 name = "about-me"
 display_name = "What Studio knows about me"

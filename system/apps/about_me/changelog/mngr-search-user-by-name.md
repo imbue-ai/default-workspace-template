@@ -1,8 +1,10 @@
-A new built-in app, What Studio knows about me (`about-me`, port 8070): one page showing what Studio remembers about you, from what you told it and the opt-in web lookup by name, so you can see, add to, and delete all of it without asking the agent.
+A new built-in app, What Studio knows about me (`about-me`, port 8070): one page showing what Studio remembers about you, from what you told it and the opt-in web lookup by name, so you can see, add to, edit, and delete all of it without asking the agent.
 
 - Each fact in `data/memories/user-public-profile.md` is a row with its source as a link (or "You told me" for something you shared) and the date it was found, and a Delete button. A line not in the lookup's fixed shape is still shown and deletable whole; the frontmatter and the closing sentence are not facts.
 
 - An Add box keeps a fact you type about yourself as a "You told me" line after the last fact, creating the memory, its `MEMORY.md` line and your own sources entry when nothing is remembered yet. An empty entry, one over 500 characters, or one holding `<!--` or `-->` is refused with a message.
+
+- Edit turns a fact's words into a box with Save and Cancel (Enter saves, Escape cancels). Saving rewrites only that line's words, keeping its source link and date.
 
 - Delete removes exactly that line and, from `data/.skills/personalized-ideas/sources.json`, the sources only that line cited (and your own entries once no "you told me" fact remains). Deleting the last fact forgets everything.
 

@@ -40,6 +40,13 @@ class AddFactRequest(FrozenModel):
     text: str = Field(description="The fact, in the user's words; one line, at most 500 characters")
 
 
+class EditFactRequest(FrozenModel):
+    """New words for one fact, keeping its source and date."""
+
+    fact_id: str = Field(description="The fact's id, as the profile listed it")
+    text: str = Field(description="The fact's new words; one line, at most 500 characters")
+
+
 class HealthResponse(FrozenModel):
     """What the health probe answers."""
 

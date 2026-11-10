@@ -4,7 +4,7 @@
 - ``data/memories/MEMORY.md``: the memory index, whose line naming ``(user-public-profile.md)`` points at it.
 - ``data/.skills/personalized-ideas/sources.json``: the search results and pages the lookup used.
 
-Adding a fact the user typed appends one ``(you told me)`` line after the last fact, creating the profile, its index
+Editing a fact rewrites only its words, keeping its source and date. Adding a fact the user typed appends one ``(you told me)`` line after the last fact, creating the profile, its index
 line and its sources entry when there are none yet. Deleting a fact removes exactly its line from the profile and, from the sources, the entries nothing left cites;
 deleting the last fact, or forgetting all, removes the profile, its index line, and the sources, as asking the agent
 to forget does. Every write replaces its file whole (a temporary file renamed over it), and one lock serializes them,
@@ -23,6 +23,7 @@ from typing import Final
 
 from loguru import logger
 
+from about_me.data_types import Fact
 from about_me.data_types import ProfileResponse
 from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
@@ -112,6 +113,18 @@ def _kept_sources(entries: Sequence[object], dropped_urls: frozenset[str], is_dr
     return [entry for entry in entries if not is_dropped(entry)]
 
 
+def _edited_line(fact: Fact, raw: bytes, text: str) -> bytes:
+    """``raw`` with ``fact``'s words replaced by ``text``: its source and date kept, its line ending as it was."""
+    ending = raw[len(raw.rstrip(b"\r\n")) :]
+    if fact.source_url is not None:
+        line = f"- {text} ([{fact.source_title}]({fact.source_url})) <!-- found {fact.found_on} -->"
+    elif fact.is_told_by_user:
+        line = f"- {text} (you told me) <!-- found {fact.found_on} -->"
+    else:
+        line = f"- {text}"
+    return line.encode("utf-8") + ending
+
+
 def _with_line_after_last_fact(content: bytes, line: bytes) -> bytes:
     """``content`` with ``line`` inserted after its last fact line, or at the end of a profile with none."""
     file_lines = split_lines(content)
@@ -153,6 +166,25 @@ class ProfileStore:
                 write_atomically(self._profile, _with_line_after_last_fact(content, line))
             self._ensure_index_line()
             self._ensure_told_source()
+            return self._read_locked()
+
+    def edit_fact(self, fact_id: str, text: str) -> ProfileResponse:
+        """Give the one line ``fact_id`` names new words, keeping its source and date.
+
+        Raises ``InvalidFactError`` when ``text`` cannot be one line, and ``StaleFactError`` when no line of the
+        profile as it is now has that id.
+        """
+        words = normalized_fact_text(text)
+        with self._lock:
+            content = _read_bytes(self._profile)
+            if content is None:
+                raise StaleFactError(f"no profile holds the fact {fact_id}")
+            target = next((line for line in parse_profile(content) if line.fact.id == fact_id), None)
+            if target is None:
+                raise StaleFactError(f"the profile has no fact {fact_id} any more")
+            file_lines = split_lines(content)
+            file_lines[target.index] = _edited_line(target.fact, target.raw, words)
+            write_atomically(self._profile, b"".join(file_lines))
             return self._read_locked()
 
     def delete_fact(self, fact_id: str) -> ProfileResponse:
