@@ -176,14 +176,14 @@ describe("chordNotices", () => {
 });
 
 describe("chordKeycapLabels", () => {
-  it("draws the modifiers as Apple's symbols in the grammar's order on an Apple platform", () => {
-    expect(chordKeycapLabels("ctrl+alt+shift+meta+n", true)).toEqual(["⌃", "⌥", "⇧", "⌘", "N"]);
+  it("draws the modifiers as Apple's symbols, Command first, on an Apple platform", () => {
+    expect(chordKeycapLabels("ctrl+alt+shift+meta+n", true)).toEqual(["⌘", "⌃", "⌥", "⇧", "N"]);
     expect(chordKeycapLabels("meta+enter", true)).toEqual(["⌘", "↩"]);
     expect(chordKeycapLabels("meta+backspace", true)).toEqual(["⌘", "⌫"]);
   });
 
   it("spells the modifiers out elsewhere, where meta is the Control key", () => {
-    expect(chordKeycapLabels("shift+meta+n", false)).toEqual(["Shift", "Ctrl", "N"]);
+    expect(chordKeycapLabels("shift+meta+n", false)).toEqual(["Ctrl", "Shift", "N"]);
     expect(chordKeycapLabels("meta+enter", false)).toEqual(["Ctrl", "Enter"]);
     expect(chordKeycapLabels("meta+backspace", false)).toEqual(["Ctrl", "Backspace"]);
   });
@@ -198,13 +198,16 @@ describe("chordKeycapLabels", () => {
 });
 
 describe("chordDisplayLabel", () => {
-  it("runs Apple's symbols together, the way a Mac menu writes a shortcut", () => {
-    expect(chordDisplayLabel("shift+meta+n", true)).toBe("⇧⌘N");
+  it("runs Apple's symbols together, Command first", () => {
+    expect(chordDisplayLabel("shift+meta+n", true)).toBe("⌘⇧N");
+    expect(chordDisplayLabel("ctrl+alt+shift+meta+k", true)).toBe("⌘⌃⌥⇧K");
     expect(chordDisplayLabel("meta+enter", true)).toBe("⌘↩");
     expect(chordDisplayLabel("f2", true)).toBe("F2");
   });
 
-  it("joins the names with plus signs elsewhere", () => {
+  it("joins the names with plus signs elsewhere, Ctrl first", () => {
+    expect(chordDisplayLabel("shift+meta+n", false)).toBe("Ctrl+Shift+N");
+    expect(chordDisplayLabel("alt+shift+meta+w", false)).toBe("Ctrl+Alt+Shift+W");
     expect(chordDisplayLabel("ctrl+shift+n", false)).toBe("Ctrl+Shift+N");
     expect(chordDisplayLabel("alt+arrowup", false)).toBe("Alt+↑");
   });
@@ -212,7 +215,8 @@ describe("chordDisplayLabel", () => {
 
 describe("chordSpokenLabel", () => {
   it("names each key in words, joined with plus signs", () => {
-    expect(chordSpokenLabel("shift+meta+n", true)).toBe("Shift+Command+N");
+    expect(chordSpokenLabel("shift+meta+n", true)).toBe("Command+Shift+N");
+    expect(chordSpokenLabel("alt+meta+]", false)).toBe("Ctrl+Alt+]");
     expect(chordSpokenLabel("alt+arrowleft", true)).toBe("Option+Left Arrow");
     expect(chordSpokenLabel("ctrl+enter", false)).toBe("Ctrl+Enter");
     expect(chordSpokenLabel("delete", false)).toBe("Delete");
