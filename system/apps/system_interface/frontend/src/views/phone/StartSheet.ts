@@ -73,7 +73,6 @@ export const StartSheet: m.Component<StartSheetAttrs> = {
             isSheet: true,
             onRun,
             onHighlight,
-            onAppShortcutContextMenu: null,
           }),
         ),
       ],

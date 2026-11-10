@@ -18,6 +18,7 @@ import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-pos
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
+import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
@@ -63,14 +64,14 @@ import {
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
 import { findShortcut } from "../reducers/shortcuts";
-import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
+import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE, bindingForTarget } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
-import { Backdrop } from "./Backdrop";
+import { Backdrop, SHORTCUT_GRID_ATTRIBUTE } from "./Backdrop";
 import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -106,23 +107,26 @@ import { createTrayCardHover } from "./tray/TrayCard";
 import type { OpenCard } from "./tray/TrayCard";
 import type { ViewingChipAttrs } from "./tray/ViewingChip";
 
+/** A thing of the shell's own chrome that has rows of its own, which lead the menu a right-click or a long press
+ *  on it opens. */
+type MenuSubject =
+  | { readonly kind: "entry"; readonly windowId: string }
+  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut }
+  | { readonly kind: "app-shortcut"; readonly app: string; readonly launch: string }
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2). */
+  | { readonly kind: "backdrop" }
+  /** A desktop thumbnail's menu in the overview. */
+  | { readonly kind: "overview-desktop"; readonly desktopId: string }
+  | { readonly kind: "tray-agent" };
+
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
- *  down, belongs to the menu component itself. */
+ *  down, belongs to the menu component itself. A subject's menu reads the subject's own rows afresh on every
+ *  render, and follows them with ``trailingRows``: the element menu's rows for the right-click, or the reference
+ *  rows for a long press. */
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string }
   | { readonly kind: "size"; readonly windowId: string }
-  | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
-  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
-  | {
-      readonly kind: "app-shortcut";
-      readonly app: string;
-      readonly launch: string;
-      readonly referenceRows: readonly MenuRow[];
-    }
-  /** The bare backdrop's menu (the multiplayer spec, section 8.2). */
-  | { readonly kind: "backdrop"; readonly referenceRows: readonly MenuRow[] }
-  /** A desktop thumbnail's menu in the overview. */
-  | { readonly kind: "overview-desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
+  | (MenuSubject & { readonly trailingRows: readonly MenuRow[] })
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
@@ -146,10 +150,10 @@ function referenceRowsFor(store: DesktopStore, target: Element | null, x: number
   return elementReferenceRows(reference, (text) => void store.draftText(text), true);
 }
 
-/** ``rows`` followed by the reference rows after a divider, or ``rows`` alone when there are none. */
-function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuRow[]): MenuRow[] | null {
-  if (rows === null || referenceRows.length === 0) return rows;
-  return [...rows, { kind: "divider" }, ...referenceRows];
+/** ``rows`` followed by ``trailingRows`` after a divider, or ``rows`` alone when there are none. */
+function withTrailingRows(rows: MenuRow[] | null, trailingRows: readonly MenuRow[]): MenuRow[] | null {
+  if (rows === null || trailingRows.length === 0) return rows;
+  return [...rows, { kind: "divider" }, ...trailingRows];
 }
 
 /** Set on the desktop's root while a window is being dragged by its title bar, for as long as the
@@ -595,16 +599,16 @@ export function App(): m.Component<AppAttrs> {
             const desktop = activeDesktop(current.getState());
             const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
             if (shortcut !== undefined) {
-              openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
+              openMenuAt({ kind: "shortcut", shortcut, trailingRows: referenceRows() }, anchor);
             }
             break;
           }
           case "taskbar-entry":
-            openMenuAt({ kind: "entry", windowId: binding.windowId, referenceRows: referenceRows() }, anchor);
+            openMenuAt({ kind: "entry", windowId: binding.windowId, trailingRows: referenceRows() }, anchor);
             break;
           case "floating-entry": {
             const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows: referenceRows() }, anchor);
+            if (windowId !== null) openMenuAt({ kind: "entry", windowId, trailingRows: referenceRows() }, anchor);
             break;
           }
         }
@@ -674,7 +678,7 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  function rowsOfEntryMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
+  function rowsOfEntryMenu(current: DesktopStore, windowId: string): ContextMenuRow[] | null {
     const state = current.getState();
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
@@ -704,7 +708,7 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
+  function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): ContextMenuRow[] | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
     if (desktop === null) return null;
@@ -715,7 +719,7 @@ export function App(): m.Component<AppAttrs> {
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
     const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     const otherMode = shortcut.mode === "focus" ? "new" : "focus";
-    const rows: MenuRow[] = [
+    const rows: ContextMenuRow[] = [
       { kind: "action", key: "open", label: "Open", onSelect: () => void current.runShortcut(shortcut) },
     ];
     if (shortcut.mode === "focus" && launchPath !== null) {
@@ -749,7 +753,7 @@ export function App(): m.Component<AppAttrs> {
     return rows;
   }
 
-  function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
+  function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): ContextMenuRow {
     return {
       kind: "action",
       key: "remove-from-desktop",
@@ -761,7 +765,7 @@ export function App(): m.Component<AppAttrs> {
   /** Add one of the app's own shortcuts (``appShortcutsOf``) to the desktop on screen, or take it off when it is
    *  there: the one of ``launch``, or the app's first with none named; null with no desktop, no such app, or no such
    *  shortcut the app may have. */
-  function desktopShortcutRow(current: DesktopStore, appName: string, launch: string | null): MenuRow | null {
+  function desktopShortcutRow(current: DesktopStore, appName: string, launch: string | null): ContextMenuRow | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
     const app = appByName(state, appName);
@@ -779,7 +783,7 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string, launch: string): MenuRow[] | null {
+  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string, launch: string): ContextMenuRow[] | null {
     const row = desktopShortcutRow(current, appName, launch);
     return row === null ? null : [row];
   }
@@ -792,7 +796,7 @@ export function App(): m.Component<AppAttrs> {
    *  theme, and the keyboard shortcuts. While viewing somebody else's desktop (section 8.3) only the new desktop and
    *  the shortcuts stay: the overview button is hidden too, and the wallpaper and the theme are the viewed desktop's,
    *  not the viewer's to change, while the shortcuts are the viewer's own wherever they are. */
-  function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
+  function rowsOfBackdropMenu(current: DesktopStore): ContextMenuRow[] {
     const active = current.getState().activeDesktopId;
     const isViewing = current.viewedDesktop() !== null;
     return [
@@ -840,9 +844,9 @@ export function App(): m.Component<AppAttrs> {
 
   /** A thumbnail's menu in the overview: a rename for the viewer's own desktops, and the deletion, confirmed in
    *  place over the thumbnail. */
-  function rowsOfOverviewDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
+  function rowsOfOverviewDesktopMenu(current: DesktopStore, desktopId: string): ContextMenuRow[] {
     const isOwn = current.ownDesktops().some((desktop) => desktop.id === desktopId);
-    const rows: MenuRow[] = isOwn
+    const rows: ContextMenuRow[] = isOwn
       ? [
           {
             kind: "action",
@@ -857,9 +861,28 @@ export function App(): m.Component<AppAttrs> {
       key: "delete",
       label: "Delete desktop...",
       tone: "danger",
+      symbol: "trash",
       onSelect: () => current.setOverviewDeletingId(desktopId),
     });
     return rows;
+  }
+
+  /** A subject's own rows, or null once it has gone. */
+  function rowsOfSubject(current: DesktopStore, subject: MenuSubject): ContextMenuRow[] | null {
+    switch (subject.kind) {
+      case "entry":
+        return rowsOfEntryMenu(current, subject.windowId);
+      case "shortcut":
+        return rowsOfShortcutMenu(current, subject.shortcut);
+      case "app-shortcut":
+        return rowsOfAppShortcutMenu(current, subject.app, subject.launch);
+      case "backdrop":
+        return rowsOfBackdropMenu(current);
+      case "overview-desktop":
+        return rowsOfOverviewDesktopMenu(current, subject.desktopId);
+      case "tray-agent":
+        return trayAgentMenuRows(current);
+    }
   }
 
   /** The rows of whichever menu is open, or null once what it was opened for has gone. */
@@ -869,18 +892,52 @@ export function App(): m.Component<AppAttrs> {
         return rowsOfWindowMenu(current, open.windowId);
       case "size":
         return rowsOfSizeMenu(current, open.windowId);
-      case "entry":
-        return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
-      case "shortcut":
-        return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
-      case "app-shortcut":
-        return withReferenceRows(rowsOfAppShortcutMenu(current, open.app, open.launch), open.referenceRows);
-      case "backdrop":
-        return withReferenceRows(rowsOfBackdropMenu(current), open.referenceRows);
-      case "overview-desktop":
-        return withReferenceRows(rowsOfOverviewDesktopMenu(current, open.desktopId), open.referenceRows);
       case "element":
         return [...open.rows];
+      default:
+        return withTrailingRows(rowsOfSubject(current, open), open.trailingRows);
+    }
+  }
+
+  /** The subject a right-click on ``element`` is about, or null for one on chrome with no rows of its own. A
+   *  subject that has since gone (a shortcut taken off the desktop) is none. */
+  function menuSubjectOf(current: DesktopStore, element: Element): MenuSubject | null {
+    const subject = menuSubjectAt(current, element);
+    return subject !== null && rowsOfSubject(current, subject) !== null ? subject : null;
+  }
+
+  function menuSubjectAt(current: DesktopStore, element: Element): MenuSubject | null {
+    // The bare backdrop alone: the grid covers it whole, and a right-click on a shortcut in it is the shortcut's.
+    if (element.hasAttribute(SHORTCUT_GRID_ATTRIBUTE)) return { kind: "backdrop" };
+    if (element.closest("[data-tray-agent]") !== null) return { kind: "tray-agent" };
+    const desktopId = element.closest("[data-overview-desktop]")?.getAttribute("data-overview-desktop");
+    if (desktopId) return { kind: "overview-desktop", desktopId };
+    // A launcher row that opens an app, not one that hands the typed text to it.
+    const launchRow = element.closest("[data-launcher-overlay] [data-launch]:not([data-text-action])");
+    const launchKey = launchRow?.getAttribute("data-launch") ?? "";
+    const separator = launchKey.indexOf(":");
+    if (separator > 0) {
+      return {
+        kind: "app-shortcut",
+        app: launchKey.substring(0, separator),
+        launch: launchKey.substring(separator + 1),
+      };
+    }
+    const binding = bindingForTarget(element);
+    switch (binding?.kind) {
+      case "taskbar-entry":
+        return { kind: "entry", windowId: binding.windowId };
+      case "floating-entry": {
+        const window = pinnedWindowOf(current.getState(), binding.app);
+        return window === null ? null : { kind: "entry", windowId: window.id };
+      }
+      case "shortcut": {
+        const desktop = activeDesktop(current.getState());
+        const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
+        return shortcut === undefined ? null : { kind: "shortcut", shortcut };
+      }
+      default:
+        return null;
     }
   }
 
@@ -908,7 +965,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** The tray agent entry's right-click menu: the card's actions, the way the floating creature offers its own. */
-  function trayAgentMenuRows(current: DesktopStore): MenuRow[] {
+  function trayAgentMenuRows(current: DesktopStore): ContextMenuRow[] {
     return [
       { kind: "action", key: "change-avatar", label: "Change avatar...", onSelect: () => openAvatarChooser(current) },
       { kind: "action", key: "float", label: "Float", onSelect: () => floatAvatar(current) },
@@ -1022,12 +1079,6 @@ export function App(): m.Component<AppAttrs> {
       onEndRename: () => current.setOverviewRenamingId(null),
       onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
       onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
-      onDesktopContextMenu: (desktopId, x, y, target) => {
-        openMenuAt(
-          { kind: "overview-desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
-          anchorForPoint(x, y),
-        );
-      },
       onConfirmDelete: (desktopId) => {
         current.setOverviewDeletingId(null);
         void current.deleteDesktop(desktopId);
@@ -1273,8 +1324,17 @@ export function App(): m.Component<AppAttrs> {
       openLink: (anchor) => void current.openLink(anchor.href, window.location.host, SHELL_APP_NAME),
       scope: (target) => shellReferenceScope(current, target.element),
       isDrawnByHost: () => current.getDrawsContextMenus(),
-      open: (rows, point) => {
-        openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
+      // The menu the shell draws reads a subject's rows afresh as it renders (``open`` below), so the subject's rows
+      // go through here only for the desktop app's native menu.
+      extraRows: (target) => {
+        if (!current.getDrawsContextMenus()) return [];
+        const subject = menuSubjectOf(current, target.element);
+        return subject === null ? [] : (rowsOfSubject(current, subject) ?? []);
+      },
+      open: (rows, point, target) => {
+        const subject = menuSubjectOf(current, target.element);
+        const anchor = anchorForPoint(point.x, point.y);
+        openMenuAt(subject === null ? { kind: "element", rows } : { ...subject, trailingRows: rows }, anchor);
         m.redraw();
       },
     });
@@ -1364,12 +1424,6 @@ export function App(): m.Component<AppAttrs> {
       const launcher = launcherMenu(current);
       // A pinned entry answers the same way in the bar and afloat.
       const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
-      const onEntryContextMenu = (windowId: string, x: number, y: number, target: Element): void => {
-        openMenuAt(
-          { kind: "entry", windowId, referenceRows: referenceRowsFor(current, target, x, y) },
-          anchorForPoint(x, y),
-        );
-      };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
       const roster = getRoster();
       const now = new Date();
@@ -1430,28 +1484,11 @@ export function App(): m.Component<AppAttrs> {
                     openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
                     sizeMenuTrigger,
                     onEntryClick,
-                    onEntryContextMenu,
                     isOverlayOpen: isShieldingOverlayOpen(),
                     onSelectShortcut: (key) => {
                       selectedShortcutKey = key;
                     },
                     onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
-                    onShortcutContextMenu: (shortcut, point, target) => {
-                      openMenuAt(
-                        {
-                          kind: "shortcut",
-                          shortcut,
-                          referenceRows: referenceRowsFor(current, target, point.x, point.y),
-                        },
-                        anchorForPoint(point.x, point.y),
-                      );
-                    },
-                    onBackdropContextMenu: (point, target) => {
-                      openMenuAt(
-                        { kind: "backdrop", referenceRows: referenceRowsFor(current, target, point.x, point.y) },
-                        anchorForPoint(point.x, point.y),
-                      );
-                    },
                     overview: overviewTiling === null ? null : overviewAttrs(current, desktop, overviewTiling),
                     letterbox: letterboxAttrs(current, viewing),
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
@@ -1469,12 +1506,6 @@ export function App(): m.Component<AppAttrs> {
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
-                    },
-                    onAppShortcutContextMenu: (app, launch, x, y, target) => {
-                      openMenuAt(
-                        { kind: "app-shortcut", app, launch, referenceRows: referenceRowsFor(current, target, x, y) },
-                        anchorForPoint(x, y),
-                      );
                     },
                   })
                 : null,
@@ -1533,16 +1564,12 @@ export function App(): m.Component<AppAttrs> {
                 trayCard.close();
                 void current.openMainChat();
               },
-              onAgentContextMenu: (x, y) => {
-                trayCard.close();
-                openMenuAt({ kind: "element", rows: trayAgentMenuRows(current) }, anchorForPoint(x, y));
-              },
+              onAgentContextMenu: () => trayCard.close(),
               onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
               onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
               onHoverEnd: trayCard.leaveEntry,
             },
             onEntryClick,
-            onEntryContextMenu,
           }),
           m(BubbleLayer, {
             bubbles: current.getBubbles(),

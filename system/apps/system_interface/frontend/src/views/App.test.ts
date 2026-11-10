@@ -27,6 +27,7 @@ import {
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { THEME_DESIGN_PROMPT } from "./ThemeChooserDialog";
+import { HOST_MENU_GLOBAL, type HostMenuBridge, type HostMenuItem } from "@imbue/workspace-ui/src/context_menu";
 import { App } from "./App";
 import { enableThemingPrompt } from "./WindowMenu";
 
@@ -655,6 +656,44 @@ describe("the element menu", () => {
       (row) => row.getAttribute("data-menu-row") ?? "",
     );
   }
+
+  it("where the desktop app draws the menu, hands it an entry's rows and the bare backdrop's, and runs a pick", async () => {
+    store.setDrawsContextMenus(true);
+    m.redraw.sync();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const bridge = Reflect.get(window, HOST_MENU_GLOBAL) as HostMenuBridge;
+    const rightClickPage = (element: Element): HostMenuItem[] => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
+      element.dispatchEvent(event);
+      m.redraw.sync();
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+      return bridge.sections()?.page ?? [];
+    };
+    const keysOf = (items: HostMenuItem[]): string[] =>
+      items.map((item) => (item.kind === "divider" ? "|" : item.kind === "submenu" ? item.label : item.key));
+
+    const entryRows = rightClickPage(document.querySelector('[data-taskbar-entry="win-1"]') as Element);
+    expect(keysOf(entryRows).slice(0, 2)).toEqual(["minimize", "maximize"]);
+    expect(entryRows[entryRows.length - 1]).toMatchObject({ kind: "action", key: "close", symbol: "xmark" });
+    await bridge.select("close");
+    await settle();
+    expect(api.calls).toContain("closeWindow:home:win-1");
+
+    const backdropRows = rightClickPage(document.querySelector(".shortcut-grid") as Element);
+    expect(keysOf(backdropRows)).toEqual([
+      "new-desktop",
+      "show-all-desktops",
+      "|",
+      "change-wallpaper",
+      "change-theme",
+      "|",
+      "keyboard-shortcuts",
+    ]);
+    // The rest of the chrome has no rows of its own: only the reference rows reach the native menu.
+    expect(rightClickPage(document.querySelector("[data-backdrop-area]") as Element)).toEqual([]);
+    expect(keysOf(bridge.sections()!.reference)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+  });
 
   it("opens over the shell's own chrome on a right-click the views leave alone, with the reference rows", () => {
     const area = document.querySelector("[data-backdrop-area]") as HTMLElement;

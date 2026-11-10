@@ -9,7 +9,6 @@
  */
 
 import m from "mithril";
-import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelRect } from "../geometry/frames";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
@@ -26,7 +25,6 @@ export interface FloatingEntriesAttrs {
   readonly rectOf: (entry: TaskbarEntry) => PixelRect;
   readonly openMenuWindowId: string | null;
   readonly onClick: (windowId: string) => void;
-  readonly onContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
 }
 
 export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
@@ -80,10 +78,6 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             // on viewport overflow, so the below placement would land the bubble on the bar.
             ...hoverTooltipAttrs(tooltip, isAvatar ? "above" : "below"),
             onclick: () => attrs.onClick(entry.window.id),
-            oncontextmenu: (event: MouseEvent) => {
-              event.preventDefault();
-              attrs.onContextMenu(entry.window.id, event.clientX, event.clientY, targetElementOf(event));
-            },
           },
           parts.image,
         );
