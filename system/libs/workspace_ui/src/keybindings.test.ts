@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
+  type ChordContext,
   chordDisplayLabel,
   chordFromKeydown,
   chordKeycapLabels,
   chordNotices,
   chordSpokenLabel,
   detectChordPlatform,
-  isChordHiddenOn,
+  isChordHiddenIn,
   isRefusedChord,
   isWorkspaceWideChord,
   keydownMatchesAction,
@@ -98,6 +99,11 @@ describe("detectChordPlatform", () => {
   });
 });
 
+const MAC_DESKTOP: ChordContext = { platform: "mac", surface: "desktop" };
+const MAC_BROWSER: ChordContext = { platform: "mac", surface: "browser" };
+const WINDOWS_DESKTOP: ChordContext = { platform: "windows", surface: "desktop" };
+const WINDOWS_BROWSER: ChordContext = { platform: "windows", surface: "browser" };
+
 describe("isRefusedChord", () => {
   it("refuses Ctrl+Alt+Del in its canonical spelling and nothing else", () => {
     expect(isRefusedChord("alt+meta+delete")).toBe(true);
@@ -118,42 +124,46 @@ describe("isWorkspaceWideChord", () => {
   });
 });
 
-describe("isChordHiddenOn", () => {
-  it("hides a chord holding the Mac's Control key off a Mac, and nothing else", () => {
-    expect(isChordHiddenOn("ctrl+k", "windows")).toBe(true);
-    expect(isChordHiddenOn("ctrl+meta+f", "linux")).toBe(true);
-    expect(isChordHiddenOn("ctrl+k", "mac")).toBe(false);
-    expect(isChordHiddenOn("meta+k", "windows")).toBe(false);
-    // A chord browsers keep is warned about, never hidden.
-    expect(isChordHiddenOn("meta+w", "mac")).toBe(false);
+describe("isChordHiddenIn", () => {
+  it("hides a chord holding the Mac's Control key off a Mac", () => {
+    expect(isChordHiddenIn("ctrl+k", WINDOWS_DESKTOP)).toBe(true);
+    expect(isChordHiddenIn("ctrl+meta+f", { platform: "linux", surface: "browser" })).toBe(true);
+    expect(isChordHiddenIn("ctrl+k", MAC_DESKTOP)).toBe(false);
+    expect(isChordHiddenIn("meta+k", WINDOWS_DESKTOP)).toBe(false);
+  });
+
+  it("hides a chord the browser keeps only when the workspace runs in a browser", () => {
+    expect(isChordHiddenIn("meta+w", MAC_BROWSER)).toBe(true);
+    expect(isChordHiddenIn("meta+w", MAC_DESKTOP)).toBe(false);
+    expect(isChordHiddenIn("meta+tab", WINDOWS_BROWSER)).toBe(true);
+    expect(isChordHiddenIn("meta+tab", MAC_BROWSER)).toBe(false);
+    expect(isChordHiddenIn("alt+meta+w", MAC_BROWSER)).toBe(false);
   });
 });
 
 describe("chordNotices", () => {
-  it("warns about a chord browsers keep for themselves, wherever the workspace runs", () => {
-    expect(chordNotices("meta+w", "mac")).toEqual([
-      "⌘W is a shortcut browsers keep for themselves, so this may not work when the workspace is open in a browser.",
+  it("warns in the desktop app about a chord the browser would keep", () => {
+    expect(chordNotices("meta+w", MAC_DESKTOP)).toEqual([
+      "⌘W is a shortcut the browser keeps for itself, so this won't work when the workspace is open in a browser.",
     ]);
-    expect(chordNotices("meta+tab", "windows")).toEqual([
-      "Ctrl+Tab is a shortcut browsers keep for themselves, so this may not work when the workspace is open in a browser.",
-    ]);
+    expect(chordNotices("meta+w", MAC_BROWSER)).toEqual([]);
   });
 
   it("warns about a chord the OS keeps, with the Mac's remedy", () => {
-    expect(chordNotices("meta+tab", "mac")).toEqual([
-      "macOS uses ⌘⇥ for the app switcher, so this may never reach the workspace unless you change that in System Settings.",
+    expect(chordNotices("meta+tab", MAC_DESKTOP)).toEqual([
+      "macOS uses ⌘⇥ for the app switcher, so this may never reach Imbue Studio unless you change that in System Settings.",
     ]);
-    expect(chordNotices("alt+tab", "windows")).toEqual([
-      "Windows uses Alt+Tab for the window switcher, so this may never reach the workspace.",
+    expect(chordNotices("alt+tab", WINDOWS_DESKTOP)).toEqual([
+      "Windows uses Alt+Tab for the window switcher, so this may never reach Imbue Studio.",
     ]);
   });
 
-  it("warns about a key Imbue Studio takes from the OS", () => {
-    expect(chordNotices("alt+f4", "windows")).toEqual([
-      "On Windows, Alt+F4 is normally used for closing the window; in Imbue Studio it runs this action instead.",
+  it("warns about a key the desktop app takes from the OS", () => {
+    expect(chordNotices("alt+f4", WINDOWS_DESKTOP)).toEqual([
+      "On Windows, Alt+F4 is normally used for closing the window; here it runs this action instead.",
     ]);
-    expect(chordNotices("alt+f4", "mac")).toEqual([]);
-    expect(chordNotices("alt+meta+w", "mac")).toEqual([]);
+    expect(chordNotices("alt+f4", MAC_DESKTOP)).toEqual([]);
+    expect(chordNotices("alt+meta+w", MAC_DESKTOP)).toEqual([]);
   });
 });
 
@@ -202,24 +212,34 @@ describe("chordSpokenLabel", () => {
 });
 
 describe("matching", () => {
+  const MAC_DESKTOP = { platform: "mac", surface: "desktop" } as const;
+
   it("matches a keystroke against a chord list exactly", () => {
     const chords = ["ctrl+enter", "meta+enter"];
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), chords, "mac")).toBe(true);
-    expect(keydownMatchesChords(keydown("Enter", { shiftKey: true }), chords, "mac")).toBe(false);
-    expect(keydownMatchesChords(keydown("Enter"), [], "mac")).toBe(false);
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), chords, MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesChords(keydown("Enter", { shiftKey: true }), chords, MAC_DESKTOP)).toBe(false);
+    expect(keydownMatchesChords(keydown("Enter"), [], MAC_DESKTOP)).toBe(false);
   });
 
   it("matches meta with the Control key off a Mac, where a ctrl chord never matches", () => {
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["meta+enter"], "windows")).toBe(true);
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["ctrl+enter"], "windows")).toBe(false);
-    expect(keydownMatchesChords(keydown("Enter", { metaKey: true }), ["meta+enter"], "linux")).toBe(false);
+    const windows = { platform: "windows", surface: "desktop" } as const;
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["meta+enter"], windows)).toBe(true);
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["ctrl+enter"], windows)).toBe(false);
+    const linux = { platform: "linux", surface: "desktop" } as const;
+    expect(keydownMatchesChords(keydown("Enter", { metaKey: true }), ["meta+enter"], linux)).toBe(false);
+  });
+
+  it("never matches a chord the browser keeps when the page runs in one, though a browser may deliver it", () => {
+    const commandW = keydown("w", { metaKey: true, code: "KeyW" });
+    expect(keydownMatchesChords(commandW, ["meta+w"], MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesChords(commandW, ["meta+w"], { platform: "mac", surface: "browser" })).toBe(false);
   });
 
   it("matches the named action only once the resolved chords are loaded", () => {
     const resolved = { app: "chat", chords_by_action: { "send-message": ["enter"] } };
-    expect(keydownMatchesAction(keydown("Enter"), resolved, "send-message", "mac")).toBe(true);
-    expect(keydownMatchesAction(keydown("Enter"), resolved, "unknown-action", "mac")).toBe(false);
-    expect(keydownMatchesAction(keydown("Enter"), null, "send-message", "mac")).toBe(false);
+    expect(keydownMatchesAction(keydown("Enter"), resolved, "send-message", MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesAction(keydown("Enter"), resolved, "unknown-action", MAC_DESKTOP)).toBe(false);
+    expect(keydownMatchesAction(keydown("Enter"), null, "send-message", MAC_DESKTOP)).toBe(false);
   });
 });
 

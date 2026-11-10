@@ -115,9 +115,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `minds:run-shortcut`, hands their chords to every page with
   `shell:workspace-chords`, and reports them and every app's chords to Imbue
   Studio with `minds:shell-shortcuts` (the keyboard-shortcuts spec in the mngr
-  repo, section 6). The screen reads chords per platform (a Mac's Control
-  chord is hidden off a Mac) and warns, the same wherever the workspace runs,
-  about chords browsers or the OS keep.
+  repo, section 6). The screen reads chords in a context, the platform and
+  whether the workspace runs in the desktop app or a browser (`canPopOut`),
+  and hides, warns about, and checks clashes among the chords by it.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.

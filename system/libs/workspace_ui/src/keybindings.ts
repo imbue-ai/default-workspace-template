@@ -10,9 +10,8 @@
  * and Linux, where the Windows key is no modifier at all; `ctrl` is the Mac's Control key, which has
  * no partner elsewhere, so a chord holding it is hidden off a Mac. The per-platform lists below mirror
  * the desktop's `workspace_profile_contract.json` the way the two Python grammars do (the contract
- * test pins them): the chords no binding may claim, the ones a browser keeps from its pages (warned
- * about, never hidden: a shortcut works the same wherever the workspace runs), the ones an OS keeps
- * from every app, and the ones the desktop app must intercept for a binding to win.
+ * test pins them): the chords no binding may claim, the ones a browser keeps from its pages, the ones
+ * an OS keeps from every app, and the ones the desktop app must intercept for a binding to win.
  */
 
 /** The resolved chords of one app's actions, as its `/api/keybindings/me` route answers them. */
@@ -34,6 +33,15 @@ export interface ChordKeyEvent {
 
 /** The platform a chord is read on: which physical key `meta` and `ctrl` name, and which chords the OS keeps. */
 export type ChordPlatform = "mac" | "windows" | "linux";
+
+/** Where the workspace runs: the desktop app, or a page in a browser (which keeps its own shortcuts from pages). */
+export type ChordSurface = "desktop" | "browser";
+
+/** What decides whether a chord can arrive, and what to warn about when it is recorded. */
+export interface ChordContext {
+  readonly platform: ChordPlatform;
+  readonly surface: ChordSurface;
+}
 
 /** A chord a layer above the workspace keeps, with what it is used for ("the app switcher"). */
 export interface KeptChord {
@@ -279,15 +287,20 @@ export function chordFromKeydown(
   return tokens.join("+");
 }
 
-/** Whether the keystroke spells one of the given chords on the platform. */
+/** The context a page reads chords in when nothing says otherwise: the browser's platform, in the desktop app. */
+export function defaultChordContext(): ChordContext {
+  return { platform: detectChordPlatform(), surface: "desktop" };
+}
+
+/** Whether the keystroke spells one of the given chords in the context; a chord hidden there never matches. */
 export function keydownMatchesChords(
   event: ChordKeyEvent,
   chords: readonly string[],
-  platform: ChordPlatform = detectChordPlatform(),
+  context: ChordContext = defaultChordContext(),
 ): boolean {
   if (chords.length === 0) return false;
-  const chord = chordFromKeydown(event, platform);
-  return chord !== null && chords.includes(chord);
+  const chord = chordFromKeydown(event, context.platform);
+  return chord !== null && chords.includes(chord) && !isChordHiddenIn(chord, context);
 }
 
 /** Whether the chord is one no binding may claim. */
@@ -311,10 +324,20 @@ function holdsControl(chord: string): boolean {
   return chord.split("+").includes("ctrl");
 }
 
-/** Whether the chord cannot arrive on the platform, so it is hidden there: a chord holding the Mac's Control key,
- *  off a Mac (no keystroke there spells it). */
-export function isChordHiddenOn(chord: string, platform: ChordPlatform): boolean {
-  return platform !== "mac" && holdsControl(chord);
+/**
+ * Whether the chord cannot arrive in the context, so it is hidden there: a chord holding the Mac's
+ * Control key off a Mac, or a chord the browser keeps from its pages when the workspace runs in one.
+ */
+export function isChordHiddenIn(chord: string, context: ChordContext): boolean {
+  return hiddenChordReason(chord, context) !== null;
+}
+
+/** Why a chord is hidden in the context: it holds the Mac's Control key off a Mac ("platform"), or the browser
+ *  keeps it ("browser"); null for a chord that can arrive. */
+export function hiddenChordReason(chord: string, context: ChordContext): "platform" | "browser" | null {
+  if (context.platform !== "mac" && holdsControl(chord)) return "platform";
+  if (context.surface === "browser" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) return "browser";
+  return null;
 }
 
 /** Whether a chord reads with Apple's symbols on the platform: every chord on a Mac, and off a Mac a chord holding
@@ -325,30 +348,28 @@ export function readsChordAsApple(chord: string, platform: ChordPlatform): boole
 }
 
 /**
- * What to tell the user about a chord on the platform, none of it blocking: that browsers keep it for
- * themselves, that the OS is known to keep it from every app, or that Imbue Studio takes it from the OS
- * to run the binding.
+ * What to tell the user about a chord in the context, none of it blocking: that a browser would keep
+ * it from the workspace, that the OS is known to keep it from every app, or that the desktop app takes
+ * it from the OS to run the binding.
  */
-export function chordNotices(chord: string, platform: ChordPlatform): string[] {
-  const isApple = platform === "mac";
-  const label = chordDisplayLabel(chord, readsChordAsApple(chord, platform));
-  const os = OS_NAMES[platform];
+export function chordNotices(chord: string, context: ChordContext): string[] {
+  const isApple = context.platform === "mac";
+  const label = chordDisplayLabel(chord, readsChordAsApple(chord, context.platform));
+  const os = OS_NAMES[context.platform];
   const notices: string[] = [];
-  if (BROWSER_RESERVED_CHORDS[platform].includes(chord)) {
+  if (context.surface === "desktop" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) {
     notices.push(
-      `${label} is a shortcut browsers keep for themselves, so this may not work when the workspace is open in a browser.`,
+      `${label} is a shortcut the browser keeps for itself, so this won't work when the workspace is open in a browser.`,
     );
   }
-  const kept = OS_KEPT_CHORDS[platform].find((entry) => entry.chord === chord);
+  const kept = OS_KEPT_CHORDS[context.platform].find((entry) => entry.chord === chord);
   if (kept !== undefined) {
     const remedy = isApple ? " unless you change that in System Settings" : "";
-    notices.push(`${os} uses ${label} for ${kept.reason}, so this may never reach the workspace${remedy}.`);
+    notices.push(`${os} uses ${label} for ${kept.reason}, so this may never reach Imbue Studio${remedy}.`);
   }
-  const acted = HOST_ACTED_CHORDS[platform].find((entry) => entry.chord === chord);
+  const acted = HOST_ACTED_CHORDS[context.platform].find((entry) => entry.chord === chord);
   if (acted !== undefined) {
-    notices.push(
-      `On ${os}, ${label} is normally used for ${acted.reason}; in Imbue Studio it runs this action instead.`,
-    );
+    notices.push(`On ${os}, ${label} is normally used for ${acted.reason}; here it runs this action instead.`);
   }
   return notices;
 }
@@ -425,13 +446,13 @@ export function chordSpokenLabel(chord: string, isApple: boolean): string {
     .join("+");
 }
 
-/** Whether the keystroke triggers the named action under the resolved chords (none loaded: never). */
+/** Whether the keystroke triggers the named action under the resolved chords in the context (none loaded: never). */
 export function keydownMatchesAction(
   event: ChordKeyEvent,
   resolved: ResolvedKeybindings | null,
   actionId: string,
-  platform: ChordPlatform = detectChordPlatform(),
+  context: ChordContext = defaultChordContext(),
 ): boolean {
   if (resolved === null) return false;
-  return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? [], platform);
+  return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? [], context);
 }

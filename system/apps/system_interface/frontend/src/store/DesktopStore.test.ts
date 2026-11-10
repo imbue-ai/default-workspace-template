@@ -26,7 +26,11 @@ import {
 import type { GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
-import { setResolvedShellKeybindingsForTest, setShellChordPlatformForTest } from "../model/keybindings";
+import {
+  setResolvedShellKeybindingsForTest,
+  setShellChordPlatformForTest,
+  setShellChordSurface,
+} from "../model/keybindings";
 import {
   DesktopStore,
   IMMERSIVE_REFUSED_NOTICE,
@@ -901,6 +905,7 @@ describe("workspace-wide actions", () => {
   afterEach(() => {
     setResolvedShellKeybindingsForTest(null);
     setShellChordPlatformForTest(null);
+    setShellChordSurface("browser");
   });
 
   function shownOrder(store: DesktopStore): string[] {
@@ -966,7 +971,7 @@ describe("workspace-wide actions", () => {
     expect(opened).toEqual(["chrome"]);
   });
 
-  it("tells the pages the workspace-wide chords, and the chrome every app's as well, those it can receive", async () => {
+  it("tells the pages the workspace-wide chords for where it runs, and the chrome every app's as well", async () => {
     setResolvedShellKeybindingsForTest({
       app: "system_interface",
       chords_by_action: { "close-window": ["alt+meta+w", "meta+w"], "open-launcher": ["meta+k"] },
@@ -1007,17 +1012,23 @@ describe("workspace-wide actions", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
-      sendWorkspaceChords: (chords) => sentToPages.push(chords),
+      sendWorkspaceChords: (chords, surface) => sentToPages.push({ chords, surface }),
       sendChord: () => undefined,
     });
 
-    // With no chrome there is nothing to report to; the pages are told all the same.
-    await store.refreshKeybindings();
-    expect(sentToPages[sentToPages.length - 1]).toEqual(["alt+meta+w", "meta+w", "meta+k"]);
+    // A browser keeps Command-W from its pages, so it is no workspace-wide chord there.
+    store.setCanPopOut(true);
+    store.setCanPopOut(false);
+    expect(sentToPages[sentToPages.length - 1]).toEqual({ chords: ["alt+meta+w", "meta+k"], surface: "browser" });
     expect(reported).toEqual([]);
 
+    store.setCanPopOut(true);
     store.setEmbedderPresent(true);
     await settle();
+    expect(sentToPages[sentToPages.length - 1]).toEqual({
+      chords: ["alt+meta+w", "meta+w", "meta+k"],
+      surface: "desktop",
+    });
     expect(reported[reported.length - 1]).toEqual({
       chordsByAction: {
         "close-window": ["alt+meta+w", "meta+w"],
@@ -1029,12 +1040,6 @@ describe("workspace-wide actions", () => {
       },
       claimed: ["f2", "meta+w", "ctrl+r"],
     });
-
-    // Off a Mac no keystroke spells the Mac's Control chord, so it is claimed by nobody there.
-    setShellChordPlatformForTest("windows");
-    store.setEmbedderPresent(true);
-    await settle();
-    expect((reported[reported.length - 1] as { claimed: string[] }).claimed).toEqual(["f2", "meta+w"]);
   });
 
   it("hands a chord the chrome intercepted to the focused window's page", async () => {

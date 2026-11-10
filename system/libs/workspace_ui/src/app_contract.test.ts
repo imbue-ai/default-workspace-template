@@ -302,7 +302,7 @@ describe("a framed page's input reports", () => {
 
 describe("a framed page's workspace-wide chords", () => {
   // Alt+F1 spells the same chord on every platform, so the test runner's own platform does not matter.
-  const WORKSPACE_CHORDS = { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+f1"] };
+  const WORKSPACE_CHORDS = { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+f1"], surface: "browser" };
 
   function pressAltF1(init: KeyboardEventInit = {}): KeyboardEvent {
     const event = new KeyboardEvent("keydown", { key: "F1", code: "F1", altKey: true, cancelable: true, ...init });
@@ -359,12 +359,16 @@ describe("a framed page's workspace-wide chords", () => {
     expect(shortcutsSent(parent)).toEqual([]);
   });
 
-  it("ignores a malformed list of chords, keeping the last good one", () => {
-    const parent = shellFramed();
+  it("tells the page where the workspace runs, and ignores a malformed message", () => {
+    const parent = framed();
+    const onChordSurface = vi.fn();
+    connection = connectToShell({ onChordSurface });
+    deliver(HANDSHAKE, parent);
     deliver(WORKSPACE_CHORDS, parent);
-    deliver({ type: SHELL_WORKSPACE_CHORDS, chords: "alt+f2" }, parent);
+    deliver({ type: SHELL_WORKSPACE_CHORDS, chords: ["alt+f1"], surface: "tv" }, parent);
+    deliver({ type: SHELL_WORKSPACE_CHORDS, chords: "alt+f1", surface: "desktop" }, parent);
 
-    expect(pressAltF1({ bubbles: true }).defaultPrevented).toBe(true);
+    expect(onChordSurface.mock.calls).toEqual([["browser"]]);
   });
 
   it("hands the page a chord the desktop app intercepted for it", () => {

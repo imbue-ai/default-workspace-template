@@ -54,6 +54,7 @@ import {
   SHELL_START_WITH_TEXT,
   SHELL_WORKSPACE_CHORDS,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
 import { workspaceActionOfChord } from "../model/keybindings";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
@@ -233,8 +234,11 @@ export class LivePagesLayer implements PageDriver {
   private mountPolicy: MountPolicy = { kind: "all" };
   /** The overview's tiles while it is up, else null. */
   private overview: OverviewPresentation | null = null;
-  /** The workspace-wide chords as last sent; every greeting sends them again. */
-  private workspaceChords: readonly string[] = [];
+  /** The workspace-wide chords and where the workspace runs, as last sent; every greeting sends them again. */
+  private workspaceChords: { readonly chords: readonly string[]; readonly surface: ChordSurface } = {
+    chords: [],
+    surface: "browser",
+  };
 
   constructor(
     private readonly host: HTMLElement,
@@ -375,15 +379,18 @@ export class LivePagesLayer implements PageDriver {
     if (page !== undefined) sendToChildFrame(page.frame, SHELL_CLOSE_REQUEST);
   }
 
-  sendWorkspaceChords(chords: readonly string[]): void {
-    this.workspaceChords = [...chords];
+  sendWorkspaceChords(chords: readonly string[], surface: ChordSurface): void {
+    this.workspaceChords = { chords: [...chords], surface };
     for (const page of this.pages.values()) {
       if (page.greetedDesktopId !== null) this.sendWorkspaceChordsTo(page);
     }
   }
 
   private sendWorkspaceChordsTo(page: LivePage): void {
-    sendToChildFrame(page.frame, SHELL_WORKSPACE_CHORDS, { chords: [...this.workspaceChords] });
+    sendToChildFrame(page.frame, SHELL_WORKSPACE_CHORDS, {
+      chords: [...this.workspaceChords.chords],
+      surface: this.workspaceChords.surface,
+    });
   }
 
   sendChord(windowId: string, chord: string): void {

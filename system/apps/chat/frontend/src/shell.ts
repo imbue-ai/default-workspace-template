@@ -14,7 +14,12 @@
 import m from "mithril";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
-import { type ChatShortcut, chatShortcutOfKeydown, refreshKeybindings } from "./models/keybindings";
+import {
+  type ChatShortcut,
+  chatShortcutOfKeydown,
+  refreshKeybindings,
+  setKeybindingSurface,
+} from "./models/keybindings";
 import { interruptAgent } from "./models/Response";
 import { startNewChat } from "./root/newChat";
 import type { CreatedChat } from "./models/Chats";
@@ -108,6 +113,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onHidden,
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
+    onChordSurface: setKeybindingSurface,
   });
   void refreshKeybindings();
   document.addEventListener("keydown", (event) => {
