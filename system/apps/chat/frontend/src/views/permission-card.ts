@@ -274,6 +274,7 @@ const GENERIC_PERMISSION_TITLE = "Permission request";
  *  file-sharing request; "Other workspaces" for a workspace request (acting on the
  *  user's other Imbue Studio workspaces); "Device accounts" for an accounts request;
  *  "This computer" for a remote-execution request (running commands on the user's computer);
+ *  "App data" for an app-data request (reading named sources such as Notes or browser history);
  *  the friendly service name for a predefined request once the gateway catalog
  *  resolves (the raw scope until then); null when nothing named the subject, so
  *  each caller decides whether a generic stand-in beats no row at all. The
@@ -283,6 +284,7 @@ function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: Sc
   if (details?.requestType === "workspace") return "Other workspaces";
   if (details?.requestType === "accounts") return "Device accounts";
   if (details?.requestType === "remote-execution") return "This computer";
+  if (details?.requestType === "app-data") return "App data";
   if (details?.scope) return scopeInfo?.display_name ?? details.scope;
   return null;
 }

@@ -152,6 +152,7 @@ const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of t
 
 // An accounts request (listing the device's signed-in accounts).
 const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account is signed in","request_type":"accounts","payload":{}}`;
+const APP_DATA_OUTPUT = `{"request_id":"app-1","rationale":"suggest apps","request_type":"app-data","payload":{"sources":[{"id":"notes"}]}}`;
 
 // The backend caps tool output (`_MAX_OUTPUT_LENGTH` in session_parser.py) and
 // appends this marker. Mirrored here because the recovery scan's real trigger
@@ -461,6 +462,14 @@ describe("renderPermissionCard", () => {
       makeResult(ACCOUNTS_OUTPUT),
     );
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Device accounts");
+  });
+
+  it("titles an app-data request 'App data'", () => {
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(APP_DATA_OUTPUT),
+    );
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("App data");
   });
 
   it("titles a workspace request 'Other workspaces' with a button and no permission specifics", () => {

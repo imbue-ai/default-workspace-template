@@ -105,7 +105,7 @@ Formal tests are the background harden pass's job (the `crystallize-creation` an
 
 The user may be reaching this workspace from the Imbue Studio desktop app, or through a sharing URL in a browser on a computer, phone, or tablet: once sharing is on, the whole workspace and each of its apps has one. The `use-from-phone` skill walks the user through setting that up.
 
-If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
+If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two. For their Mac app data (Notes, browser history, Reminders, Calendar, Messages, installed apps), load the `read-app-data` skill first.
 
 Commands run in this workspace by default: a bare "my computer", "my machine", or "my desktop" means the workspace, which has its own terminal and desktop. Only when the user explicitly asks for something to run on their own physical computer ("on my laptop", "on my local machine", "not in the workspace"), or a task would have you tell them to run a command there, load the `run-on-users-computer` skill first: it says what to try instead, when a one-off script the user runs is fine, and the one sanctioned way to run something there yourself.
 
