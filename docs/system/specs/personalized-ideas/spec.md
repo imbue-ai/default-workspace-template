@@ -45,7 +45,8 @@ The skill does not use them:
 
 ## Exclusions
 
-- A message from someone other than the owner (`[from: <name>]`), and any shared workspace: the name belongs to the owner, and what is saved would be visible to others. The agent suggests general ideas instead.
+- A message from someone other than the owner (`[from: <name>]`): the name belongs to the owner. The agent suggests general ideas instead.
+- A workspace with sharing on is asked about once, with a fixed question and two reply buttons ("Only me, go ahead" / "Skip the search"), because sharing is often only the owner's own phone or browser. "Only me" is saved in `consent.json` and not asked again; anything else counts as a "no" and nothing is searched.
 - Backend: the connector's web lookup routes (mngr-internal `apps/remote_service_connector`), the desktop routes that reach them, and the owner-name route. The name and the pages read pass through Imbue's connector on their way to treg; the connector records the account, time, kind of call, workspace and answering engine for its daily limits, never the query or the URL. The one outside service is treg, under Imbue's account and billing; the offer says the search goes through an outside search service.
 
 ## Seeing and controlling what is remembered

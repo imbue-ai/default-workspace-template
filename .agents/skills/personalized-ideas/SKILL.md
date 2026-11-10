@@ -17,7 +17,7 @@ Everything in this skill serves that: ask before searching, search only for what
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answer, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>"}`.
+- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace; see step 3).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -35,7 +35,6 @@ Otherwise, do not offer the lookup, and go straight to step 6 with general ideas
 
 - `consent.json` says `"no"`. The user already declined; do not ask again unless they bring it up.
 - The message came from someone other than the owner (it starts with `[from: <name>]`). The name on the account is the owner's, not theirs.
-- The workspace is shared (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell). The person in the chat may not be the account's owner, and what you save would be visible to others.
 - The user has already told you enough about themselves to suggest from.
 
 If `consent.json` says `"yes"` and `user-public-profile.md` is in your memory, skip to step 6 and suggest from it.
@@ -77,6 +76,21 @@ latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$M
 The answer is `{"display_name": "<name>"}` for the account that owns this workspace.
 Ask the user to type their name instead when `display_name` is null or the call fails (for example when Imbue Studio is not running on their computer), and end your turn.
 Never take a name from anywhere else, such as a file, a commit author, or an email address, and never ask for the accounts permission for this: that route is all the lookup needs.
+
+### Check who can see the workspace
+
+Before searching, check whether sharing is turned on for this workspace (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell).
+Sharing is often on only so the owner can reach the workspace from their own phone or browser, so it is a question for the user, not a reason to give up.
+
+- **Sharing is off**, or `consent.json` already has `"only_me": true`: go straight to step 4, with no question.
+- **Sharing is on** and they have not confirmed yet: send exactly this message, word for word, then end your turn:
+
+> Sharing is turned on for this workspace, so other people may be able to get into it. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace?
+>
+> [Only me, go ahead](#reply=only%20me) [Skip the search](#reply=skip%20the%20search)
+
+- `only me` (or another clear "only me"): add `"only_me": true` to `consent.json` and go to step 4. Do not ask again in later chats.
+- `skip the search`, "others can", "not sure", or anything that is not a clear "only me": set `consent.json`'s `lookup` to `"no"`, do not search, and go to step 6 with what they tell you about themselves.
 
 ## 4. Search
 
