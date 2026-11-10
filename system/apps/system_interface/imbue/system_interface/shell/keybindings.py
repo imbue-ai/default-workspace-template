@@ -36,6 +36,7 @@ from workspace_profile.snapshot import WorkspaceProfileSnapshot
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.desktop_document import launcher_order
 
 SHELL_APP_NAME: Final[str] = "system_interface"
 SHELL_DISPLAY_NAME: Final[str] = "Workspace"
@@ -67,7 +68,8 @@ def shell_keybinding_actions() -> tuple[KeybindingAction, ...]:
 
 
 def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[AppKeybindingActions]:
-    """Every app's declared keybinding actions: the shell's own, then each registered app that declares any.
+    """Every app's declared keybinding actions: the shell's own, then each registered app that declares any, in the
+    launcher's order (``launcher_order``), so the screen lists the apps where the launcher does.
 
     A row whose default chords are invalid (a registration the reader cannot trust), or that claims a
     workspace-wide action (the shell's alone), is skipped with a warning rather than offered for re-binding.
@@ -75,8 +77,7 @@ def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[Ap
     listed = [
         AppKeybindingActions(app=SHELL_APP_NAME, display_name=SHELL_DISPLAY_NAME, actions=shell_keybinding_actions())
     ]
-    for entry in entries:
-        row = entry.row
+    for row in launcher_order([entry.row for entry in entries]):
         if str(row.name) == SHELL_APP_NAME or not row.keybindings:
             continue
         invalid = find_invalid_default_chords(row.keybindings)
