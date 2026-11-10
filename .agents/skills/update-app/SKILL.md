@@ -114,23 +114,13 @@ To hand work off:
 1. If the change needs its shape confirmed (a larger-scope change above),
    settle the shape with the user first, then hand off the build.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
-   The worker starts fresh: it knows only its brief and the workspace's usual
-   instructions, which send any agent editing an app to this skill. So the
-   brief says all of the following:
-   - the app, the request in the user's words, the files and decisions you
-     already know about, and what done looks like;
-   - it is building a handed-off change in its own worktree, and the lead
-     brings the work into the live app;
-   - build the change to a usable state, commit, and send a milestone report
-     each time a usable part is committed, so each part can reach the user
-     early;
-   - verify against its own instance (a preview or isolated instance started
-     from its worktree), never the live app;
-   - do not take the service lease, restart or refresh the live app, or open,
-     refresh or close any of the user's windows;
-   - do not run the harden pass or the turn-end steps of this skill: hardening
-     still happens at turn-end, after the user's feedback, as described below;
-   - do not hand the work, or any part of it, to another worker.
+   The brief names the app, the request in the user's words, the files and
+   decisions you already know about, and what done looks like. It asks the
+   worker to build the change to a usable state, verify it against its own
+   instance (never the live app), commit, and send a milestone report each
+   time a usable part is committed. It also tells the worker not to take the
+   service lease, touch the live app or the user's windows, harden, or hand
+   off again. Hardening still happens at turn-end, as described below.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
 4. While the worker runs, keep handling new messages. Do a small request on a
@@ -145,11 +135,7 @@ To hand work off:
 The worker edits its own worktree, so it needs no service lease. Take yours as
 usual (next section) before you merge its work into the live app.
 
-**If you are that worker** (your task file came from `launch-task` and hands
-you a change to an app): your brief overrides this skill. Build and verify in
-your own worktree against your own instance, and skip the service lease, the
-restart and refresh steps of the live loop, the turn-end hardening, and this
-hand-off section. Report as your task file says.
+If you are that worker, your brief overrides this skill.
 
 ## One editor at a time: the service lease
 
