@@ -17,7 +17,7 @@ Everything in this skill serves that: ask before searching, search only for what
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace; see step 3).
+- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -166,7 +166,7 @@ Show the user the people you found, one short line each with its link, and ask w
 
 **Rank by the email's organization.** When `email_domain` is set, list first any person whose title, snippet or link mentions that organization (its domain, or its name: `Imbue` for `imbue.com`), and say why in that line: "mentions Imbue, your email's organization". This only orders what the search already found; it sends nothing new.
 
-**Offer to search with it.** When `email_domain` is set, no result mentions that organization, more than one person was found or none, and `consent.json` has no `"email_org"` answer yet, add this to the end of the message, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`:
+**Offer to search with it.** When `email_domain` is set, no result mentions that organization, either more than one person or none was found, and `consent.json` has no `"email_org"` answer yet, add this to the end of the message, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`:
 
 > Your account email is at <domain>. Want me to also search for your name with <Org>?
 >
