@@ -59,6 +59,19 @@ label = "Undo"
 default_chords = ["Control+Z"]
 """
 
+_WORKSPACE_WIDE_ROW = """
+[[apps]]
+name = "sketch"
+url = "http://127.0.0.1:9"
+program = "sketch"
+
+[[apps.keybindings]]
+id = "open-sketch"
+label = "Open sketch"
+default_chords = ["alt+meta+s"]
+scope = "workspace"
+"""
+
 
 def _client(tmp_path: Path, *extra_rows: str) -> FlaskClient:
     broadcaster = WebSocketBroadcaster()
@@ -268,6 +281,12 @@ def test_a_save_for_a_stopped_apps_action_is_accepted(tmp_path: Path) -> None:
 
 def test_the_catalog_skips_a_row_whose_default_chords_are_off_the_grammar(tmp_path: Path) -> None:
     catalog = _client(tmp_path, _STOPPED_NOTES_ROW, _OFF_GRAMMAR_ROW).get("/api/keybindings/catalog").get_json()
+
+    assert [app["app"] for app in catalog["apps"]] == ["system_interface", "notes"]
+
+
+def test_the_catalog_skips_a_row_that_claims_a_workspace_wide_action(tmp_path: Path) -> None:
+    catalog = _client(tmp_path, _STOPPED_NOTES_ROW, _WORKSPACE_WIDE_ROW).get("/api/keybindings/catalog").get_json()
 
     assert [app["app"] for app in catalog["apps"]] == ["system_interface", "notes"]
 
