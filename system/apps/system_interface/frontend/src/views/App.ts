@@ -200,7 +200,6 @@ export function App(): m.Component<AppAttrs> {
   let wallpaperDialogDesktopId: string | null = null;
   /** The desktop whose theme chooser is up. */
   let themeDialogDesktopId: string | null = null;
-  /** Whether the keyboard shortcuts dialog is up. */
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
   let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
