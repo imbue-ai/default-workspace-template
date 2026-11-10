@@ -112,8 +112,8 @@ export const OPEN_LOCAL_FILES: "minds:open-local-files" =
 // Workspace -> embedder (contract v15): the state of the keyboard shortcuts page Imbue Studio's Workspace settings
 // frames. Payload: { height, isRecording }: the page's height in CSS px, which the frame takes, and whether its
 // recorder is listening for a new shortcut, while which Imbue Studio closes nothing on Escape, runs no shortcut, and
-// hands the recorder every key (RECORD_CHORD). The first one says the page has loaded; until then the settings pane shows no frame, so a workspace too old to serve
-// the page is told apart from one still loading.
+// hands the recorder every key (RECORD_CHORD). The first one says the page has loaded; until then the settings pane
+// shows no frame, so a workspace too old to serve the page is told apart from one still loading.
 export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page" =
   "KEYBOARD_SHORTCUTS_PAGE" in embedContract ? embedContract.KEYBOARD_SHORTCUTS_PAGE : "minds:keyboard-shortcuts-page";
 
