@@ -290,6 +290,7 @@ import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
+import { canSendReply, sendReplyFromMessage } from "./reply-senders";
 import {
   MAX_TEXTAREA_HEIGHT_PX,
   MessageInput,
@@ -2626,5 +2627,143 @@ describe("MessageInput dictation", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("MessageInput sending a reply button's message", () => {
+  const TARGET = { id: "acct-openai", harness: "codex", label: "OpenAI (Codex)" };
+
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.launchChat.mockClear();
+    mocks.switchChat.mockClear();
+    mocks.clearComposerAttachments.mockClear();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.isChatRegistered = true;
+    mocks.isLaunchInFlight = false;
+    mocks.provisional = undefined;
+    mocks.selectedAccount = null;
+    mocks.accountsLoaded = true;
+    mocks.switching.target = null;
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  /** Mount the composer on ``chatId`` with ``draft`` typed into it; returns its render. */
+  function composerWithDraft(chatId: string, draft: string): () => unknown {
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)?.({
+      target: { value: draft, style: {}, scrollHeight: 10 },
+    });
+    render();
+    return render;
+  }
+
+  it("sends the reply as the chat's next message, leaving the draft and its attachments where they are", async () => {
+    const attachment = { localId: "l1", fileName: "notes.txt", status: "ready", uploaded: { path: "/u/notes.txt" } };
+    mocks.getComposerAttachments.mockReturnValue([attachment]);
+    const render = composerWithDraft("agent-reply-1", "half-typed thought");
+
+    expect(canSendReply("agent-reply-1")).toBe(true);
+    expect(sendReplyFromMessage("agent-reply-1", "no thanks")).toBe(true);
+    // The "Sending…" bubble is up on the click itself, before anything is awaited.
+    expect(getOutgoingMessages("agent-reply-1").map((outgoing) => outgoing.content)).toEqual(["no thanks"]);
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      "agent-reply-1",
+      "no thanks",
+      expect.stringMatching(/^m-/),
+    );
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("half-typed thought");
+    expect(localStorage.getItem("message-text:agent-reply-1")).toBe("half-typed thought");
+    expect(mocks.clearComposerAttachments).not.toHaveBeenCalled();
+  });
+
+  it("launches a seeded chat awaiting its first send, with the reply as its first message", async () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-reply-2",
+      name: "Welcome",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+      held_sends: [],
+    };
+    mocks.selectedAccount = { id: "acct-1" };
+    composerWithDraft("agent-reply-2", "");
+
+    expect(sendReplyFromMessage("agent-reply-2", "yes")).toBe(true);
+    await flushAsync();
+
+    expect(mocks.launchChat).toHaveBeenCalledExactlyOnceWith("agent-reply-2", "acct-1", "yes", "agent");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("carries an armed switch out with the reply, as Send would", async () => {
+    mocks.switching.target = TARGET;
+    composerWithDraft("agent-reply-3", "draft stays");
+
+    expect(sendReplyFromMessage("agent-reply-3", "yes")).toBe(true);
+    await flushAsync();
+
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+    const [chatId, accountId, message] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+    expect([chatId, accountId, message]).toEqual(["agent-reply-3", "acct-openai", "yes"]);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("puts a reply that did not send in the composer, above the draft, like any failed send", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("the agent could not be reached");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const render = composerWithDraft("agent-reply-4", "my draft");
+
+    sendReplyFromMessage("agent-reply-4", "yes");
+    await flushAsync();
+
+    expect(getOutgoingMessages("agent-reply-4")).toEqual([]);
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("yes\n\nmy draft");
+    expect(renderedText(render())).toContain("Couldn't send your message");
+    error.mockRestore();
+  });
+
+  it("offers no sender while the composer is replaced by a way to connect a provider", () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-reply-5",
+      name: "Welcome",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+      held_sends: [],
+    };
+    mocks.selectedAccount = null;
+    composerWithDraft("agent-reply-5", "");
+
+    expect(canSendReply("agent-reply-5")).toBe(false);
+    expect(sendReplyFromMessage("agent-reply-5", "yes")).toBe(false);
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+  });
+
+  it("stops sending a chat's replies once the composer moves to another chat, or goes", () => {
+    const component = MessageInput();
+    component.view!({ attrs: { chatId: "agent-reply-6" } } as never);
+    expect(canSendReply("agent-reply-6")).toBe(true);
+
+    component.view!({ attrs: { chatId: "agent-reply-7" } } as never);
+    expect(canSendReply("agent-reply-6")).toBe(false);
+    expect(canSendReply("agent-reply-7")).toBe(true);
+
+    component.onremove!({} as never);
+    expect(canSendReply("agent-reply-7")).toBe(false);
   });
 });

@@ -1,0 +1,31 @@
+# The "What Studio knows about me" app: what the opt-in web lookup by name (the personalized-ideas skill) remembered
+# about the user, as one page at ``/``: each fact with its source link (or "You told me") and date, a Delete per
+# fact, "Forget all of this", and the raw files. It reads and writes only data/memories/user-public-profile.md, its
+# line in data/memories/MEMORY.md, and data/.skills/personalized-ideas/sources.json, and never reaches the network.
+# It declares no launch path, so the desktop offers the synthesized ``open`` at its root; it seeds no desktop
+# shortcut, and the launcher lists it after the ranked apps.
+name = "about-me"
+display_name = "What Studio knows about me"
+description = "What the web lookup you asked for remembered about you, each fact with its source and date, and controls to delete any of it or forget all of it."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+priority = "about-me"
+# Part of the workspace itself (its memory of the user) rather than an app built on it, so the Share tab tucks it
+# under its System group rather than offering it up front.
+system = true
+
+# Built only from the page kit and the design tokens, so every theme styles it with no work of its own
+# (docs/system/blueprint/workspace-themes/, section 7).
+[theming]
+mode = "tokens"
+
+[[references]]
+path = ".agents/skills/personalized-ideas"
+note = "Writes the profile memory in the fixed line shape this page parses, and links the page"
+
+[[references]]
+path = "docs/system/specs/personalized-ideas/spec.md"
+note = "Specifies the page (section \"A 'What Studio knows about me' page\")"

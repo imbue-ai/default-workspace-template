@@ -537,8 +537,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             "save-file",
         ],
     }
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the
-    # Style Guide stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, the
+    # Style Guide, and What Studio knows about me stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
     # and the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
@@ -553,6 +553,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": True,
         "system-monitor": True,
         "style-guide": True,
+        "about-me": True,
     }
     # The composer's dictation (the workspace-voice-input spec in the mngr repository) is the one built-in that
     # listens, so the chat's frames alone are handed the microphone.
@@ -577,6 +578,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": "app",
         "system-monitor": "system",
         "style-guide": "system",
+        "about-me": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the Screen's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
