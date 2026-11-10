@@ -451,9 +451,10 @@ each window open there. It is remembered in `users.json`, every later client
 of that user lands on it, a returning client keeps the desktop it was on (when
 it last arrived as that same user), and if it has been deleted, or the
 desktop under its id is no longer theirs (a desktop the owner makes later can
-take a deleted one's id), the next arrival seeds another and says so. Every desktop stays shared and reachable
-from everyone's launcher; there is no private mode. The seeded desktop is
-written with the visitor's key as its owner (the multiplayer spec, section
+take a deleted one's id), the next arrival seeds another and says so. Every
+desktop stays shared and reachable from everyone's launcher; there is no
+private mode. The seeded desktop is written with the visitor's key as its
+owner (the multiplayer spec, section
 8.1), so their card and their overview list it as theirs (a shell older than
 desktop owners seeded it with none, so the first start of a newer one gives
 each ownerless desktop `users.json` records for a visitor that visitor's key,
