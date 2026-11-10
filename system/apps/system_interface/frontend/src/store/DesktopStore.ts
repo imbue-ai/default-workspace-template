@@ -3096,9 +3096,12 @@ export class DesktopStore {
     this.dispatch({ type: "window_lowered", windowId: shown[shown.length - 1].window_id });
   }
 
-  /** Hand the focused window's page a chord the chrome intercepted for it (``minds:run-chord``). */
+  /** Hand the focused window's page a chord the chrome intercepted for it (``minds:run-chord``): a solo shell's own
+   *  window, the window a phone shows, else the active desktop's focused window. */
   forwardChordToFocusedWindow(chord: string): void {
-    const focused = this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state);
+    const focused =
+      this.soloWindowId ??
+      (this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state));
     if (focused !== null) this.pageDriver?.sendChord(focused, chord);
   }
 

@@ -1106,6 +1106,29 @@ describe("workspace-wide actions", () => {
     store.forwardChordToFocusedWindow("alt+f4");
     expect(sent).toEqual(["win-4:alt+f4"]);
   });
+
+  it("hands a solo shell's chord to its own window, which the desktop holds pulled out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-2"), placementRecord("win-1", { is_detached: true })],
+    });
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    const sent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: (windowId, chord) => sent.push(`${windowId}:${chord}`),
+    });
+
+    store.forwardChordToFocusedWindow("alt+f4");
+    expect(sent).toEqual(["win-1:alt+f4"]);
+  });
 });
 
 describe("desktop news", () => {
