@@ -4,15 +4,19 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KeybindingAppView, KeybindingsCatalog, KeybindingsDeliveryOutcome } from "../model/api";
+import type { ChromeShortcuts } from "../model/chromeShortcuts";
 import { isShortcutRecording } from "../model/shortcutRecording";
 import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
+  IMBUE_STUDIO_APP,
   REFUSED_CHORD_NOTICE,
   WORKSPACE_WIDE_CHORD_NOTICE,
   actionsSharingShortcuts,
   clashCandidates,
   clashesOf,
+  differsFromDefaults,
+  imbueStudioAppView,
   hiddenChordsHint,
   isResetOffered,
   unsentEntryLabel,
@@ -819,5 +823,255 @@ describe("the unsent saves' retry", () => {
 
     expect(root.textContent).not.toContain("could not be reached");
     expect(root.querySelector("[data-keybinding-unsent]")?.textContent).toContain("Files: Rename the selected entry");
+  });
+});
+
+const QUIT = { id: "quit", label: "Quit", defaultChords: ["meta+q"], chords: ["meta+q"] };
+const NEW_WINDOW = { id: "new-window", label: "New window", defaultChords: ["meta+n"], chords: ["meta+n"] };
+const CHROME: ChromeShortcuts = { actions: [NEW_WINDOW, QUIT], error: null };
+
+describe("imbueStudioAppView", () => {
+  it("lists Imbue Studio's shortcuts as workspace-wide actions that clash with every action, and every action with them", () => {
+    const studio = imbueStudioAppView(CHROME);
+    const loaded = catalogOf({ apps: [APP, studio] });
+
+    expect(studio.app).toBe(IMBUE_STUDIO_APP);
+    expect(clashCandidates(loaded, studio, "quit").map((candidate) => candidate.action.id)).toEqual([
+      "rename",
+      "delete",
+      "new-folder",
+      "new-window",
+    ]);
+    expect(clashCandidates(loaded, APP, "rename").map((candidate) => candidate.action.id)).toEqual([
+      "delete",
+      "new-folder",
+      "new-window",
+      "quit",
+    ]);
+  });
+
+  it("reads a changed action as the account's and an unchanged one as the default", () => {
+    const studio = imbueStudioAppView({ actions: [NEW_WINDOW, { ...QUIT, chords: [] }], error: null });
+    expect(studio.actions.map((action) => action.source)).toEqual(["default", "account"]);
+    expect(differsFromDefaults(studio.actions[0], MAC_DESKTOP)).toBe(false);
+    expect(differsFromDefaults(studio.actions[1], MAC_DESKTOP)).toBe(true);
+  });
+});
+
+describe("Imbue Studio's own shortcuts", () => {
+  // What the chrome sent the page last, as the mounted section reads it on every redraw.
+  let sentChromeShortcuts: ChromeShortcuts | null = null;
+  let chromeSaves: { id: string; chords: string[] }[] = [];
+
+  afterEach(() => {
+    unmountViews();
+    vi.unstubAllGlobals();
+    sentChromeShortcuts = null;
+    chromeSaves = [];
+  });
+
+  async function mountWithChrome(
+    context: typeof MAC_DESKTOP | typeof MAC_BROWSER = MAC_DESKTOP,
+  ): Promise<HTMLElement> {
+    const root = mountView(() =>
+      m(KeyboardSettingsSection, {
+        context,
+        chromeShortcuts: sentChromeShortcuts,
+        onSaveChromeShortcut: (id: string, chords: readonly string[]) => chromeSaves.push({ id, chords: [...chords] }),
+      }),
+    );
+    await flush();
+    return root;
+  }
+
+  /** The chrome answers a save by sending its shortcuts again. */
+  function chromeSends(shortcuts: ChromeShortcuts): void {
+    sentChromeShortcuts = shortcuts;
+    m.redraw.sync();
+  }
+
+  function studioRow(root: HTMLElement, actionId: string): HTMLElement {
+    return root.querySelector(`[data-keybinding-action="imbue-studio.${actionId}"]`) as HTMLElement;
+  }
+
+  it("lists them last in the desktop app, and not at all in a browser or before the chrome sends them", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    const apps = Array.from(root.querySelectorAll("[data-keybinding-app]")).map((section) =>
+      section.getAttribute("data-keybinding-app"),
+    );
+    expect(apps).toEqual(["files", IMBUE_STUDIO_APP]);
+    unmountViews();
+
+    expect((await mountWithChrome(MAC_BROWSER)).querySelector('[data-keybinding-app="imbue-studio"]')).toBeNull();
+    unmountViews();
+    sentChromeShortcuts = null;
+    expect((await mountWithChrome()).querySelector('[data-keybinding-app="imbue-studio"]')).toBeNull();
+  });
+
+  it("offers one Save, asks the chrome to save, and shows it saving until the chrome sends them again", async () => {
+    const posted = stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-edit"));
+    expect(buttonNamed(root, "Only in this workspace")).toBeUndefined();
+    expect(buttonNamed(root, "Everywhere")).toBeUndefined();
+    click(studioRow(root, "quit").querySelector(".keybinding-remove"));
+    click(buttonNamed(root, "Save"));
+    await flush();
+
+    expect(chromeSaves).toEqual([{ id: "quit", chords: [] }]);
+    expect(posted).toEqual([]);
+    expect(studioRow(root, "quit").querySelector(".keybinding-saving")?.textContent).toBe("Saving...");
+
+    chromeSends({ actions: [NEW_WINDOW, { ...QUIT, chords: [] }], error: null });
+    expect(studioRow(root, "quit").querySelector(".keybinding-saving")).toBeNull();
+    expect(studioRow(root, "quit").querySelector(".keybinding-saved")?.textContent).toBe("Saved");
+    expect(studioRow(root, "quit").querySelector(".keybinding-off")?.textContent).toBe("Off");
+  });
+
+  it("shows on the row why the chrome could not save it", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-edit"));
+    click(studioRow(root, "quit").querySelector(".keybinding-remove"));
+    click(buttonNamed(root, "Save"));
+    await flush();
+    chromeSends({ ...CHROME, error: "These settings were saved by a newer version of Imbue Studio" });
+
+    expect(studioRow(root, "quit").querySelector(".keybinding-save-error")?.textContent).toBe(
+      "Not saved: These settings were saved by a newer version of Imbue Studio",
+    );
+    expect(studioRow(root, "quit").querySelector(".keybinding-saved")).toBeNull();
+  });
+
+  it("resets a changed action to its defaults through the chrome", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = { actions: [NEW_WINDOW, { ...QUIT, chords: ["shift+meta+q"] }], error: null };
+    const root = await mountWithChrome();
+
+    expect(studioRow(root, "new-window").querySelector(".keybinding-reset")).toBeNull();
+    click(studioRow(root, "quit").querySelector(".keybinding-reset"));
+    await flush();
+
+    expect(chromeSaves).toEqual([{ id: "quit", chords: ["meta+q"] }]);
+  });
+
+  it("refuses a shortcut typing could trigger, as for a workspace-wide action", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "q" });
+
+    expect(root.querySelector(".keybinding-refused")?.textContent).toBe(WORKSPACE_WIDE_CHORD_NOTICE);
+    expect(Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).length).toBe(1);
+  });
+
+  it("warns about nothing a browser keeps, since no browser runs these", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    expect(studioRow(root, "new-window").querySelector(".keybinding-row-warning")).toBeNull();
+  });
+
+  it("takes a workspace action's shortcut on Replace and saves that action everywhere", async () => {
+    const posted = stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "F2" });
+
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'F2 already runs "Rename the selected entry" (Files).',
+    );
+    click(root.querySelector(".keybinding-replace"));
+    click(buttonNamed(root, "Save"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "rename", chords: [], scope: "account" } },
+    ]);
+    expect(chromeSaves).toEqual([{ id: "quit", chords: ["meta+q", "f2"] }]);
+  });
+
+  it("clears an Imbue Studio action through the chrome when a workspace action takes its shortcut", async () => {
+    const posted = stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "q", metaKey: true });
+
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'Command+Q already runs "Quit" (Imbue Studio).',
+    );
+    click(root.querySelector(".keybinding-replace"));
+    expect(studioRow(root, "quit").querySelector(".keybinding-pending")?.textContent).toBe("Changes when you save");
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(chromeSaves).toEqual([{ id: "quit", chords: [] }]);
+    expect(posted).toEqual([
+      {
+        url: "/api/keybindings",
+        body: { app: "files", action: "rename", chords: ["f2", "meta+q"], scope: "workspace" },
+      },
+    ]);
+  });
+
+  it("asks before an Imbue Studio reset brings back a workspace action's shortcut, and saves that one everywhere", async () => {
+    const renameOnMetaQ = {
+      ...APP,
+      actions: [{ ...APP.actions[0], chords: ["meta+q"] }, APP.actions[1], APP.actions[2]],
+    };
+    const posted = stubFetch(catalogOf({ apps: [renameOnMetaQ] }));
+    sentChromeShortcuts = { actions: [NEW_WINDOW, { ...QUIT, chords: [] }], error: null };
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-reset"));
+    expect(chromeSaves).toEqual([]);
+    expect(studioRow(root, "quit").querySelector(".keybinding-clash")?.textContent).toContain(
+      'Resetting brings back Command+Q, which "Rename the selected entry" (Files) uses now.',
+    );
+    click(studioRow(root, "quit").querySelector(".keybinding-replace"));
+    await flush();
+
+    expect(posted).toEqual([
+      { url: "/api/keybindings", body: { app: "files", action: "rename", chords: [], scope: "account" } },
+    ]);
+    expect(chromeSaves).toEqual([{ id: "quit", chords: ["meta+q"] }]);
+  });
+
+  it("clears an Imbue Studio action through the chrome when a workspace reset brings back its shortcut", async () => {
+    const renameChanged = {
+      ...APP,
+      actions: [
+        { ...APP.actions[0], chords: [], reset_chords: ["meta+q"], source: "workspace" as const },
+        APP.actions[1],
+        APP.actions[2],
+      ],
+    };
+    const posted = stubFetch(catalogOf({ apps: [renameChanged] }));
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(row(root, "rename").querySelector(".keybinding-reset"));
+    click(row(root, "rename").querySelector(".keybinding-replace"));
+    await flush();
+
+    expect(chromeSaves).toEqual([{ id: "quit", chords: [] }]);
+    expect(posted).toEqual([{ url: "/api/keybindings/reset", body: { app: "files", action: "rename" } }]);
   });
 });

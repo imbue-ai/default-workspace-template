@@ -9,18 +9,24 @@
  * The chrome says what it is with `minds:embedder-capabilities`, as it does to the main workspace frame: one that
  * can pull a window out is the desktop app, any other is a browser, which keeps its own shortcuts from the page.
  * Until it says, the page reads as the desktop app, which hides nothing.
+ *
+ * The desktop app also hands the page Imbue Studio's own shortcuts (`minds:chrome-shortcuts`), which the section lists
+ * last, and saves one when the page asks (`minds:save-chrome-shortcut`), sending them again after.
  */
 
 import "../style.css";
 import m from "mithril";
 import {
+  CHROME_SHORTCUTS,
   EMBEDDER_CAPABILITIES,
   KEYBOARD_SHORTCUTS_PAGE,
   RECORD_CHORD,
+  SAVE_CHROME_SHORTCUT,
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 import { type ChordContext, detectChordPlatform } from "@imbue/workspace-ui/src/keybindings";
+import { type ChromeShortcuts, readChromeShortcuts } from "../model/chromeShortcuts";
 import { KeyboardSettingsSection } from "../views/KeyboardSettingsSection";
 
 function start(): void {
@@ -31,6 +37,7 @@ function start(): void {
   let lastSentIsRecording = false;
   let context: ChordContext = { platform: detectChordPlatform(), surface: "desktop" };
   let recordRelayedChord: ((chord: string) => void) | null = null;
+  let chromeShortcuts: ChromeShortcuts | null = null;
 
   function reportState(): void {
     const height = Math.ceil(root?.getBoundingClientRect().height ?? 0);
@@ -47,6 +54,12 @@ function start(): void {
   setEmbedderMessageHandler(RECORD_CHORD, (message) => {
     if (typeof message.chord === "string") recordRelayedChord?.(message.chord);
   });
+  setEmbedderMessageHandler(CHROME_SHORTCUTS, (message) => {
+    const sent = readChromeShortcuts(message);
+    if (sent === null) return;
+    chromeShortcuts = sent;
+    m.redraw();
+  });
 
   m.mount(root, {
     view: () =>
@@ -59,6 +72,10 @@ function start(): void {
           },
           onChordRelay: (record) => {
             recordRelayedChord = record;
+          },
+          chromeShortcuts,
+          onSaveChromeShortcut: (id: string, chords: readonly string[]) => {
+            sendToEmbedder(SAVE_CHROME_SHORTCUT, { id, chords: [...chords] });
           },
         }),
       ]),

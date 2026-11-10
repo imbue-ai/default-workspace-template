@@ -25,6 +25,14 @@
  * flow); a visitor's save is always their own override here. A saved or reset action is marked as such until the
  * section is opened again. An "everywhere" save the account has not taken yet shows as waiting, with retry and
  * discard.
+ *
+ * In the desktop app the section ends with Imbue Studio's own shortcuts (the keyboard-shortcuts spec in the mngr repo,
+ * section 8), which the chrome hands the framed page: they live in the account, so a row has one Save, which asks the
+ * chrome to store it and shows as saving until the chrome sends them again. The desktop app runs them before any page
+ * sees the key, so they clash with every action and need a real modifier, as workspace-wide actions do, and no
+ * browser ever runs them, so nothing warns that a browser keeps one. Replace between the two kinds saves each where
+ * it lives: an action of the workspace's that an Imbue Studio shortcut takes a chord from is saved "everywhere", and
+ * an Imbue Studio action is always saved through the chrome.
  */
 
 import m from "mithril";
@@ -57,6 +65,7 @@ import {
   resetKeybinding,
   saveKeybinding,
 } from "../model/api";
+import type { ChromeShortcuts } from "../model/chromeShortcuts";
 import { setShortcutRecording } from "../model/shortcutRecording";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 
@@ -167,6 +176,38 @@ export function actionsSharingShortcuts(
   );
 }
 
+/** The app name Imbue Studio's own shortcuts are listed and stored under. */
+export const IMBUE_STUDIO_APP = "imbue-studio";
+
+function isImbueStudio(appView: KeybindingAppView): boolean {
+  return appView.app === IMBUE_STUDIO_APP;
+}
+
+/** Imbue Studio's shortcuts as the section lists an app's. They are `workspace`-scoped because the desktop app runs
+ *  them wherever focus is, ahead of every page, which gives them the clash and modifier rules of such actions. */
+export function imbueStudioAppView(shortcuts: ChromeShortcuts): KeybindingAppView {
+  return {
+    app: IMBUE_STUDIO_APP,
+    display_name: "Imbue Studio",
+    actions: shortcuts.actions.map((action) => ({
+      id: action.id,
+      label: action.label,
+      default_chords: [...action.defaultChords],
+      chords: [...action.chords],
+      reset_chords: [...action.defaultChords],
+      source: areChordListsEqual(action.chords, action.defaultChords) ? "default" : "account",
+      scope: "workspace",
+    })),
+  };
+}
+
+/** Whether restoring an Imbue Studio action's defaults would change what it runs here. */
+export function differsFromDefaults(action: KeybindingActionView, context: ChordContext | null): boolean {
+  const current = visibleIn(action.chords, context);
+  const defaults = new Set(visibleIn(action.default_chords, context));
+  return current.length !== defaults.size || current.some((chord) => !defaults.has(chord));
+}
+
 /** The one chord the recorder refuses, and why. */
 export const REFUSED_CHORD_NOTICE = "Ctrl+Alt+Delete belongs to Windows and can't be a shortcut.";
 
@@ -256,6 +297,10 @@ export interface KeyboardSettingsSectionAttrs {
   /** Handed, while the section is mounted, what records a chord the desktop app took from the OS while the recorder
    *  listened (`minds:record-chord`), as if it were pressed; handed null as the section goes. */
   readonly onChordRelay?: (record: ((chord: string) => void) | null) => void;
+  /** Imbue Studio's own shortcuts, as the desktop app sent them last; listed last, and only in the desktop app. */
+  readonly chromeShortcuts?: ChromeShortcuts | null;
+  /** Asks the desktop app to save one of Imbue Studio's shortcuts; it answers with `chromeShortcuts` again. */
+  readonly onSaveChromeShortcut?: (id: string, chords: readonly string[]) => void;
 }
 
 const SECTION_HEADER_CLASS =
@@ -305,13 +350,44 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   let isRecorderListening = false;
   let onRecordingChange: ((isRecording: boolean) => void) | undefined;
   let context: ChordContext = { platform: detectChordPlatform(), surface: "desktop" };
+  let chromeShortcuts: ChromeShortcuts | null = null;
+  let onSaveChromeShortcut: ((id: string, chords: readonly string[]) => void) | undefined;
   const collapsedApps = new Set<string>();
   // The actions saved or reset since this section opened, marked until it is opened again.
   const savedActionKeys = new Set<string>();
+  // The Imbue Studio actions asked to be saved, until the chrome sends its shortcuts again.
+  const pendingChromeActionIds = new Set<string>();
+  // Why the chrome could not save an Imbue Studio action, until it is saved again.
+  const chromeErrorByActionId = new Map<string, string>();
 
   const isApple = (): boolean => context.platform === "mac";
   // A chord reads with the Mac's symbols on a Mac, and elsewhere when it holds the Mac's Control key.
   const isAppleFor = (chord: string): boolean => readsChordAsApple(chord, context.platform);
+
+  /** The catalog the section lists: the workspace's apps, then Imbue Studio's shortcuts in the desktop app. */
+  function shownCatalog(): KeybindingsCatalog | null {
+    if (catalog === null || chromeShortcuts === null || context.surface !== "desktop") return catalog;
+    return { ...catalog, apps: [...catalog.apps, imbueStudioAppView(chromeShortcuts)] };
+  }
+
+  /** Take the shortcuts the chrome sent: the saves asked for are done, or failed with its error. */
+  function receiveChromeShortcuts(next: ChromeShortcuts | null): void {
+    chromeShortcuts = next;
+    if (next === null) return;
+    if (pendingChromeActionIds.size === 0) {
+      if (next.error !== null) notice = next.error;
+      return;
+    }
+    for (const actionId of pendingChromeActionIds) {
+      if (next.error === null) {
+        chromeErrorByActionId.delete(actionId);
+        savedActionKeys.add(actionKey(IMBUE_STUDIO_APP, actionId));
+      } else {
+        chromeErrorByActionId.set(actionId, next.error);
+      }
+    }
+    pendingChromeActionIds.clear();
+  }
 
   async function load(): Promise<void> {
     try {
@@ -366,8 +442,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   function clashesWith(current: ActionEditor, chords: readonly string[]): ClashEntry[] {
-    if (catalog === null) return [];
-    return clashesInCatalog(catalog, current.app, current.action.id, chords, replacedChordsByKey(current), context);
+    const shown = shownCatalog();
+    if (shown === null) return [];
+    return clashesInCatalog(shown, current.app, current.action.id, chords, replacedChordsByKey(current), context);
   }
 
   function onRecorderKeydown(current: ActionEditor, event: KeyboardEvent): void {
@@ -433,17 +510,42 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     return delivery === null || delivery.status === "DELIVERED" ? null : delivery.detail;
   }
 
+  /** The save an action of the workspace's takes when an Imbue Studio shortcut takes a chord from it: the account's,
+   *  where Imbue Studio's live, unless this workspace cannot save there. */
+  function accountScopeIfAvailable(): "workspace" | "account" {
+    return catalog?.can_save_everywhere === true ? "account" : "workspace";
+  }
+
+  /** Save one action where it lives: an Imbue Studio action through the chrome, marked saved once the chrome sends
+   *  its shortcuts again; any other through the shell, in `scope`. Answers the shell's delivery, if any. */
+  async function saveAction(
+    app: string,
+    actionId: string,
+    chords: readonly string[],
+    scope: "workspace" | "account",
+  ): Promise<KeybindingsDeliveryOutcome | null> {
+    if (app === IMBUE_STUDIO_APP) {
+      chromeErrorByActionId.delete(actionId);
+      pendingChromeActionIds.add(actionId);
+      onSaveChromeShortcut?.(actionId, [...chords]);
+      return null;
+    }
+    const { delivery } = await saveKeybinding(app, actionId, [...chords], scope);
+    savedActionKeys.add(actionKey(app, actionId));
+    return delivery;
+  }
+
   async function save(current: ActionEditor, scope: "workspace" | "account"): Promise<void> {
     isBusy = true;
+    const replacedScope = isImbueStudio(current.app) ? accountScopeIfAvailable() : scope;
     try {
       let lastDelivery: KeybindingsDeliveryOutcome | null = null;
-      for (const [key, replaced] of current.replacedByKey) {
-        lastDelivery = (await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], scope))
-          .delivery;
-        savedActionKeys.add(key);
+      for (const replaced of current.replacedByKey.values()) {
+        lastDelivery =
+          (await saveAction(replaced.app.app, replaced.action.id, replaced.chords, replacedScope)) ?? lastDelivery;
       }
-      lastDelivery = (await saveKeybinding(current.app.app, current.action.id, current.stagedChords, scope)).delivery;
-      savedActionKeys.add(actionKey(current.app.app, current.action.id));
+      lastDelivery =
+        (await saveAction(current.app.app, current.action.id, current.stagedChords, scope)) ?? lastDelivery;
       notice = noticeOfDelivery(lastDelivery);
       closeEditor();
       await load();
@@ -478,30 +580,42 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     cause: "reset" | "discard",
     restoredChords: readonly string[],
   ): void {
+    const shown = shownCatalog();
     const entries =
-      catalog === null ? [] : clashesInCatalog(catalog, appView, action.id, restoredChords, new Map(), context);
+      shown === null ? [] : clashesInCatalog(shown, appView, action.id, restoredChords, new Map(), context);
     if (entries.length > 0) {
       pendingRevert = { app: appView, action, clash: { cause, entries } };
       return;
     }
-    void act(() => runRevert(appView.app, action.id, cause));
+    void act(() => runRevert(appView, action, cause));
   }
 
-  async function runRevert(app: string, actionId: string, cause: ClashCause): Promise<void> {
-    if (cause === "discard") await discardKeybinding(app, actionId);
-    else await resetKeybinding(app, actionId);
-    savedActionKeys.add(actionKey(app, actionId));
+  /** Undo the change: an Imbue Studio action goes back to its defaults through the chrome; any other drops this
+   *  workspace's change or the undelivered save. */
+  async function runRevert(
+    appView: KeybindingAppView,
+    action: KeybindingActionView,
+    cause: ClashCause,
+  ): Promise<void> {
+    if (isImbueStudio(appView)) {
+      await saveAction(appView.app, action.id, action.default_chords, "account");
+      return;
+    }
+    if (cause === "discard") await discardKeybinding(appView.app, action.id);
+    else await resetKeybinding(appView.app, action.id);
+    savedActionKeys.add(actionKey(appView.app, action.id));
   }
 
-  /** Take the restored shortcuts off the actions that have them now, in this workspace, then revert. */
+  /** Take the restored shortcuts off the actions that have them now, each where it lives (an action of the
+   *  workspace's in this workspace, or for an Imbue Studio reset "everywhere"), then revert. */
   function replaceAndRevert(current: PendingRevert): void {
     pendingRevert = null;
+    const replacedScope = isImbueStudio(current.app) ? accountScopeIfAvailable() : "workspace";
     void act(async () => {
-      for (const [key, replaced] of remainingAfterReplace(current.clash.entries, new Map())) {
-        await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], "workspace");
-        savedActionKeys.add(key);
+      for (const replaced of remainingAfterReplace(current.clash.entries, new Map()).values()) {
+        await saveAction(replaced.app.app, replaced.action.id, replaced.chords, replacedScope);
       }
-      await runRevert(current.app.app, current.action.id, current.clash.cause);
+      await runRevert(current.app, current.action, current.clash.cause);
     });
   }
 
@@ -657,17 +771,41 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
+  /** The warnings of a chord on one of the app's rows; no browser runs an Imbue Studio shortcut, so a browser keeping
+   *  one is no warning there. */
+  function noticesOf(appView: KeybindingAppView, chord: string): string[] {
+    return chordNotices(chord, context, { isBrowserReservedNoticed: !isImbueStudio(appView) });
+  }
+
+  /** An Imbue Studio row's one save: to the account, through the chrome. */
+  function imbueStudioSaveButtons(current: ActionEditor, isSaveBlocked: boolean): m.Children {
+    return m(
+      Button,
+      {
+        sm: true,
+        variant: "primary",
+        disabled: isSaveBlocked,
+        ...hoverTooltipAttrs("Save for your account, in every Imbue Studio window"),
+        onclick: () => void save(current, "account"),
+      },
+      "Save",
+    );
+  }
+
   function saveButtons(current: ActionEditor): m.Children {
     const isOwner = catalog?.is_owner === true;
     const canEverywhere = catalog?.can_save_everywhere === true;
     const isSaveBlocked = isBusy || current.isRecording || current.clash !== null || !hasUnsavedChanges(current);
+    const isChrome = isImbueStudio(current.app);
     return m("div", { class: "mt-4 flex flex-wrap items-center gap-2" }, [
-      m(
-        Button,
-        { sm: true, variant: "primary", disabled: isSaveBlocked, onclick: () => void save(current, "workspace") },
-        isOwner ? "Only in this workspace" : "Save",
-      ),
-      isOwner
+      isChrome
+        ? imbueStudioSaveButtons(current, isSaveBlocked)
+        : m(
+            Button,
+            { sm: true, variant: "primary", disabled: isSaveBlocked, onclick: () => void save(current, "workspace") },
+            isOwner ? "Only in this workspace" : "Save",
+          ),
+      isOwner && !isChrome
         ? m(
             Button,
             {
@@ -701,7 +839,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   function editorView(current: ActionEditor): m.Children {
-    const warnings = current.stagedChords.flatMap((chord) => chordNotices(chord, context));
+    const warnings = current.stagedChords.flatMap((chord) => noticesOf(current.app, chord));
     const clash = current.clash;
     return m("div", { class: "keybinding-editor mt-1 mb-3 rounded-lg border border-default p-3" }, [
       stagedShortcutsView(current),
@@ -721,7 +859,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           ),
       replacementNotes(current),
       ...warnings.map((warning) => m("p", { class: "keybinding-warning type-helper mt-2 text-warning" }, warning)),
-      catalog?.is_owner === true && catalog.can_save_everywhere !== true
+      !isImbueStudio(current.app) && catalog?.is_owner === true && catalog.can_save_everywhere !== true
         ? m(
             "p",
             { class: "type-helper mt-2 text-secondary" },
@@ -736,6 +874,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     if (isPendingReplace) {
       return m("span", { class: "keybinding-pending type-helper shrink-0 text-secondary" }, "Changes when you save");
     }
+    if (isImbueStudio(appView) && pendingChromeActionIds.has(action.id)) {
+      return m("span", { class: "keybinding-saving type-helper shrink-0 text-secondary" }, "Saving...");
+    }
     if (!savedActionKeys.has(actionKey(appView.app, action.id))) return null;
     return m("span", { class: "keybinding-saved inline-flex shrink-0 items-center gap-1 type-helper text-success" }, [
       m.trust(icon("check", { size: 12 })),
@@ -745,9 +886,10 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   /** The actions, of this app or workspace-wide ones elsewhere, sharing one of this action's shown shortcuts. */
   function sharedShortcutWarning(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
-    if (catalog === null) return null;
+    const shown = shownCatalog();
+    if (shown === null) return null;
     const own = shownChords(appView, action);
-    const sharing = clashCandidates(catalog, appView, action.id).filter((candidate) =>
+    const sharing = clashCandidates(shown, appView, action.id).filter((candidate) =>
       shownChords(candidate.app, candidate.action).some((chord) => own.includes(chord)),
     );
     if (sharing.length === 0) return null;
@@ -766,9 +908,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   /** The warnings of the shortcuts a row shows (the editor shows its own while the row is being edited). */
-  function rowWarnings(chords: readonly string[]): m.Children {
+  function rowWarnings(appView: KeybindingAppView, chords: readonly string[]): m.Children {
     return chords
-      .flatMap((chord) => chordNotices(chord, context))
+      .flatMap((chord) => noticesOf(appView, chord))
       .map((warning) => m("p", { class: "keybinding-row-warning type-helper mt-0.5 text-warning" }, warning));
   }
 
@@ -785,17 +927,23 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       pendingRevert.action.id === action.id
         ? pendingRevert
         : null;
+    const isChrome = isImbueStudio(appView);
+    const saveError = isChrome ? (chromeErrorByActionId.get(action.id) ?? null) : null;
+    const isResetShown = isChrome ? differsFromDefaults(action, context) : isResetOffered(action, context);
     return m("div", { key: action.id, "data-keybinding-action": `${appView.app}.${action.id}` }, [
       m("div", { class: "flex min-h-10 items-center gap-3 border-b border-default py-2" }, [
         m("div", { class: "min-w-0 flex-1" }, [
           m("span", { class: "type-body text-primary" }, action.label),
+          saveError === null
+            ? null
+            : m("p", { class: "keybinding-save-error type-helper mt-0.5 text-danger" }, `Not saved: ${saveError}`),
           sharedShortcutWarning(appView, action),
-          isEditing ? null : rowWarnings(chords),
+          isEditing ? null : rowWarnings(appView, chords),
         ]),
         rowMarker(appView, action, isPendingReplace),
         m("span", { class: "shrink-0" }, shortcutsView(chords, hidden)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
-          isResetOffered(action, context)
+          isResetShown
             ? m(
                 Button,
                 {
@@ -803,7 +951,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                   variant: "ghost",
                   extra: "keybinding-reset",
                   disabled: isBusy || editor !== null || pendingRevert !== null,
-                  ...hoverTooltipAttrs("Undo your change in this workspace"),
+                  ...hoverTooltipAttrs(isChrome ? "Go back to the default" : "Undo your change in this workspace"),
                   onclick: () => revert(appView, action, "reset", action.reset_chords),
                 },
                 "Reset",
@@ -935,19 +1083,23 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     },
     view(vnode) {
       onRecordingChange = vnode.attrs.onRecordingChange;
+      onSaveChromeShortcut = vnode.attrs.onSaveChromeShortcut;
       if (vnode.attrs.context !== undefined) context = vnode.attrs.context;
+      const sentChromeShortcuts = vnode.attrs.chromeShortcuts ?? null;
+      if (sentChromeShortcuts !== chromeShortcuts) receiveChromeShortcuts(sentChromeShortcuts);
       if (loadError !== null) {
         return m("p", { class: "type-helper text-danger" }, `The shortcuts could not be loaded: ${loadError}`);
       }
       if (catalog === null) return m("p", { class: "type-helper text-secondary" }, "Loading the shortcuts...");
       const loaded = catalog;
+      const shown = shownCatalog() ?? loaded;
       return m("div", { "data-keyboard-settings": true }, [
         unsentBanner(loaded),
         notice !== null ? m("p", { class: "keybinding-notice type-helper mb-3 text-secondary" }, notice) : null,
         m(
           "div",
           { class: "keybinding-apps" },
-          loaded.apps.filter((appView) => appView.actions.length > 0).map((appView) => appSection(appView)),
+          shown.apps.filter((appView) => appView.actions.length > 0).map((appView) => appSection(appView)),
         ),
       ]);
     },
