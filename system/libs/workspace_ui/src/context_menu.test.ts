@@ -61,6 +61,8 @@ afterEach(() => {
   uninstall?.();
   uninstall = null;
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("installElementContextMenu", () => {
@@ -245,13 +247,12 @@ describe("installElementContextMenu", () => {
   it("runs the row the desktop app picks only once the page has focus, so the clipboard takes the copy", async () => {
     uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
     rightClick(document.getElementById("para") as Element);
-    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const picked = hostBridge().select("copy-reference");
     await Promise.resolve();
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
     window.dispatchEvent(new Event("focus"));
     await picked;
-    hasFocus.mockRestore();
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
     expect(vi.mocked(navigator.clipboard.writeText).mock.calls[0][0]).toContain('"id":"para"');
   });
@@ -260,12 +261,10 @@ describe("installElementContextMenu", () => {
     vi.useFakeTimers();
     uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
     rightClick(document.getElementById("para") as Element);
-    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const picked = hostBridge().select("explain-element");
     await vi.runAllTimersAsync();
     await picked;
-    hasFocus.mockRestore();
-    vi.useRealTimers();
     expect(connection.draftText).toHaveBeenCalledTimes(1);
   });
 
