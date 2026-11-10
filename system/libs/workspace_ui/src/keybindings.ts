@@ -100,7 +100,6 @@ export const BROWSER_RESERVED_CHORDS: Readonly<Record<ChordPlatform, readonly st
     "alt+meta+arrowright",
     "meta+q",
     "meta+h",
-    "alt+meta+h",
     "meta+m",
   ],
   windows: [
