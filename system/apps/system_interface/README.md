@@ -454,13 +454,13 @@ desktop under its id is no longer theirs (a desktop the owner makes later can
 take a deleted one's id), the next arrival seeds another and says so. Every
 desktop stays shared and reachable from everyone's launcher; there is no
 private mode. The seeded desktop is written with the visitor's key as its
-owner (the multiplayer spec, section
-8.1), so their card and their overview list it as theirs (a shell older than
-desktop owners seeded it with none, so the first start of a newer one gives
-each ownerless desktop `users.json` records for a visitor that visitor's key,
-and marks it done in `visitor_desktops_adopted`); a desktop whose owner
-has since left the grants is left behind, listed in the owner's overview under
-"Left behind" so it can be viewed and deleted.
+owner (the multiplayer spec, section 8.1), so their card and their overview
+list it as theirs (a shell older than desktop owners seeded it with none, so
+the first start of a newer one gives each ownerless desktop `users.json`
+records for a visitor that visitor's key, and marks it done in
+`visitor_desktops_adopted`); a desktop whose owner has since left the grants
+is left behind, listed in the owner's overview under "Left behind" so it can
+be viewed and deleted.
 
 ### The desktop, the taskbar, and the launcher
 
