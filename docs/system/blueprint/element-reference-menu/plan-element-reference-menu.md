@@ -334,12 +334,13 @@ A chrome that does not say so (the desktop app off macOS, an older one, plain-br
 
 - `element_reference.test.ts`: the reference of an element with an id, with data attributes, of a repeated row (the `:nth-of-type` and the uniqueness check), of an editable field (`input_value`, and `null` for a password field), of a link and an image, of a text node target, and on a top-level visit; the reference id, the file name, the file text, the summary, and the block.
 - `context_menu_rows.test.ts`: which standard rows each kind of target admits; the draft texts of the reference rows; Paste absent without `readText`.
-- `context_menu.test.ts`: the installer opens on `contextmenu`, yields to a `defaultPrevented` event, closes on Escape and on a press outside, runs a row, and installs once.
-- `app_contract.test.ts`: `draftText` posts `shell:draft-text`; the handshake carries `app`.
-- The shell: `livePages.test.ts` (the handshake's `app`, `shell:draft-text` reaching the store), `DesktopStore.test.ts` (`draftText` with a pinned draft target, with a draft row only, with neither), `App.test.ts` (a right-click on the backdrop opens the element menu with the reference rows; an entry menu ends with them).
+- `context_menu.test.ts`: the installer opens on `contextmenu`, yields to a `defaultPrevented` event and to one with Shift held, closes on Escape and on a press outside, runs a row, and installs once; where the desktop app draws the menu it opens nothing, keeps the rows on `__studioContextMenu`, and runs a picked row once the page has focus.
+- `context_menu.contract.test.ts`: the bridge's global name, its sections, and its rows' bounds hold to the vendored `page-menu-bridge.json`.
+- `app_contract.test.ts`: `draftText` posts `shell:draft-text`; the handshake carries `app` and `drawsContextMenus`.
+- The shell: `livePages.test.ts` (the handshake's `app`, a page greeted again when `drawsContextMenus` changes, `shell:draft-text` reaching the store), `DesktopStore.test.ts` (`draftText` with a pinned draft target, with a draft row only, with neither), `App.test.ts` (a right-click on the backdrop opens the element menu with the reference rows; an entry menu ends with them).
 - The chat: `relay.test.ts` forwards `shell:draft-text`; `elementReferences.test.ts` attaches each reference block as a `REF-<id>.json` file with its summary and leaves other blocks alone; `ComposerAttachments.test.ts` persists ready attachments, restores them, and takes in a list another document wrote.
 - The scaffold: the runner page imports both modules and installs the menu; the static route serves the two files and refuses others.
-- The minds app: `context-menu.test.js` shows no menu for a subframe event.
+- The minds app: `context-menu.test.js` places a frame's rows among the native items and runs a picked one back in that frame; `context-menu.spec.js` does the same for a real cross-origin frame.
 - Manual: in a workspace, right-click the desktop backdrop, a taskbar entry, a chat message, a chat rail row, a Getting Started tile, and a page of a freshly scaffolded app; Explain puts a `REF-<id>.json` chip and a prompt naming it into the chat on screen each time, the sent message names the file, and the agent opens it and finds the element.
 
 ## 14. Implementation order
