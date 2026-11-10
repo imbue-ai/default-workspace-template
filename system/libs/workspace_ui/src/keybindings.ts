@@ -151,6 +151,8 @@ export const OS_KEPT_CHORDS: Readonly<Record<ChordPlatform, readonly KeptChord[]
     { chord: "ctrl+meta+q", reason: "locking the screen" },
     { chord: "alt+meta+escape", reason: "Force Quit" },
     { chord: "alt+meta+d", reason: "hiding the Dock" },
+    { chord: "meta+`", reason: "switching between an app's windows" },
+    { chord: "ctrl+meta+space", reason: "the emoji picker" },
   ],
   windows: [
     { chord: "alt+tab", reason: "the window switcher" },
