@@ -27,8 +27,10 @@ from pathlib import Path
 
 from app_manifest import scope
 from build_app_skill import scaffold_flask_lib
+from imbue.chat.config import DEFAULT_CHAT_PORT
 from migrate_workspace_skill import migrate_workspace
 from oom_priority.supervisord_testing import supervisord_commands
+from workspace_bare_scripts import start_after_first_wave
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
@@ -216,3 +218,93 @@ def test_every_program_tolerates_settings_newer_than_its_mngr() -> None:
     assert 'MNGR_ALLOW_UNKNOWN_CONFIG="1"' in entries, (
         f"[supervisord] environment does not set MNGR_ALLOW_UNKNOWN_CONFIG: {environment!r}"
     )
+
+
+# The programs that start the moment supervisord does: the shell and the chat app, what they need
+# to serve the desktop, the provider chooser and a sign-in, and the OOM machinery that has to be
+# running before anything else allocates. Every other built-in program is the second wave.
+_FIRST_WAVE_PROGRAMS: frozenset[str] = frozenset(
+    {
+        "system_interface",
+        "chat",
+        "agent-observer",
+        "owner-exec",
+        "vm-exec-register",
+        "earlyoom",
+        "oom-tag-backstop",
+        "publish_cgroup_meminfo",
+    }
+)
+
+_GATE = "system/scripts/workspace_bare_scripts/start_after_first_wave.py"
+_TAG_PREFIX = re.compile(r"^python3 \S*oom_tag_service\.py (\S+) ")
+
+
+def _autostarted_built_in_commands() -> dict[str, str]:
+    """Every program and event listener supervisord starts at boot, less the user-created ones (tagged ``user``)."""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(_SUPERVISORD_CONF)
+    parser.read(sorted(_DROPIN_DIR.glob("*.conf")))
+    commands: dict[str, str] = {}
+    for section in parser.sections():
+        if not section.startswith(("program:", "eventlistener:")):
+            continue
+        if not parser[section].getboolean("autostart", fallback=True):
+            continue
+        command = parser[section].get("command", "")
+        tag = _TAG_PREFIX.match(command)
+        if tag is not None and tag.group(1) == "user":
+            continue
+        commands[section.partition(":")[2]] = command
+    return commands
+
+
+def test_every_built_in_program_starts_in_exactly_one_wave() -> None:
+    """A built-in program is in the first wave or runs through the gate, never both and never neither.
+
+    A new built-in program left ungated would cost the shell and the chat CPU at every boot; a
+    first-wave program behind the gate would wait on itself for the gate's whole window.
+    """
+    commands = _autostarted_built_in_commands()
+    assert _FIRST_WAVE_PROGRAMS <= set(commands), (
+        f"first-wave programs that supervisord does not autostart: {sorted(_FIRST_WAVE_PROGRAMS - set(commands))}"
+    )
+    gated_first_wave = sorted(p for p in _FIRST_WAVE_PROGRAMS if _GATE in commands[p])
+    assert not gated_first_wave, (
+        f"first-wave programs held by the gate: {gated_first_wave}"
+    )
+    ungated = sorted(
+        p
+        for p, c in commands.items()
+        if p not in _FIRST_WAVE_PROGRAMS and _GATE not in c
+    )
+    assert not ungated, (
+        f"built-in programs in neither wave (prefix their command with {_GATE}): {ungated}"
+    )
+
+
+def test_the_gate_runs_inside_the_memory_band_wrapper() -> None:
+    """The gate is the program's process until it execs, so the band has to be set before it, not after."""
+    misplaced = sorted(
+        program
+        for program, command in _autostarted_built_in_commands().items()
+        if _GATE in command
+        and "oom_tag_service.py" in command
+        and command.index("oom_tag_service.py") > command.index(_GATE)
+    )
+    assert not misplaced, (
+        f"programs whose gate runs before their band is set: {misplaced}"
+    )
+
+
+def test_the_gate_waits_on_the_ports_and_pid_file_the_config_declares() -> None:
+    shell_command = supervisord_commands(_SUPERVISORD_CONF, ("program",))[
+        "system_interface"
+    ]
+    assert (
+        f"--url http://localhost:{start_after_first_wave.SHELL_HEALTH[0]}"
+        in shell_command
+    )
+    assert start_after_first_wave.CHAT_HEALTH[0] == DEFAULT_CHAT_PORT
+    pidfile = _parse_main_config().get("supervisord", "pidfile")
+    assert Path(pidfile) == start_after_first_wave.SUPERVISORD_PIDFILE
