@@ -1,0 +1,1 @@
+The README says which default chords `load_app_keybinding_actions` refuses (one off the grammar, Ctrl+Alt+Del, or a workspace-wide action's chord typing could trigger) and that the grammar refuses Ctrl+Alt+Del.
