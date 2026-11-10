@@ -913,8 +913,9 @@ class ShellState(MutableModel):
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
         """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
         clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
-        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
-        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted
+        or is no longer theirs), while a returning client of theirs keeps the desktop it was on. None while the
+        workspace has no desktop."""
         now = datetime.now(timezone.utc)
         user_id = visiting_user_id(identity)
         # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
