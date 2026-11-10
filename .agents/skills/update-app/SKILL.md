@@ -61,7 +61,9 @@ Size is a range, and these are its two ends:
   `.agents/shared/references/interactive-delivery.md`**, put a cheap,
   throwaway version of the *proposed* change in front of the user, loop until
   they **explicitly confirm** the shape, and only then build the real thing
-  to a usable state. Never build heavy against an unconfirmed shape.
+  to a usable state. Never build heavy against an unconfirmed shape
+  yourself; a background worker may start while its first milestone serves as
+  the mock.
 
   This is the demonstrative-prototype choice from
   [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
@@ -114,8 +116,9 @@ user's next messages and bring each worker's result in when it lands.
 To hand work off:
 
 1. If the change needs its shape confirmed (a larger-scope change above),
-   settle the shape with the user first, then hand off the build. Keep
-   building the other requests while the user looks at the mock.
+   hand off the build right away and ask the worker for an early milestone
+   that shows the shape. Treat that milestone as the mock: show it to the user
+   and pass their changes to the worker.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the request in the user's words, the files and
    decisions you already know about, and what done looks like. It asks the
