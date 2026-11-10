@@ -950,6 +950,33 @@ describe("Imbue Studio's own shortcuts", () => {
     expect(studioRow(root, "quit").querySelector(".keybinding-saved")).toBeNull();
   });
 
+  it("settles the chrome's saves one answer at a time, in the order they were sent", async () => {
+    stubFetch(catalogOf());
+    sentChromeShortcuts = CHROME;
+    const root = await mountWithChrome();
+
+    click(studioRow(root, "quit").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "n", metaKey: true });
+    click(root.querySelector(".keybinding-replace"));
+    click(buttonNamed(root, "Save"));
+    await flush();
+
+    expect(chromeSaves).toEqual([
+      { id: "new-window", chords: [] },
+      { id: "quit", chords: ["meta+q", "meta+n"] },
+    ]);
+    chromeSends({ actions: [{ ...NEW_WINDOW, chords: [] }, QUIT], error: null });
+    expect(studioRow(root, "new-window").querySelector(".keybinding-saved")?.textContent).toBe("Saved");
+    expect(studioRow(root, "quit").querySelector(".keybinding-saving")?.textContent).toBe("Saving...");
+
+    chromeSends({ actions: [{ ...NEW_WINDOW, chords: [] }, QUIT], error: "Couldn't save the shortcut." });
+    expect(studioRow(root, "quit").querySelector(".keybinding-save-error")?.textContent).toBe(
+      "Not saved: Couldn't save the shortcut.",
+    );
+    expect(studioRow(root, "quit").querySelector(".keybinding-saved")).toBeNull();
+  });
+
   it("resets a changed action to its defaults through the chrome", async () => {
     stubFetch(catalogOf());
     sentChromeShortcuts = { actions: [NEW_WINDOW, { ...QUIT, chords: ["shift+meta+q"] }], error: null };

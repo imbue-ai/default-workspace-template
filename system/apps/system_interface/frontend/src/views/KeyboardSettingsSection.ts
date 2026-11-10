@@ -355,8 +355,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   const collapsedApps = new Set<string>();
   // The actions saved or reset since this section opened, marked until it is opened again.
   const savedActionKeys = new Set<string>();
-  // The Imbue Studio actions asked to be saved, until the chrome sends its shortcuts again.
-  const pendingChromeActionIds = new Set<string>();
+  // The Imbue Studio actions asked to be saved, oldest first: the chrome answers each save with its shortcuts, in
+  // the order the saves were sent.
+  const pendingChromeActionIds: string[] = [];
   // Why the chrome could not save an Imbue Studio action, until it is saved again.
   const chromeErrorByActionId = new Map<string, string>();
 
@@ -370,23 +371,21 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     return { ...catalog, apps: [...catalog.apps, imbueStudioAppView(chromeShortcuts)] };
   }
 
-  /** Take the shortcuts the chrome sent: the saves asked for are done, or failed with its error. */
+  /** Take the shortcuts the chrome sent: the oldest save asked for is done, or failed with its error. */
   function receiveChromeShortcuts(next: ChromeShortcuts | null): void {
     chromeShortcuts = next;
     if (next === null) return;
-    if (pendingChromeActionIds.size === 0) {
+    const actionId = pendingChromeActionIds.shift();
+    if (actionId === undefined) {
       if (next.error !== null) notice = next.error;
       return;
     }
-    for (const actionId of pendingChromeActionIds) {
-      if (next.error === null) {
-        chromeErrorByActionId.delete(actionId);
-        savedActionKeys.add(actionKey(IMBUE_STUDIO_APP, actionId));
-      } else {
-        chromeErrorByActionId.set(actionId, next.error);
-      }
+    if (next.error === null) {
+      chromeErrorByActionId.delete(actionId);
+      savedActionKeys.add(actionKey(IMBUE_STUDIO_APP, actionId));
+    } else {
+      chromeErrorByActionId.set(actionId, next.error);
     }
-    pendingChromeActionIds.clear();
   }
 
   async function load(): Promise<void> {
@@ -526,7 +525,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   ): Promise<KeybindingsDeliveryOutcome | null> {
     if (app === IMBUE_STUDIO_APP) {
       chromeErrorByActionId.delete(actionId);
-      pendingChromeActionIds.add(actionId);
+      pendingChromeActionIds.push(actionId);
       onSaveChromeShortcut?.(actionId, [...chords]);
       return null;
     }
@@ -874,7 +873,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     if (isPendingReplace) {
       return m("span", { class: "keybinding-pending type-helper shrink-0 text-secondary" }, "Changes when you save");
     }
-    if (isImbueStudio(appView) && pendingChromeActionIds.has(action.id)) {
+    if (isImbueStudio(appView) && pendingChromeActionIds.includes(action.id)) {
       return m("span", { class: "keybinding-saving type-helper shrink-0 text-secondary" }, "Saving...");
     }
     if (!savedActionKeys.has(actionKey(appView.app, action.id))) return null;
