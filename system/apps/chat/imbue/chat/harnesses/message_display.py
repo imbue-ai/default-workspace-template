@@ -177,8 +177,8 @@ _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be complet
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 # When the user turns an app-data source off or back on from Imbue Studio's
-# Permissions tab, or Studio stops its sync because Full Disk Access went off,
-# Studio tells the chats that asked for it with a plain user message,
+# Permissions tab, Studio stops its sync because Full Disk Access went off, or
+# Full Disk Access comes back on, Studio tells the chats that asked for it with a plain user message,
 # tagged by ``format_app_data_access_notice`` in the mngr repo's
 # ``latchkey/handlers/resolution.py``: "... (app-data-access: revoked)". The tag is the
 # classification contract; the text before it is what the notice shows.
@@ -466,8 +466,8 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
 
 
 def _match_app_data_access_change(content: str) -> MessageDisplay | None:
-    """Imbue Studio's note that the user turned an app-data source off or back on, or that Studio stopped its
-    sync; a NOTICE, since it is something the agent was told, not something the user said."""
+    """Imbue Studio's note that the user turned an app-data source off or back on, that Studio stopped its
+    sync, or that Full Disk Access is back on; a NOTICE, since it is something the agent was told, not something the user said."""
     match = _APP_DATA_ACCESS_TAG_RE.search(content)
     if match is None:
         return None
