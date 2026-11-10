@@ -12,6 +12,10 @@
  * Ctrl+Alt+Del, and, for a workspace-wide action or one of Imbue Studio's, a chord with no modifier other than
  * Shift that is not a function key.
  *
+ * A search field above the list keeps the actions whose names hold every typed word, in any order, with the words
+ * marked; an app with none of them leaves the list and one that has some opens, whether it was collapsed or not. An
+ * action being edited keeps its edit while the search hides it.
+ *
  * Editing one action opens its editor below the row: the shortcuts it will have, each removable, a recorder that
  * adds one more, and the save surfaces. The recorder takes every key, Escape included (it has a Cancel of its own),
  * and says when it is listening, so whatever frames it can leave those keys alone.
@@ -40,6 +44,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MAX_CHORDS_PER_ACTION } from "@imbue/workspace-ui/src/embed";
 import {
   type ChordContext,
@@ -223,6 +228,43 @@ export function isResetOffered(action: KeybindingActionView, context: ChordConte
   return current.length !== restored.size || current.some((chord) => !restored.has(chord));
 }
 
+/** The words of a search, lowercased; none when only spaces are typed. */
+export function searchWords(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word !== "");
+}
+
+/** Whether an action's name holds every word of the search, anywhere in it and in any order. */
+export function labelMatches(label: string, words: readonly string[]): boolean {
+  const lower = label.toLowerCase();
+  return words.every((word) => lower.includes(word));
+}
+
+/** Where the search's words fall in a name, as [start, end) spans in order with overlapping ones merged. None when
+ *  lowercasing changes the name's length, since the spans would then point at the wrong letters. */
+export function matchedSpans(label: string, words: readonly string[]): [number, number][] {
+  const lower = label.toLowerCase();
+  if (lower.length !== label.length) return [];
+  const spans = words
+    .flatMap((word) => {
+      const found: [number, number][] = [];
+      for (let at = lower.indexOf(word); at !== -1; at = lower.indexOf(word, at + 1)) {
+        found.push([at, at + word.length]);
+      }
+      return found;
+    })
+    .sort((left, right) => left[0] - right[0]);
+  const merged: [number, number][] = [];
+  for (const [start, end] of spans) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
 /** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, a reset of this
  *  workspace's change, or a discard of an undelivered "everywhere" save. */
 type ClashCause = "record" | "restore-default" | "reset" | "discard";
@@ -323,6 +365,10 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   let chromeShortcuts: ChromeShortcuts | null = null;
   let onSaveChromeShortcut: ((id: string, chords: readonly string[]) => void) | undefined;
   const collapsedApps = new Set<string>();
+  let query = "";
+  let searchInput: HTMLInputElement | null = null;
+  // The apps collapsed during this search, which opens every app with a match whatever `collapsedApps` holds.
+  const collapsedWhileSearching = new Set<string>();
   // The actions saved or reset since this section opened, marked until it is opened again.
   const savedActionKeys = new Set<string>();
   // The Imbue Studio actions asked to be saved, oldest first: the chrome answers each save with its shortcuts, in
@@ -745,6 +791,76 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
+  /** Search for `next`: the recorder stops, since its row may leave the list, and so does a reset's Replace / Cancel
+   *  whose row does (Cancel changes nothing); an open editor stays, hidden or not, with its edit. */
+  function setQuery(next: string): void {
+    query = next;
+    collapsedWhileSearching.clear();
+    if (editor !== null) setRecording(editor, false);
+    if (pendingRevert?.clash.cause === "reset" && !labelMatches(pendingRevert.action.label, searchWords(next))) {
+      pendingRevert = null;
+    }
+  }
+
+  function searchField(): m.Children {
+    return m("div", { class: "keybinding-search relative mb-4" }, [
+      m(
+        "span",
+        { class: "pointer-events-none absolute top-1/2 left-3 z-(--z-content) -translate-y-1/2 text-faint" },
+        m.trust(icon("search", { size: 14 })),
+      ),
+      m("input", {
+        class: inputClass({ extra: "keybinding-search-input pl-9 pr-10" }),
+        type: "text",
+        placeholder: "Search shortcuts",
+        "aria-label": "Search shortcuts",
+        value: query,
+        oncreate: (created: m.VnodeDOM) => {
+          searchInput = created.dom as HTMLInputElement;
+        },
+        onremove: () => {
+          searchInput = null;
+        },
+        oninput: (event: Event) => setQuery((event.target as HTMLInputElement).value),
+      }),
+      query === ""
+        ? null
+        : m(
+            Button,
+            {
+              xs: true,
+              icon: true,
+              variant: "ghost",
+              extra: "keybinding-search-clear absolute top-1/2 right-2 z-(--z-content) -translate-y-1/2",
+              "aria-label": "Clear search",
+              ...hoverTooltipAttrs("Clear search"),
+              onclick: () => {
+                setQuery("");
+                searchInput?.focus();
+              },
+            },
+            m.trust(icon("close", { size: 12 })),
+          ),
+    ]);
+  }
+
+  /** An action's name with the search's words marked. */
+  function labelView(label: string, words: readonly string[]): m.Children {
+    const spans = matchedSpans(label, words);
+    if (spans.length === 0) return label;
+    const parts: m.Children[] = [];
+    let at = 0;
+    for (const [start, end] of spans) {
+      if (start > at) parts.push(label.slice(at, start));
+      parts.push(
+        m("mark", { class: "keybinding-match rounded-sm bg-accent-light text-primary" }, label.slice(start, end)),
+      );
+      at = end;
+    }
+    if (at < label.length) parts.push(label.slice(at));
+    return parts;
+  }
+
   /** The warnings of a chord on one of the app's rows; no browser runs an Imbue Studio shortcut, so a browser keeping
    *  one is no warning there. */
   function noticesOf(appView: KeybindingAppView, chord: string): string[] {
@@ -888,7 +1004,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       .map((warning) => m("p", { class: "keybinding-row-warning type-helper mt-0.5 text-warning" }, warning));
   }
 
-  function actionRow(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
+  function actionRow(appView: KeybindingAppView, action: KeybindingActionView, words: readonly string[]): m.Children {
     const isEditing = editor !== null && editor.app.app === appView.app && editor.action.id === action.id;
     const held = heldChords(appView, action);
     const chords = visibleIn(held, context);
@@ -907,7 +1023,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     return m("div", { key: action.id, "data-keybinding-action": `${appView.app}.${action.id}` }, [
       m("div", { class: "flex min-h-10 items-center gap-3 border-b border-default py-2" }, [
         m("div", { class: "min-w-0 flex-1" }, [
-          m("span", { class: "type-body text-primary" }, action.label),
+          m("span", { class: "keybinding-label type-body text-primary" }, labelView(action.label, words)),
           saveError === null
             ? null
             : m("p", { class: "keybinding-save-error type-helper mt-0.5 text-danger" }, `Not saved: ${saveError}`),
@@ -949,9 +1065,17 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
-  function appSection(appView: KeybindingAppView): m.Children {
-    const isCollapsed = collapsedApps.has(appView.app);
+  /** One app's section, listing `actions` (the ones the search keeps), out of all its actions. */
+  function appSection(
+    appView: KeybindingAppView,
+    actions: readonly KeybindingActionView[],
+    words: readonly string[],
+  ): m.Children {
+    const isSearching = words.length > 0;
+    const collapsed = isSearching ? collapsedWhileSearching : collapsedApps;
+    const isCollapsed = collapsed.has(appView.app);
     const count = appView.actions.length;
+    const noun = count === 1 ? "shortcut" : "shortcuts";
     return m("section", { key: appView.app, class: "mb-5", "data-keybinding-app": appView.app }, [
       m(
         "button",
@@ -960,8 +1084,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           class: SECTION_HEADER_CLASS,
           "aria-expanded": isCollapsed ? "false" : "true",
           onclick: () => {
-            if (isCollapsed) collapsedApps.delete(appView.app);
-            else collapsedApps.add(appView.app);
+            if (isCollapsed) collapsed.delete(appView.app);
+            else collapsed.add(appView.app);
           },
         },
         [
@@ -971,7 +1095,11 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
             m.trust(icon(isCollapsed ? "chevron-right" : "chevron-down", { size: 14 })),
           ),
           m("span", { class: "type-label text-primary" }, appView.display_name),
-          m("span", { class: "type-helper text-faint" }, `${count} ${count === 1 ? "shortcut" : "shortcuts"}`),
+          m(
+            "span",
+            { class: "keybinding-app-count type-helper text-faint" },
+            isSearching ? `${actions.length} of ${count} ${noun}` : `${count} ${noun}`,
+          ),
         ],
       ),
       isCollapsed
@@ -979,7 +1107,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         : m(
             "div",
             { class: "pl-6" },
-            appView.actions.map((action) => actionRow(appView, action)),
+            actions.map((action) => actionRow(appView, action, words)),
           ),
     ]);
   }
@@ -1067,14 +1195,28 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       if (catalog === null) return m("p", { class: "type-helper text-secondary" }, "Loading the shortcuts...");
       const loaded = catalog;
       const shown = shownCatalog() ?? loaded;
+      const words = searchWords(query);
+      const sections = shown.apps
+        .map((appView) => ({
+          appView,
+          actions: appView.actions.filter((action) => labelMatches(action.label, words)),
+        }))
+        .filter((section) => section.actions.length > 0);
       return m("div", { "data-keyboard-settings": true }, [
         unsentBanner(loaded),
         notice !== null ? m("p", { class: "keybinding-notice type-helper mb-3 text-secondary" }, notice) : null,
-        m(
-          "div",
-          { class: "keybinding-apps" },
-          shown.apps.filter((appView) => appView.actions.length > 0).map((appView) => appSection(appView)),
-        ),
+        searchField(),
+        words.length > 0 && sections.length === 0
+          ? m(
+              "p",
+              { class: "keybinding-no-match type-helper text-secondary" },
+              `No shortcuts match "${query.trim()}".`,
+            )
+          : m(
+              "div",
+              { class: "keybinding-apps" },
+              sections.map((section) => appSection(section.appView, section.actions, words)),
+            ),
       ]);
     },
   };

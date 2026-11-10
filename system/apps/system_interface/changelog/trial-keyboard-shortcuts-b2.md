@@ -5,3 +5,5 @@ Imbue Studio runs these shortcuts before any page sees the key, so they clash wi
 The screen lists the apps in the launcher's order (each manifest's `launcher_rank`, then registry order), so Chat comes before Files wherever the apps happened to register.
 
 An action takes at most 16 shortcuts: once it holds 16, Add shortcut is greyed out and says so on hover, and a save of more is refused.
+
+A search field above the list keeps the actions whose names hold every typed word, in any order, with the words marked; each app shows how many of its shortcuts match, and an app with a match opens even if it was collapsed.

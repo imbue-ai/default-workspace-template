@@ -18,6 +18,9 @@ import {
   imbueStudioAppView,
   hiddenChordsHint,
   isResetOffered,
+  labelMatches,
+  matchedSpans,
+  searchWords,
   unsentEntryLabel,
 } from "./KeyboardSettingsSection";
 
@@ -223,6 +226,34 @@ describe("unsentEntryLabel", () => {
     expect(unsentEntryLabel(loaded, { app: "gone", action: "old", chords: [], restored_chords: [] })).toBe(
       "gone: old",
     );
+  });
+});
+
+describe("searchWords and labelMatches", () => {
+  it("matches a name holding every typed word, ignoring case, order, and extra spaces", () => {
+    expect(searchWords("  Win   CLOSE ")).toEqual(["win", "close"]);
+    expect(searchWords("   ")).toEqual([]);
+    expect(labelMatches("Close window", searchWords("win close"))).toBe(true);
+    expect(labelMatches("Close window", searchWords("close tab"))).toBe(false);
+    expect(labelMatches("Close window", [])).toBe(true);
+  });
+});
+
+describe("matchedSpans", () => {
+  it("finds every place each word falls, in order, merging the ones that overlap", () => {
+    expect(matchedSpans("Close window", ["win", "close"])).toEqual([
+      [0, 5],
+      [6, 9],
+    ]);
+    expect(matchedSpans("Delete the selection", ["e"])).toHaveLength(6);
+    expect(matchedSpans("Delete the selection", ["ele", "lete"])).toEqual([
+      [1, 6],
+      [12, 15],
+    ]);
+  });
+
+  it("marks nothing when lowercasing changes the name's length", () => {
+    expect(matchedSpans("İstanbul", ["stan"])).toEqual([]);
   });
 });
 
