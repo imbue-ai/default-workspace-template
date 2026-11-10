@@ -8,4 +8,4 @@ A workspace's first chat ends its first reply with a one-time offer to suggest a
 
 `read-app-data` says that while Full Disk Access is off, Imbue Studio stops the synchronized copies of the sources it protects, tells the agent with `SYNC_STOPPED`, and never restarts them on its own: a new request with `"sync": true` asks again.
 
-`read-app-data` says a workspace shared with anyone besides its owner is refused app data and Full Disk Access as `REFUSED_SHARED`, and the agent does not ask again until the owner stops sharing it.
+`read-app-data` says a workspace shared with anyone besides its owner is refused app data and Full Disk Access as `REFUSED_SHARED`, and the agent does not ask again until the owner stops sharing it; sharing also stops the workspace's synchronized app-data copies, with no message, so the agent stops reading them.
