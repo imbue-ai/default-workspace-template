@@ -2,7 +2,7 @@ A workspace boot now starts the shell and the chat app first, and everything els
 
 - The first wave is the shell, the chat app, what those two need to serve (agent-observer, owner-exec, vm-exec-register) and the memory guard (earlyoom, oom-tag-backstop, publish_cgroup_meminfo). It starts at once.
 
-- Every other built-in program runs through the new `system/scripts/workspace_bare_scripts/start_after_first_wave.py`. At boot this waits until the shell and the chat answer `/api/health`, then waits that program's own `--delay`, so env-converge, host-backup and share-gateway (each with a `uv sync`) start a few seconds apart. The wait never runs past 30 seconds after supervisord started, so a broken chat holds nothing back for longer than that. A program that starts once both apps already answer (a restart, a wake, an update) is not held at all.
+- Every other built-in program runs through the new `system/scripts/workspace_bare_scripts/start_after_first_wave.py`. At boot this waits until the shell and the chat answer `/api/health`, then waits that program's own `--delay`, so env-converge, host-backup and share-gateway (each with a `uv sync`) start a few seconds apart. Waiting for the two apps never runs past 30 seconds after supervisord started, so a broken chat holds nothing back for longer than that. A program started later than that (a restart, a wake, a `supervisorctl update`) is not held at all.
 
 - Every program keeps `autostart=true`. `system/test_supervisord_layout.py` checks that every built-in program is in exactly one of the two waves, and that the gate runs inside the memory band wrapper.
 

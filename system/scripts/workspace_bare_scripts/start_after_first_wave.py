@@ -12,12 +12,12 @@ and only then execs its command with its arguments untouched.
 
 The wait is bounded and boot-scoped:
 
-- It never outlasts ``FIRST_WAVE_WINDOW_SECONDS`` after supervisord started (the mtime of its pid
-  file), so a shell or chat that cannot start holds nothing back for longer than that.
-- A program started once both apps already answer -- a restart, a wake from the shell's port
-  parking, an update's ``supervisorctl update`` -- execs at once, with no ``--delay``: the stagger
-  only spreads out programs that were actually held back.
-- A program started after that window (supervisord has been up for longer) execs at once.
+- Waiting for the two apps never outlasts ``FIRST_WAVE_WINDOW_SECONDS`` after supervisord started
+  (the mtime of its pid file), so a shell or chat that cannot start holds nothing back for longer
+  than that; the ``--delay`` follows either way.
+- A program started after that window (supervisord has been up for longer) -- a restart, a wake
+  from the shell's port parking, an ``supervisorctl update`` -- execs at once. One started inside it
+  waits as at boot, which costs a restart in a boot's first seconds at most its ``--delay``.
 
 Every program keeps ``autostart=true``, so a restart of the services agent still starts them all.
 Stdlib only: supervisord runs it under the system ``python3``.
@@ -92,9 +92,11 @@ def seconds_to_hold(
     """
     now = clock()
     window_end = (now if started_at is None else started_at) + FIRST_WAVE_WINDOW_SECONDS
-    if now >= window_end or is_serving():
+    if now >= window_end:
         return 0.0
-    while clock() < window_end and not is_serving():
+    # The first check can itself take as long as the apps' imports: the apps bind their ports before
+    # importing, so a connection succeeds at once and waits for the answer.
+    while not is_serving() and clock() < window_end:
         sleep(POLL_SECONDS)
     return delay_seconds
 

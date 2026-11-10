@@ -37,16 +37,18 @@ def _serving_after(clock: _FakeClock, at: float) -> Callable[[], bool]:
     return lambda: clock.now >= at
 
 
-def test_a_program_started_once_the_first_wave_serves_is_not_held() -> None:
+def test_a_program_started_inside_the_window_once_the_first_wave_serves_waits_only_its_delay() -> (
+    None
+):
     clock = _FakeClock(now=1_000.0)
     hold = gate.seconds_to_hold(
-        5.0,
+        delay_seconds=5.0,
         started_at=995.0,
         is_serving=lambda: True,
         clock=clock.time,
         sleep=clock.sleep,
     )
-    assert hold == 0.0
+    assert hold == 5.0
     assert clock.sleeps == []
 
 
@@ -55,7 +57,7 @@ def test_a_program_started_after_the_window_is_not_held_even_with_the_first_wave
 ):
     clock = _FakeClock(now=1_000.0)
     hold = gate.seconds_to_hold(
-        5.0,
+        delay_seconds=5.0,
         started_at=1_000.0 - gate.FIRST_WAVE_WINDOW_SECONDS - 1,
         is_serving=lambda: False,
         clock=clock.time,
@@ -68,7 +70,7 @@ def test_a_program_started_after_the_window_is_not_held_even_with_the_first_wave
 def test_a_held_program_waits_for_the_first_wave_then_its_delay() -> None:
     clock = _FakeClock(now=1_000.0)
     hold = gate.seconds_to_hold(
-        6.0,
+        delay_seconds=6.0,
         started_at=1_000.0,
         is_serving=_serving_after(clock, 1_003.0),
         clock=clock.time,
@@ -82,7 +84,7 @@ def test_a_held_program_waits_for_the_first_wave_then_its_delay() -> None:
 def test_a_first_wave_that_never_serves_holds_nobody_past_the_window() -> None:
     clock = _FakeClock(now=1_000.0)
     hold = gate.seconds_to_hold(
-        2.0,
+        delay_seconds=2.0,
         started_at=1_000.0,
         is_serving=lambda: False,
         clock=clock.time,
@@ -95,7 +97,7 @@ def test_a_first_wave_that_never_serves_holds_nobody_past_the_window() -> None:
 def test_with_no_supervisord_the_window_runs_from_now() -> None:
     clock = _FakeClock(now=1_000.0)
     gate.seconds_to_hold(
-        0.0,
+        delay_seconds=0.0,
         started_at=None,
         is_serving=lambda: False,
         clock=clock.time,
