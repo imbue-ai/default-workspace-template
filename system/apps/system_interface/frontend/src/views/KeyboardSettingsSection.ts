@@ -39,9 +39,11 @@ import {
   chordPlatformName,
   chordSpokenLabel,
   detectChordPlatform,
+  hiddenChordReason,
   isChordHiddenIn,
   isRefusedChord,
   isWorkspaceWideChord,
+  readsChordAsApple,
 } from "@imbue/workspace-ui/src/keybindings";
 import {
   type KeybindingActionView,
@@ -172,13 +174,21 @@ export const REFUSED_CHORD_NOTICE = "Ctrl+Alt+Delete belongs to Windows and can'
 export const WORKSPACE_WIDE_CHORD_NOTICE =
   "A shortcut that works everywhere in the workspace needs a modifier other than Shift, or a function key.";
 
-/** What a row says on hover when its shortcuts are set but none can arrive here. */
+/** What a row says on hover when its shortcuts are set but none can arrive here: each hidden chord with why, the
+ *  platform's (a Mac's Control chord, named with the Mac's symbols) or the browser's. */
 export function hiddenChordsHint(hidden: readonly string[], context: ChordContext): string {
-  const isApple = context.platform === "mac";
-  const labels = hidden.map((chord) => chordDisplayLabel(chord, isApple)).join(", ");
-  const verb = hidden.length === 1 ? "is" : "are";
-  const where = context.surface === "browser" ? "in a browser" : `on ${chordPlatformName(context.platform)}`;
-  return `${labels} ${verb} set, but not available ${where}.`;
+  const sentence = (chords: readonly string[], where: string): string => {
+    const labels = chords
+      .map((chord) => chordDisplayLabel(chord, readsChordAsApple(chord, context.platform)))
+      .join(", ");
+    return `${labels} ${chords.length === 1 ? "is" : "are"} set, but not available ${where}.`;
+  };
+  const onPlatform = hidden.filter((chord) => hiddenChordReason(chord, context) === "platform");
+  const inBrowser = hidden.filter((chord) => !onPlatform.includes(chord));
+  const sentences: string[] = [];
+  if (onPlatform.length > 0) sentences.push(sentence(onPlatform, `on ${chordPlatformName(context.platform)}`));
+  if (inBrowser.length > 0) sentences.push(sentence(inBrowser, "in a browser"));
+  return sentences.join(" ");
 }
 
 /** An unsent save named the way the list names it: its app's display name and its action's label. */
@@ -192,12 +202,14 @@ export function areChordListsEqual(left: readonly string[], right: readonly stri
   return left.length === right.length && left.every((chord, index) => chord === right[index]);
 }
 
-/** Whether a reset would change what the action runs: it has a change in this workspace, and that change differs
- *  from what removing it restores (a Replace elsewhere can leave a change equal to it). */
-export function isResetOffered(action: KeybindingActionView): boolean {
+/** Whether a reset would change what the action runs here: it has a change in this workspace, and the chords of that
+ *  change that can arrive in the context differ from those of what removing it restores (a Replace elsewhere can
+ *  leave a change equal to it). */
+export function isResetOffered(action: KeybindingActionView, context: ChordContext | null): boolean {
   if (action.source !== "workspace") return false;
-  const restored = new Set(action.reset_chords);
-  return action.chords.length !== restored.size || action.chords.some((chord) => !restored.has(chord));
+  const current = visibleIn(action.chords, context);
+  const restored = new Set(visibleIn(action.reset_chords, context));
+  return current.length !== restored.size || current.some((chord) => !restored.has(chord));
 }
 
 /** What brought shortcuts in use elsewhere into an action: a recorded one, its defaults, a reset of this
@@ -295,6 +307,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   const savedActionKeys = new Set<string>();
 
   const isApple = (): boolean => context.platform === "mac";
+  // A chord reads with the Mac's symbols on a Mac, and elsewhere when it holds the Mac's Control key.
+  const isAppleFor = (chord: string): boolean => readsChordAsApple(chord, context.platform);
 
   async function load(): Promise<void> {
     try {
@@ -544,7 +558,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
           m(
             "p",
             { class: "keybinding-replaced type-helper mt-2 text-secondary" },
-            `${chordSpokenLabel(chord, isApple())} will be removed from ${name}.`,
+            `${chordSpokenLabel(chord, isAppleFor(chord))} will be removed from ${name}.`,
           ),
         );
     });
@@ -567,7 +581,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                 ...(isHidden ? hoverTooltipAttrs(hiddenChordsHint([chord], context)) : {}),
               },
               [
-                m(ShortcutKeycap, { chord, isApple: isApple() }),
+                m(ShortcutKeycap, { chord, isApple: isAppleFor(chord) }),
                 m(
                   Button,
                   {
@@ -575,8 +589,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                     icon: true,
                     variant: "ghost",
                     extra: "keybinding-remove",
-                    "aria-label": `Remove ${chordSpokenLabel(chord, isApple())}`,
-                    ...hoverTooltipAttrs(`Remove ${chordSpokenLabel(chord, isApple())}`),
+                    "aria-label": `Remove ${chordSpokenLabel(chord, isAppleFor(chord))}`,
+                    ...hoverTooltipAttrs(`Remove ${chordSpokenLabel(chord, isAppleFor(chord))}`),
                     onclick: () => {
                       current.stagedChords = current.stagedChords.filter((staged) => staged !== chord);
                     },
@@ -736,6 +750,13 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     );
   }
 
+  /** The warnings of the shortcuts a row shows (the editor shows its own while the row is being edited). */
+  function rowWarnings(chords: readonly string[]): m.Children {
+    return chords
+      .flatMap((chord) => chordNotices(chord, context))
+      .map((warning) => m("p", { class: "keybinding-row-warning type-helper mt-0.5 text-warning" }, warning));
+  }
+
   function actionRow(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
     const isEditing = editor !== null && editor.app.app === appView.app && editor.action.id === action.id;
     const held = heldChords(appView, action);
@@ -754,11 +775,12 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         m("div", { class: "min-w-0 flex-1" }, [
           m("span", { class: "type-body text-primary" }, action.label),
           sharedShortcutWarning(appView, action),
+          isEditing ? null : rowWarnings(chords),
         ]),
         rowMarker(appView, action, isPendingReplace),
         m("span", { class: "shrink-0" }, shortcutsView(chords, hidden)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
-          isResetOffered(action)
+          isResetOffered(action, context)
             ? m(
                 Button,
                 {

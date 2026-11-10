@@ -267,6 +267,10 @@ class MessageHandler(FrozenModel):
         return self
 
 
+# The one app whose keybinding actions may fire anywhere in the workspace: the shell, which frames every other app.
+WORKSPACE_WIDE_KEYBINDINGS_APP: Final[str] = "system_interface"
+
+
 class KeybindingScope(LowerCaseStrEnum):
     """Where an action's chord fires: inside the app's own page, or anywhere in the workspace, which only the shell's
     actions do (the keyboard-shortcuts spec in the mngr repository, section 5.2)."""
@@ -639,6 +643,12 @@ class AppManifest(FrozenModel):
         keybinding_ids = [action.id for action in self.keybindings]
         if len(set(keybinding_ids)) != len(keybinding_ids):
             raise InvalidManifestValueError(f"keybinding action ids must be unique, got {keybinding_ids}")
+        if str(self.name) != WORKSPACE_WIDE_KEYBINDINGS_APP:
+            workspace_wide = [str(action.id) for action in self.keybindings if action.scope is KeybindingScope.WORKSPACE]
+            if workspace_wide:
+                raise InvalidManifestValueError(
+                    f"only {WORKSPACE_WIDE_KEYBINDINGS_APP} declares workspace-wide keybindings, got {workspace_wide}"
+                )
         launch_path_ids = [launch_path.id for launch_path in self.launch_paths]
         if len(set(launch_path_ids)) != len(launch_path_ids):
             raise InvalidManifestValueError(f"launch path ids must be unique, got {launch_path_ids}")

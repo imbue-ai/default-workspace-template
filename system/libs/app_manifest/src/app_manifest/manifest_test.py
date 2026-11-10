@@ -363,6 +363,7 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
     manifest = AppManifest.model_validate(
         {
             **_full_manifest_data(),
+            "name": "system_interface",
             "keybindings": [
                 {"id": "rename", "label": "Rename the selected entry", "default_chords": ["f2"]},
                 {"id": "unbound", "label": "Something with no default"},
@@ -392,6 +393,16 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
 def test_a_malformed_keybinding_fails_to_load_with_its_reason(action: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         AppManifest.model_validate({**_full_manifest_data(), "keybindings": [action]})
+
+
+def test_only_the_shell_declares_workspace_wide_keybindings() -> None:
+    with pytest.raises(ValidationError, match="only system_interface declares workspace-wide keybindings"):
+        AppManifest.model_validate(
+            {
+                **_full_manifest_data(),
+                "keybindings": [{"id": "launcher", "label": "Open the launcher", "scope": "workspace"}],
+            }
+        )
 
 
 def test_duplicate_keybinding_action_ids_are_rejected() -> None:

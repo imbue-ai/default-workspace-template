@@ -27,7 +27,7 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
-``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
+``keybindings`` (id, label, default_chords, and scope when given), and ``theming_mode`` (the ``[theming]`` table's mode,
 when the manifest has one); the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -869,8 +869,9 @@ def _copied_message_handler(
 def _copied_keybinding(
     action: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest keybinding action as the registry row carries it: ``id``, ``label``, and ``default_chords``.
-    Returns ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    """One manifest keybinding action as the registry row carries it: ``id``, ``label``, ``default_chords``, and
+    ``scope`` when the manifest wrote one. Returns ``(copied, None)``, or ``(None, error)`` when the entry is not
+    shaped as the manifest requires."""
     if not (
         isinstance(action, dict)
         and isinstance(action.get("id"), str)
@@ -889,11 +890,16 @@ def _copied_keybinding(
             None,
             f"manifest {str(path)!r}: a keybinding's default_chords must be an array of strings",
         )
-    return {
+    copied: dict[str, object] = {
         "id": action["id"],
         "label": action["label"],
         "default_chords": list(default_chords),
-    }, None
+    }
+    if "scope" in action:
+        if not isinstance(action["scope"], str):
+            return None, f"manifest {str(path)!r}: a keybinding's scope must be a string"
+        copied["scope"] = action["scope"]
+    return copied, None
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.

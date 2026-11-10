@@ -6,8 +6,10 @@
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import {
+  type ChordContext,
   type ChordKeyEvent,
   type ChordPlatform,
+  type ChordSurface,
   detectChordPlatform,
   keydownMatchesChords,
   type ResolvedKeybindings,
@@ -15,6 +17,8 @@ import {
 
 let resolved: ResolvedKeybindings | null = null;
 let platformOverride: ChordPlatform | null = null;
+// A browser until the Imbue Studio chrome says it frames the shell (``canPopOut``).
+let surface: ChordSurface = "browser";
 
 export async function refreshShellKeybindings(): Promise<void> {
   try {
@@ -26,9 +30,15 @@ export async function refreshShellKeybindings(): Promise<void> {
   }
 }
 
-/** The platform the shell reads chords on: the browser's, unless a test named one. */
-export function shellChordPlatform(): ChordPlatform {
-  return platformOverride ?? detectChordPlatform();
+/** Where the shell reads chords: the browser's platform (unless a test named one), and the desktop app or a
+ *  browser as the chrome said. */
+export function shellChordContext(): ChordContext {
+  return { platform: platformOverride ?? detectChordPlatform(), surface };
+}
+
+/** The chrome said whether it is the desktop app. */
+export function setShellChordSurface(value: ChordSurface): void {
+  surface = value;
 }
 
 export function matchesShellKeybinding(
@@ -37,7 +47,7 @@ export function matchesShellKeybinding(
   fallbackChords: readonly string[],
 ): boolean {
   const chords = resolved?.chords_by_action[actionId] ?? fallbackChords;
-  return keydownMatchesChords(event, chords, shellChordPlatform());
+  return keydownMatchesChords(event, chords, shellChordContext());
 }
 
 /** For tests: pretend the backend answered these chords. */

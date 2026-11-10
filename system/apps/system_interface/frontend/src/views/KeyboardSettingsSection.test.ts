@@ -145,11 +145,22 @@ describe("actionsSharingShortcuts", () => {
 describe("isResetOffered", () => {
   it("offers a reset only for a change in this workspace that differs from what the reset restores", () => {
     const [rename, deleteAction, newFolder] = APP.actions;
-    expect(isResetOffered(deleteAction)).toBe(true);
-    expect(isResetOffered(rename)).toBe(false);
-    expect(isResetOffered(newFolder)).toBe(false);
-    expect(isResetOffered({ ...deleteAction, chords: ["delete"] })).toBe(false);
-    expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] })).toBe(true);
+    expect(isResetOffered(deleteAction, MAC_DESKTOP)).toBe(true);
+    expect(isResetOffered(rename, MAC_DESKTOP)).toBe(false);
+    expect(isResetOffered(newFolder, MAC_DESKTOP)).toBe(false);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"] }, MAC_DESKTOP)).toBe(false);
+    expect(
+      isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] }, MAC_DESKTOP),
+    ).toBe(true);
+  });
+
+  it("compares only the shortcuts that can arrive in the context", () => {
+    // Delete's change adds ctrl+backspace, a Mac's Control chord: off a Mac the change shows as the default does.
+    const deleteAction = APP.actions[1];
+    expect(isResetOffered(deleteAction, WINDOWS_DESKTOP)).toBe(false);
+    const withMetaW = { ...deleteAction, chords: ["delete", "meta+w"] };
+    expect(isResetOffered(withMetaW, MAC_BROWSER)).toBe(false);
+    expect(isResetOffered(withMetaW, MAC_DESKTOP)).toBe(true);
   });
 });
 
@@ -182,9 +193,18 @@ describe("clashesOf in a context", () => {
 
 describe("hiddenChordsHint", () => {
   it("names the shortcuts that are set but cannot arrive here", () => {
-    expect(hiddenChordsHint(["ctrl+k"], WINDOWS_DESKTOP)).toBe("Ctrl+K is set, but not available on Windows.");
     expect(hiddenChordsHint(["meta+w", "meta+t"], MAC_BROWSER)).toBe(
       "⌘W, ⌘T are set, but not available in a browser.",
+    );
+  });
+
+  it("names a Mac's Control shortcut with the Mac's symbols off a Mac, where Ctrl is another key", () => {
+    expect(hiddenChordsHint(["ctrl+k"], WINDOWS_DESKTOP)).toBe("⌃K is set, but not available on Windows.");
+  });
+
+  it("gives each hidden shortcut its own reason", () => {
+    expect(hiddenChordsHint(["ctrl+k", "meta+w"], { platform: "windows", surface: "browser" })).toBe(
+      "⌃K is set, but not available on Windows. Ctrl+W is set, but not available in a browser.",
     );
   });
 });
@@ -648,6 +668,31 @@ describe("editing a shortcut", () => {
     );
     expect(deleteKeycaps).toEqual(["delete"]);
     expect(row(root, "delete").textContent).not.toContain("or");
+  });
+
+  it("warns under a row about a shortcut a browser would keep, and leaves the warning to the editor while editing", async () => {
+    const withMetaW = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "meta+w"] }] };
+    stubFetch(catalogOf({ apps: [withMetaW] }));
+    const root = await mountSection();
+
+    expect(row(root, "rename").querySelector(".keybinding-row-warning")?.textContent).toContain(
+      "⌘W is a shortcut the browser keeps for itself",
+    );
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    expect(row(root, "rename").querySelector(".keybinding-row-warning")).toBeNull();
+    expect(row(root, "rename").querySelector(".keybinding-warning")).not.toBeNull();
+  });
+
+  it("draws a hidden Mac Control shortcut in the editor with the Mac's symbols", async () => {
+    const macOnly = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "ctrl+r"] }] };
+    stubFetch(catalogOf({ apps: [macOnly] }));
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    const removeLabels = Array.from(root.querySelectorAll(".keybinding-remove")).map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(removeLabels).toEqual(["Remove F2", "Remove Control+R"]);
   });
 
   it("hides what a browser keeps when the workspace runs in one", async () => {

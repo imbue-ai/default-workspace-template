@@ -27,7 +27,7 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { refreshShellKeybindings } from "../model/keybindings";
+import { refreshShellKeybindings, setShellChordSurface } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
@@ -684,6 +684,7 @@ export class DesktopStore {
   setCanPopOut(canPopOut: boolean): void {
     if (this.canPopOut === canPopOut) return;
     this.canPopOut = canPopOut;
+    setShellChordSurface(canPopOut ? "desktop" : "browser");
     this.notifyListeners();
   }
 

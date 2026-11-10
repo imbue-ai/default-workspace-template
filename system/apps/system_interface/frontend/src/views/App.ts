@@ -21,7 +21,8 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { OPEN_KEYBOARD_SHORTCUTS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
-import { detectChordPlatform, isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
+import { isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
+import { shellChordContext } from "../model/keybindings";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
@@ -1116,7 +1117,7 @@ export function App(): m.Component<AppAttrs> {
   function keyboardShortcutsDialogView(): m.Children {
     return m(KeyboardShortcutsDialog, {
       // A chrome that can pull a window out is the desktop app; any other host is a browser.
-      context: { platform: detectChordPlatform(), surface: store?.getCanPopOut() === true ? "desktop" : "browser" },
+      context: shellChordContext(),
       onClose: () => {
         isKeyboardShortcutsDialogOpen = false;
       },

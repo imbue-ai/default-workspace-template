@@ -1,0 +1,1 @@
+The desktop-interface contracts describe keybinding scopes (`scope = "app" | "workspace"`, workspace-wide actions the shell's alone) and the defaults every built-in app declares, each written once. A manifest test fails when a built-in default is one a browser keeps from its pages or one any OS keeps from every app, or when two actions that may clash share a default.

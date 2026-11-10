@@ -6,6 +6,8 @@ repo root, which is what checks that its declared references still exist where i
 """
 
 import ast
+import itertools
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -26,6 +28,11 @@ from app_manifest.manifest import KeybindingScope
 from workspace_profile.manifest import find_invalid_default_chords
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_VENDOR_ASSETS_DIR = _REPO_ROOT / "system" / "vendor" / "mngr-assets"
+_PROFILE_CONTRACT_PATH = (
+    _VENDOR_ASSETS_DIR / "apps" / "minds" / "imbue" / "minds" / "desktop_client" / "workspace_profile_contract.json"
+)
+_CHORD_PLATFORMS = ("mac", "windows", "linux")
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 
@@ -431,9 +438,38 @@ def test_built_in_manifest_keybindings_declare_default_chords_the_actions_may_ha
     manifest = load_manifest(manifest_path)
 
     assert find_invalid_default_chords(manifest.keybindings) == []
-    # A workspace-wide action fires inside every app's page, so only the shell declares one.
-    workspace_wide = [action.id for action in manifest.keybindings if action.scope is KeybindingScope.WORKSPACE]
-    assert workspace_wide == [] or str(manifest.name) == "system_interface"
+
+
+def test_built_in_default_chords_work_everywhere_out_of_the_box() -> None:
+    # The keyboard-shortcuts spec in the mngr repository, section 5.1: no default is one a browser keeps
+    # from its pages or one any OS keeps from every app, and no two actions that may clash share one
+    # (an app's actions among themselves, a workspace-wide action with every action of every app).
+    if not _VENDOR_ASSETS_DIR.is_dir():
+        pytest.skip("mngr assets are not vendored here; run system/scripts/fetch_mngr_assets.sh first")
+    contract = json.loads(_PROFILE_CONTRACT_PATH.read_text(encoding="utf-8"))
+    defaults = [
+        (str(manifest.name), str(action.id), action.scope, chord)
+        for manifest in map(load_manifest, _built_in_manifest_paths())
+        for action in manifest.keybindings
+        for chord in action.default_chords
+    ]
+
+    kept_somewhere = [
+        f"{app}.{action}: {chord} ({platform})"
+        for platform in _CHORD_PLATFORMS
+        for app, action, _, chord in defaults
+        if chord in contract["browser_reserved_chords"][platform]
+        or chord in {entry["chord"] for entry in contract["os_kept_chords"][platform]}
+    ]
+    assert kept_somewhere == []
+    # Dropping the Mac's Control chords off a Mac only removes chords, so a clash there is one on a Mac too.
+    clashing = [
+        f"{first[0]}.{first[1]} and {second[0]}.{second[1]}: {first[3]}"
+        for first, second in itertools.combinations(defaults, 2)
+        if first[3] == second[3]
+        and (first[0] == second[0] or KeybindingScope.WORKSPACE in (first[2], second[2]))
+    ]
+    assert clashing == []
 
 
 @pytest.mark.parametrize(

@@ -23,7 +23,7 @@ export interface ResolvedKeybindings {
 /** The keys a chord is read from; structurally a `KeyboardEvent`, so tests can pass a plain object. */
 export interface ChordKeyEvent {
   key: string;
-  /** The physical key (`KeyN`), read instead of `key` for a letter or digit while Option is held. */
+  /** The physical key (`KeyN`), read instead of `key` for a printable key while Option is held. */
   code?: string;
   ctrlKey: boolean;
   altKey: boolean;
@@ -205,16 +205,57 @@ export function isApplePlatform(): boolean {
   return detectChordPlatform() === "mac";
 }
 
-// A letter or digit key, as `KeyboardEvent.code` names it.
-const LETTER_OR_DIGIT_CODE = /^(?:Key([A-Z])|Digit([0-9]))$/;
+// A letter key, as `KeyboardEvent.code` names it.
+const LETTER_CODE = /^Key([A-Z])$/;
+
+// The other printable keys of the US layout by `KeyboardEvent.code`: the character each types, unshifted and shifted.
+const US_LAYOUT_CHARACTERS: Readonly<Record<string, readonly [string, string]>> = {
+  Backquote: ["`", "~"],
+  Digit1: ["1", "!"],
+  Digit2: ["2", "@"],
+  Digit3: ["3", "#"],
+  Digit4: ["4", "$"],
+  Digit5: ["5", "%"],
+  Digit6: ["6", "^"],
+  Digit7: ["7", "&"],
+  Digit8: ["8", "*"],
+  Digit9: ["9", "("],
+  Digit0: ["0", ")"],
+  Minus: ["-", "_"],
+  Equal: ["=", "+"],
+  BracketLeft: ["[", "{"],
+  BracketRight: ["]", "}"],
+  Backslash: ["\\", "|"],
+  Semicolon: [";", ":"],
+  Quote: ["'", '"'],
+  Comma: [",", "<"],
+  Period: [".", ">"],
+  Slash: ["/", "?"],
+};
+
+/** The character a printable key types on the US layout, or null for a key that is not one. */
+function usLayoutCharacter(code: string, isShifted: boolean): string | null {
+  const letter = LETTER_CODE.exec(code);
+  if (letter !== null) return letter[1].toLowerCase();
+  const characters = US_LAYOUT_CHARACTERS[code];
+  return characters === undefined ? null : characters[isShifted ? 1 : 0];
+}
+
+/** A single character's spelling in the grammar. */
+function spelledCharacter(character: string): string {
+  if (character === "+") return "plus";
+  return character.toLowerCase();
+}
 
 /**
  * The canonical chord one keydown spells on the platform, or null for a keystroke that is no chord (a
  * bare modifier, a key the grammar has no name for, or off a Mac the Windows key).
  *
  * Off a Mac, the Control key spells `meta`, the grammar's primary modifier. While Option is held a Mac
- * composes a character for a letter or digit (Option-N gives a tilde), so those keys are read from the
- * physical key instead, on every platform, and the chord records the same everywhere.
+ * composes a character for a printable key (Option-N gives a tilde, Option-] a quotation mark), so those
+ * keys are read from the physical key instead, as the US layout types them, on every platform, and the
+ * chord records the same everywhere. The Space bar is read from the physical key always, since a browser
+ * may report Option-Space as a no-break space.
  */
 export function chordFromKeydown(
   event: ChordKeyEvent,
@@ -227,11 +268,11 @@ export function chordFromKeydown(
   const isMac = platform === "mac";
   if (!isMac && event.metaKey) return null;
   let key: string;
-  const physical = event.altKey && event.code !== undefined ? LETTER_OR_DIGIT_CODE.exec(event.code) : null;
-  if (physical !== null) key = (physical[1] ?? physical[2]).toLowerCase();
-  else if (raw === " ") key = "space";
-  else if (raw === "+") key = "plus";
-  else if (raw.length === 1) key = raw.toLowerCase();
+  const physical = event.altKey && event.code !== undefined ? usLayoutCharacter(event.code, event.shiftKey) : null;
+  if (event.code === "Space" || raw === " ") key = "space";
+  else if (physical !== null) key = spelledCharacter(physical);
+  else if (/^\s$/.test(raw)) return null;
+  else if (raw.length === 1) key = spelledCharacter(raw);
   else {
     key = raw.toLowerCase();
     if (!NAMED_KEYS.has(key)) return null;
@@ -245,15 +286,20 @@ export function chordFromKeydown(
   return tokens.join("+");
 }
 
-/** Whether the keystroke spells one of the given chords on the platform. */
+/** The context a page reads chords in when nothing says otherwise: the browser's platform, in the desktop app. */
+export function defaultChordContext(): ChordContext {
+  return { platform: detectChordPlatform(), surface: "desktop" };
+}
+
+/** Whether the keystroke spells one of the given chords in the context; a chord hidden there never matches. */
 export function keydownMatchesChords(
   event: ChordKeyEvent,
   chords: readonly string[],
-  platform: ChordPlatform = detectChordPlatform(),
+  context: ChordContext = defaultChordContext(),
 ): boolean {
   if (chords.length === 0) return false;
-  const chord = chordFromKeydown(event, platform);
-  return chord !== null && chords.includes(chord);
+  const chord = chordFromKeydown(event, context.platform);
+  return chord !== null && chords.includes(chord) && !isChordHiddenIn(chord, context);
 }
 
 /** Whether the chord is one no binding may claim. */
@@ -282,8 +328,22 @@ function holdsControl(chord: string): boolean {
  * Control key off a Mac, or a chord the browser keeps from its pages when the workspace runs in one.
  */
 export function isChordHiddenIn(chord: string, context: ChordContext): boolean {
-  if (context.platform !== "mac" && holdsControl(chord)) return true;
-  return context.surface === "browser" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord);
+  return hiddenChordReason(chord, context) !== null;
+}
+
+/** Why a chord is hidden in the context: it holds the Mac's Control key off a Mac ("platform"), or the browser
+ *  keeps it ("browser"); null for a chord that can arrive. */
+export function hiddenChordReason(chord: string, context: ChordContext): "platform" | "browser" | null {
+  if (context.platform !== "mac" && holdsControl(chord)) return "platform";
+  if (context.surface === "browser" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) return "browser";
+  return null;
+}
+
+/** Whether a chord reads with Apple's symbols on the platform: every chord on a Mac, and off a Mac a chord holding
+ *  the Mac's Control key, which is a Mac keystroke ("⌃K") that the platform's own names would misname ("Ctrl" is
+ *  what `meta` reads as there). */
+export function readsChordAsApple(chord: string, platform: ChordPlatform): boolean {
+  return platform === "mac" || holdsControl(chord);
 }
 
 /**
@@ -293,7 +353,7 @@ export function isChordHiddenIn(chord: string, context: ChordContext): boolean {
  */
 export function chordNotices(chord: string, context: ChordContext): string[] {
   const isApple = context.platform === "mac";
-  const label = chordDisplayLabel(chord, isApple);
+  const label = chordDisplayLabel(chord, readsChordAsApple(chord, context.platform));
   const os = OS_NAMES[context.platform];
   const notices: string[] = [];
   if (context.surface === "desktop" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) {
@@ -385,13 +445,13 @@ export function chordSpokenLabel(chord: string, isApple: boolean): string {
     .join("+");
 }
 
-/** Whether the keystroke triggers the named action under the resolved chords (none loaded: never). */
+/** Whether the keystroke triggers the named action under the resolved chords in the context (none loaded: never). */
 export function keydownMatchesAction(
   event: ChordKeyEvent,
   resolved: ResolvedKeybindings | null,
   actionId: string,
-  platform: ChordPlatform = detectChordPlatform(),
+  context: ChordContext = defaultChordContext(),
 ): boolean {
   if (resolved === null) return false;
-  return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? [], platform);
+  return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? [], context);
 }

@@ -815,6 +815,7 @@ default_chords = ["f2"]
 [[keybindings]]
 id = "unbound"
 label = "Something with no default"
+scope = "app"
 """
 
 
@@ -900,14 +901,15 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
         {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
     ]
-    # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
+    # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound, and its scope
+    # when the manifest wrote one.
     assert row["keybindings"] == [
         {
             "id": "rename",
             "label": "Rename the selected entry",
             "default_chords": ["f2"],
         },
-        {"id": "unbound", "label": "Something with no default", "default_chords": []},
+        {"id": "unbound", "label": "Something with no default", "default_chords": [], "scope": "app"},
     ]
 
 
@@ -1060,6 +1062,11 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             '[[keybindings]]\nid = "rename"\nlabel = "Rename"\ndefault_chords = "f2"\n',
             "a keybinding's default_chords must be an array of strings",
             id="keybinding-default-chords-not-an-array",
+        ),
+        pytest.param(
+            '[[keybindings]]\nid = "rename"\nlabel = "Rename"\nscope = 1\n',
+            "a keybinding's scope must be a string",
+            id="keybinding-scope-not-a-string",
         ),
         pytest.param(
             '[pin]\nstyle = "avatar"\n',

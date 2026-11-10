@@ -13,6 +13,7 @@ import {
   isWorkspaceWideChord,
   keydownMatchesAction,
   keydownMatchesChords,
+  readsChordAsApple,
 } from "./keybindings";
 
 function keydown(key: string, modifiers: Partial<KeyboardEventInit> = {}): KeyboardEvent {
@@ -39,16 +40,36 @@ describe("chordFromKeydown on a Mac", () => {
     expect(chordFromKeydown(keydown("MediaPlayPause"), "mac")).toBeNull();
   });
 
-  it("reads a letter or digit from the physical key while Option is held, which composes a character", () => {
+  it("reads a printable key from the physical key while Option is held, which composes a character", () => {
     expect(chordFromKeydown(keydown("˜", { altKey: true, metaKey: true, code: "KeyN" }), "mac")).toBe("alt+meta+n");
     expect(chordFromKeydown(keydown("∑", { altKey: true, code: "KeyW" }), "mac")).toBe("alt+w");
     expect(chordFromKeydown(keydown("¡", { altKey: true, code: "Digit1" }), "mac")).toBe("alt+1");
-    // Punctuation and named keys keep their own spelling: Option-] is "]" on a US layout and the
-    // physical key has no letter to read.
-    expect(chordFromKeydown(keydown("]", { altKey: true, metaKey: true, code: "BracketRight" }), "mac")).toBe(
+    expect(chordFromKeydown(keydown("‘", { altKey: true, metaKey: true, code: "BracketRight" }), "mac")).toBe(
       "alt+meta+]",
     );
+    expect(chordFromKeydown(keydown("“", { altKey: true, metaKey: true, code: "BracketLeft" }), "mac")).toBe(
+      "alt+meta+[",
+    );
+    expect(chordFromKeydown(keydown("÷", { altKey: true, code: "Slash" }), "mac")).toBe("alt+/");
     expect(chordFromKeydown(keydown("n", { metaKey: true, code: "KeyN" }), "mac")).toBe("meta+n");
+  });
+
+  it("spells a shifted key under Option as the character Shift types, as it does without Option", () => {
+    expect(chordFromKeydown(keydown("#", { shiftKey: true, code: "Digit3" }), "mac")).toBe("shift+#");
+    expect(chordFromKeydown(keydown("‹", { altKey: true, shiftKey: true, code: "Digit3" }), "mac")).toBe(
+      "alt+shift+#",
+    );
+    expect(chordFromKeydown(keydown("±", { altKey: true, shiftKey: true, code: "Equal" }), "mac")).toBe(
+      "alt+shift+plus",
+    );
+    expect(chordFromKeydown(keydown("Á", { altKey: true, shiftKey: true, code: "KeyY" }), "mac")).toBe(
+      "alt+shift+y",
+    );
+  });
+
+  it("reads the Space bar from the physical key, and refuses any other whitespace", () => {
+    expect(chordFromKeydown(keydown("\u00a0", { altKey: true, code: "Space" }), "mac")).toBe("alt+space");
+    expect(chordFromKeydown(keydown("\u00a0", { altKey: true }), "mac")).toBeNull();
   });
 });
 
@@ -193,24 +214,41 @@ describe("chordSpokenLabel", () => {
 });
 
 describe("matching", () => {
+  const MAC_DESKTOP = { platform: "mac", surface: "desktop" } as const;
+
   it("matches a keystroke against a chord list exactly", () => {
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["ctrl+enter", "meta+enter"], "mac")).toBe(true);
-    expect(keydownMatchesChords(keydown("Enter", { shiftKey: true }), ["ctrl+enter", "meta+enter"], "mac")).toBe(
-      false,
-    );
-    expect(keydownMatchesChords(keydown("Enter"), [], "mac")).toBe(false);
+    const chords = ["ctrl+enter", "meta+enter"];
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), chords, MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesChords(keydown("Enter", { shiftKey: true }), chords, MAC_DESKTOP)).toBe(false);
+    expect(keydownMatchesChords(keydown("Enter"), [], MAC_DESKTOP)).toBe(false);
   });
 
   it("matches meta with the Control key off a Mac, where a ctrl chord never matches", () => {
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["meta+enter"], "windows")).toBe(true);
-    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["ctrl+enter"], "windows")).toBe(false);
-    expect(keydownMatchesChords(keydown("Enter", { metaKey: true }), ["meta+enter"], "linux")).toBe(false);
+    const windows = { platform: "windows", surface: "desktop" } as const;
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["meta+enter"], windows)).toBe(true);
+    expect(keydownMatchesChords(keydown("Enter", { ctrlKey: true }), ["ctrl+enter"], windows)).toBe(false);
+    const linux = { platform: "linux", surface: "desktop" } as const;
+    expect(keydownMatchesChords(keydown("Enter", { metaKey: true }), ["meta+enter"], linux)).toBe(false);
+  });
+
+  it("never matches a chord the browser keeps when the page runs in one, though a browser may deliver it", () => {
+    const commandW = keydown("w", { metaKey: true, code: "KeyW" });
+    expect(keydownMatchesChords(commandW, ["meta+w"], MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesChords(commandW, ["meta+w"], { platform: "mac", surface: "browser" })).toBe(false);
   });
 
   it("matches the named action only once the resolved chords are loaded", () => {
     const resolved = { app: "chat", chords_by_action: { "send-message": ["enter"] } };
-    expect(keydownMatchesAction(keydown("Enter"), resolved, "send-message", "mac")).toBe(true);
-    expect(keydownMatchesAction(keydown("Enter"), resolved, "unknown-action", "mac")).toBe(false);
-    expect(keydownMatchesAction(keydown("Enter"), null, "send-message", "mac")).toBe(false);
+    expect(keydownMatchesAction(keydown("Enter"), resolved, "send-message", MAC_DESKTOP)).toBe(true);
+    expect(keydownMatchesAction(keydown("Enter"), resolved, "unknown-action", MAC_DESKTOP)).toBe(false);
+    expect(keydownMatchesAction(keydown("Enter"), null, "send-message", MAC_DESKTOP)).toBe(false);
+  });
+});
+
+describe("readsChordAsApple", () => {
+  it("reads every chord with Apple's symbols on a Mac, and a Mac's Control chord so everywhere", () => {
+    expect(readsChordAsApple("meta+k", "mac")).toBe(true);
+    expect(readsChordAsApple("meta+k", "windows")).toBe(false);
+    expect(readsChordAsApple("ctrl+k", "windows")).toBe(true);
   });
 });
