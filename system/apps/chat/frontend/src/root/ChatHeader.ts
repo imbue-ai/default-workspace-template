@@ -8,7 +8,8 @@
  */
 
 import m from "mithril";
-import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { kebabGlyph, listGlyph } from "../glyphs";
 import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
@@ -39,7 +40,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
     extraClass: "chat-header-menu",
   });
   // The reference rows of the menu now open, built as it opens.
-  let referenceRows: MenuRow[] = [];
+  let referenceRows: ContextMenuRow[] = [];
 
   return {
     onremove() {
