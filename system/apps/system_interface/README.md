@@ -115,7 +115,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `minds:run-shortcut`, hands their chords to every page with
   `shell:workspace-chords`, and reports them and every app's chords to Imbue
   Studio with `minds:shell-shortcuts` (the keyboard-shortcuts spec in the mngr
-  repo, section 6). The screen reads chords in a context, the platform and
+  repo, section 6); a chord Imbue Studio takes from the OS for an app's own
+  action (`minds:run-chord`) goes to the focused window's page as
+  `shell:chord`. The screen reads chords in a context, the platform and
   whether the workspace runs in the desktop app or a browser (`canPopOut`),
   and hides, warns about, and checks clashes among the chords by it.
   In the desktop app the screen ends with Imbue Studio's own shortcuts (New
