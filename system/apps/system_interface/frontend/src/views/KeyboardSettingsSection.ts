@@ -125,24 +125,6 @@ function clashesAmong(
   );
 }
 
-/** Every other action of the app using one of `chords` now, once per chord it uses. An action's chords are read
- *  from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved. */
-export function clashesOf(
-  app: KeybindingAppView,
-  actionId: string,
-  chords: readonly string[],
-  chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
-  context: ChordContext | null = null,
-): ClashEntry[] {
-  const candidates = app.actions.filter((action) => action.id !== actionId).map((action) => ({ app, action }));
-  return clashesAmong(
-    candidates,
-    chords,
-    (candidate) => chordsByActionId.get(candidate.action.id) ?? candidate.action.chords,
-    context,
-  );
-}
-
 /** The clashes across the whole catalog, by the rule of `clashCandidates`; `replacedChordsByKey` holds what Replace
  *  has left other actions (by `actionKey`), ahead of what they were loaded with. */
 export function clashesInCatalog(
@@ -159,20 +141,6 @@ export function clashesInCatalog(
     (candidate) =>
       replacedChordsByKey.get(actionKey(candidate.app.app, candidate.action.id)) ?? candidate.action.chords,
     context,
-  );
-}
-
-/** The other actions of the app sharing one of this action's shortcuts, by the chords each row shows. */
-export function actionsSharingShortcuts(
-  app: KeybindingAppView,
-  actionId: string,
-  chordsOfAction: (action: KeybindingActionView) => readonly string[],
-): KeybindingActionView[] {
-  const own = app.actions.find((action) => action.id === actionId);
-  if (own === undefined) return [];
-  const ownChords = chordsOfAction(own);
-  return app.actions.filter(
-    (action) => action.id !== actionId && chordsOfAction(action).some((chord) => ownChords.includes(chord)),
   );
 }
 

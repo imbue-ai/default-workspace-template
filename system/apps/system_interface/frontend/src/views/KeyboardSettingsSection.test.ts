@@ -12,9 +12,8 @@ import {
   IMBUE_STUDIO_APP,
   REFUSED_CHORD_NOTICE,
   WORKSPACE_WIDE_CHORD_NOTICE,
-  actionsSharingShortcuts,
   clashCandidates,
-  clashesOf,
+  clashesInCatalog,
   differsFromDefaults,
   imbueStudioAppView,
   hiddenChordsHint,
@@ -113,36 +112,38 @@ function catalogOf(overrides: Partial<KeybindingsCatalog> = {}): KeybindingsCata
   };
 }
 
-describe("clashesOf", () => {
+/** The clashes `chords` would have for one of `app`'s actions, with no other app in the catalog. */
+function clashesInApp(
+  app: KeybindingAppView,
+  actionId: string,
+  chords: readonly string[],
+  replacedChordsByKey: ReadonlyMap<string, readonly string[]> = new Map(),
+  context: typeof MAC_DESKTOP | typeof WINDOWS_DESKTOP | typeof MAC_BROWSER | null = null,
+) {
+  return clashesInCatalog(catalogOf({ apps: [app] }), app, actionId, chords, replacedChordsByKey, context);
+}
+
+describe("clashesInCatalog", () => {
   it("finds every other action holding a chord, and never the action itself", () => {
-    expect(clashesOf(APP, "rename", ["ctrl+backspace"]).map((entry) => entry.otherAction.id)).toEqual(["delete"]);
-    expect(clashesOf(APP, "delete", ["ctrl+backspace"])).toEqual([]);
+    expect(clashesInApp(APP, "rename", ["ctrl+backspace"]).map((entry) => entry.otherAction.id)).toEqual(["delete"]);
+    expect(clashesInApp(APP, "delete", ["ctrl+backspace"])).toEqual([]);
     expect(
-      clashesOf(APP_SHARING_F2, "new-folder", ["f2"]).map((entry) => [entry.chord, entry.otherAction.id]),
+      clashesInApp(APP_SHARING_F2, "new-folder", ["f2"]).map((entry) => [entry.chord, entry.otherAction.id]),
     ).toEqual([
       ["f2", "rename"],
       ["f2", "delete"],
     ]);
   });
 
-  it("reads an action's chords from the edits made so far, ahead of what it was loaded with", () => {
-    const afterReplace = new Map([["delete", ["delete"]]]);
-    expect(clashesOf(APP, "rename", ["ctrl+backspace"], afterReplace)).toEqual([]);
+  it("reads an action's chords from what Replace has left it, ahead of what it was loaded with", () => {
+    const afterReplace = new Map([["files.delete", ["delete"]]]);
+    expect(clashesInApp(APP, "rename", ["ctrl+backspace"], afterReplace)).toEqual([]);
   });
 
   it("lists each of the chords another action uses, with the action that has it", () => {
-    const entries = clashesOf(APP_AFTER_REPLACE, "rename", ["f2", "ctrl+x"]);
+    const entries = clashesInApp(APP_AFTER_REPLACE, "rename", ["f2", "ctrl+x"]);
     expect(entries.map((entry) => [entry.chord, entry.otherAction.id])).toEqual([["f2", "delete"]]);
-    expect(clashesOf(APP, "rename", ["ctrl+x"])).toEqual([]);
-  });
-});
-
-describe("actionsSharingShortcuts", () => {
-  it("names the other actions that share one of the action's shortcuts", () => {
-    const chordsOf = (action: { chords: string[] }): readonly string[] => action.chords;
-    expect(actionsSharingShortcuts(APP_SHARING_F2, "rename", chordsOf).map((action) => action.id)).toEqual(["delete"]);
-    expect(actionsSharingShortcuts(APP_SHARING_F2, "new-folder", chordsOf)).toEqual([]);
-    expect(actionsSharingShortcuts(APP, "rename", chordsOf)).toEqual([]);
+    expect(clashesInApp(APP, "rename", ["ctrl+x"])).toEqual([]);
   });
 });
 
@@ -184,14 +185,14 @@ describe("clashCandidates", () => {
   });
 });
 
-describe("clashesOf in a context", () => {
+describe("clashesInCatalog in a context", () => {
   it("counts only the chords that can arrive there, on either side", () => {
     // Delete holds ctrl+backspace, a Mac's Control chord: off a Mac it runs nothing, so it clashes with nothing.
-    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), MAC_DESKTOP)).toHaveLength(1);
-    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), WINDOWS_DESKTOP)).toEqual([]);
+    expect(clashesInApp(APP, "rename", ["ctrl+backspace"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesInApp(APP, "rename", ["ctrl+backspace"], new Map(), WINDOWS_DESKTOP)).toEqual([]);
     const sharingMetaW = { ...APP, actions: [APP.actions[0], { ...APP.actions[1], chords: ["meta+w"] }] };
-    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_DESKTOP)).toHaveLength(1);
-    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_BROWSER)).toEqual([]);
+    expect(clashesInApp(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesInApp(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_BROWSER)).toEqual([]);
   });
 });
 
