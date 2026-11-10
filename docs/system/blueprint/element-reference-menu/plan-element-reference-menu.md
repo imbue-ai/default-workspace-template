@@ -20,9 +20,9 @@ Every app draws its own menu.
 The shell cannot see a click inside a page (a page is a cross-origin frame), and an app will want its own rows beside the reference rows, so the menu is the page's, built from a shared library that gives it the standard rows and the reference rows.
 The shell's part is one message: a page hands it text to draft, and the shell drafts it into the chat the way "Design your own..." already does, naming no app.
 
-The menu replaces the browser's, except in the Imbue Studio desktop app and under Shift.
+The menu replaces the browser's, except in the Imbue Studio desktop app on macOS and under Shift.
 A page that opens its own menu on `contextmenu` loses the native one, so the library's menu carries the rows the native one would have given (Cut, Copy, Paste, Select All, the link and image rows) beside the reference rows.
-The desktop app draws the native menu itself, with the macOS items no page can reach, and takes a page's rows into it (section 11); a right-click with Shift held is left to the browser's own menu everywhere.
+The desktop app on macOS draws the native menu itself, with the items no page can reach, and takes a page's rows into it (section 11); a right-click with Shift held is left to the browser's own menu everywhere.
 The reference rows show for every element, editable fields, selections, and images included; an agent can make sense of any of them.
 
 The five principles of the workspace app model hold: one owner per fact; the shell is generic and names no app; truth is shared while arrangement is scoped; minimal shell state; no two-phase commits.
@@ -307,14 +307,14 @@ Apps built before this change keep their beacon and get no menu until they adopt
 ## 11. The minds desktop app
 
 Electron's main process pops one native menu for every `context-menu` event of the window's web contents, the workspace's frames included (the mngr repository's `apps/minds/electron/context-menu.js`).
-It carries the macOS items a page cannot offer (spelling suggestions, Look Up, Share, Speech, Services, Inspect Element) and the edit, link, and image items, so the page's menu would only duplicate them; the chrome says it draws the menu with `drawsContextMenus` on `minds:embedder-capabilities`, which the shell passes to every page in its handshake (desktop-interface contracts.md section 7) and follows for its own element menu.
+It carries the items a page cannot offer (spelling suggestions, Look Up, Share, Speech, Services, Inspect Element) and the edit, link, and image items, so the page's menu would only duplicate them; on macOS, where those items are, the chrome says it draws the menu with `drawsContextMenus` on `minds:embedder-capabilities`, which the shell passes to every page in its handshake (desktop-interface contracts.md section 7) and follows for its own element menu.
 
 A page so told opens nothing on a right-click and does not `preventDefault` it.
 It keeps three sections of rows for the app instead: its own rows; "Open link" alone of the standard rows, since only the page can follow a link where its links go; and the reference rows.
 It exposes them on `globalThis.__studioContextMenu`: `sections()` answers the last right-click's rows as data (key, label, disabled, tooltip, symbol), or null when the right-click was left to the browser (handled by the page, or with Shift held); `select(key)` runs that right-click's row of that key, after waiting up to half a second for the page to take focus, because a right-click focuses neither the window nor the frame and the clipboard refuses a page without focus.
 Main reads the sections from the right-clicked frame, places them among its own items (the page's rows after the spelling suggestions, "Open link" with the link items, the reference rows above Inspect Element), and runs a pick back in the frame with the window raised.
 
-A chrome that does not say so (an older desktop app, plain-browser mode) leaves the page its own menu, as before.
+A chrome that does not say so (the desktop app off macOS, an older one, plain-browser mode) leaves the page its own menu, as before.
 
 ## 12. Errors and edge cases
 
