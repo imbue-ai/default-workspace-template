@@ -126,7 +126,7 @@ def _continues_past(source: str, start: int, newline: int) -> bool:
 def _definition_of(source: str, name: str) -> str | None:
     """The text of ``name``'s function in ``source``, defined by a declaration or a ``const``/``let``/``var``."""
     match = re.search(
-        rf"\bfunction\s+{re.escape(name)}\s*\(|\b(?:const|let|var)\s+{re.escape(name)}\b[^=;]*=",
+        rf"\bfunction\s+{re.escape(name)}\b|\b(?:const|let|var)\s+{re.escape(name)}\b[^=;]*=",
         source,
     )
     if match is None:
@@ -278,6 +278,10 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             "});\n"
             "m('li', { oncontextmenu: () => select(row) });\n"
             "m('li', { oncontextmenu: attrs.onContextMenu });\n"
+            "function onPress(event: MouseEvent): void {\n"
+            "  event.preventDefault();\n"
+            "}\n"
+            "row.addEventListener('contextmenu', onPress);\n"
         ),
         "app/listeners.js": (
             "stage.addEventListener('contextmenu', (event) => event.preventDefault());\n"
@@ -340,6 +344,7 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
     }
     assert found == {
         ("app/mithril.ts", 2, False),
+        ("app/mithril.ts", 13, False),
         ("app/listeners.js", 1, False),
         ("app/listeners.js", 6, False),
         ("app/listeners.js", 12, False),
