@@ -454,6 +454,30 @@ def test_account_binding_args_leaves_another_harness_on_the_default_account() ->
     )
 
 
+def test_account_process_env_scopes_a_claude_create_to_the_account_folder() -> None:
+    # Without a per-agent config dir, mngr files an adopted session under the
+    # create process's CLAUDE_CONFIG_DIR, so the create itself has to run in the
+    # account's scope or the session lands in the migrating chat's account.
+    assert migrate_workspace.account_process_env(
+        "claude", "/home/user/.minds/accounts/ff2ef7e5"
+    ) == {"CLAUDE_CONFIG_DIR": "/home/user/.minds/accounts/ff2ef7e5"}
+    # An unbound claude chat, a codex chat (its rollouts go into the agent's own
+    # codex home), and another harness leave the create's environment alone.
+    assert migrate_workspace.account_process_env("claude", "") == {}
+    assert (
+        migrate_workspace.account_process_env(
+            "codex", "/home/user/.minds/accounts/7d36a9d4"
+        )
+        == {}
+    )
+    assert (
+        migrate_workspace.account_process_env(
+            "pi-coding", "/home/user/.minds/accounts/x"
+        )
+        == {}
+    )
+
+
 def test_resolve_codex_session_adopts_the_recorded_root_rollout() -> None:
     rollouts = [
         "/h/agents/a/plugin/codex/home/sessions/2026/11/01/rollout-2026-11-01T09-00-00-id-one.jsonl",

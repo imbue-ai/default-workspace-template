@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -710,6 +711,27 @@ def account_binding_args(harness: str, account_dir: str) -> list[str]:
             f"mkdir -p {codex_home} && ln -sfn {source} {codex_home}/auth.json",
         ]
     return []
+
+
+def account_process_env(harness: str, account_dir: str) -> dict[str, str]:
+    """The environment the ``mngr create`` process itself runs under to bind a new agent to the account folder.
+
+    The create's own environment, on top of :func:`account_binding_args`: the
+    workspace runs claude without a per-agent config dir
+    (``isolate_local_config_dir = false``), and in that mode mngr files an
+    adopted session under the ``CLAUDE_CONFIG_DIR`` of the process running the
+    create -- never under the ``--env`` value, which only reaches the agent's
+    env file. A migrating chat runs with its own account folder in that
+    variable, so without this every adopted claude session would land in the
+    migrating chat's account while the recreated chat read from its own, and
+    come back empty. The same scoping the chat app gives its own CLI calls
+    (``AccountBinding.account_env``). Codex copies a rollout into the agent's
+    own codex home, which the process env plays no part in, so it and any other
+    harness get nothing here.
+    """
+    if harness == HARNESS_CLAUDE and account_dir:
+        return {"CLAUDE_CONFIG_DIR": account_dir}
+    return {}
 
 
 def build_recreate_argv(
@@ -1806,7 +1828,13 @@ def _cmd_recreate_agents(args: argparse.Namespace) -> int:
             work_dir=work_dir,
             mngr_binary=args.mngr_binary,
         )
-        create = subprocess.run(argv, capture_output=True, text=True, check=False)
+        create = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, **account_process_env(agent["harness"], account_dir)},
+        )
         if create.returncode != 0:
             results.append(
                 {

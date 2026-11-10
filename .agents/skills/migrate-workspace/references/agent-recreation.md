@@ -194,10 +194,16 @@ Each flag is doing a specific job:
   (`system/apps/chat/imbue/chat/harnesses/account_binding.py`), and it has to
   ride the create, since mngr starts the agent before returning. Claude is bound
   through `--env CLAUDE_CONFIG_DIR=<accounts>/<account_id>`, the config dir
-  mngr sources from the agent's env file (and which is also where the adopted
-  sessions are re-filed). Codex is bound by an `--extra-provision-command` that
-  repoints the `auth.json` link under the agent's own codex home at the
-  account's copy, after provisioning and before the start. `--label
+  mngr sources from the agent's env file. The adopted sessions are not re-filed
+  there by that flag alone: this workspace runs claude without a per-agent
+  config dir, and in that mode mngr files an adopted session under the
+  `CLAUDE_CONFIG_DIR` of the process running the create -- yours, which names
+  your own account's folder -- so `recreate-agents` runs each claude create
+  with that variable set to the chat's account folder, and the sessions land
+  where the recreated chat reads them. Codex is bound by an
+  `--extra-provision-command` that repoints the `auth.json` link under the
+  agent's own codex home at the account's copy, after provisioning and before
+  the start. `--label
   account=<account_id>` is what the chat app reads to show which account the
   chat is on. An agent with no account label gets no binding and runs on this
   workspace's default account; the account folder has to be here first (the
