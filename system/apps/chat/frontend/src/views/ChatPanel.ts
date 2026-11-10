@@ -888,7 +888,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
         ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
-        // The status row under the user's own send while it waits on the agent.
+        // The status row under the user's own send while it waits on the agent or opens the turn the row reports.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),
     ]);
