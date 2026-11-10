@@ -12,8 +12,11 @@ contract; everything about chats lives in this app's own pages and routes.
 The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from the workspace venv
 (`.venv/bin/chat-app`; the mngr harness plugins are dependencies of this package,
-so the venv carries them). At startup it registers
-its manifest and port 8010 through `system/scripts/forward_port.py`, follows
+so the venv carries them). Its program line binds port 8010 and registers and
+announces the app (`system/scripts/workspace_bare_scripts/listen_then_exec.py`,
+then `system/scripts/forward_port.py --announce`) before the app imports
+anything, so a request routed to it waits for it instead of being refused. At
+startup the app registers its manifest and port 8010 again, follows
 the agent lifecycle event file the workspace's `agent-observer` program (`mngr
 observe`, its own supervised service) writes, and serves:
 
