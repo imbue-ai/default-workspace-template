@@ -130,6 +130,7 @@ from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
@@ -958,10 +959,19 @@ class ShellState(MutableModel):
     ) -> ClientArrivalOutcome:
         """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
         them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
-        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock.
+
+        The recorded desktop counts as theirs only while they own it: their record keeps naming its id after the
+        owner deletes it, and a desktop the owner makes later may take that id, which would land them viewing
+        somebody else's desktop with nowhere for "Stop viewing" to go."""
         known = self.users.get_user(user_id)
         desktop_by_id = {desktop.id: desktop for desktop in desktops}
-        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        recorded_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        own_desktop = (
+            recorded_desktop
+            if recorded_desktop is not None and is_desktop_owned_by(recorded_desktop, identity)
+            else None
+        )
         created: Desktop | None = None
         replaced_desktop_name: str | None = None
         if own_desktop is not None:

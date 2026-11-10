@@ -2820,6 +2820,27 @@ def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_repo
     assert record is not None and record.active_desktop == "alice"
 
 
+def test_a_visitor_whose_recorded_desktop_id_now_names_the_owners_desktop_gets_one_of_their_own(
+    client: FlaskClient, app: Flask
+) -> None:
+    # Her record still names "alice" after the owner deletes her desktop, and the owner's next desktop of that name
+    # takes the id: landing her there would leave her viewing the owner's desktop with nowhere to stop viewing to.
+    _arrive(client, "c-alice", _ALICE)
+    assert client.post("/api/desktops/alice/delete").status_code == 200
+    owners = client.post("/api/desktops", json={"name": "alice"})
+    assert owners.status_code == 201 and owners.get_json()["id"] == "alice" and owners.get_json()["owner"] is None
+
+    again = _arrive(client, "c-alice", _ALICE)
+
+    owner_by_id = {desktop["id"]: desktop["owner"] for desktop in client.get("/api/desktops").get_json()["desktops"]}
+    assert owner_by_id[again["desktop_id"]] == "user:user-alice"
+    assert again["created_desktop"]["id"] == again["desktop_id"]
+    assert again["replaced_desktop_name"] == "alice"
+    assert owner_by_id["alice"] is None
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.active_desktop == again["desktop_id"]
+
+
 # The update notice
 
 

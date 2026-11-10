@@ -449,8 +449,9 @@ profile is resolved before the arrival takes the state lock), seeded from the
 first desktop: its shortcuts, its wallpaper, and a new window at the path of
 each window open there. It is remembered in `users.json`, every later client
 of that user lands on it, a returning client keeps the desktop it was on (when
-it last arrived as that same user), and if it has been deleted the next
-arrival seeds another and says so. Every desktop stays shared and reachable
+it last arrived as that same user), and if it has been deleted, or the
+desktop under its id is no longer theirs (a desktop the owner makes later can
+take a deleted one's id), the next arrival seeds another and says so. Every desktop stays shared and reachable
 from everyone's launcher; there is no private mode. The seeded desktop is
 written with the visitor's key as its owner (the multiplayer spec, section
 8.1), so their card and their overview list it as theirs (a shell older than
@@ -502,9 +503,10 @@ viewing" in place of the tray, the overview button hidden meanwhile (and the
 backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
 desktop the window came from, else the viewer's first, else the desktop the
 shell seeds for a visitor who has none left; when none of those is somewhere
-else to go (the shell could not be asked, or it answered the desktop already on
-screen), the chip says "Couldn't leave this desktop" and its button reads "Try
-again" until the window moves off. A viewed desktop is
+else to go, the chip says "Couldn't leave this desktop" until the window moves
+off, with its button reading "Try again" when the shell could not be asked and
+no button at all when it answered the desktop already on screen, which asking
+again would only repeat. A viewed desktop is
 shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it

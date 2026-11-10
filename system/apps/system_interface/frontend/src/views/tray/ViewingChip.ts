@@ -21,8 +21,9 @@ export interface ViewingChipAttrs {
   /** The owner's colour, which the outline wears too. */
   readonly color: string;
   readonly onStopViewing: () => void;
-  /** Whether the last "Stop viewing" found nowhere to go: the chip says so and its button tries again. */
-  readonly isStopFailed: boolean;
+  /** How the last "Stop viewing" found nowhere to go, or null: the chip says so, and its button tries again only
+   *  when that can find somewhere; when it cannot, the chip offers no button at all. */
+  readonly stopFailure: { readonly canRetry: boolean } | null;
 }
 
 /** The name the chip gives a desktop's owner: the roster's, or nobody's for a desktop left behind. */
@@ -32,7 +33,7 @@ function viewedOwnerName(owner: RosterParticipant | null): string {
 
 export const ViewingChip: m.Component<ViewingChipAttrs> = {
   view(vnode) {
-    const { desktop, owner, color, onStopViewing, isStopFailed } = vnode.attrs;
+    const { desktop, owner, color, onStopViewing, stopFailure } = vnode.attrs;
     return m(
       "div",
       {
@@ -55,25 +56,27 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
           m("span", { class: "truncate", "data-viewing-owner": "" }, viewedOwnerName(owner)),
           m("span", { class: "truncate font-normal opacity-75" }, ` · ${desktop.name}`),
         ]),
-        isStopFailed
+        stopFailure !== null
           ? m(
               "span",
               { class: "shrink-0 text-(length:--font-size-row) opacity-90", "data-stop-viewing-failed": "" },
               STOP_VIEWING_FAILED_MESSAGE,
             )
           : null,
-        m(
-          "button",
-          {
-            type: "button",
-            "data-stop-viewing": "",
-            class:
-              "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-row) " +
-              "font-medium text-on-accent hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
-            onclick: onStopViewing,
-          },
-          isStopFailed ? STOP_VIEWING_RETRY_LABEL : STOP_VIEWING_LABEL,
-        ),
+        stopFailure !== null && !stopFailure.canRetry
+          ? null
+          : m(
+              "button",
+              {
+                type: "button",
+                "data-stop-viewing": "",
+                class:
+                  "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-row) " +
+                  "font-medium text-on-accent hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
+                onclick: onStopViewing,
+              },
+              stopFailure === null ? STOP_VIEWING_LABEL : STOP_VIEWING_RETRY_LABEL,
+            ),
       ],
     );
   },
