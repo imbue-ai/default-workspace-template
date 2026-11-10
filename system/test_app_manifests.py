@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
+from app_manifest.manifest import MANIFEST_FILENAME, KeybindingScope, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
 from app_manifest.scope import (
     APP_CONVENTIONS,
@@ -24,7 +24,6 @@ from app_manifest.scope import (
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
 from workspace_bare_scripts import user_packages
-from app_manifest.manifest import KeybindingScope
 from workspace_profile.manifest import find_invalid_default_chords
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
