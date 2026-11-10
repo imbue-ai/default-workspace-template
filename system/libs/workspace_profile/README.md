@@ -16,11 +16,13 @@ Keybindings (`keybindings.py` and `manifest.py`) are the one setting with a decl
 per-user override, and resolve per assignment rather than as one value: each built-in app
 with keyboard shortcuts declares its actions and default chords as `[[keybindings]]` in its `app.toml`, which
 registration copies onto its registry row for the shell's Keyboard shortcuts dialog;
-`load_app_keybinding_actions` reads the same declarations (refusing a default chord off the
-grammar) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
+`load_app_keybinding_actions` reads the same declarations (refusing a default chord it may not
+have: one off the grammar, the refused Ctrl+Alt+Del, or on a workspace-wide action one that typing
+could trigger) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
 request identity, and the app consumes those instead of hard-coded chords. The chord
 grammar (lowercase tokens joined with `+`, modifiers in the fixed ctrl/alt/shift/meta order,
-named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`) is
+named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`, and
+`alt+meta+delete`, Ctrl+Alt+Del, refused as `REFUSED_CHORDS`) is
 mirrored by the desktop's write path and pinned cross-repo through the same contract fixture.
 
 Resolution order for one setting, earliest wins: the requesting user's override, then (owner
