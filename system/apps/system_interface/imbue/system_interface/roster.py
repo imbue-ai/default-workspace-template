@@ -12,10 +12,10 @@ the workspace agent's ``agent`` is reserved before anyone else's.
 
 ``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
 (someone came or went, or a person's newest input time moved), a grants file or the desktop's identities sidecar
-changes (the desktop and the gateway write them, so the shell watches them), and on connect. The announcer pushes a
-document only when it differs from the one it last pushed, and the watch folds a burst of file events (an atomic
-replace fires twice; the gateway rewrites its last-seen record every ten seconds per working visiting agent) into one
-announcement.
+changes (the desktop and the gateway write them, so the shell watches them), a background profile fetch changed what
+the profile cache answers, and on connect. The announcer pushes a document only when it differs from the one it last
+pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway rewrites its last-seen
+record every ten seconds per working visiting agent) into one announcement.
 """
 
 import threading
@@ -41,6 +41,7 @@ from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import UNNAMED_PERSON_DISPLAY_NAME
 from workspace_layout.roster import assign_handles
 from workspace_layout.roster import participant_color
 from workspace_layout.shell_url import ROSTER_ROUTE
@@ -120,15 +121,15 @@ def _email_local_part(email: str | None) -> str | None:
 
 
 @pure
-def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None, user_id: str) -> str:
+def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None) -> str:
     """A person's name: their profile's, else the one recorded at their last arrival or by the desktop's identities
-    sidecar, else their email's local part, else their id."""
+    sidecar, else their email's local part, else a neutral label."""
     if profile is not None and profile.display_name:
         return profile.display_name
     if known_name:
         return known_name
     local_part = _email_local_part(email)
-    return local_part if local_part is not None else user_id
+    return local_part if local_part is not None else UNNAMED_PERSON_DISPLAY_NAME
 
 
 @pure
@@ -178,8 +179,7 @@ def _person_entry(
     is_admitted_by_domain: bool,
 ) -> _Entry:
     """One account's entry: named from its profile, else what its last arrival recorded, else what the desktop
-    recorded when it granted them, else its email's local part, else its id; the email read the same way."""
-    user_id = str(key).removeprefix("user:")
+    recorded when it granted them, else its email's local part, else a neutral label; the email read the same way."""
     email = _first_known(
         presence.email if presence is not None else None,
         known.email if known is not None else None,
@@ -189,7 +189,7 @@ def _person_entry(
         known.display_name if known is not None else None,
         identity.display_name if identity is not None else None,
     )
-    display_name = _person_name(profile, known_name, email, user_id)
+    display_name = _person_name(profile, known_name, email)
     return _Entry(
         key=key,
         kind=ParticipantKind.PERSON,
@@ -428,9 +428,9 @@ class RosterSource(MutableModel):
 class RosterAnnouncer(MutableModel):
     """How the roster reaches every window: computed afresh and pushed as ``roster_updated``, unless it is the very
     document last pushed, which every window already holds. One announcement at a time, computed and pushed under
-    the one lock: the heartbeat route, the sweep, and the watch announce from threads of their own, and a document
-    computed earlier must never go out after a newer one, which the skip of an equal document would then leave
-    standing."""
+    the one lock: the heartbeat route, the sweep, the watch, and the profile refresh announce from threads of their
+    own, and a document computed earlier must never go out after a newer one, which the skip of an equal document
+    would then leave standing."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
