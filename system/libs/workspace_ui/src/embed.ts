@@ -140,6 +140,15 @@ export const RUN_CHORD: "minds:run-chord" = "RUN_CHORD" in embedContract ? embed
 // listening, to record as if pressed. Payload: { chord }.
 export const RECORD_CHORD: "minds:record-chord" =
   "RECORD_CHORD" in embedContract ? embedContract.RECORD_CHORD : "minds:record-chord";
+// Embedder -> the framed keyboard shortcuts page (the keyboard-shortcuts spec in the mngr repo, section 8.3): Imbue
+// Studio's own shortcuts, after the page's first report and after every save of one. Sent only by the desktop app.
+// Payload: { actions: [{ id, label, defaultChords, chords }], error? }: `error` says why the last save failed.
+export const CHROME_SHORTCUTS: "minds:chrome-shortcuts" =
+  "CHROME_SHORTCUTS" in embedContract ? embedContract.CHROME_SHORTCUTS : "minds:chrome-shortcuts";
+// The framed keyboard shortcuts page -> embedder: save one of Imbue Studio's shortcuts to the account; the chrome
+// answers with CHROME_SHORTCUTS. Payload: { id, chords }.
+export const SAVE_CHROME_SHORTCUT: "minds:save-chrome-shortcut" =
+  "SAVE_CHROME_SHORTCUT" in embedContract ? embedContract.SAVE_CHROME_SHORTCUT : "minds:save-chrome-shortcut";
 
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
@@ -174,6 +183,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   RUN_SHORTCUT,
   RUN_CHORD,
   RECORD_CHORD,
+  CHROME_SHORTCUTS,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

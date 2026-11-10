@@ -149,6 +149,14 @@ describe("chordNotices", () => {
     expect(chordNotices("meta+w", MAC_BROWSER)).toEqual([]);
   });
 
+  it("leaves out the browser's keeping a chord for a binding no browser runs, and keeps the rest", () => {
+    const desktopOnly = { isBrowserReservedNoticed: false };
+    expect(chordNotices("meta+n", MAC_DESKTOP, desktopOnly)).toEqual([]);
+    expect(chordNotices("meta+tab", MAC_DESKTOP, desktopOnly)).toEqual([
+      "macOS uses ⌘⇥ for the app switcher, so this may never reach Imbue Studio unless you change that in System Settings.",
+    ]);
+  });
+
   it("warns about a chord the OS keeps, with the Mac's remedy", () => {
     expect(chordNotices("meta+tab", MAC_DESKTOP)).toEqual([
       "macOS uses ⌘⇥ for the app switcher, so this may never reach Imbue Studio unless you change that in System Settings.",

@@ -55,6 +55,8 @@ declare module "@minds/embed-contract" {
   export const RUN_SHORTCUT: "minds:run-shortcut";
   export const RUN_CHORD: "minds:run-chord";
   export const RECORD_CHORD: "minds:record-chord";
+  export const CHROME_SHORTCUTS: "minds:chrome-shortcuts";
+  export const SAVE_CHROME_SHORTCUT: "minds:save-chrome-shortcut";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

@@ -347,17 +347,28 @@ export function readsChordAsApple(chord: string, platform: ChordPlatform): boole
   return platform === "mac" || holdsControl(chord);
 }
 
+/** Which of the notices a chord's binding has a use for. */
+export interface ChordNoticeOptions {
+  /** Whether a browser keeping the chord matters: not for a desktop app binding a browser never runs. */
+  readonly isBrowserReservedNoticed?: boolean;
+}
+
 /**
  * What to tell the user about a chord in the context, none of it blocking: that a browser would keep
  * it from the workspace, that the OS is known to keep it from every app, or that the desktop app takes
  * it from the OS to run the binding.
  */
-export function chordNotices(chord: string, context: ChordContext): string[] {
+export function chordNotices(chord: string, context: ChordContext, options: ChordNoticeOptions = {}): string[] {
   const isApple = context.platform === "mac";
   const label = chordDisplayLabel(chord, readsChordAsApple(chord, context.platform));
   const os = OS_NAMES[context.platform];
   const notices: string[] = [];
-  if (context.surface === "desktop" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) {
+  const isBrowserReservedNoticed = options.isBrowserReservedNoticed ?? true;
+  if (
+    isBrowserReservedNoticed &&
+    context.surface === "desktop" &&
+    BROWSER_RESERVED_CHORDS[context.platform].includes(chord)
+  ) {
     notices.push(
       `${label} is a shortcut the browser keeps for itself, so this won't work when the workspace is open in a browser.`,
     );
