@@ -65,7 +65,7 @@ import {
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
 import { findShortcut } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE, bindingForTarget } from "../gestures/pointerGestures";
-import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import type { GestureBinding, GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -486,8 +486,6 @@ export function App(): m.Component<AppAttrs> {
       const origin = backdropOrigin();
       return { x: press.x - (box.left - origin.left), y: press.y - (box.top - origin.top) };
     };
-    /** The pinned window of ``app`` on the active desktop, whose entry a floating-entry press names. */
-    const pinnedWindowIdOf = (app: string): string | null => pinnedWindowOf(current.getState(), app)?.id ?? null;
     return {
       thresholdPx: () => current.getMetrics().dragThreshold,
       isDraggable: (binding) => binding.kind !== "taskbar-entry",
@@ -588,28 +586,13 @@ export function App(): m.Component<AppAttrs> {
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
-        const referenceRows = (): MenuRow[] =>
-          referenceRowsFor(current, document.elementFromPoint(client.x, client.y), client.x, client.y);
-        switch (binding.kind) {
-          case "window-move":
-          case "window-resize":
-            openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
-            break;
-          case "shortcut": {
-            const desktop = activeDesktop(current.getState());
-            const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
-            if (shortcut !== undefined) {
-              openMenuAt({ kind: "shortcut", shortcut, trailingRows: referenceRows() }, anchor);
-            }
-            break;
-          }
-          case "taskbar-entry":
-            openMenuAt({ kind: "entry", windowId: binding.windowId, trailingRows: referenceRows() }, anchor);
-            break;
-          case "floating-entry": {
-            const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenuAt({ kind: "entry", windowId, trailingRows: referenceRows() }, anchor);
-            break;
+        if (binding.kind === "window-move" || binding.kind === "window-resize") {
+          openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
+        } else {
+          const subject = menuSubjectOfBinding(current, binding);
+          if (subject !== null) {
+            const target = document.elementFromPoint(client.x, client.y);
+            openMenuAt({ ...subject, trailingRows: referenceRowsFor(current, target, client.x, client.y) }, anchor);
           }
         }
         m.redraw();
@@ -923,7 +906,12 @@ export function App(): m.Component<AppAttrs> {
         launch: launchKey.substring(separator + 1),
       };
     }
-    const binding = bindingForTarget(element);
+    return menuSubjectOfBinding(current, bindingForTarget(element));
+  }
+
+  /** The subject of an entry's or a shortcut's menu, from the press that names it; null for any other press, and
+   *  for a floating entry with no pinned window or a shortcut no longer on the desktop. */
+  function menuSubjectOfBinding(current: DesktopStore, binding: GestureBinding | null): MenuSubject | null {
     switch (binding?.kind) {
       case "taskbar-entry":
         return { kind: "entry", windowId: binding.windowId };
