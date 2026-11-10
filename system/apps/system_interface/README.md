@@ -245,6 +245,10 @@ page its template names from the message's fields and show it through the op
 route's `show` below, in-process. A message some app did not take becomes a
 notice carrying that app's reason, and a page shown while the client has only
 pop-outs open becomes a notice to reopen the main window. The shell's page
+announces `reportsChatOnScreen` to the chrome, promising the
+`minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
+a window on screen, which the relay forwards up with the other `minds:`
+messages. The shell's page
 also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
 to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
 into the workspace) or a

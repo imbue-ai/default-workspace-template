@@ -14,6 +14,7 @@ import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
+import { reportChatOnScreen } from "@imbue/workspace-ui/src/embed";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
@@ -51,6 +52,19 @@ let isShown = true;
  */
 export function isFrameRendered(): boolean {
   return document.documentElement.getBoundingClientRect().height > 0;
+}
+
+let isChatOnScreenReported = false;
+
+/**
+ * After a draw of this chat's transcript: tell the Imbue Studio chrome, once per page, that the chat is on screen.
+ * The chrome keeps its wash over a new workspace until the welcome chat says this, so a transcript still loading or a
+ * page the shell has not shown yet does not count.
+ */
+export function reportChatOnScreenOnce(chatId: string, isTranscriptLoaded: boolean): void {
+  if (isChatOnScreenReported || !isTranscriptLoaded || !isShown || !isFrameRendered()) return;
+  isChatOnScreenReported = true;
+  reportChatOnScreen(chatId);
 }
 
 export interface ChatShellOptions {
