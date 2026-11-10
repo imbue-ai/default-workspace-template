@@ -7,6 +7,7 @@ from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (
     describe_keybindings_value_problem,
+    effective_keybinding_assignment,
     is_canonical_chord,
     is_workspace_wide_chord,
     keybinding_assignment,
@@ -16,6 +17,7 @@ from workspace_profile.keybindings import (
     with_keybinding_assignment,
     without_keybinding_assignment,
 )
+from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.overrides import (
     UNSENT_CHANGES_RELATIVE_PATH,
     load_unsent_change_values,
@@ -24,6 +26,7 @@ from workspace_profile.overrides import (
     write_user_override_values,
 )
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
+from workspace_profile.superseded_defaults import SUPERSEDED_DEFAULT_CHORDS
 
 _VISITOR = RequestIdentity(owner=False, user_id="visitor-1", email="v@example.com")
 
@@ -255,6 +258,82 @@ def test_an_empty_assignment_unbinds_rather_than_falling_back(tmp_path: Path) ->
         "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
     )
     assert resolved == {"send-message": []}
+
+
+def test_a_save_of_an_actions_superseded_default_list_resolves_as_no_assignment(tmp_path: Path) -> None:
+    # Files' Go up and the shell's launcher action as saved before each default was written once, in any order,
+    # in the owner's override file and in the account alike: each action gets its current default.
+    write_user_override_values(
+        tmp_path, "owner-1", {"keybindings": {"files": {"go-up": ["alt+arrowup", "meta+arrowup", "ctrl+arrowup"]}}}
+    )
+    snapshot = _snapshot({"system_interface": {"launcher-secondary-send": ["meta+enter", "ctrl+enter"]}})
+
+    files = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+    shell = resolve_app_keybindings(
+        "system_interface",
+        {"launcher-secondary-send": ["meta+enter"]},
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+    )
+
+    assert files == {"go-up": ["meta+arrowup"]}
+    assert shell == {"launcher-secondary-send": ["meta+enter"]}
+
+
+def test_a_superseded_override_gives_way_to_the_accounts_real_choice(tmp_path: Path) -> None:
+    write_user_override_values(
+        tmp_path, "owner-1", {"keybindings": {"files": {"go-up": ["ctrl+arrowup", "meta+arrowup", "alt+arrowup"]}}}
+    )
+    snapshot = _snapshot({"files": {"go-up": ["alt+meta+arrowup"]}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"go-up": ["alt+meta+arrowup"]}
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        ["ctrl+arrowup", "meta+arrowup"],
+        ["ctrl+arrowup", "meta+arrowup", "alt+arrowup", "f6"],
+        ["ctrl+arrowup", "meta+arrowup", "alt+arrowleft"],
+        [],
+    ],
+    ids=["a-subset", "a-superset", "one-chord-changed", "unbound"],
+)
+def test_a_save_that_differs_from_the_superseded_default_list_is_kept(tmp_path: Path, saved: list[str]) -> None:
+    snapshot = _snapshot({"files": {"go-up": saved}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"go-up": saved}
+
+
+def test_another_actions_superseded_list_is_a_real_choice() -> None:
+    layer = {"keybindings": {"files": {"select-all": ["ctrl+s", "meta+s"]}}}
+
+    assert effective_keybinding_assignment(layer, "files", "select-all") == ["ctrl+s", "meta+s"]
+
+
+def test_the_stored_assignment_keeps_a_superseded_list_that_resolution_reads_as_none() -> None:
+    layer = {"keybindings": {"chat": {"send-message": ["meta+enter", "enter", "ctrl+enter"]}}}
+
+    assert keybinding_assignment(layer, "chat", "send-message") == ["meta+enter", "enter", "ctrl+enter"]
+    assert effective_keybinding_assignment(layer, "chat", "send-message") is None
+
+
+def test_every_superseded_default_names_an_action_its_app_still_declares() -> None:
+    apps_directory = Path(__file__).resolve().parents[4] / "apps"
+    for app_name, chords_by_action in SUPERSEDED_DEFAULT_CHORDS.items():
+        declared = load_app_keybinding_actions(apps_directory / app_name / "app.toml")
+        assert set(chords_by_action) <= {str(action.id) for action in declared}, app_name
 
 
 def test_assignment_helpers_round_trip_one_layer() -> None:

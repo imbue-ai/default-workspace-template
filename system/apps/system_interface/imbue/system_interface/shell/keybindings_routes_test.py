@@ -15,6 +15,7 @@ from latchkey_access.gateway import ENV_GATEWAY_PASSWORD
 from workspace_layout.identity import RequestIdentity
 from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.overrides import load_user_override_values
+from workspace_profile.overrides import write_user_override_values
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from imbue.system_interface.shell.keybindings import shell_keybinding_actions
@@ -169,6 +170,68 @@ def test_the_catalog_answers_what_a_reset_restores_beside_the_override_in_force(
     assert action["source"] == "workspace"
 
 
+# Files' Go up as the release before the defaults were written once declared it, written once (ctrl and meta).
+_FILES_ROW = """
+[[apps]]
+name = "files"
+url = "http://127.0.0.1:9"
+program = "files"
+display_name = "Files"
+
+[[apps.keybindings]]
+id = "go-up"
+label = "Go to the parent folder"
+default_chords = ["meta+arrowup"]
+"""
+
+
+def test_the_catalog_reads_a_save_of_an_actions_superseded_default_list_as_unchanged(tmp_path: Path) -> None:
+    # The owner's override holds Files' old Go up list and the account the shell's old launcher list, each in an
+    # order of its own: both are the old defaults, not choices, so each row reads as the current default.
+    _write_snapshot(tmp_path, {"system_interface": {"launcher-secondary-send": ["meta+enter", "ctrl+enter"]}})
+    write_user_override_values(
+        _repo_root(tmp_path),
+        "owner-1",
+        {"keybindings": {"files": {"go-up": ["alt+arrowup", "ctrl+arrowup", "meta+arrowup"]}}},
+    )
+    client = _client(tmp_path, _FILES_ROW)
+
+    catalog = client.get("/api/keybindings/catalog").get_json()
+
+    actions = {(app["app"], action["id"]): action for app in catalog["apps"] for action in app["actions"]}
+    for key, default in (
+        (("files", "go-up"), ["meta+arrowup"]),
+        (("system_interface", "launcher-secondary-send"), ["meta+enter"]),
+    ):
+        assert actions[key]["chords"] == default, key
+        assert actions[key]["reset_chords"] == default, key
+        assert actions[key]["source"] == "default", key
+    assert client.get("/api/keybindings/me").get_json()["chords_by_action"]["launcher-secondary-send"] == [
+        "meta+enter"
+    ]
+
+
+def test_the_catalog_keeps_a_save_that_differs_from_the_superseded_default_list(tmp_path: Path) -> None:
+    _write_snapshot(
+        tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter", "meta+enter", "alt+enter"]}}
+    )
+    write_user_override_values(
+        _repo_root(tmp_path), "owner-1", {"keybindings": {"files": {"go-up": ["ctrl+arrowup", "meta+arrowup"]}}}
+    )
+
+    catalog = _client(tmp_path, _FILES_ROW).get("/api/keybindings/catalog").get_json()
+
+    actions = {(app["app"], action["id"]): action for app in catalog["apps"] for action in app["actions"]}
+    assert actions[("files", "go-up")]["chords"] == ["ctrl+arrowup", "meta+arrowup"]
+    assert actions[("files", "go-up")]["source"] == "workspace"
+    assert actions[("system_interface", "launcher-secondary-send")]["chords"] == [
+        "ctrl+enter",
+        "meta+enter",
+        "alt+enter",
+    ]
+    assert actions[("system_interface", "launcher-secondary-send")]["source"] == "account"
+
+
 def test_a_save_for_a_stopped_apps_action_is_accepted(tmp_path: Path) -> None:
     answered = _client(tmp_path, _STOPPED_NOTES_ROW).post(
         "/api/keybindings",
@@ -192,7 +255,12 @@ def test_a_workspace_save_normalizes_the_chords_into_the_requesters_override(tmp
 
     answered = client.post(
         "/api/keybindings",
-        json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["Cmd+Enter"], "scope": "workspace"},
+        json={
+            "app": "system_interface",
+            "action": "launcher-secondary-send",
+            "chords": ["Cmd+Enter"],
+            "scope": "workspace",
+        },
     )
 
     assert answered.status_code == 200
@@ -262,7 +330,12 @@ def test_an_everywhere_save_without_a_gateway_stays_unsent(tmp_path: Path) -> No
 
     answered = client.post(
         "/api/keybindings",
-        json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+        json={
+            "app": "system_interface",
+            "action": "launcher-secondary-send",
+            "chords": ["alt+enter"],
+            "scope": "account",
+        },
     )
 
     assert answered.status_code == 200
@@ -335,7 +408,12 @@ def test_the_everywhere_save_files_one_permission_request_and_delivers_once_gran
         # The first save 403s at the gateway and files exactly one request.
         first = client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert first.get_json()["delivery"]["status"] == "PERMISSION_PENDING"
         assert len(record["requests"]) == 1
@@ -377,7 +455,12 @@ def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
 
         client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert len(record["requests"]) == 1
 
@@ -389,6 +472,11 @@ def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
         # A fresh save asks again: the denial cleared the pending marker.
         client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert len(record["requests"]) == 2

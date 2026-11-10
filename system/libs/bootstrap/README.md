@@ -24,7 +24,13 @@ service.
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
    may start by itself; a workspace that already existed never gets it.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **App keybindings** - rewrites the keybindings on every built-in app's registry
+   row (`data/.state/apps.toml`) from its `app.toml`, through
+   `system/scripts/forward_port.py --refresh-keybindings`. An app writes its row only
+   when its program starts, so without this an app that stays stopped would keep the
+   default shortcuts of the release it last ran under. Built-in apps are the root
+   workspace members under `system/apps/`; a user's app is left to its own registration.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

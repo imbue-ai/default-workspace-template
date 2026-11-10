@@ -10,6 +10,9 @@ rule, the icon markup, the value types); its module docstring describes the rule
 - `system/scripts/forward_port.py` -- the command app program lines run before
   their app starts, and that update-self and agents run by path to remove an app.
 - `app_manifest.registry.register_app` -- an app's entry point registering itself.
+- `bootstrap` -- at every workspace start, before any program runs, it rewrites the
+  keybindings on each built-in app's row from its manifest (`--refresh-keybindings`),
+  so an app that is not running still lists the current release's defaults.
 - `system/apps/datalib/launch_datalib_http.py` -- Datalib's launcher.
 - The isolated-instance, preview and scaffold code under `.agents/`.
 

@@ -28,6 +28,10 @@ only) the unsent changes, then (owner only) the snapshot's account value, then t
 Owner detection follows the `X-Imbue-Identity` header exactly as the shell does: a request is
 the owner's when the header says so, and the owner's user id is then the snapshot's owner id,
 so an unshared workspace (whose header carries no user id) still keys the owner's overrides.
+A keybindings layer whose assignment is exactly an action's default list from before each
+default was written once (a Ctrl form and a ⌘ form; `superseded_defaults.py`, compared as sets)
+holds no assignment, so the action gets its current default; any other list is a choice and is
+kept.
 
 Every read is tolerant: an absent or unreadable snapshot (a workspace created by an older
 client) resolves from overrides and defaults alone, and a snapshot a newer client wrote (a
