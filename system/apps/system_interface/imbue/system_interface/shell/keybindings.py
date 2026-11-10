@@ -20,6 +20,7 @@ from app_manifest.manifest import KeybindingAction, KeybindingScope
 from loguru import logger
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
+from workspace_profile.keybindings import effective_keybinding_assignment
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
@@ -83,7 +84,11 @@ def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[Ap
             continue
         workspace_wide = [str(action.id) for action in row.keybindings if action.scope is KeybindingScope.WORKSPACE]
         if workspace_wide:
-            logger.warning("Skipped {}'s keybindings: only the shell declares workspace-wide actions: {}", row.name, workspace_wide)
+            logger.warning(
+                "Skipped {}'s keybindings: only the shell declares workspace-wide actions: {}",
+                row.name,
+                workspace_wide,
+            )
             continue
         display_name = str(row.display_name) if row.display_name is not None else str(row.name)
         listed.append(AppKeybindingActions(app=str(row.name), display_name=display_name, actions=row.keybindings))
@@ -101,12 +106,18 @@ def resolve_assignment_source(
     """Which layer answers the action for this identity, by the resolution's own order."""
     user_id = resolve_request_user_id(identity, snapshot)
     if user_id is not None:
-        if keybinding_assignment(load_user_override_values(workspace_root, user_id), app_name, action_id) is not None:
+        if (
+            effective_keybinding_assignment(load_user_override_values(workspace_root, user_id), app_name, action_id)
+            is not None
+        ):
             return SOURCE_WORKSPACE
     if identity.owner:
-        if keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id) is not None:
+        if effective_keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id) is not None:
             return SOURCE_UNSENT
-        if snapshot is not None and keybinding_assignment(snapshot.value_by_key, app_name, action_id) is not None:
+        if (
+            snapshot is not None
+            and effective_keybinding_assignment(snapshot.value_by_key, app_name, action_id) is not None
+        ):
             return SOURCE_ACCOUNT
     return SOURCE_DEFAULT
 

@@ -16,7 +16,9 @@ A keybindings value is one map of app name, then action id, then the assigned
 chords. Unlike a scalar setting it resolves per assignment: for each action,
 the requesting user's override in this workspace wins, then (owner only) the
 shell's unsent account changes, then (owner only) the owner account's value
-from the snapshot, then the app's declared default.
+from the snapshot, then the app's declared default. A layer whose assignment is
+exactly the action's default from before the defaults were written once
+(``superseded_defaults``) holds none, so the action takes its current default.
 """
 
 import re
@@ -34,6 +36,7 @@ from workspace_profile.overrides import (
 )
 from workspace_profile.resolve import resolve_request_user_id
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
+from workspace_profile.superseded_defaults import is_superseded_default_assignment
 
 # The one snapshot/override/unsent key keybindings live under.
 KEYBINDINGS_SETTING_KEY: Final[str] = "keybindings"
@@ -223,12 +226,20 @@ def parse_keybindings_value(raw: object) -> dict[str, dict[str, list[str]]]:
     return parsed
 
 
-def _layer_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
+def _stored_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
     assignments = parse_keybindings_value(layer_value_by_key.get(KEYBINDINGS_SETTING_KEY))
     by_action = assignments.get(app_name)
     if by_action is None or action_id not in by_action:
         return None
     return by_action[action_id]
+
+
+def _layer_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
+    """The layer's assignment as resolution reads it: a save of the action's superseded default list is none."""
+    stored = _stored_assignment(layer_value_by_key, app_name, action_id)
+    if stored is not None and is_superseded_default_assignment(app_name, action_id, stored):
+        return None
+    return stored
 
 
 def resolve_app_keybindings(
@@ -299,5 +310,14 @@ def without_keybinding_assignment(
 
 @pure
 def keybinding_assignment(value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
-    """One layer's assignment for the action, or None when the layer holds none."""
+    """One layer's assignment for the action as stored, or None when the layer holds none."""
+    return _stored_assignment(value_by_key, app_name, action_id)
+
+
+@pure
+def effective_keybinding_assignment(
+    value_by_key: Mapping[str, object], app_name: str, action_id: str
+) -> list[str] | None:
+    """One layer's assignment for the action as resolution reads it, or None when it holds none that counts:
+    a save of the action's superseded default list (``superseded_defaults``) is none."""
     return _layer_assignment(value_by_key, app_name, action_id)
