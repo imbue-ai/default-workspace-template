@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from workspace_profile.keybindings import CHORD_MODIFIER_ORDER, CHORD_NAMED_KEYS, REFUSED_CHORDS
+from workspace_profile.keybindings import (
+    CHORD_MODIFIER_ORDER,
+    CHORD_NAMED_KEYS,
+    REFUSED_CHORDS,
+)
 from workspace_profile.snapshot import (
     CONSUMED_SETTING_KEYS,
     SNAPSHOT_HEADER_KEYS,
