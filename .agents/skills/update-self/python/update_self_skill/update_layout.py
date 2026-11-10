@@ -58,6 +58,11 @@ STYLE_GUIDE_DIR = "system/apps/style_guide"
 
 STYLE_GUIDE_FRONTEND_DIR = f"{STYLE_GUIDE_DIR}/frontend"
 
+# The App Store app, whose bundle its own server serves from inside its package.
+APP_STORE_DIR = "system/apps/app_store"
+
+APP_STORE_FRONTEND_DIR = f"{APP_STORE_DIR}/frontend"
+
 # The frontends' shared library (source only: each app's build compiles what it imports) and
 # the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
 FRONTEND_LIB_DIR = "system/libs/workspace_ui"
@@ -78,6 +83,7 @@ NPM_MANIFEST_PATHS = frozenset(
         f"{ROUTINES_FRONTEND_DIR}/package.json",
         f"{SCREEN_FRONTEND_DIR}/package.json",
         f"{STYLE_GUIDE_FRONTEND_DIR}/package.json",
+        f"{APP_STORE_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
 )
@@ -100,6 +106,7 @@ FRONTEND_SOURCE_DIRS = (
     ROUTINES_FRONTEND_DIR,
     SCREEN_FRONTEND_DIR,
     STYLE_GUIDE_FRONTEND_DIR,
+    APP_STORE_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
 
@@ -174,6 +181,8 @@ SCREEN_STATIC_DIR = f"{SCREEN_DIR}/src/screen/static"
 SCREEN_FRONTEND_BUILD_INDEX = f"{SCREEN_STATIC_DIR}/index.html"
 STYLE_GUIDE_STATIC_DIR = f"{STYLE_GUIDE_DIR}/src/style_guide_app/static"
 STYLE_GUIDE_FRONTEND_BUILD_INDEX = f"{STYLE_GUIDE_STATIC_DIR}/index.html"
+APP_STORE_STATIC_DIR = f"{APP_STORE_DIR}/src/app_store/static"
+APP_STORE_FRONTEND_BUILD_INDEX = f"{APP_STORE_STATIC_DIR}/index.html"
 
 
 class FrontendBundle(NamedTuple):
@@ -237,6 +246,13 @@ FRONTEND_BUNDLES = (
         STYLE_GUIDE_FRONTEND_DIR,
         STYLE_GUIDE_STATIC_DIR,
         STYLE_GUIDE_FRONTEND_BUILD_INDEX,
+    ),
+    FrontendBundle(
+        "app_store",
+        "app_store_bundle",
+        APP_STORE_FRONTEND_DIR,
+        APP_STORE_STATIC_DIR,
+        APP_STORE_FRONTEND_BUILD_INDEX,
     ),
 )
 

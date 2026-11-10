@@ -274,6 +274,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Files app: a small Flask server over the workspace's files. It
     # holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The App Store app: a small Flask page over the store's catalog, plus the one install job it may be
+    # running. A shed costs a reload and fails an install in flight (the restart marks it failed and undoes it),
+    # so it sits just below the pages that hold nothing at all.
+    "app-store": 77,
     # The Routines app: a small Flask page over the routines library's state. It stores nothing
     # of its own, so a shed costs one reload.
     "routines": 78,

@@ -32,6 +32,7 @@ members = [
     "app-manifest",
     "app-registration",
     "app-schema",
+    "app-store",
     "bootstrap",
     "build-app-skill",
     "caretaker",
@@ -341,6 +342,71 @@ provides-extras = ["testing"]
 [package.metadata.requires-dev]
 dev = [
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "ty", specifier = "==0.0.87" },
+]
+
+[[package]]
+name = "app-store"
+version = "0.1.0"
+source = { editable = "system/apps/app_store" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "click" },
+    { name = "flask" },
+    { name = "getting-started" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "oom-priority" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "werkzeug" },
+    { name = "workspace-layout" },
+    { name = "workspace-themes" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "coverage" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "getting-started", editable = "system/apps/getting_started" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=713d10cdce66d320786f4e4041c2b7fcf31c9956" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "packaging", specifier = ">=24" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+    { name = "workspace-themes", editable = "system/libs/workspace_themes" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "coverage" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
     { name = "ty", specifier = "==0.0.87" },
 ]
 
@@ -1062,6 +1128,7 @@ name = "default-workspace-template"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "app-store" },
     { name = "bootstrap" },
     { name = "chat" },
     { name = "chat-background-tasks" },
@@ -1113,6 +1180,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "app-store", editable = "system/apps/app_store" },
     { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
