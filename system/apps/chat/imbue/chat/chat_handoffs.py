@@ -417,7 +417,7 @@ class HandoffDeps(FrozenModel):
     # Replace the record's handoff entry under the manager's lock, given the current record;
     # raises ``HandoffCancelledError`` when the record no longer carries this handoff.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the handoff and return None when none remain; atomic
+    # Move the next held send onto the delivered list, or clear the handoff and return None when none remain; atomic
     # with the message route's hold, so a send can never be appended to a handoff that just
     # finished. Raises ``HandoffCancelledError`` for another handoff.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
@@ -1026,8 +1026,9 @@ class HandoffRunner:
         the message route appends under, so a send that arrives during delivery is delivered
         by this loop rather than overtaking one still held. Raises ``HandoffStepError`` while
         the successor is untracked (a resume that ran before the observe stream listed it):
-        the sends stay on the record for the next resume rather than being popped with
-        nothing to receive them.
+        the sends stay on the record for the next resume rather than being taken with
+        nothing to receive them. A send that does not land leaves the delivered list again, so the
+        page stops showing it.
         """
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
@@ -1036,7 +1037,10 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
+            if not deliver_held_send(self._deps.deliver, successor_info, held, chat_id):
+                self._update_handoff(
+                    chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
+                )
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 

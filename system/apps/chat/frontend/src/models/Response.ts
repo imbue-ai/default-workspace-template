@@ -8,6 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
+import { ensureParticipantsKnowAuthors } from "./Participants";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -720,6 +721,16 @@ function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
   return events.filter(isSentUserTurn).map((event) => event.event_id);
 }
 
+/** How many turns users' messages opened for ``agentId`` from ``since`` (ISO 8601) on, in the chat's loaded
+ *  transcript: the real forms of the messages a switch that began then has delivered to it. */
+export function countSentTurnsSince(chatId: string, agentId: string, since: string): number {
+  const sinceMs = Date.parse(since);
+  return getEventsForChat(chatId).filter(
+    (event) =>
+      isSentUserTurn(event) && (event.agent_id ?? agentId) === agentId && Date.parse(event.timestamp) >= sinceMs,
+  ).length;
+}
+
 function isSentUserTurn(event: TranscriptEvent): event is UserMessageEvent {
   return event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event);
 }
@@ -800,6 +811,7 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  ensureParticipantsKnowAuthors(newEvents.filter(isSentUserTurn));
   // A switch marker is the real form of the message it carries (the successor's opening
   // bubble), so it stands that message's bubble down by id: a bubble the switch's end
   // brought back before the marker landed goes here, and one the marker preceded is

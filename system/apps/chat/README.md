@@ -343,7 +343,9 @@ carries the switch out: once its message is sent the chip names the target,
 unmarked, until the new agent reports its model, and a failed switch leaves it
 on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends` (each carries the display decision its text would get in
+`handoff.held_sends`, which keeps listing each one the switch has delivered
+until the switch is done, so a message stays on the page until its turn is in
+the transcript (each carries the display decision its text would get in
 the transcript, so a held background-task report shows as its notice; the
 message the user switched with stands down once the `agent_switch` marker
 carrying it is on the transcript, where it renders as the successor's opening
