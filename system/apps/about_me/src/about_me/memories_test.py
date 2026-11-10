@@ -69,7 +69,14 @@ def test_index_titles_and_removing_a_files_lines() -> None:
 
 @pytest.mark.parametrize(
     ("name", "expected"),
-    [("coding-style.md", True), ("MEMORY.md", False), ("../x.md", False), ("a/b.md", False), ("notes.txt", False)],
+    [
+        ("coding-style.md", True),
+        ("MEMORY.md", False),
+        ("README.md", False),
+        ("../x.md", False),
+        ("a/b.md", False),
+        ("notes.txt", False),
+    ],
 )
 def test_only_plain_markdown_names_other_than_the_index_are_memory_files(name: str, expected: bool) -> None:
     assert is_memory_file_name(name) is expected
