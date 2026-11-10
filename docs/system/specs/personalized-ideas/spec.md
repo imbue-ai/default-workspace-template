@@ -45,7 +45,8 @@ The skill does not use them:
 
 ## Exclusions
 
-- A message from someone other than the owner (`[from: <name>]`), and any shared workspace: the name belongs to the owner, and what is saved would be visible to others. The agent suggests general ideas instead.
+- A message from someone other than the owner (`[from: <name>]`): the name belongs to the owner. The agent suggests general ideas instead.
+- A workspace with sharing on is asked about once, with a fixed question and two reply buttons ("Only me, go ahead" / "Skip the search"), because sharing is often only the owner's own phone or browser. "Only me" is saved in `consent.json` and not asked again; anything else counts as a "no" and nothing is searched.
 - No backend component: nothing in Imbue Studio's backend or the connector changes. The search is the agent's own web search; the offer says it goes through an outside search service.
 
 ## Planned: seeing and controlling what is remembered
