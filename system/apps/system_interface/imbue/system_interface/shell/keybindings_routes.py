@@ -191,6 +191,7 @@ def get_keybindings_catalog() -> ResponseReturnValue:
     identity = request_identity()
     snapshot = load_workspace_profile_snapshot(shell.repo_root)
     apps = []
+    restored_chords_by_app: dict[str, dict[str, list[str]]] = {}
     for app_actions in list_app_keybinding_actions(shell.inventory.entries()):
         default_chords_by_action = {
             str(action.id): tuple(str(chord) for chord in action.default_chords) for action in app_actions.actions
@@ -209,6 +210,15 @@ def get_keybindings_catalog() -> ResponseReturnValue:
             identity=identity,
             workspace_root=shell.repo_root,
             is_user_override_applied=False,
+        )
+        restored_chords_by_app[app_actions.app] = resolve_app_keybindings(
+            app_actions.app,
+            default_chords_by_action,
+            snapshot=snapshot,
+            identity=identity,
+            workspace_root=shell.repo_root,
+            is_user_override_applied=False,
+            is_unsent_applied=False,
         )
         actions = tuple(
             KeybindingActionView(
@@ -230,18 +240,6 @@ def get_keybindings_catalog() -> ResponseReturnValue:
         )
         apps.append(KeybindingAppView(app=app_actions.app, display_name=app_actions.display_name, actions=actions))
     _merged, unsent = merged_account_keybindings(shell.repo_root)
-    restored_chords_by_app = {
-        app_actions.app: resolve_app_keybindings(
-            app_actions.app,
-            {str(action.id): tuple(str(chord) for chord in action.default_chords) for action in app_actions.actions},
-            snapshot=snapshot,
-            identity=identity,
-            workspace_root=shell.repo_root,
-            is_user_override_applied=False,
-            is_unsent_applied=False,
-        )
-        for app_actions in list_app_keybinding_actions(shell.inventory.entries())
-    }
     unsent_views = tuple(
         UnsentKeybindingView(
             app=app_name,
