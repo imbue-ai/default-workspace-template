@@ -48,6 +48,33 @@ The skill does not use them:
 - A message from someone other than the owner (`[from: <name>]`), and any shared workspace: the name belongs to the owner, and what is saved would be visible to others. The agent suggests general ideas instead.
 - No backend component: nothing in Imbue Studio's backend or the connector changes. The search is the agent's own web search; the offer says it goes through an outside search service.
 
+## Planned: seeing and controlling what is remembered
+
+Two additions make the promise that the user can see and delete everything visible rather than something they have to ask for. Neither collects anything new.
+
+### Refresh on request
+
+When the user asks to update what the agent knows ("update what you know about me", "look me up again"), the agent reruns steps 3 to 5 for the person already confirmed: it reads the owner's name, searches the same way, and shows only what is new or changed since `user-public-profile.md` was written, each with its link, for the user to confirm or drop.
+Confirmed changes are written into the same memory, with the date of the refresh in its last line; dropped ones are deleted from `sources.json`.
+Their earlier yes stands (`consent.json` says `"yes"`), so there is no new offer; a `"no"` there means no refresh until they say yes again.
+A refresh never runs on its own: no schedule, no routine, unless the user explicitly sets one up with the `manage-routines` skill and is told it repeats the lookup.
+This is a change to the skill's instructions only.
+
+### A "What Studio knows about me" page
+
+A small workspace app (built with the `build-app` skill, under `system/apps/`) that shows the lookup's memory as a page:
+
+- Each remembered fact, with the link it came from and the date it was found or confirmed; facts the user shared themselves are marked as such.
+- A delete control on each fact, which removes its line from `user-public-profile.md` and its entry from `sources.json` when no remaining fact cites it.
+- "Forget all of this", which does what asking the agent to forget does: deletes `user-public-profile.md`, its line in `MEMORY.md`, and `sources.json`.
+- An empty state when nothing is remembered, saying how to ask for a lookup.
+
+It reads and writes only those three files; it never searches or reads the web.
+For the page to read the memory reliably, the skill writes `user-public-profile.md` with one fact per line in a fixed shape, `- <fact> ([<source title>](<url>)) <!-- found <YYYY-MM-DD> -->`, and the page treats any line it cannot parse as one fact it can still show and delete whole.
+The skill links the page once, in step 6, where it now mentions the memory's path.
+
+Open for this page: whether it belongs in the workspace or in Imbue Studio's own settings once memories from other sources exist.
+
 ## Open questions
 
 - Legal review of the offer's wording before release.
