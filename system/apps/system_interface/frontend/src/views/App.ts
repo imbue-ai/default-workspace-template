@@ -1317,7 +1317,7 @@ export function App(): m.Component<AppAttrs> {
       // go through here only for the desktop app's native menu.
       extraRows: (target) => {
         if (!current.getDrawsContextMenus()) return [];
-        const subject = menuSubjectOf(current, target.element);
+        const subject = menuSubjectAt(current, target.element);
         return subject === null ? [] : (rowsOfSubject(current, subject) ?? []);
       },
       open: (rows, point, target) => {
