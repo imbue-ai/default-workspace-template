@@ -22,7 +22,6 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
-from unittest.mock import ANY
 
 import pytest
 
@@ -2659,14 +2658,24 @@ def _venv_entry_point(repo_root: Path, script: str) -> str:
     return str(repo_root / ".venv" / "bin" / script)
 
 
+class _AbsoluteFolder:
+    """Equal to any absolute path: the scratch folder a pre-flight boot picks for itself."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and Path(other).is_absolute()
+
+
+_SCRATCH_FOLDER = _AbsoluteFolder()
+
+
 def _shell_preflight_argv(repo_root: Path) -> list[object]:
     """The shell's pre-flight boot: its console script, with its state and presence in a scratch folder."""
     return [
         _venv_entry_point(repo_root, "system-interface"),
         "--state-dir",
-        ANY,
+        _SCRATCH_FOLDER,
         "--presence-dir",
-        ANY,
+        _SCRATCH_FOLDER,
     ]
 
 
@@ -2694,13 +2703,13 @@ def _supervisord_exec_target(program_conf: Path) -> list[str]:
         (
             "system_interface.conf",
             update_probes.preflight,
-            ["--state-dir", ANY, "--presence-dir", ANY],
+            ["--state-dir", _SCRATCH_FOLDER, "--presence-dir", _SCRATCH_FOLDER],
         ),
         ("chat.conf", update_probes.preflight_chat, ["--preflight"]),
     ],
 )
 def test_the_preflight_boots_the_install_supervisord_runs(
-    program_conf: str, preflight, extra_args: list[str]
+    program_conf: str, preflight, extra_args: list[object]
 ) -> None:
     # The pre-flight exists to boot what the restart will boot. Read off the real tree's
     # program lines, so a program that moves to another install moves the pre-flight too.
