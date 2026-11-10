@@ -61,8 +61,9 @@ export interface ContextMenuDividerRow {
 /** What a submenu may hold: every row but another submenu. */
 export type ContextMenuSubmenuChildRow = ContextMenuActionRow | ContextMenuCheckRow | ContextMenuDividerRow;
 
-/** A row that opens a submenu of rows, one level deep. Mirrors the shared Menu's ``SubmenuRow``; ``rows`` is read
- *  once per right-click. */
+/** A row that opens a submenu of rows, one level deep. Mirrors the shared Menu's ``SubmenuRow``. The desktop app's
+ *  native menu reads ``rows`` once, at the right-click; a menu the page draws reads it each time the submenu opens or
+ *  redraws, so it should only read the current state. */
 export interface ContextMenuSubmenuRow {
   kind: "submenu";
   key: string;

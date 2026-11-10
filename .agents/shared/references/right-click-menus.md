@@ -42,8 +42,9 @@ installElementContextMenu({
 ```
 
 - A row is an `action` (`onSelect`; `isDisabled` greys it, `tooltip` says why), a `check` row (`isChecked`,
-  `onToggle`), a `divider`, or a `submenu` of those, one level deep. A submenu's `rows` is read once, at the
-  right-click.
+  `onToggle`), a `divider`, or a `submenu` of those, one level deep. The native menu reads a submenu's `rows` once,
+  at the right-click; a menu the page draws reads it each time the submenu opens, so `rows` only reads state and
+  changes nothing.
 - Every `key` is unique across the whole menu, a submenu's rows included: a pick in the native menu comes back by
   key.
 - `symbol` names an SF Symbol (`pencil`, `trash`, `folder`) the native menu shows beside the row; `tone` and `icon`
