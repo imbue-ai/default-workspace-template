@@ -275,13 +275,14 @@ describe("installElementContextMenu", () => {
     });
   });
 
-  it("hands the desktop app a submenu with its rows read at the right-click, and runs a row picked inside it", async () => {
+  it("hands the desktop app a submenu with its rows read at the right-click, and runs and redraws a row picked inside it", async () => {
     const calls: string[] = [];
     let children: ContextMenuRow[] | null = null;
     uninstall = installElementContextMenu({
       connection,
       handshake: () => HOST_DRAWN_HANDSHAKE,
       extraRows: () => statusRows(calls, () => children),
+      redraw: () => calls.push("redraw"),
     });
     rightClick(document.getElementById("para") as Element);
     // A submenu that changes after the right-click changes neither what the app shows nor what a pick runs.
@@ -306,7 +307,7 @@ describe("installElementContextMenu", () => {
     await hostBridge().select("status-open");
     await hostBridge().select("pinned");
     await hostBridge().select("status-later");
-    expect(calls).toEqual(["close", "open", "pinned"]);
+    expect(calls).toEqual(["close", "redraw", "open", "redraw", "pinned", "redraw"]);
   });
 
   it("runs the row the desktop app picks only once the page has focus, so the clipboard takes the copy", async () => {

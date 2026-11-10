@@ -52,8 +52,10 @@ installElementContextMenu({
 - Doing something else on the right-click, without the menu, is fine: a handler that only selects the row under
   the pointer (and calls no `preventDefault`) leaves the menu to the element menu.
 
-A Mithril page hands the installer `open: createContextMenuOpener().open` so the menu it draws is the shared Menu;
-the Files app (`system/apps/files/frontend/src/index.ts`) is a working example of `extraRows`.
+A Mithril page hands the installer `open: createContextMenuOpener().open` so the menu it draws is the shared Menu,
+and `redraw: () => m.redraw()`: a row picked in the native menu runs outside the page's event handlers, so without it
+a row that only changes the page's state shows nothing until something else redraws. The Files app
+(`system/apps/files/frontend/src/index.ts`) is a working example of `extraRows`.
 
 ## When a page has to keep the right-click
 

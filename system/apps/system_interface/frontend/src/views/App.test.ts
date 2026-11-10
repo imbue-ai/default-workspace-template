@@ -690,6 +690,11 @@ describe("the element menu", () => {
       "|",
       "keyboard-shortcuts",
     ]);
+    // A pick that only changes the shell's own state still shows, though no handler of the shell ran it: the
+    // redraws already asked for land first, so only the pick's own can draw the dialog.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await bridge.select("keyboard-shortcuts");
+    await vi.waitFor(() => expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).not.toBeNull());
     // The rest of the chrome has no rows of its own: only the reference rows reach the native menu.
     expect(rightClickPage(document.querySelector("[data-backdrop-area]") as Element)).toEqual([]);
     expect(keysOf(bridge.sections()!.reference)).toEqual(["copy-reference", "explain-element", "modify-element"]);

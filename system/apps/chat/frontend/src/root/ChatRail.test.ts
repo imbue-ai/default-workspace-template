@@ -250,6 +250,7 @@ describe("ChatRail right-click", () => {
       isDraftAvailable: () => true,
       openLink: () => undefined,
       isDrawnByHost: () => isDrawnByHost,
+      redraw: () => m.redraw(),
       ...railContextMenuRoutes(
         () => attrs,
         () => isDrawnByHost,
@@ -297,5 +298,16 @@ describe("ChatRail right-click", () => {
     expect(page[page.length - 1]).toMatchObject({ symbol: "trash" });
     await bridge.select("make-main");
     expect(verbs.makeMainChat).toHaveBeenCalledWith("agent-2");
+    // Rename only opens the row's field: the pick shows it, though no handler of the rail ran it. The redraws
+    // already asked for land first, so only the pick's own can draw the field.
+    rightClick(root!.querySelector('[data-chat-id="agent-2"]')!);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await bridge.select("rename");
+    const field = await vi.waitFor(() => {
+      const found = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 });

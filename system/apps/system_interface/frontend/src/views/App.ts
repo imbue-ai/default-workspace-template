@@ -1326,6 +1326,7 @@ export function App(): m.Component<AppAttrs> {
         openMenuAt(subject === null ? { kind: "element", rows } : { ...subject, trailingRows: rows }, anchor);
         m.redraw();
       },
+      redraw: () => m.redraw(),
     });
   }
 

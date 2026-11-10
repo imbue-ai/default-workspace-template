@@ -568,6 +568,7 @@ function bootstrap(): void {
     handshake: () => handshake,
     draft: draftReference,
     isDraftAvailable: isReferenceDraftAvailable,
+    redraw: () => m.redraw(),
     ...railContextMenuRoutes(
       () => railAttrs(railRows(), compactQuery.matches),
       () => handshake?.drawsContextMenus === true,

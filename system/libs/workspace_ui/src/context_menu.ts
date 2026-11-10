@@ -62,6 +62,9 @@ interface ContextMenuBaseOptions {
   open?: (rows: readonly ContextMenuRow[], point: ContextMenuPoint, target: ContextMenuTarget) => void;
   /** The document to listen on; the page's own when unset (a test hands in another). */
   document?: Document;
+  /** Redraw the page once a row the desktop app picked has run. The pick runs outside the page's event handlers,
+   *  so a framework that redraws after those (Mithril) would not show its effect; ``() => m.redraw()`` there. */
+  redraw?: () => void;
 }
 
 /** A page a shell may frame: a draft goes through its connection unless it says otherwise. */
@@ -189,7 +192,11 @@ function whenFocused(ownerDocument: Document): Promise<void> {
   });
 }
 
-function hostMenuBridgeOf(currentSnapshot: () => HostMenuSnapshot | null, ownerDocument: Document): HostMenuBridge {
+function hostMenuBridgeOf(
+  currentSnapshot: () => HostMenuSnapshot | null,
+  ownerDocument: Document,
+  redraw: () => void,
+): HostMenuBridge {
   return {
     sections: () => currentSnapshot()?.sections ?? null,
     select: async (key) => {
@@ -198,6 +205,7 @@ function hostMenuBridgeOf(currentSnapshot: () => HostMenuSnapshot | null, ownerD
       await whenFocused(ownerDocument);
       if (row.kind === "check") row.onToggle();
       else row.onSelect();
+      redraw();
     },
   };
 }
@@ -272,7 +280,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
     Reflect.set(
       view,
       HOST_MENU_GLOBAL,
-      hostMenuBridgeOf(() => hostSnapshot, ownerDocument),
+      hostMenuBridgeOf(() => hostSnapshot, ownerDocument, options.redraw ?? (() => undefined)),
     );
   const uninstall = (): void => {
     renderer.close?.();
