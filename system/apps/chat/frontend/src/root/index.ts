@@ -71,7 +71,6 @@ import {
   chatShortcutOfChord,
   chatShortcutOfKeydown,
   refreshKeybindings,
-  setKeybindingSurface,
 } from "../models/keybindings";
 import { interruptAgent } from "../models/Response";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
@@ -502,7 +501,6 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
     onKeybindingsChanged: () => void refreshKeybindings(),
-    onChordSurface: setKeybindingSurface,
     onChord: (chord) => {
       const shortcut = chatShortcutOfChord(chord);
       if (shortcut !== null) runChatShortcut(shortcut);

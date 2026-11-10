@@ -29,7 +29,7 @@
  * to be told) are passed down to the root's inner frames, as are the shell's
  * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords) and
  * ``shell:workspace-chords`` (the workspace-wide chords each inner page hands up as
- * ``shell:shortcut``, which goes up unchanged, and where the workspace runs), the latter held and
+ * ``shell:shortcut``, which goes up unchanged), the latter held and
  * handed to every inner page introduced later, like the handshake. Everything else the chrome
  * sends is the root's own to handle.
  *

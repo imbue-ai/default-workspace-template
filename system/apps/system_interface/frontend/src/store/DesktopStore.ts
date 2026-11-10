@@ -27,14 +27,11 @@ import {
   externalLinkMessageType,
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
-import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   type WorkspaceActionId,
   claimedChordsOf,
   refreshShellKeybindings,
-  setShellChordSurface,
-  shellChordContext,
   workspaceChordsByAction,
 } from "../model/keybindings";
 import {
@@ -297,9 +294,9 @@ export interface PageDriver {
   broadcastKeybindingsChanged(): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
-  /** Send every greeted page the workspace-wide chords and where the workspace runs (``shell:workspace-chords``),
-   *  and every page greeted from now on the same. */
-  sendWorkspaceChords(chords: readonly string[], surface: ChordSurface): void;
+  /** Send every greeted page the workspace-wide chords (``shell:workspace-chords``), and every page greeted from now
+   *  on the same. */
+  sendWorkspaceChords(chords: readonly string[]): void;
   /** Send the window's page a chord the desktop app intercepted for it (``shell:chord``). */
   sendChord(windowId: string, chord: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
@@ -724,8 +721,6 @@ export class DesktopStore {
   setCanPopOut(canPopOut: boolean): void {
     if (this.canPopOut === canPopOut) return;
     this.canPopOut = canPopOut;
-    setShellChordSurface(canPopOut ? "desktop" : "browser");
-    this.publishWorkspaceChords();
     this.notifyListeners();
   }
 
@@ -3023,12 +3018,12 @@ export class DesktopStore {
     this.publishWorkspaceChords();
   }
 
-  /** Tell every page the workspace-wide chords and where the workspace runs, and the chrome, when there is one, those
-   *  chords by action and every app's, all filtered for where the workspace runs. */
+  /** Tell every page the workspace-wide chords, and the chrome, when there is one, those chords by action and every
+   *  app's. */
   private publishWorkspaceChords(): void {
     const chordsByAction = workspaceChordsByAction();
     const chords = [...new Set(Object.values(chordsByAction).flat())];
-    this.pageDriver?.sendWorkspaceChords(chords, shellChordContext().surface);
+    this.pageDriver?.sendWorkspaceChords(chords);
     if (!this.isEmbedderPresent) return;
     void this.deps.api.fetchKeybindingsCatalog().then(
       (catalog) => this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog)),

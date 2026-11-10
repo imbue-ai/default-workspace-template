@@ -692,15 +692,15 @@ describe("the contract", () => {
   it("hands every greeted page the workspace-wide chords, on a change and in the greeting", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
-    layer.sendWorkspaceChords(["alt+meta+w"], "desktop");
+    layer.sendWorkspaceChords(["alt+meta+w"]);
     load("win-1");
     const chordMessages = spy.mock.calls
       .map((call) => call[0])
       .filter((message) => message.type === SHELL_WORKSPACE_CHORDS);
     expect(chordMessages).toEqual([
-      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
-      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"], surface: "desktop" },
-      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"], surface: "desktop" },
+      { type: SHELL_WORKSPACE_CHORDS, chords: [] },
+      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"] },
+      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"] },
     ]);
   });
 
@@ -769,8 +769,8 @@ describe("the contract", () => {
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
-      // So are the workspace-wide chords and where the workspace runs (the keyboard-shortcuts spec, section 6.1).
-      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
+      // So are the workspace-wide chords (the keyboard-shortcuts spec, section 6.1).
+      { type: SHELL_WORKSPACE_CHORDS, chords: [] },
       { type: SHELL_SHOWN },
     ]);
     store.minimizeWindow("win-1");
@@ -790,7 +790,7 @@ describe("the contract", () => {
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
-      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
+      { type: SHELL_WORKSPACE_CHORDS, chords: [] },
       { type: SHELL_HIDDEN },
     ]);
   });

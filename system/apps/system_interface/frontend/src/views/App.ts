@@ -21,7 +21,7 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
-import { shellChordContext, workspaceActionOfKeydown } from "../model/keybindings";
+import { shellChordPlatform, workspaceActionOfKeydown } from "../model/keybindings";
 import { isShortcutRecording } from "../model/shortcutRecording";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
@@ -1120,7 +1120,7 @@ export function App(): m.Component<AppAttrs> {
 
   function keyboardShortcutsDialogView(current: DesktopStore): m.Children {
     return m(KeyboardShortcutsDialog, {
-      context: shellChordContext(),
+      platform: shellChordPlatform(),
       onClose: () => current.closeKeyboardShortcutsDialog(),
     });
   }

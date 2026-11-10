@@ -139,7 +139,7 @@ describe("the workspace-wide chords", () => {
       () => [pageA] as unknown as Window[],
       () => undefined,
     );
-    const chords = { type: "shell:workspace-chords", chords: ["alt+meta+w"], surface: "desktop" };
+    const chords = { type: "shell:workspace-chords", chords: ["alt+meta+w"] };
 
     deliver(chords, parent);
     const pageB = { postMessage: vi.fn() };

@@ -4,12 +4,11 @@
  * page that Imbue Studio's Workspace settings frames, and of the Keyboard shortcuts dialog a plain browser opens
  * from the backdrop's context menu.
  *
- * Shortcuts are read in a context (the keyboard-shortcuts spec in the mngr repo, sections 4 and 7): the platform,
- * which decides what the keys are called and which chords cannot arrive here (a Mac's Control chord off a Mac), and
- * the surface, which hides the chords a browser keeps from its pages when the workspace runs in one. A row whose
- * shortcuts are all hidden here reads "Off", with the hidden ones named on hover. A chord a browser would keep, one
- * the OS is known to keep, or one the desktop app takes from the OS is saved with a warning; only Ctrl+Alt+Del is
- * refused.
+ * Shortcuts are read on a platform (the keyboard-shortcuts spec in the mngr repo, sections 4 and 7), which decides
+ * what the keys are called and which chords cannot arrive here (a Mac's Control chord off a Mac). A row whose
+ * shortcuts are all hidden here reads "Off", with the hidden ones named on hover. A chord browsers keep for
+ * themselves, one the OS is known to keep, or one Imbue Studio takes from the OS is saved with a warning, the same
+ * wherever the workspace runs; only Ctrl+Alt+Del is refused.
  *
  * Editing one action opens its editor below the row: the shortcuts it will have, each removable, a recorder that
  * adds one more, and the save surfaces. The recorder takes every key, Escape included (it has a Cancel of its own),
@@ -32,15 +31,14 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import {
-  type ChordContext,
+  type ChordPlatform,
   chordDisplayLabel,
   chordFromKeydown,
   chordNotices,
   chordPlatformName,
   chordSpokenLabel,
   detectChordPlatform,
-  hiddenChordReason,
-  isChordHiddenIn,
+  isChordHiddenOn,
   isRefusedChord,
   isWorkspaceWideChord,
   readsChordAsApple,
@@ -77,9 +75,9 @@ function actionKey(app: string, actionId: string): string {
   return `${app}.${actionId}`;
 }
 
-/** The chords of the list that can arrive in the context; every chord when no context is given. */
-function visibleIn(chords: readonly string[], context: ChordContext | null): readonly string[] {
-  return context === null ? chords : chords.filter((chord) => !isChordHiddenIn(chord, context));
+/** The chords of the list that can arrive on the platform; every chord when no platform is given. */
+function visibleIn(chords: readonly string[], platform: ChordPlatform | null): readonly string[] {
+  return platform === null ? chords : chords.filter((chord) => !isChordHiddenOn(chord, platform));
 }
 
 /** The actions a chord of this action could collide with (the keyboard-shortcuts spec in the mngr repo, section
@@ -101,17 +99,17 @@ export function clashCandidates(
 }
 
 /** Every candidate using one of `chords` now, once per chord it uses; `heldChordsOf` answers what each candidate
- *  has, edits not yet saved included. Only chords visible in `context` clash: a chord that cannot arrive here runs
+ *  has, edits not yet saved included. Only chords visible on `platform` clash: a chord that cannot arrive here runs
  *  nothing here. */
 function clashesAmong(
   candidates: readonly CatalogAction[],
   chords: readonly string[],
   heldChordsOf: (candidate: CatalogAction) => readonly string[],
-  context: ChordContext | null,
+  platform: ChordPlatform | null,
 ): ClashEntry[] {
-  return visibleIn(chords, context).flatMap((chord) =>
+  return visibleIn(chords, platform).flatMap((chord) =>
     candidates
-      .filter((candidate) => visibleIn(heldChordsOf(candidate), context).includes(chord))
+      .filter((candidate) => visibleIn(heldChordsOf(candidate), platform).includes(chord))
       .map((candidate) => ({ chord, otherApp: candidate.app, otherAction: candidate.action })),
   );
 }
@@ -123,14 +121,14 @@ export function clashesOf(
   actionId: string,
   chords: readonly string[],
   chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
-  context: ChordContext | null = null,
+  platform: ChordPlatform | null = null,
 ): ClashEntry[] {
   const candidates = app.actions.filter((action) => action.id !== actionId).map((action) => ({ app, action }));
   return clashesAmong(
     candidates,
     chords,
     (candidate) => chordsByActionId.get(candidate.action.id) ?? candidate.action.chords,
-    context,
+    platform,
   );
 }
 
@@ -142,14 +140,14 @@ export function clashesInCatalog(
   actionId: string,
   chords: readonly string[],
   replacedChordsByKey: ReadonlyMap<string, readonly string[]>,
-  context: ChordContext | null,
+  platform: ChordPlatform | null,
 ): ClashEntry[] {
   return clashesAmong(
     clashCandidates(loaded, app, actionId),
     chords,
     (candidate) =>
       replacedChordsByKey.get(actionKey(candidate.app.app, candidate.action.id)) ?? candidate.action.chords,
-    context,
+    platform,
   );
 }
 
@@ -174,21 +172,12 @@ export const REFUSED_CHORD_NOTICE = "Ctrl+Alt+Delete belongs to Windows and can'
 export const WORKSPACE_WIDE_CHORD_NOTICE =
   "A shortcut that works everywhere in the workspace needs a modifier other than Shift, or a function key.";
 
-/** What a row says on hover when its shortcuts are set but none can arrive here: each hidden chord with why, the
- *  platform's (a Mac's Control chord, named with the Mac's symbols) or the browser's. */
-export function hiddenChordsHint(hidden: readonly string[], context: ChordContext): string {
-  const sentence = (chords: readonly string[], where: string): string => {
-    const labels = chords
-      .map((chord) => chordDisplayLabel(chord, readsChordAsApple(chord, context.platform)))
-      .join(", ");
-    return `${labels} ${chords.length === 1 ? "is" : "are"} set, but not available ${where}.`;
-  };
-  const onPlatform = hidden.filter((chord) => hiddenChordReason(chord, context) === "platform");
-  const inBrowser = hidden.filter((chord) => !onPlatform.includes(chord));
-  const sentences: string[] = [];
-  if (onPlatform.length > 0) sentences.push(sentence(onPlatform, `on ${chordPlatformName(context.platform)}`));
-  if (inBrowser.length > 0) sentences.push(sentence(inBrowser, "in a browser"));
-  return sentences.join(" ");
+/** What a row says on hover when its shortcuts are set but none can arrive here: the Mac's Control chords, named with
+ *  the Mac's symbols, since off a Mac "Ctrl" is what `meta` reads as. */
+export function hiddenChordsHint(hidden: readonly string[], platform: ChordPlatform): string {
+  const labels = hidden.map((chord) => chordDisplayLabel(chord, readsChordAsApple(chord, platform))).join(", ");
+  const verb = hidden.length === 1 ? "is" : "are";
+  return `${labels} ${verb} set, but not available on ${chordPlatformName(platform)}.`;
 }
 
 /** An unsent save named the way the list names it: its app's display name and its action's label. */
@@ -203,12 +192,12 @@ export function areChordListsEqual(left: readonly string[], right: readonly stri
 }
 
 /** Whether a reset would change what the action runs here: it has a change in this workspace, and the chords of that
- *  change that can arrive in the context differ from those of what removing it restores (a Replace elsewhere can
+ *  change that can arrive on the platform differ from those of what removing it restores (a Replace elsewhere can
  *  leave a change equal to it). */
-export function isResetOffered(action: KeybindingActionView, context: ChordContext | null): boolean {
+export function isResetOffered(action: KeybindingActionView, platform: ChordPlatform | null): boolean {
   if (action.source !== "workspace") return false;
-  const current = visibleIn(action.chords, context);
-  const restored = new Set(visibleIn(action.reset_chords, context));
+  const current = visibleIn(action.chords, platform);
+  const restored = new Set(visibleIn(action.reset_chords, platform));
   return current.length !== restored.size || current.some((chord) => !restored.has(chord));
 }
 
@@ -249,8 +238,8 @@ interface PendingRevert {
 }
 
 export interface KeyboardSettingsSectionAttrs {
-  /** Where the shortcuts are read: the browser's platform in the desktop app when omitted. */
-  readonly context?: ChordContext;
+  /** The platform the shortcuts are read on: the browser's when omitted. */
+  readonly platform?: ChordPlatform;
   /** Told each time the recorder starts or stops listening for a new shortcut. */
   readonly onRecordingChange?: (isRecording: boolean) => void;
   /** Handed, while the section is mounted, what records a chord the desktop app took from the OS while the recorder
@@ -304,14 +293,14 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   let isBusy = false;
   let isRecorderListening = false;
   let onRecordingChange: ((isRecording: boolean) => void) | undefined;
-  let context: ChordContext = { platform: detectChordPlatform(), surface: "desktop" };
+  let platform: ChordPlatform = detectChordPlatform();
   const collapsedApps = new Set<string>();
   // The actions saved or reset since this section opened, marked until it is opened again.
   const savedActionKeys = new Set<string>();
 
-  const isApple = (): boolean => context.platform === "mac";
+  const isApple = (): boolean => platform === "mac";
   // A chord reads with the Mac's symbols on a Mac, and elsewhere when it holds the Mac's Control key.
-  const isAppleFor = (chord: string): boolean => readsChordAsApple(chord, context.platform);
+  const isAppleFor = (chord: string): boolean => readsChordAsApple(chord, platform);
 
   async function load(): Promise<void> {
     try {
@@ -367,13 +356,13 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   function clashesWith(current: ActionEditor, chords: readonly string[]): ClashEntry[] {
     if (catalog === null) return [];
-    return clashesInCatalog(catalog, current.app, current.action.id, chords, replacedChordsByKey(current), context);
+    return clashesInCatalog(catalog, current.app, current.action.id, chords, replacedChordsByKey(current), platform);
   }
 
   function onRecorderKeydown(current: ActionEditor, event: KeyboardEvent): void {
     event.preventDefault();
     event.stopPropagation();
-    const chord = chordFromKeydown(event, context.platform);
+    const chord = chordFromKeydown(event, platform);
     if (chord !== null) recordChord(current, chord);
   }
 
@@ -425,7 +414,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
 
   /** The chords a row shows: the held ones that can arrive here. */
   function shownChords(appView: KeybindingAppView, action: KeybindingActionView): readonly string[] {
-    return visibleIn(heldChords(appView, action), context);
+    return visibleIn(heldChords(appView, action), platform);
   }
 
   /** What a delivery attempt leaves on screen: nothing once it landed, else its own word on why not. */
@@ -479,7 +468,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     restoredChords: readonly string[],
   ): void {
     const entries =
-      catalog === null ? [] : clashesInCatalog(catalog, appView, action.id, restoredChords, new Map(), context);
+      catalog === null ? [] : clashesInCatalog(catalog, appView, action.id, restoredChords, new Map(), platform);
     if (entries.length > 0) {
       pendingRevert = { app: appView, action, clash: { cause, entries } };
       return;
@@ -525,7 +514,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
    *  naming on hover the ones that are set all the same. */
   function shortcutsView(chords: readonly string[], hidden: readonly string[]): m.Children {
     if (chords.length === 0) {
-      const hint = hidden.length === 0 ? {} : hoverTooltipAttrs(hiddenChordsHint(hidden, context));
+      const hint = hidden.length === 0 ? {} : hoverTooltipAttrs(hiddenChordsHint(hidden, platform));
       return m(
         "span",
         { class: "keybinding-off type-helper text-faint", "data-hidden-chords": hidden.join(" "), ...hint },
@@ -584,7 +573,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       current.stagedChords.length === 0
         ? m("span", { class: "type-helper text-faint" }, "Off: no shortcut runs this")
         : current.stagedChords.map((chord) => {
-            const isHidden = isChordHiddenIn(chord, context);
+            const isHidden = isChordHiddenOn(chord, platform);
             return m(
               "span",
               {
@@ -593,7 +582,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
                   "keybinding-staged inline-flex items-center gap-0.5 rounded-md bg-fill-faint py-0.5 pr-0.5 pl-1" +
                   (isHidden ? " opacity-60" : ""),
                 "data-hidden": isHidden ? "true" : undefined,
-                ...(isHidden ? hoverTooltipAttrs(hiddenChordsHint([chord], context)) : {}),
+                ...(isHidden ? hoverTooltipAttrs(hiddenChordsHint([chord], platform)) : {}),
               },
               [
                 m(ShortcutKeycap, { chord, isApple: isAppleFor(chord) }),
@@ -701,7 +690,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   function editorView(current: ActionEditor): m.Children {
-    const warnings = current.stagedChords.flatMap((chord) => chordNotices(chord, context));
+    const warnings = current.stagedChords.flatMap((chord) => chordNotices(chord, platform));
     const clash = current.clash;
     return m("div", { class: "keybinding-editor mt-1 mb-3 rounded-lg border border-default p-3" }, [
       stagedShortcutsView(current),
@@ -768,14 +757,14 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   /** The warnings of the shortcuts a row shows (the editor shows its own while the row is being edited). */
   function rowWarnings(chords: readonly string[]): m.Children {
     return chords
-      .flatMap((chord) => chordNotices(chord, context))
+      .flatMap((chord) => chordNotices(chord, platform))
       .map((warning) => m("p", { class: "keybinding-row-warning type-helper mt-0.5 text-warning" }, warning));
   }
 
   function actionRow(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
     const isEditing = editor !== null && editor.app.app === appView.app && editor.action.id === action.id;
     const held = heldChords(appView, action);
-    const chords = visibleIn(held, context);
+    const chords = visibleIn(held, platform);
     const hidden = held.filter((chord) => !chords.includes(chord));
     const isPendingReplace = !isEditing && held !== action.chords;
     const resetClash =
@@ -795,7 +784,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         rowMarker(appView, action, isPendingReplace),
         m("span", { class: "shrink-0" }, shortcutsView(chords, hidden)),
         m("span", { class: "flex shrink-0 items-center gap-1" }, [
-          isResetOffered(action, context)
+          isResetOffered(action, platform)
             ? m(
                 Button,
                 {
@@ -935,7 +924,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     },
     view(vnode) {
       onRecordingChange = vnode.attrs.onRecordingChange;
-      if (vnode.attrs.context !== undefined) context = vnode.attrs.context;
+      if (vnode.attrs.platform !== undefined) platform = vnode.attrs.platform;
       if (loadError !== null) {
         return m("p", { class: "type-helper text-danger" }, `The shortcuts could not be loaded: ${loadError}`);
       }

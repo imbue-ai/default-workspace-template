@@ -12,13 +12,11 @@
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import {
-  type ChordContext,
   type ChordKeyEvent,
   type ChordPlatform,
-  type ChordSurface,
   chordFromKeydown,
   detectChordPlatform,
-  isChordHiddenIn,
+  isChordHiddenOn,
   keydownMatchesChords,
   type ResolvedKeybindings,
 } from "@imbue/workspace-ui/src/keybindings";
@@ -42,8 +40,6 @@ export function isWorkspaceActionId(value: unknown): value is WorkspaceActionId 
 
 let resolved: ResolvedKeybindings | null = null;
 let platformOverride: ChordPlatform | null = null;
-// A browser until the Imbue Studio chrome says it frames the shell (``canPopOut``).
-let surface: ChordSurface = "browser";
 
 export async function refreshShellKeybindings(): Promise<void> {
   try {
@@ -55,15 +51,9 @@ export async function refreshShellKeybindings(): Promise<void> {
   }
 }
 
-/** Where the shell reads chords: the browser's platform (unless a test named one), and the desktop app or a
- *  browser as the chrome said. */
-export function shellChordContext(): ChordContext {
-  return { platform: platformOverride ?? detectChordPlatform(), surface };
-}
-
-/** The chrome said whether it is the desktop app. */
-export function setShellChordSurface(value: ChordSurface): void {
-  surface = value;
+/** The platform the shell reads chords on: the browser's, unless a test named one. */
+export function shellChordPlatform(): ChordPlatform {
+  return platformOverride ?? detectChordPlatform();
 }
 
 export function matchesShellKeybinding(
@@ -72,14 +62,14 @@ export function matchesShellKeybinding(
   fallbackChords: readonly string[],
 ): boolean {
   const chords = resolved?.chords_by_action[actionId] ?? fallbackChords;
-  return keydownMatchesChords(event, chords, shellChordContext());
+  return keydownMatchesChords(event, chords, shellChordPlatform());
 }
 
-/** The chords of each workspace-wide action that can arrive where the shell runs. */
+/** The chords of each workspace-wide action that can arrive on the shell's platform. */
 export function workspaceChordsByAction(): Record<WorkspaceActionId, string[]> {
-  const context = shellChordContext();
+  const platform = shellChordPlatform();
   const chordsOf = (actionId: WorkspaceActionId): string[] =>
-    (resolved?.chords_by_action[actionId] ?? []).filter((chord) => !isChordHiddenIn(chord, context));
+    (resolved?.chords_by_action[actionId] ?? []).filter((chord) => !isChordHiddenOn(chord, platform));
   return Object.fromEntries(WORKSPACE_ACTION_IDS.map((actionId) => [actionId, chordsOf(actionId)])) as Record<
     WorkspaceActionId,
     string[]
@@ -94,15 +84,15 @@ export function workspaceActionOfChord(chord: string): WorkspaceActionId | null 
 
 /** The workspace-wide action a keystroke in the shell's own document runs, or null. */
 export function workspaceActionOfKeydown(event: ChordKeyEvent): WorkspaceActionId | null {
-  const chord = chordFromKeydown(event, shellChordContext().platform);
+  const chord = chordFromKeydown(event, shellChordPlatform());
   return chord === null ? null : workspaceActionOfChord(chord);
 }
 
-/** Every active chord of every app's actions in the catalog that can arrive where the shell runs. */
+/** Every active chord of every app's actions in the catalog that can arrive on the shell's platform. */
 export function claimedChordsOf(catalog: KeybindingsCatalog): string[] {
-  const context = shellChordContext();
+  const platform = shellChordPlatform();
   const chords = catalog.apps.flatMap((app) => app.actions.flatMap((action) => action.chords));
-  return [...new Set(chords)].filter((chord) => !isChordHiddenIn(chord, context));
+  return [...new Set(chords)].filter((chord) => !isChordHiddenOn(chord, platform));
 }
 
 /** For tests: pretend the backend answered these chords. */

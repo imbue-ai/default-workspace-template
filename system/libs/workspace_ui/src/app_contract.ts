@@ -43,11 +43,9 @@
  * The workspace-wide shortcuts win inside every page (the keyboard-shortcuts spec in the mngr repo, section 6.1): the
  * shell sends their chords, and a keydown spelling one is stopped before the page's own handlers see it and handed
  * to the shell (``shell:shortcut``), unless the page owns every key (``ownsKeys``: a terminal, a remote desktop).
- * The same message tells the page whether the workspace runs in the desktop app or a browser, for the page's own
- * matching (``onChordSurface``).
  */
 
-import { type ChordSurface, chordFromKeydown, detectChordPlatform } from "./keybindings";
+import { chordFromKeydown, detectChordPlatform } from "./keybindings";
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
 export const SHELL_HANDSHAKE = "shell:handshake";
@@ -67,8 +65,7 @@ export const SHELL_THEME = "shell:theme";
 export const SHELL_KEYBINDINGS_CHANGED = "shell:keybindings-changed";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
-/** Shell to app: the active workspace-wide chords (filtered for where the workspace runs) and whether it runs in the
- *  desktop app or a browser, sent after the handshake and whenever either changes. */
+/** Shell to app: the active workspace-wide chords, sent after the handshake and whenever they change. */
 export const SHELL_WORKSPACE_CHORDS = "shell:workspace-chords";
 /** Shell to app: a chord the desktop app intercepted on the page's behalf (the OS would otherwise have acted on it);
  *  the page runs whatever its own keybindings bind to it (`onChord`). */
@@ -212,9 +209,6 @@ export interface ShellConnectionHandlers {
   onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
   /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
   onKeybindingsChanged?: () => void;
-  /** Whether the workspace runs in the desktop app or a browser, where a browser keeps some chords from pages; the
-   *  page reads its own chords in that context. */
-  onChordSurface?: (surface: ChordSurface) => void;
   /** A chord the desktop app intercepted for the page: run what the page's keybindings bind to it. */
   onChord?: (chord: string) => void;
   /** The page's program owns every key (a terminal, a remote desktop): workspace-wide chords are not taken from it. */
@@ -285,13 +279,10 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
-function readWorkspaceChords(
-  message: Record<string, unknown>,
-): { chords: readonly string[]; surface: ChordSurface } | null {
-  const { chords, surface } = message;
+function readWorkspaceChords(message: Record<string, unknown>): readonly string[] | null {
+  const { chords } = message;
   if (!Array.isArray(chords) || !chords.every((chord) => typeof chord === "string")) return null;
-  if (surface !== "desktop" && surface !== "browser") return null;
-  return { chords: chords as string[], surface };
+  return chords as string[];
 }
 
 function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
@@ -483,9 +474,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       }
       case SHELL_WORKSPACE_CHORDS: {
         const received = readWorkspaceChords(message);
-        if (received === null) return;
-        workspaceChords = received.chords;
-        handlers.onChordSurface?.(received.surface);
+        if (received !== null) workspaceChords = received;
         return;
       }
       case SHELL_CHORD: {
