@@ -11,6 +11,7 @@ import {
   HOST_MENU_GLOBAL,
   installElementContextMenu,
   type HostMenuBridge,
+  type HostMenuItem,
   type HostMenuItemSections,
 } from "./context_menu";
 
@@ -22,7 +23,10 @@ const FIXTURE_PATH = resolve(
 interface PageMenuBridgeContract {
   global: string;
   sections: string[];
+  row_kinds: string[];
+  submenu_row_kinds: string[];
   max_rows_per_section: number;
+  max_rows_per_submenu: number;
   max_label_length: number;
   symbol_pattern: string;
 }
@@ -67,6 +71,18 @@ describe.skipIf(!existsSync(FIXTURE_PATH))("the desktop app's page menu bridge c
       handshake: () => HOST_DRAWN_HANDSHAKE,
       extraRows: () => [
         { kind: "action", key: "rename", label: "Rename", symbol: "pencil.line", onSelect: () => undefined },
+        { kind: "check", key: "pinned", label: "Pinned", isChecked: true, onToggle: () => undefined },
+        {
+          kind: "submenu",
+          key: "move",
+          label: "Move to",
+          symbol: "folder",
+          rows: () => [
+            { kind: "action", key: "move-inbox", label: "Inbox", onSelect: () => undefined },
+            { kind: "divider" },
+            { kind: "check", key: "move-done", label: "Done", isChecked: false, onToggle: () => undefined },
+          ],
+        },
         { kind: "divider" },
         {
           kind: "action",
@@ -84,17 +100,32 @@ describe.skipIf(!existsSync(FIXTURE_PATH))("the desktop app's page menu bridge c
     const sections = answer as HostMenuItemSections;
     expect(Object.keys(sections).sort()).toEqual([...contract.sections].sort());
     const symbolPattern = new RegExp(contract.symbol_pattern);
-    for (const name of contract.sections) {
-      const items = sections[name as keyof HostMenuItemSections];
-      expect(items.length, name).toBeGreaterThan(0);
-      expect(items.length, name).toBeLessThanOrEqual(contract.max_rows_per_section);
+    const kindsSeen = new Set<string>();
+    const expectWithinBounds = (items: HostMenuItem[], where: string, kinds: string[], maxRows: number): void => {
+      expect(items.length, where).toBeGreaterThan(0);
+      expect(items.length, where).toBeLessThanOrEqual(maxRows);
       for (const item of items) {
+        kindsSeen.add(item.kind);
+        expect(kinds, where).toContain(item.kind);
         if (item.kind === "divider") continue;
-        expect(item.key, name).not.toBe("");
-        expect(item.label.trim(), item.key).not.toBe("");
-        expect(item.label.length, item.key).toBeLessThanOrEqual(contract.max_label_length);
-        if (item.symbol !== null) expect(item.symbol, item.key).toMatch(symbolPattern);
+        expect(item.label.trim(), where).not.toBe("");
+        expect(item.label.length, item.label).toBeLessThanOrEqual(contract.max_label_length);
+        if (item.symbol !== null) expect(item.symbol, item.label).toMatch(symbolPattern);
+        if (item.kind === "submenu") {
+          expectWithinBounds(item.items, item.label, contract.submenu_row_kinds, contract.max_rows_per_submenu);
+        } else {
+          expect(item.key, item.label).not.toBe("");
+        }
       }
+    };
+    for (const name of contract.sections) {
+      expectWithinBounds(
+        sections[name as keyof HostMenuItemSections],
+        name,
+        contract.row_kinds,
+        contract.max_rows_per_section,
+      );
     }
+    expect([...kindsSeen].sort()).toEqual([...contract.row_kinds].sort());
   });
 });

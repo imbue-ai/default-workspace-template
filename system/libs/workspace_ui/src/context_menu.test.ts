@@ -9,11 +9,13 @@ import {
   CONTEXT_MENU_CARD_ATTR,
   CONTEXT_MENU_INSTALLED_ATTR,
   CONTEXT_MENU_ROW_ATTR,
+  CONTEXT_MENU_SUBMENU_ATTR,
   HOST_MENU_GLOBAL,
   installElementContextMenu,
   type ContextMenuConnection,
   type HostMenuBridge,
 } from "./context_menu";
+import type { ContextMenuRow } from "./context_menu_rows";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
@@ -34,6 +36,30 @@ function row(key: string): HTMLButtonElement {
   const found = document.body.querySelector<HTMLButtonElement>(`[${CONTEXT_MENU_ROW_ATTR}="${key}"]`);
   if (found === null) throw new Error(`no row ${key}`);
   return found;
+}
+
+function submenuCard(): HTMLElement | null {
+  return document.body.querySelector<HTMLElement>(`[${CONTEXT_MENU_SUBMENU_ATTR}]`);
+}
+
+/** A page's own rows with a submenu ("Status": a check row, a divider, an action) and a check row of its own. */
+function statusRows(calls: string[], statusChildren: () => ContextMenuRow[] | null = () => null): ContextMenuRow[] {
+  return [
+    {
+      kind: "submenu",
+      key: "status",
+      label: "Status",
+      symbol: "flag",
+      rows: () =>
+        (statusChildren() as Exclude<ContextMenuRow, { kind: "submenu" }>[] | null) ?? [
+          { kind: "check", key: "status-open", label: "Open", isChecked: true, onToggle: () => calls.push("open") },
+          { kind: "divider" },
+          { kind: "action", key: "status-close", label: "Close", onSelect: () => calls.push("close") },
+        ],
+    },
+    { kind: "check", key: "pinned", label: "Pinned", isChecked: false, onToggle: () => calls.push("pinned") },
+    { kind: "action", key: "delete", label: "Delete", tone: "danger", onSelect: () => calls.push("delete") },
+  ];
 }
 
 function hostBridge(): HostMenuBridge {
@@ -191,8 +217,13 @@ describe("installElementContextMenu", () => {
     rightClick(document.getElementById("field") as Element);
     expect(card()).toBeNull();
     expect(open).toHaveBeenCalledTimes(1);
-    const [rows, point] = open.mock.calls[0] as [{ kind: string; key?: string }[], { x: number; y: number }];
+    const [rows, point, target] = open.mock.calls[0] as [
+      { kind: string; key?: string }[],
+      { x: number; y: number },
+      { element: Element },
+    ];
     expect(point).toEqual({ x: 40, y: 50 });
+    expect(target.element).toBe(document.getElementById("field"));
     expect(rows.map((each) => each.key ?? "|")).toEqual([
       "rename",
       "|",
@@ -242,6 +273,40 @@ describe("installElementContextMenu", () => {
       tooltip: null,
       symbol: "pencil.line",
     });
+  });
+
+  it("hands the desktop app a submenu with its rows read at the right-click, and runs a row picked inside it", async () => {
+    const calls: string[] = [];
+    let children: ContextMenuRow[] | null = null;
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HOST_DRAWN_HANDSHAKE,
+      extraRows: () => statusRows(calls, () => children),
+    });
+    rightClick(document.getElementById("para") as Element);
+    // A submenu that changes after the right-click changes neither what the app shows nor what a pick runs.
+    children = [{ kind: "action", key: "status-later", label: "Later", onSelect: () => calls.push("later") }];
+    const page = hostBridge().sections()!.page;
+    expect(page).toEqual([
+      {
+        kind: "submenu",
+        label: "Status",
+        tooltip: null,
+        symbol: "flag",
+        items: [
+          { kind: "check", key: "status-open", label: "Open", isChecked: true, tooltip: null, symbol: null },
+          { kind: "divider" },
+          { kind: "action", key: "status-close", label: "Close", isDisabled: false, tooltip: null, symbol: null },
+        ],
+      },
+      { kind: "check", key: "pinned", label: "Pinned", isChecked: false, tooltip: null, symbol: null },
+      { kind: "action", key: "delete", label: "Delete", isDisabled: false, tooltip: null, symbol: null },
+    ]);
+    await hostBridge().select("status-close");
+    await hostBridge().select("status-open");
+    await hostBridge().select("pinned");
+    await hostBridge().select("status-later");
+    expect(calls).toEqual(["close", "open", "pinned"]);
   });
 
   it("runs the row the desktop app picks only once the page has focus, so the clipboard takes the copy", async () => {
@@ -334,5 +399,102 @@ describe("installElementContextMenu", () => {
     noop();
     expect(document.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)).toBe(true);
     document.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
+  });
+});
+
+describe("the framework-free renderer", () => {
+  function installWithStatusRows(calls: string[]): void {
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      extraRows: () => statusRows(calls),
+    });
+    rightClick(document.getElementById("para") as Element);
+  }
+
+  it("opens a submenu once the pointer rests on its row, and a pick inside it runs and closes both cards", () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    expect(row("status").getAttribute("aria-haspopup")).toBe("menu");
+    row("status").dispatchEvent(new MouseEvent("mouseenter"));
+    expect(submenuCard()).toBeNull();
+    vi.advanceTimersByTime(150);
+    expect(submenuCard()).not.toBeNull();
+    expect(row("status-open").getAttribute("aria-checked")).toBe("true");
+    row("status-close").click();
+    expect(calls).toEqual(["close"]);
+    expect(card()).toBeNull();
+    expect(submenuCard()).toBeNull();
+  });
+
+  it("opens a submenu at once on a click, and a press inside it keeps the menu up", () => {
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    row("status").click();
+    expect(submenuCard()).not.toBeNull();
+    submenuCard()!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(card()).not.toBeNull();
+    row("status-open").click();
+    expect(calls).toEqual(["open"]);
+    expect(card()).toBeNull();
+  });
+
+  it("closes a submenu once the pointer has sat on another row past the grace, unless it reaches the submenu", () => {
+    vi.useFakeTimers();
+    installWithStatusRows([]);
+    row("status").click();
+    row("pinned").dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(100);
+    submenuCard()!.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(1000);
+    expect(submenuCard()).not.toBeNull();
+    row("pinned").dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(1000);
+    expect(submenuCard()).toBeNull();
+    expect(card()).not.toBeNull();
+  });
+
+  it("opens a submenu after the menu's right edge, or before its left edge where the right would leave the viewport", () => {
+    const boxes = new Map<string, DOMRect>([
+      ["menu-right", new DOMRect(100, 100, 200, 120)],
+      ["menu-left", new DOMRect(820, 100, 200, 120)],
+    ]);
+    let menuBox = boxes.get("menu-right")!;
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(180);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(90);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute(CONTEXT_MENU_CARD_ATTR)) return menuBox;
+      return new DOMRect(menuBox.left, 140, 200, 32);
+    });
+    Object.defineProperty(window, "innerWidth", { value: 1024, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 768, configurable: true });
+    installWithStatusRows([]);
+    row("status").click();
+    expect(submenuCard()!.style.left).toBe("296px");
+    expect(submenuCard()!.style.top).toBe("136px");
+    menuBox = boxes.get("menu-left")!;
+    rightClick(document.getElementById("para") as Element);
+    row("status").click();
+    expect(submenuCard()!.style.left).toBe("644px");
+  });
+
+  it("toggles a check row and closes, and draws a danger row in red", () => {
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    expect(row("pinned").getAttribute("role")).toBe("menuitemcheckbox");
+    expect(row("pinned").getAttribute("aria-checked")).toBe("false");
+    expect(row("delete").style.color).toBe("rgb(198, 40, 40)");
+    row("pinned").click();
+    expect(calls).toEqual(["pinned"]);
+    expect(card()).toBeNull();
+  });
+
+  it("takes an open submenu down with the menu on Escape", () => {
+    installWithStatusRows([]);
+    row("status").click();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(card()).toBeNull();
+    expect(submenuCard()).toBeNull();
   });
 });

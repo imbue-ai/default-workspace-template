@@ -4,11 +4,13 @@
  * Paste, Select All, the link rows, the image row) and the reference rows that hand the
  * element to a chat (Copy reference, Explain, Modify).
  *
- * A row here is structurally an ``ActionRow`` or a ``DividerRow`` of the shared Menu component,
- * so a Mithril page passes the rows straight to ``createMenu`` and the framework-free renderer
- * of ``context_menu.ts`` draws the same objects. This module imports no framework.
+ * A row here is structurally a row of the shared Menu component (an action, a check row, a
+ * divider, or a submenu of those), so a Mithril page passes the rows straight to ``createMenu``
+ * and the framework-free renderer of ``context_menu.ts`` draws the same objects. This module
+ * imports no framework: its one import from the Menu is of types alone.
  */
 
+import type { MenuRowIcon, MenuRowTone } from "./components/menu";
 import {
   contentEditableRegionOf,
   describeElement,
@@ -33,14 +35,45 @@ export interface ContextMenuActionRow {
   /** The SF Symbol (``doc.on.doc``) the desktop app's native menu shows beside the row on macOS; a menu the page
    *  draws itself ignores it. */
   symbol?: string;
+  /** How the shared Menu and the framework-free renderer style the row; the native menu has no tones. */
+  tone?: MenuRowTone;
+  /** The shared Menu's glyph for the row; the native menu shows ``symbol`` instead. */
+  icon?: MenuRowIcon;
   onSelect: () => void;
+}
+
+/** A row with a check mark that a pick toggles. Mirrors the shared Menu's ``CheckRow``; the native menu, unlike
+ *  the shared one, closes on the toggle. */
+export interface ContextMenuCheckRow {
+  kind: "check";
+  key: string;
+  label: string;
+  isChecked: boolean;
+  tooltip?: string;
+  symbol?: string;
+  onToggle: () => void;
 }
 
 export interface ContextMenuDividerRow {
   kind: "divider";
 }
 
-export type ContextMenuRow = ContextMenuActionRow | ContextMenuDividerRow;
+/** What a submenu may hold: every row but another submenu. */
+export type ContextMenuSubmenuChildRow = ContextMenuActionRow | ContextMenuCheckRow | ContextMenuDividerRow;
+
+/** A row that opens a submenu of rows, one level deep. Mirrors the shared Menu's ``SubmenuRow`` with ``rows``,
+ *  which ``rows`` is read once per right-click. */
+export interface ContextMenuSubmenuRow {
+  kind: "submenu";
+  key: string;
+  label: string;
+  tooltip?: string;
+  symbol?: string;
+  rows: () => readonly ContextMenuSubmenuChildRow[];
+}
+
+/** A row of the element menu: what both the desktop app's native menu and a menu the page draws can show. */
+export type ContextMenuRow = ContextMenuSubmenuChildRow | ContextMenuSubmenuRow;
 
 /** What a right-click landed on, captured when it happened. */
 export interface ContextMenuTarget {
