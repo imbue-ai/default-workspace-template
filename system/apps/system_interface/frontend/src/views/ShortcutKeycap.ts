@@ -15,7 +15,7 @@ export interface ShortcutKeycapAttrs {
 const KEYCAP_CLASS =
   "shortcut-keycap inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-default " +
   "bg-surface px-1.5 font-sans text-(length:--font-size-row) leading-none tracking-wide text-primary " +
-  "shadow-[inset_0_-1px_0_var(--c-border)]";
+  "shadow-(--desk-shortcut-keycap-shadow)";
 
 export function ShortcutKeycap(): m.Component<ShortcutKeycapAttrs> {
   return {
