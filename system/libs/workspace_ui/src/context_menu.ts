@@ -171,12 +171,6 @@ function hostMenuSnapshotOf(sections: HostMenuSections): HostMenuSnapshot {
   };
 }
 
-/** Run a picked row: an action's ``onSelect``, a check row's ``onToggle``; a disabled action runs nothing. */
-function runRow(row: PickableRow): void {
-  if (row.kind === "check") row.onToggle();
-  else if (row.isDisabled !== true) row.onSelect();
-}
-
 /** Resolves once the page has focus, asking for it, or after the wait. A row the desktop app runs arrives while
  *  the window or the frame may be unfocused (a right-click focuses neither), and the clipboard refuses a page
  *  without focus. */
@@ -202,7 +196,8 @@ function hostMenuBridgeOf(currentSnapshot: () => HostMenuSnapshot | null, ownerD
       const row = currentSnapshot()?.rowsByKey.get(key);
       if (row === undefined || (row.kind === "action" && row.isDisabled === true)) return;
       await whenFocused(ownerDocument);
-      runRow(row);
+      if (row.kind === "check") row.onToggle();
+      else row.onSelect();
     },
   };
 }
