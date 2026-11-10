@@ -268,15 +268,17 @@ function railRowOf(context: RowMenuContext, element: Element): ChatRow | null {
   return context.rows.find((row) => row.chatId === chatId) ?? null;
 }
 
-/** The root's element menu over the rail (``installElementContextMenu``'s ``extraRows`` and ``open``): a row's verbs
- *  lead its menu. The desktop app's native menu takes them as the page's rows; the menu the root draws is the rail's
- *  own, which reads them afresh as it draws, and a right-click off the rows goes to ``openElsewhere``. */
+/** The root's element menu over the rail (``installElementContextMenu``'s ``isDrawnByHost``, ``extraRows`` and
+ *  ``open``): a row's verbs lead its menu. The desktop app's native menu takes them as the page's rows; the menu the
+ *  root draws is the rail's own, which reads them afresh as it draws, and a right-click off the rows goes to
+ *  ``openElsewhere``. */
 export function railContextMenuRoutes(
   context: () => RowMenuContext,
   isDrawnByHost: () => boolean,
   openElsewhere: (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void,
-): Required<Pick<ContextMenuOptions, "extraRows" | "open">> {
+): Required<Pick<ContextMenuOptions, "isDrawnByHost" | "extraRows" | "open">> {
   return {
+    isDrawnByHost,
     extraRows: (target) => {
       if (!isDrawnByHost()) return [];
       const current = context();

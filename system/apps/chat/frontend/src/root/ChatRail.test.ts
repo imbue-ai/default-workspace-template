@@ -249,7 +249,6 @@ describe("ChatRail right-click", () => {
       draft: () => undefined,
       isDraftAvailable: () => true,
       openLink: () => undefined,
-      isDrawnByHost: () => isDrawnByHost,
       redraw: () => m.redraw(),
       ...railContextMenuRoutes(
         () => attrs,
