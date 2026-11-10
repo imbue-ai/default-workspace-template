@@ -1,5 +1,5 @@
 // The What Studio knows about me page: reads /api/profile and draws each fact with its source, date and Delete,
-// the "Forget all of this" control with its confirm, the empty state, and the raw files. Everything is drawn with
+// the box to add a fact the user tells it, the "Forget all of this" control with its confirm, the empty state, and the raw files. Everything is drawn with
 // textContent, never as markup, since the facts come from web pages. It talks only to this app's own routes.
 
 const HTTP_CONFLICT = 409;
@@ -16,6 +16,9 @@ const elements = {
   rawFiles: document.getElementById("raw-files"),
   rawProfile: document.getElementById("raw-profile"),
   rawSources: document.getElementById("raw-sources"),
+  addFact: document.getElementById("add-fact"),
+  addFactText: document.getElementById("add-fact-text"),
+  addFactSubmit: document.getElementById("add-fact-submit"),
 };
 
 function showNotice(text) {
@@ -108,6 +111,7 @@ async function load() {
   render(body);
 }
 
+// Whether the change went through; the page then shows the profile the server answered.
 async function post(path, payload, control) {
   control.disabled = true;
   try {
@@ -119,16 +123,18 @@ async function post(path, payload, control) {
     if (status === HTTP_CONFLICT) {
       showNotice(body.detail);
       await load();
-      return;
+      return false;
     }
     if (!ok) {
       showNotice(body.detail ?? "That did not work; nothing was changed.");
-      return;
+      return false;
     }
     showNotice("");
     render(body);
+    return true;
   } catch {
     showNotice("That did not work; nothing was changed.");
+    return false;
   } finally {
     control.disabled = false;
   }
@@ -149,6 +155,19 @@ function closeForgetConfirm() {
   elements.forgetAll.hidden = false;
 }
 
+async function addFact(event) {
+  event.preventDefault();
+  const text = elements.addFactText.value.trim();
+  if (text === "") {
+    elements.addFactText.focus();
+    return;
+  }
+  if (await post("/api/facts/add", { text }, elements.addFactSubmit)) {
+    elements.addFactText.value = "";
+  }
+}
+
+elements.addFact.addEventListener("submit", addFact);
 elements.forgetAll.addEventListener("click", openForgetConfirm);
 elements.forgetConfirmCancel.addEventListener("click", closeForgetConfirm);
 elements.forgetConfirmYes.addEventListener("click", () => post("/api/forget", {}, elements.forgetConfirmYes));

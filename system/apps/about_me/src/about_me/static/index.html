@@ -14,7 +14,8 @@
       <header>
         <h1>What Studio knows about me</h1>
         <p class="explanation">
-          What I've remembered about you from the web lookup you asked for. Delete anything you don't want me to keep.
+          What I remember about you, from what you've told me and the web lookup you asked for. Add anything you'd like
+          me to know, and delete anything you don't want me to keep.
         </p>
       </header>
 
@@ -25,7 +26,7 @@
         <div id="forget-controls" class="forget-controls">
           <button type="button" id="forget-all">Forget all of this</button>
           <span id="forget-confirm" class="forget-confirm" hidden>
-            <span>Forget everything from the lookup?</span>
+            <span>Forget everything I remember about you?</span>
             <button type="button" id="forget-confirm-yes" data-variant="destructive">Yes, forget it all</button>
             <button type="button" id="forget-confirm-cancel" data-variant="ghost">Cancel</button>
           </span>
@@ -33,8 +34,23 @@
       </section>
 
       <p id="empty-state" class="empty-state" hidden>
-        I don't know anything about you from a lookup yet. Ask me for ideas in chat and I can offer one.
+        I don't remember anything about you yet. Add something below, or ask me for ideas in chat and I can offer to
+        look you up.
       </p>
+
+      <form id="add-fact" class="add-fact">
+        <label for="add-fact-text">Add something about yourself</label>
+        <div class="add-fact-row">
+          <input
+            id="add-fact-text"
+            type="text"
+            maxlength="500"
+            autocomplete="off"
+            placeholder="For example: I teach recitations for an algorithms class"
+          />
+          <button type="submit" id="add-fact-submit">Add</button>
+        </div>
+      </form>
 
       <details id="raw-files" class="raw-files" hidden>
         <summary>View raw file</summary>

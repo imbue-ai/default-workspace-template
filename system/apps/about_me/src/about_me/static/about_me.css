@@ -94,6 +94,27 @@
     display: none;
   }
 
+  .add-fact {
+    margin-top: 24px;
+  }
+
+  .add-fact label {
+    display: block;
+    font-size: var(--font-size-row);
+    color: var(--c-text-secondary);
+    margin: 0 0 4px;
+  }
+
+  .add-fact-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .add-fact-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
   .empty-state {
     color: var(--c-text-secondary);
     padding: 24px 0;

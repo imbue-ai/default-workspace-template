@@ -1,12 +1,16 @@
+import datetime
 import json
 import threading
 from pathlib import Path
 
 import pytest
 
+from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
 from about_me.profile import split_lines
+from about_me.store import MAX_FACT_CHARS
 from about_me.store import MEMORY_INDEX_PATH
+from about_me.store import NEW_INDEX_LINE
 from about_me.store import PROFILE_PATH
 from about_me.store import ProfileStore
 from about_me.store import SOURCES_PATH
@@ -227,3 +231,74 @@ def test_concurrent_deletes_are_serialized_and_never_delete_the_wrong_line(works
     assert "Writes a newsletter about type" not in remaining
     assert ("Something written by hand, with no link" in remaining) == (len(refusals) == 1)
     assert len(remaining) == 3 + len(refusals)
+
+
+_ADDED_ON = datetime.date(2026, 11, 10)
+
+
+def _store_on(root: Path) -> ProfileStore:
+    return ProfileStore(root, today=lambda: _ADDED_ON)
+
+
+def test_adding_a_fact_puts_one_told_line_after_the_last_fact(workspace: Path) -> None:
+    profile = _store_on(workspace).add_fact("  I teach   recitations\nfor algorithms  ")
+
+    line = b"- I teach recitations for algorithms (you told me) <!-- found 2026-11-10 -->\n"
+    lines = split_lines(SAMPLE_PROFILE)
+    last_fact = max(index for index, raw in enumerate(lines) if raw.startswith(b"- Something written by hand"))
+    assert (workspace / PROFILE_PATH).read_bytes() == b"".join(
+        lines[: last_fact + 1] + [line] + lines[last_fact + 1 :]
+    )
+    added = profile.facts[-1]
+    assert (added.text, added.is_told_by_user, added.found_on, added.source_url) == (
+        "I teach recitations for algorithms",
+        True,
+        "2026-11-10",
+        None,
+    )
+    assert (workspace / MEMORY_INDEX_PATH).read_bytes() == SAMPLE_INDEX
+    assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES
+
+
+def test_adding_a_fact_with_nothing_remembered_creates_the_profile_its_index_line_and_its_source(
+    empty_workspace: Path,
+) -> None:
+    profile = _store_on(empty_workspace).add_fact("Is learning Japanese")
+
+    assert [fact.text for fact in profile.facts] == ["Is learning Japanese"]
+    assert profile.facts[0].is_told_by_user
+    assert (empty_workspace / PROFILE_PATH).read_bytes().startswith(b"---\nname: user-public-profile\n")
+    assert (empty_workspace / MEMORY_INDEX_PATH).read_bytes() == NEW_INDEX_LINE
+    assert json.loads((empty_workspace / SOURCES_PATH).read_bytes()) == [
+        {"url": None, "title": "What you told me", "fetched_at": "2026-11-10", "origin": "user"}
+    ]
+
+
+def test_adding_a_fact_appends_the_index_line_to_an_index_without_one(empty_workspace: Path) -> None:
+    write_workspace_file(empty_workspace, MEMORY_INDEX_PATH, b"- [Projects](projects.md) -- what the user builds")
+
+    _store_on(empty_workspace).add_fact("Is learning Japanese")
+
+    assert (empty_workspace / MEMORY_INDEX_PATH).read_bytes() == (
+        b"- [Projects](projects.md) -- what the user builds\n" + NEW_INDEX_LINE
+    )
+
+
+def test_an_added_fact_is_deleted_like_any_other_and_takes_its_source_with_it(empty_workspace: Path) -> None:
+    store = _store_on(empty_workspace)
+    store.add_fact("Is learning Japanese")
+    store.add_fact("Runs on weekends")
+
+    profile = store.delete_fact(_fact_id_by_text(store, "Runs on weekends"))
+
+    assert [fact.text for fact in profile.facts] == ["Is learning Japanese"]
+    assert _source_titles(empty_workspace) == ["What you told me"]
+
+
+@pytest.mark.parametrize("text", ["", "   \n ", "x" * (MAX_FACT_CHARS + 1), "a <!-- note", "ends -->"])
+def test_a_fact_that_cannot_be_one_line_is_refused_and_changes_nothing(workspace: Path, text: str) -> None:
+    with pytest.raises(InvalidFactError):
+        _store_on(workspace).add_fact(text)
+
+    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
+    assert (workspace / SOURCES_PATH).read_bytes() == SAMPLE_SOURCES

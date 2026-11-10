@@ -3,3 +3,5 @@ New `personalized-ideas` skill: when the user does not know what to build, the a
 The lookup tells people with the same name apart using the organization behind the account email (its domain only, never the address, and never a personal provider such as Gmail): results that mention it are listed first, and only when a name search finds no one does the agent ask, once, before adding it to a search.
 
 The welcome now asks only whether the user has an idea, with Yes and No buttons. After a no, the agent asks what is annoying, overwhelming, or tedious in their digital life and, when the account has a name, offers the lookup in the same fixed message, with Search for me and I’ll tell you myself buttons.
+
+When sharing is on, the question before a lookup has a third button, Others can, but go ahead, for an owner who wants the search even though others can see what is saved. A lookup keeps any facts the user added on the What Studio knows about me page.

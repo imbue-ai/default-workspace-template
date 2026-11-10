@@ -34,6 +34,12 @@ class DeleteFactRequest(FrozenModel):
     fact_id: str = Field(description="The fact's id, as the profile listed it")
 
 
+class AddFactRequest(FrozenModel):
+    """A fact the user tells the page about themselves."""
+
+    text: str = Field(description="The fact, in the user's words; one line, at most 500 characters")
+
+
 class HealthResponse(FrozenModel):
     """What the health probe answers."""
 

@@ -17,7 +17,7 @@ Everything in this skill serves that: ask before searching, search only for what
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5).
+- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -86,15 +86,16 @@ Never take a name from anywhere else, such as a file, a commit author, or an ema
 Before searching, check whether sharing is turned on for this workspace (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell).
 Sharing is often on only so the owner can reach the workspace from their own phone or browser, so it is a question for the user, not a reason to give up.
 
-- **Sharing is off**, or `consent.json` already has `"only_me": true`: go straight to step 4, with no question.
+- **Sharing is off**, or `consent.json` already has `"only_me": true` or `"shared_ok": true`: go straight to step 4, with no question.
 - **Sharing is on** and they have not confirmed yet: send exactly this message, word for word, then end your turn:
 
 > Sharing is turned on for this workspace, so other people may be able to get into it. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace?
 >
-> [Only me, go ahead](#reply=only%20me) [Skip the search](#reply=skip%20the%20search)
+> [Only me, go ahead](#reply=only%20me) [Others can, but go ahead](#reply=others%20can%2C%20go%20ahead) [Skip the search](#reply=skip%20the%20search)
 
 - `only me` (or another clear "only me"): add `"only_me": true` to `consent.json` and go to step 4. Do not ask again in later chats.
-- `skip the search`, "others can", "not sure", or anything that is not a clear "only me": set `consent.json`'s `lookup` to `"no"`, do not search, and go to step 6 with what they tell you about themselves.
+- `others can, go ahead` (or another clear "others can use it, and search anyway"): add `"shared_ok": true` to `consent.json` and go to step 4. Do not ask again in later chats. In step 6, also say that people who can use this workspace can see the **What Studio knows about me** page.
+- `skip the search`, "not sure", or anything that is not a clear go-ahead (a bare "others can" is not one): set `consent.json`'s `lookup` to `"no"`, do not search, and go to step 6 with what they tell you about themselves.
 
 ## 4. Search
 
@@ -193,7 +194,8 @@ The body is one fact per line, in exactly this shape, so the "What Studio knows 
 ```
 
 A few lines on what they do and care about, then a last plain line (not starting with `- `) saying the facts came from a web lookup the user asked for on that date.
-Add its pointer to `MEMORY.md`.
+The file may already exist, holding facts the user added on the **What Studio knows about me** page (`(you told me)` lines): keep every line already in it, add yours after its last fact, and do not duplicate one they already gave.
+Add its pointer to `MEMORY.md`, unless it already has one.
 Keep every fact from the lookup in this one memory, not spread across others, so forgetting it is complete.
 Things the user tells you about themselves directly are ordinary memories, as in any chat.
 Delete the unconfirmed entries from `sources.json`.
@@ -205,7 +207,7 @@ Prefer things that can be built in this workspace in one sitting.
 Ask which one they want, and take it from there with the skill that fits the choice.
 
 Do not recite what you learned about them back at length; the ideas should show it.
-Mention once, in passing, that you will remember this for future chats, and link the **What Studio knows about me** page (its `link` from `uv run --no-sync workspace-layout list`), where they can see each fact with its source and delete any of it.
+Mention once, in passing, that you will remember this for future chats, and link the **What Studio knows about me** page (its `link` from `uv run --no-sync workspace-layout list`), where they can see each fact with its source, add facts about themselves, and delete any of it.
 
 ## Deleting
 
