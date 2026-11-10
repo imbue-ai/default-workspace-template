@@ -89,54 +89,33 @@ Never take a name from anywhere else, such as a file, a commit author, or an ema
 
 ## 4. Search
 
-Search through [treg](https://treg.to/), a service that passes each request on to one of many public web search engines and bills the user's treg account per call.
-Use only these two treg tools, and nothing else from its catalog:
+Search with your own web search tool, and read promising result pages with your web fetch tool.
+That is the whole lookup: there is nothing for the user to connect, sign up for, or pay.
 
-- `treg.web.search`: search the open web. `POST https://treg.to/call/treg.web.search` with `{"q": "<query>", "limit": 10}`; the rows are in `output.results`.
-- `treg.web.extract`: read one public page from the results. `POST https://treg.to/call/treg.web.extract` with `{"url": "<url>"}`; the content is in `output.pages`.
-
-Never call treg's people or company enrichment tools (Hunter, Lusha, People Data Labs, Apollo, LeadMagic, Diffbot's knowledge graph, and the like), even when one would answer faster; see "Why only web search" below.
-
-**Connecting treg.**
-The first time, ask the user to connect their treg account.
-The request goes in a tool call of its own; then end your turn:
-
-```bash
-latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service",
-       "payload": {"domain": "treg.to", "scheme": "https", "header": "X-Treg-Token: {token}",
-                   "credential_instructions": "Sign in at treg.to (new accounts start with $1 of free calls) and copy your API token. It starts with trg_live_."},
-       "rationale": "To look you up on the public web, as you asked, I search through your treg account. Each search costs a fraction of a cent."}'
-```
-
-When the user declines, has no treg account and does not want one, or the request cannot be filed, do not search with anything else: say so, and go to step 6 with what they tell you about themselves.
-
-**Searching.**
 Search for the name alone first; add a detail (a city, an employer, a field) only when the user gave you one.
-Keep a lookup to at most 3 searches and 5 page reads, and cap each call's cost:
+Keep a lookup to at most 3 searches and 5 page reads.
 
-```bash
-latchkey curl -XPOST https://treg.to/call/treg.web.search \
-  -H 'Content-Type: application/json' -H 'X-Treg-Route-Max-Cost: 0.05' \
-  -d '{"q": "<the name>", "limit": 10}'
-```
+**Sign-ins.** Some results, LinkedIn profiles most often, show only part of a page until someone signs in.
+Use such a result only as far as its search result (title and snippet) shows, and do not try to read the page itself: it would answer a sign-in wall, not the profile.
+Never sign in to anything, and never use the user's own connected accounts (their LinkedIn included) to see more.
+If that profile matters, say so when you show the results in step 5, and offer the user's own way to share it: paste the parts of it they are happy to share, or upload the PDF LinkedIn can make of their own profile (**Save to PDF**, in the menu on their profile page).
+What they share themselves goes in `sources.json` as coming from them, with no URL needed.
 
-Read only pages that are public: do not sign in to anything, do not use the user's other connected accounts, and do not look for contact details, addresses, family, finances, or health, even when a page offers them.
+Read only pages that are public: do not look for contact details, addresses, family, finances, or health, even when a page offers them.
 
-Save every result and page you use to `sources.json` as you go, with its URL, the date fetched, and the search engine that answered (treg names it in the `X-Treg-Served-By` response header).
+Save every result and page you use to `sources.json` as you go, with its URL and the date fetched.
 
 Most names belong to many people.
 Group what you found into the distinct people it seems to describe.
 Keep nothing yet.
 
-### Why only web search
+### Why only a web search
 
-treg also sells access to people and company enrichment providers: sales-lead databases that return work emails, phone numbers, social profiles and employment history for a name.
+Services exist that look a person up in people-search or sales-lead databases (Lusha, People Data Labs, Apollo, Hunter and the like, some of them reachable through tool brokers such as treg): they return work emails, phone numbers, social profiles and employment history for a name.
 This skill does not use them, on purpose:
 
 - **It would seem creepy.** The offer promises a look at public web pages. Being shown your own phone number or email history from a database you never gave it to is the opposite of what the user agreed to, and the reason the offer is worded as it is.
-- **It is often wrong.** treg says a found email or phone is "the provider's best match, not a confirmed one", so it attaches another person's details to the user as easily as their own.
+- **It is often wrong.** Their matches are guesses (treg calls a found email or phone "the provider's best match, not a confirmed one"), so they attach another person's details to the user as easily as their own.
 - **It is data you must not collect.** Contact details are excluded above, and gathering them about a person from brokers carries notice duties (for example GDPR Article 14) that a public search with the user watching does not.
 
 ## 5. Confirm
