@@ -90,8 +90,8 @@ Size is a range, and these are its two ends:
   confirm and ship it on its own rather than bundling it with unrelated
   changes.
 
-  When building it will take long stretches of reasoning, hand the build to a
-  background worker once the shape is settled (see "Hand large work to a
+  When building the change will take long stretches of reasoning, hand the
+  build to a background worker once the shape is settled (see "Hand large work to a
   background worker" below).
 
 Many requests fall somewhere in between, for example a new control on an
