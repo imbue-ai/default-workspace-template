@@ -97,25 +97,25 @@ is substantial or you can't tell. Either way, the mechanics of surfacing the
 change to the user are the same live loop.
 
 Separately from how much the user sees, ask how long the change will take to
-build: one of any size that needs long stretches of reasoning goes to a
-background worker (next section).
+build: one of any size that will take more than a couple of minutes goes to
+a background worker (next section).
 
 ## Hand large work to a background worker
 
-Keep the main chat free for the user. A request that needs long stretches of
-heavy reasoning goes to a background worker through the `launch-task` skill:
-a new feature that spans several files, a redesign of a page or view, a change
-applied across many records or many parts of the app, or anything else you
-expect to take more than a few minutes of building. Hand off each such
-request on its own, never every request at once: build the others yourself
-through the live loop while the workers run, so they reach the user without
-waiting on the large ones. You stay available to answer the
+Keep the main chat free for the user. A request you expect to take more than
+a couple of minutes of building goes to a background worker through the
+`launch-task` skill, whatever its size on screen: for example a feature that
+spans several files, or a change applied across many records or many parts of
+the app. Give each such request its own worker, never one worker for all the
+requests: build the rest yourself through the live loop while the workers run,
+so they reach the user without waiting on the large ones. You stay available to answer the
 user's next messages and bring each worker's result in when it lands.
 
 To hand work off:
 
 1. If the change needs its shape confirmed (a larger-scope change above),
-   settle the shape with the user first, then hand off the build.
+   settle the shape with the user first, then hand off the build. Keep
+   building the other requests while the user looks at the mock.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the request in the user's words, the files and
    decisions you already know about, and what done looks like. It asks the
@@ -126,11 +126,11 @@ To hand work off:
    off again. Hardening still happens at turn-end, as described below.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
-4. While the worker runs, keep handling new messages. Do a small request on a
-   part the worker is not changing yourself, through the live loop below.
-   Forward a request that changes or adds to the worker's part to the worker
-   with `create_worker.py reply`, and leave those files to it, so two agents
-   never edit the same code.
+4. While workers run, keep handling new messages. Build a request that no
+   worker is building yourself, through the live loop below, unless it needs
+   its own worker. Forward a request that changes or adds to a worker's part
+   to that worker with `create_worker.py reply`, and leave those files to it,
+   so two agents never edit the same code.
 5. When a milestone or the final report arrives, merge it as
    `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
    through steps 2 and 3 of the live loop, and tell the user what is now there.
