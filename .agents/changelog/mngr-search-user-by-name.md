@@ -7,3 +7,5 @@ The welcome now asks only whether the user has an idea, with Yes and No buttons.
 When sharing is on, the question before a lookup has a third button, Others can, but go ahead, for an owner who wants the search even though others can see what is saved. 
 
 What the user tells the agent about themselves is saved as ordinary memories, which the What Studio knows about me page shows and lets them edit, and the agent says so, naming and linking the page, every time it saves one. Forgetting what the lookup found keeps those memories.
+
+The lookup asks about sharing only when the workspace is shared with other people, not when sharing is merely on for the owner's own phone.
