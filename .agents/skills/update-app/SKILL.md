@@ -108,10 +108,13 @@ Keep the main chat free for the user. A request you expect to take more than
 a couple of minutes of building goes to a background worker through the
 `launch-task` skill, whatever its size on screen: for example a feature that
 spans several files, or a change applied across many records or many parts of
-the app. Give each such request its own worker, never one worker for all the
-requests: build the rest yourself through the live loop while the workers run,
-so they reach the user without waiting on the large ones. You stay available to answer the
-user's next messages and bring each worker's result in when it lands.
+the app. Use one worker for all such requests: hand it the first, and send
+each later one to the same worker with `create_worker.py reply`. The worker
+may combine its requests and build them together, in whatever order works,
+without finishing one before starting the next. Build the rest yourself
+through the live loop while it runs, so they reach the user without waiting
+on the large ones. You stay available to answer the user's next messages and
+bring the worker's result in when it lands.
 
 While you build something yourself, the user's next messages wait until you
 reach a break, so keep what you build yourself to work you can finish in a
@@ -128,7 +131,8 @@ To hand work off:
    decisions you already know about, and what done looks like. It asks the
    worker to build the change to a usable state, verify it against its own
    instance (never the live app), commit, and send a milestone report each
-   time a usable part is committed. It also tells the worker not to take the
+   time a usable part is committed, and says it may build its requests
+   together in any order. It also tells the worker not to take the
    service lease, touch the live app or the user's windows, harden, or hand
    off again. Hardening still happens at turn-end, as described below.
    Handing work to a worker does not change its scope. Decide the scope
@@ -143,11 +147,12 @@ To hand work off:
    data survives the change still happen before it goes live.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
-4. While workers run, keep handling new messages. Build a request that no
-   worker is building yourself, through the live loop below, unless it needs
-   its own worker. Forward a request that changes or adds to a worker's part
-   to that worker with `create_worker.py reply`, and leave those files to it,
-   so two agents never edit the same code.
+4. While the worker runs, keep handling new messages. Build a request
+   yourself, through the live loop below, unless it needs more than a couple
+   of minutes of building; send that one to the worker with
+   `create_worker.py reply`. Also forward a request that changes or adds to
+   the worker's part, and leave those files to it, so two agents never edit
+   the same code.
 5. When a milestone or the final report arrives, merge it as
    `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
    through steps 2 and 3 of the live loop, and tell the user what is now there.
