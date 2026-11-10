@@ -35,6 +35,7 @@ from pydantic import Field
 from pydantic import SecretStr
 from update_self_skill import update_agent_restarts
 from update_self_skill import update_runtime
+from update_self_skill.update_layout import APPS_REGISTRY_PATH
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -3140,7 +3141,7 @@ def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(
     seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
     switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
     workspace = tmp_path / "workspace"
-    registry = workspace / "data" / ".state" / "apps.toml"
+    registry = workspace / APPS_REGISTRY_PATH
     registry.parent.mkdir(parents=True)
     registry.write_text('[[apps]]\nname = "chat"\nurl = "http://chat.test"\n')
 
