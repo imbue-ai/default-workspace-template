@@ -7,3 +7,5 @@ New `suggest-apps` skill: when the user wants an app built but has no idea what,
 A workspace's first chat ends its first reply with a one-time offer to suggest apps from the user's Mac app data, filed as an `app-data` request with `origin: "first-chat-offer"` (installed apps and browser history, plus Notes, Reminders, and Calendar when Full Disk Access is on or may be asked for). It is skipped when the workspace already holds app-data grants or the message is not the owner's, waits for a calm reply after an urgent first message, and is recorded in `data/.skills/read-app-data/first_chat_offer.json` so no later chat repeats it.
 
 `read-app-data` says that while Full Disk Access is off, Imbue Studio stops the synchronized copies of the sources it protects, tells the agent with `SYNC_STOPPED`, and never restarts them on its own: a new request with `"sync": true` asks again.
+
+`read-app-data` says a workspace shared with anyone besides its owner is refused app data and Full Disk Access as `REFUSED_SHARED`, and the agent does not ask again until the owner stops sharing it.

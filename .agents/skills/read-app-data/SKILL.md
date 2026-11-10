@@ -65,7 +65,7 @@ Then wait for the automated system message with the user's answer.
 
 ## The answer
 
-The message names every source you asked for under `GRANTED` or `NOT_GRANTED`, and for each granted one, what you can now read. Two more lists appear only when they apply: `GRANTED_PENDING_RESTART` for sources granted while Imbue Studio's Full Disk Access is still off (their reads are refused until the user turns it on and restarts Imbue Studio; do not ask for them again), and `NOT_GRANTED_ASKING_TURNED_OFF` for sources that need Full Disk Access when the user has turned off requests for it (do not ask for them again):
+The message names every source you asked for under `GRANTED` or `NOT_GRANTED`, and for each granted one, what you can now read. A request from a workspace that is shared with anyone besides the owner is refused at once with `REFUSED_SHARED: <source ids>`: anyone it is shared with could see app data through its apps, so do not ask again unless the owner stops sharing it. Two more lists appear only when they apply: `GRANTED_PENDING_RESTART` for sources granted while Imbue Studio's Full Disk Access is still off (their reads are refused until the user turns it on and restarts Imbue Studio; do not ask for them again), and `NOT_GRANTED_ASKING_TURNED_OFF` for sources that need Full Disk Access when the user has turned off requests for it (do not ask for them again):
 
 ```
 Your app-data request on device host-abc was answered. GRANTED: installed-apps, browser-history; NOT_GRANTED: safari-history.
@@ -113,7 +113,7 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "full-disk-access", "payload": {}, "rationale": "To read your Notes, which macOS protects, Imbue Studio needs Full Disk Access."}'
 ```
 
-The answer says `ENABLED` (read again), `DECLINED` (do not ask again in this task), `ASKING_TURNED_OFF` (do not ask again at all), `REFUSED_SHARED_WITH_FULL_ACCESS` (this workspace is shared too widely to ask), or `NOT_APPLICABLE` (the computer is not a Mac). Turning it on can take a restart of Imbue Studio; until then the request stays open and nothing arrives, so carry on with whatever else the task needs. A 400 naming the `type` means this computer's Imbue Studio predates the request: tell the user to turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio, once.
+The answer says `ENABLED` (read again), `DECLINED` (do not ask again in this task), `ASKING_TURNED_OFF` (do not ask again at all), `REFUSED_SHARED` (this workspace is shared, so it cannot ask), or `NOT_APPLICABLE` (the computer is not a Mac). Turning it on can take a restart of Imbue Studio; until then the request stays open and nothing arrives, so carry on with whatever else the task needs. A 400 naming the `type` means this computer's Imbue Studio predates the request: tell the user to turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio, once.
 
 While Full Disk Access is off, Imbue Studio stops every synchronized copy of a source it protects (Reminders and Calendar, the only ones that sync), and tells you with `App data on device host-abc: SYNC_STOPPED: reminders. ...`. The copy stays in the workspace but no longer updates, and nothing restarts it when access comes back: stop relying on it being current, and to sync again ask in a new `app-data` request with `"sync": true` once a task needs it, or let the user switch it on in the Permissions tab.
 
@@ -122,7 +122,7 @@ While Full Disk Access is off, Imbue Studio stops every synchronized copy of a s
 A workspace's welcome ends by saying you can suggest apps that fit how the user uses their Mac. Follow up on that once per workspace, in its first chat:
 
 1. Check `data/.skills/read-app-data/first_chat_offer.json`. If it exists, the offer was made or skipped already: do nothing.
-2. Skip it, and record the skip, when the workspace already holds app-data grants (see "When to ask"), or when the first message carries a `[from: <name>]` prefix. (A workspace shared with full access cannot ask: Imbue Studio refuses its request as `REFUSED_SHARED_WITH_FULL_ACCESS`; record that as the skip.)
+2. Skip it, and record the skip, when the workspace already holds app-data grants (see "When to ask"), or when the first message carries a `[from: <name>]` prefix. (A shared workspace cannot ask: Imbue Studio refuses its request as `REFUSED_SHARED`; record that as the skip.)
 3. If the user's first message is urgent (an error, a `/assist`, something broken), wait: make the offer after your first calm reply in this chat instead.
 4. Answer the user's message as usual. Then end the same reply with one plain line, for example "I can also suggest apps that fit how you use your Mac: approve what I can look at, or skip it.", and in the same turn file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
    - `installed-apps` and `browser-history`, always;
