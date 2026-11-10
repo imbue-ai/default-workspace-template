@@ -99,10 +99,28 @@ def _expression_end(source: str, start: int) -> int:
             depth -= 1
         elif depth == 0 and char in ",;":
             return index
-        elif depth == 0 and char == "\n" and source[start:index].strip():
+        elif (
+            depth == 0
+            and char == "\n"
+            and source[start:index].strip()
+            and not _continues_past(source, start, index)
+        ):
             return index
         index += 1
     return index
+
+
+# What ends a line, or opens the next, of an expression that carries on across the newline: an arrow whose body
+# prettier moved down, or a condition wrapped over several lines.
+_CONTINUING_LINE_ENDS = ("=>", "&&", "||", "??", "?", ":", "=", "+")
+_CONTINUING_LINE_STARTS = ("?", ":", ".", "&&", "||", "??", "+")
+
+
+def _continues_past(source: str, start: int, newline: int) -> bool:
+    """Whether the expression from ``start`` carries on across the newline at ``newline``."""
+    if source[start:newline].rstrip().endswith(_CONTINUING_LINE_ENDS):
+        return True
+    return source[newline:].lstrip().startswith(_CONTINUING_LINE_STARTS)
 
 
 def _definition_of(source: str, name: str) -> str | None:
@@ -281,6 +299,22 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             '<div oncontextmenu="highlight()">y</div>\n'
         ),
         "app/view.tsx": "<li onContextMenu={(e) => { e.preventDefault(); show(e); }}>z</li>\n",
+        "app/wrapped.ts": (
+            'stage.addEventListener("contextmenu", (event) =>\n'
+            "  helper(event, () => event.preventDefault()),\n"
+            ");\n"
+            "m('li', {\n"
+            "  oncontextmenu:\n"
+            "    isOn &&\n"
+            "    hasShortcut\n"
+            "      ? (event) => {\n"
+            "          event.preventDefault();\n"
+            "        }\n"
+            "      : undefined,\n"
+            "});\n"
+            "element.oncontextmenu = select\n"
+            "cancel.onclick = (event) => event.preventDefault()\n"
+        ),
         "app/marked.ts": (
             "// The stage hands the right-click to the remote desktop.\n"
             "// own-context-menu: forwards -- the remote desktop takes the right-click\n"
@@ -312,6 +346,8 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
         ("app/listeners.js", 13, False),
         ("app/page.html", 1, False),
         ("app/view.tsx", 1, False),
+        ("app/wrapped.ts", 1, False),
+        ("app/wrapped.ts", 5, False),
         ("app/marked.ts", 3, True),
         ("app/marked.ts", 5, False),
         ("app/marked.ts", 7, False),
