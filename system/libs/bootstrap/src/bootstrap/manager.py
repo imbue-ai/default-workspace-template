@@ -80,8 +80,7 @@ UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
 # written straight into /etc/cron.d at every boot.
 ROUTINES_TICK_CRON_NAME = "routines"
 ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
-# The built-in apps are the root uv workspace's members under this directory with an app.toml; a
-# user's app is a standalone project, never a member.
+# Where the built-in apps live (``_built_in_app_manifests`` says which of its directories are built in).
 BUILT_IN_APPS_DIR = Path("system/apps")
 # The registry writer, stdlib-only, run with a bare python3 as every app's program line runs it.
 FORWARD_PORT_SCRIPT = Path("system/scripts/forward_port.py")
@@ -686,7 +685,8 @@ def _run_env_converge_fast_phase() -> None:
 
 def _built_in_app_manifests() -> list[Path]:
     """The ``app.toml`` of every built-in app: each root workspace member under ``system/apps``
-    that has one. An unreadable root ``pyproject.toml`` reads as no apps."""
+    that has one (a user's app is a standalone project, never a member). An unreadable root
+    ``pyproject.toml`` reads as no apps."""
     try:
         root_pyproject = tomllib.loads(
             Path("pyproject.toml").read_text(encoding="utf-8")
