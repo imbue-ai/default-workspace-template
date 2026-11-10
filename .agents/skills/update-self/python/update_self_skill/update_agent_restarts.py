@@ -45,8 +45,8 @@ SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
 SELF_RESTART_LOG_NAME = "helper.log"
 
 # Cross-layer contract with the chat app (its chat list's ``ChatStatus`` and ``ChatKind``, and its
-# interrupt route's ``InterruptAgentRequest`` and 409 answers); ``system/apps/chat``'s server tests
-# pin these five against it.
+# interrupt route's ``InterruptAgentRequest`` and 409 answers). A ``system/apps/chat`` server test
+# runs ``restart_idle_agents`` against the real app, so it fails when these drift from it.
 STOPPED_CHAT_STATUS = "stopped"
 ROOM_CHAT_KIND = "room"
 INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}

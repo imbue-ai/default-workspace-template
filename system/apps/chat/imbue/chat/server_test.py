@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +34,7 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from update_self_skill import update_agent_restarts
+from update_self_skill import update_runtime
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -54,6 +56,7 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
@@ -3095,52 +3098,65 @@ def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: Flask
     assert fake_watcher.clear_calls == [True]
 
 
-def test_the_restart_clients_ask_for_what_the_interrupt_route_takes_and_read_what_it_answers(
-    client: FlaskClient, app: Flask
-) -> None:
-    """update-self's agent restarts and ``message_chat.py --interrupt`` are standard-library only and
-    carry their own copies of the route's request fields and its 409 field; a rename here would
-    leave update-self restarting busy chats, or ``--interrupt`` dropping their queues, with no
-    failing test."""
-    assert InterruptAgentRequest.model_validate(update_agent_restarts.INTERRUPT_IF_IDLE_REQUEST).only_if_idle is True
+def test_message_chats_interrupt_asks_for_what_the_interrupt_route_takes() -> None:
+    """``message_chat.py --interrupt`` is standard-library only and carries its own copy of the route's
+    request; a rename here would leave it dropping the queue of every chat it restarts."""
     assert InterruptAgentRequest.model_validate(message_chat.INTERRUPT_REQUEST).keep_queue is True
-    agent_id = f"agent-{uuid4().hex}"
-    _register_agent(app, agent_id, "claude-agent", "RUNNING")
-    with patch("imbue.chat.server.run_local_command_modern_version") as mock_run:
-        refused = client.post(
-            f"/api/chats/{agent_id}/interrupt", json=dict(update_agent_restarts.INTERRUPT_IF_IDLE_REQUEST)
+
+
+class _TestClientHttp(update_runtime.HttpClient):
+    """update-self's HTTP client, answered by this app's test client instead of a socket."""
+
+    def __init__(self, client: FlaskClient) -> None:
+        self._client = client
+
+    def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.get(urlparse(url).path))
+
+    def post_json(self, url: str, body: Mapping[str, object], timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.post(urlparse(url).path, json=dict(body)))
+
+    @staticmethod
+    def _page_of(response: TestResponse) -> update_runtime.FetchedPage:
+        return update_runtime.FetchedPage(
+            status=response.status_code, body=response.get_data(as_text=True), headers={}
         )
-    assert refused.status_code == 409
-    assert refused.get_json()[update_agent_restarts.BUSY_WITH_FIELD] == "working"
-    mock_run.assert_not_called()
 
 
-def test_update_selfs_agent_restarts_read_a_stopped_chat_a_room_and_a_switching_one_as_this_app_answers(
-    tmp_path: Path,
-) -> None:
-    """update-self's agent restarts skip a chat the list calls stopped and a room, and name a chat
-    that refuses the restart mid-switch by the refusal's handoff field; all are its own copies of
-    this app's wire names, which a rename here would leave reading a stopped chat or a room as one
-    to restart."""
+def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(tmp_path: Path) -> None:
+    """update-self's restart pass, run against this app: it restarts the idle chat, leaves the busy ones and
+    the switching one running and says why, and skips its own chat, a stopped chat and a room.
+
+    The pass is standard-library only and reads this app's chat list and interrupt answers from its
+    own copies of their wire names, so this is what fails when the two drift apart."""
     app, _log_path = _recording_app(tmp_path)
-    client = app.test_client()
+    manager: AgentManager = state_of(app).agent_manager
+    own, idle, working, backgrounded, stopped, room = (f"agent-{uuid4().hex}" for _ in range(6))
+    _register_agent(app, own, "Chat-own", "WAITING")
+    _register_agent(app, idle, "Chat-idle", "WAITING")
+    _register_agent(app, working, "Chat-working", "RUNNING")
+    _register_agent(app, backgrounded, "Chat-backgrounded", BACKGROUND_LIFECYCLE_STATE)
+    _register_agent(app, stopped, "Chat-stopped", "STOPPED")
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
     switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
-    stopped = f"agent-{uuid4().hex}"
-    _register_agent(app, stopped, "Chat-2", "STOPPED")
-    room = f"agent-{uuid4().hex}"
-    seed_agent_state(state_of(app).agent_manager, room, name="Lounge", harness=HarnessType.ROOM)
+    workspace = tmp_path / "workspace"
+    registry = workspace / "data" / ".state" / "apps.toml"
+    registry.parent.mkdir(parents=True)
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://chat.test"\n')
 
-    listed = client.get("/api/chats").get_json()["chats"]
-    refused = client.post(
-        f"/api/chats/{switching}/interrupt", json=dict(update_agent_restarts.INTERRUPT_IF_IDLE_REQUEST)
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        report = update_agent_restarts.restart_idle_agents(workspace, own, set(), _TestClientHttp(app.test_client()))
+
+    assert [entry["chat_id"] for entry in report["restarted"]] == [idle]
+    assert sorted((entry["chat_id"], entry["busy_with"]) for entry in report["left_running"]) == sorted(
+        [
+            (working, "working"),
+            (backgrounded, "waiting on background work"),
+            (switching, "switching to another agent"),
+        ]
     )
-
-    assert [chat["status"] for chat in listed if chat["chat_id"] == stopped] == [
-        update_agent_restarts.STOPPED_CHAT_STATUS
-    ]
-    assert [chat["kind"] for chat in listed if chat["chat_id"] == room] == [update_agent_restarts.ROOM_CHAT_KIND]
-    assert refused.status_code == 409
-    assert update_agent_restarts.HANDOFF_PHASE_FIELD in refused.get_json()
+    assert report["failed"] == []
+    assert mock_run.call_count == 1
 
 
 @pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
