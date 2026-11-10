@@ -132,7 +132,11 @@ To hand work off:
    the brief: what to build, no more and no less, with the context the worker
    needs to build it (the user's words, how the app works now, decisions
    already made). Do not add targets you would not have built yourself;
-   writing out a detailed plan tends to add work nobody asked for.
+   writing out a detailed plan tends to add work nobody asked for. Ask the
+   worker to check the change the way you would in the chat, usually one real
+   run of the main path; failure cases, edge cases and regression checks
+   belong to the hardening pass at turn-end. Checks that the user's existing
+   data survives the change still happen before it goes live.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
 4. While workers run, keep handling new messages. Build a request that no
