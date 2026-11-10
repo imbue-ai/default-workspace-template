@@ -278,6 +278,11 @@ export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat abou
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 /** What a change refused while this window views somebody else's desktop gets (the multiplayer spec, section 8.3). */
 export const STOP_VIEWING_FIRST_NOTICE = "Stop viewing first";
+/** What "Stop viewing" says when it could not ask the shell where to go; pressing it again asks again. */
+export const STOP_VIEWING_UNANSWERED_NOTICE = "Couldn't leave this desktop: the workspace did not answer";
+/** What "Stop viewing" says when the viewer has no desktop of their own to go to (the workspace owner after
+ *  deleting all of theirs; a visitor is always seeded one). */
+export const STOP_VIEWING_NOWHERE_NOTICE = "Couldn't leave this desktop: you have no desktop of your own to go to";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
 export const TRAY_HOP_MS = 450;
@@ -1589,10 +1594,18 @@ export class DesktopStore {
   }
 
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
-   *  shell seeds for a visitor who has none left. */
+   *  shell seeds for a visitor who has none left. When none of those is somewhere else to go, the window stays and
+   *  a toast says why. */
   async stopViewing(): Promise<void> {
+    const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
-    if (target !== null) await this.switchDesktop(target);
+    if (target === null || target === viewedId) {
+      // A window that moved off while the shell was asked has left already: there is nothing to tell.
+      if (this.state.activeDesktopId !== viewedId) return;
+      this.toast(target === null ? STOP_VIEWING_UNANSWERED_NOTICE : STOP_VIEWING_NOWHERE_NOTICE);
+      return;
+    }
+    await this.switchDesktop(target);
   }
 
   isOverviewOpen(): boolean {

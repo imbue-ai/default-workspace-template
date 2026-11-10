@@ -39,11 +39,15 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 // whose manifest registers the type.
 const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
 // Workspace -> embedder: this page's endpoint is listening. Payload:
-// { opensLinks, opensCustomSchemeLinks } (see ReadyAnnouncement). The
+// { opensLinks, opensCustomSchemeLinks, reportsChatOnScreen } (see ReadyAnnouncement). The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.
 export const WORKSPACE_READY: "minds:workspace-ready" =
   "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
+// Workspace -> embedder (contract v15): this chat's transcript is drawn in a window the user can see. Payload:
+// { chatId }. The Imbue Studio creation page keeps its wash over a new workspace until the welcome chat says this.
+export const CHAT_ON_SCREEN: "minds:chat-on-screen" =
+  "CHAT_ON_SCREEN" in embedContract ? embedContract.CHAT_ON_SCREEN : "minds:chat-on-screen";
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
 // Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
 // if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
@@ -254,6 +258,8 @@ export interface ReadyAnnouncement {
   readonly opensLinks: boolean;
   /** Whether it takes custom-scheme links (``slack:``, ``vscode:``) among them. */
   readonly opensCustomSchemeLinks: boolean;
+  /** Whether a chat of this workspace reports itself with CHAT_ON_SCREEN once it is drawn. */
+  readonly reportsChatOnScreen: boolean;
 }
 
 /** Tell the embedder this page is listening, so it can send what it held, and what it handles.
@@ -262,7 +268,13 @@ export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
   sendToEmbedder(WORKSPACE_READY, {
     opensLinks: announcement.opensLinks,
     opensCustomSchemeLinks: announcement.opensCustomSchemeLinks,
+    reportsChatOnScreen: announcement.reportsChatOnScreen,
   });
+}
+
+/** Tell the embedder this chat's transcript is drawn in a window the user can see. */
+export function reportChatOnScreen(chatId: string): void {
+  sendToEmbedder(CHAT_ON_SCREEN, { chatId });
 }
 
 /** Clear the handler for one embedder->workspace type. */

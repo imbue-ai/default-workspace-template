@@ -39,6 +39,8 @@ import {
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   STOP_VIEWING_FIRST_NOTICE,
+  STOP_VIEWING_NOWHERE_NOTICE,
+  STOP_VIEWING_UNANSWERED_NOTICE,
   TRAY_HOP_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
@@ -3815,6 +3817,18 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   const alices = desktopRecord("alice", { owner: "user:user-alice-0001" });
   const josh = rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true });
   const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice" });
+  const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
+
+  /** Alice visiting a workspace whose desktops are the owner's and Bob's: none is hers. */
+  function visitorWithNoDesktopOfHerOwn(): void {
+    api.desktops = [api.desktops[0], bobs];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+  }
 
   async function viewerStore(): Promise<DesktopStore> {
     api.desktops = [...api.desktops, alices];
@@ -4232,7 +4246,6 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("a visitor with no desktop left arrives again when the viewed one is deleted, and lands on the seeded one", async () => {
-    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
     api.desktops = [api.desktops[0], alices, bobs];
     setOwnIdentityForTesting({
       owner: false,
@@ -4256,19 +4269,64 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("stop viewing with no desktop of its own arrives again and lands on the seeded one", async () => {
-    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
-    setOwnIdentityForTesting({
-      owner: false,
-      user_id: "user-alice-0001",
-      email: "alice@example.com",
-      participant: alice.key,
-    });
+    visitorWithNoDesktopOfHerOwn();
     const store = await startedStore();
     expect(store.viewedDesktop()?.id).toBe("home");
     api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("alice-2");
     expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("stop viewing that the shell answers with the viewed desktop says there is nowhere else to go", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(notices()).toEqual([STOP_VIEWING_NOWHERE_NOTICE]);
+  });
+
+  it("stop viewing that cannot reach the shell says so, and leaves when pressed again once the shell answers", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    api.refusal = "the shell is down";
+
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(notices()).toEqual([STOP_VIEWING_UNANSWERED_NOTICE]);
+
+    api.refusal = null;
+    api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("stop viewing that finds nowhere to go after the window already moved off says nothing", async () => {
+    visitorWithNoDesktopOfHerOwn();
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    let answerArrival: () => void = () => undefined;
+    const arrivalAnswered = new Promise<void>((resolve) => {
+      answerArrival = resolve;
+    });
+    const arrive = api.arriveClient.bind(api);
+    api.arriveClient = async (clientId) => {
+      await arrivalAnswered;
+      return arrive(clientId);
+    };
+
+    const stopping = store.stopViewing();
+    await store.switchDesktop("bob");
+    answerArrival();
+    await stopping;
+    expect(store.getState().activeDesktopId).toBe("bob");
+    expect(notices()).toEqual([]);
   });
 
   it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {

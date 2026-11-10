@@ -281,15 +281,15 @@ def build_test_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, resolved_broadcaster, utc_now)
+    presence_sweep = build_presence_sweep(presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce)
+    resolved_profiles.add_refresh_listener(presence_sweep.announce_connected)
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
         presence=presence,
-        presence_sweep=build_presence_sweep(
-            presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce
-        ),
+        presence_sweep=presence_sweep,
         profiles=resolved_profiles,
         roster=roster,
         roster_announcer=roster_announcer,

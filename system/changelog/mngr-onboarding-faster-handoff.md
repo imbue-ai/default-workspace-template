@@ -1,0 +1,1 @@
+The desktop interface contracts now say the shell announces `reportsChatOnScreen` (embed contract v15) and that a chat's own page sends `minds:chat-on-screen`, which the chat root and the shell forward up unchanged.

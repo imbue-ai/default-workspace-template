@@ -108,11 +108,13 @@ def build_production_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, broadcaster, utc_now)
+    presence_sweep = build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce)
+    profiles.add_refresh_listener(presence_sweep.announce_connected)
     return SystemInterfaceState(
         config=config,
         shell=shell,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce),
+        presence_sweep=presence_sweep,
         profiles=profiles,
         roster=roster,
         roster_announcer=roster_announcer,
