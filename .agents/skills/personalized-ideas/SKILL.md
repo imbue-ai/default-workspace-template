@@ -73,7 +73,8 @@ Do this in the same turn as the user's yes, with no question and no approval in 
 latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/owner-name"
 ```
 
-The answer is `{"display_name": "<name>"}` for the account that owns this workspace.
+The answer is `{"display_name": "<name>", "email_domain": "<domain>"}` for the account that owns this workspace.
+`email_domain` is the domain of the owner's email only when it names an organization (`imbue.com`); it is null for personal mail providers such as Gmail, and the address itself is never answered. Keep it for step 5: it ranks the results, and it is never searched with unless the user says yes to the question there.
 Ask the user to type their name instead when `display_name` is null or the call fails (for example when Imbue Studio is not running on their computer), and end your turn.
 Never take a name from anywhere else, such as a file, a commit author, or an email address, and never ask for the accounts permission for this: that route is all the lookup needs.
 
@@ -126,7 +127,7 @@ When a call answers an error, do not search with anything else:
 Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
 
 - **Search in parallel.** Run every search call in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
-- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their account email or its domain (an `@company.com` address is not their employer), not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. Those are not the user's answer to who they are, and searching with them looks the user up with information they never offered.
+- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. The one exception is the organization behind `email_domain`, and only after the user says yes to including it (step 5). Searching with anything else looks the user up with information they never offered.
 - **Widen a thin first batch.** If the first batch shows one person or none, run one more batch at once, before asking anything: the name with `LinkedIn`, with `GitHub`, and with `personal website` (at most 3 more searches). Most names belong to several people, and a single candidate is more often a thin result than a match.
 - **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
@@ -162,6 +163,17 @@ Show the user the people you found, one short line each with its link, and ask w
 > 2. A high-school chemistry teacher in Ohio ([school page](https://...))
 >
 > Is one of these you? If not, tell me something that would narrow it down, or we can skip this.
+
+**Rank by the email's organization.** When `email_domain` is set, list first any person whose title, snippet or link mentions that organization (its domain, or its name: `Imbue` for `imbue.com`), and say why in that line: "mentions Imbue, your email's organization". This only orders what the search already found; it sends nothing new.
+
+**Offer to search with it.** When `email_domain` is set, no result mentions that organization, more than one person was found or none, and `consent.json` has no `"email_org"` answer yet, add this to the end of the message, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`:
+
+> Your account email is at <domain>. Want me to also search for your name with <Org>?
+>
+> [Yes, include <Org>](#reply=include%20my%20organization) [No, don't](#reply=don%27t%20include%20it)
+
+- `include my organization` (or another clear yes): set `"email_org": "yes"` in `consent.json`, run one search for the name with `<Org>` (never the address), and show the people again, ranked as above.
+- `don't include it`, or a pick or detail that answers the question another way: set `"email_org": "no"` in `consent.json` and never search with it.
 
 End your turn and wait.
 Keep only what they confirm.
