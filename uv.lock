@@ -28,6 +28,7 @@ exclude-newer-span = "P14D"
 
 [manifest]
 members = [
+    "about-me-app",
     "agents-shared",
     "app-manifest",
     "app-registration",
@@ -74,6 +75,53 @@ members = [
     "workspace-profile",
     "workspace-scripts",
     "workspace-themes",
+]
+
+[[package]]
+name = "about-me-app"
+version = "0.1.0"
+source = { editable = "system/apps/about_me" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "flask" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "werkzeug" },
+    { name = "workspace-themes" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0775ee8a0e8ec70e44cef12ee0315fd86dda95d3" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-themes", editable = "system/libs/workspace_themes" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.87" },
 ]
 
 [[package]]
@@ -1062,6 +1110,7 @@ name = "default-workspace-template"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "about-me-app" },
     { name = "bootstrap" },
     { name = "chat" },
     { name = "chat-background-tasks" },
@@ -1113,6 +1162,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "about-me-app", editable = "system/apps/about_me" },
     { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
