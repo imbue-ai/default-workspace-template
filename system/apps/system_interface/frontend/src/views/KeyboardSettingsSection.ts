@@ -294,8 +294,8 @@ export interface KeyboardSettingsSectionAttrs {
   readonly context?: ChordContext;
   /** Told each time the recorder starts or stops listening for a new shortcut. */
   readonly onRecordingChange?: (isRecording: boolean) => void;
-  /** Handed, while the section is mounted, what records a chord the desktop app took from the OS while the recorder
-   *  listened (`minds:record-chord`), as if it were pressed; handed null as the section goes. */
+  /** Handed, while the section is mounted, what records a key the desktop app took while the recorder listened
+   *  (`minds:record-chord`), as if it were pressed; handed null as the section goes. */
   readonly onChordRelay?: (record: ((chord: string) => void) | null) => void;
   /** Imbue Studio's own shortcuts, as the desktop app sent them last; listed last, and only in the desktop app. */
   readonly chromeShortcuts?: ChromeShortcuts | null;
@@ -454,7 +454,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     if (chord !== null) recordChord(current, chord);
   }
 
-  /** A chord the desktop app took from the OS while the recorder listened, recorded as a pressed one is. */
+  /** A key the desktop app took while the recorder listened, recorded as a pressed one is. */
   function recordRelayedChord(chord: string): void {
     if (editor === null || !editor.isRecording) return;
     recordChord(editor, chord);

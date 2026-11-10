@@ -111,9 +111,8 @@ export const OPEN_LOCAL_FILES: "minds:open-local-files" =
 
 // Workspace -> embedder (contract v15): the state of the keyboard shortcuts page Imbue Studio's Workspace settings
 // frames. Payload: { height, isRecording }: the page's height in CSS px, which the frame takes, and whether its
-// recorder is listening for a new shortcut, while which Imbue Studio neither closes its settings on Escape nor a
-// window on the close-tab chord. The
-// first one says the page has loaded; until then the settings pane shows no frame, so a workspace too old to serve
+// recorder is listening for a new shortcut, while which Imbue Studio closes nothing on Escape, runs no shortcut, and
+// hands the recorder every key (RECORD_CHORD). The first one says the page has loaded; until then the settings pane shows no frame, so a workspace too old to serve
 // the page is told apart from one still loading.
 export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page" =
   "KEYBOARD_SHORTCUTS_PAGE" in embedContract ? embedContract.KEYBOARD_SHORTCUTS_PAGE : "minds:keyboard-shortcuts-page";
@@ -136,8 +135,8 @@ export const RUN_SHORTCUT: "minds:run-shortcut" =
 // Embedder -> workspace: a chord the desktop app took from the OS for an app's own action (Alt+F4 on Windows); the
 // shell hands it to the focused window's page. Payload: { chord }.
 export const RUN_CHORD: "minds:run-chord" = "RUN_CHORD" in embedContract ? embedContract.RUN_CHORD : "minds:run-chord";
-// Embedder -> the framed keyboard shortcuts page: a chord the desktop app took from the OS while the recorder was
-// listening, to record as if pressed. Payload: { chord }.
+// Embedder -> the framed keyboard shortcuts page: a key the desktop app took while the recorder was listening, so
+// nothing else acted on it, to record as if pressed. Payload: { chord }.
 export const RECORD_CHORD: "minds:record-chord" =
   "RECORD_CHORD" in embedContract ? embedContract.RECORD_CHORD : "minds:record-chord";
 // Embedder -> the framed keyboard shortcuts page (the keyboard-shortcuts spec in the mngr repo, section 8.3): Imbue
