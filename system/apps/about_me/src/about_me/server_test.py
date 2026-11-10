@@ -29,8 +29,9 @@ def test_the_page_carries_the_header_the_page_kit_and_the_shell_script(client: F
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "<title>What Studio knows about me</title>" in page
-    assert "What I've remembered about you from the web lookup you asked for." in page
-    assert "I don't know anything about you from a lookup yet." in page
+    assert "What I remember about you, from what you've told me and the web lookup you asked for." in page
+    assert "I don't remember anything about you yet." in page
+    assert '<form id="add-fact"' in page
     assert "View raw file" in page
     assert '<script src="/_static/workspace_theme.js"></script>' in page
     assert page.index('import { connectToShell } from "/_static/app_contract.js"') < page.index("</body>")
@@ -137,6 +138,23 @@ def test_forget_all_answers_an_empty_profile_and_removes_the_files(client: Flask
     assert (workspace / MEMORY_INDEX_PATH).read_bytes() == SAMPLE_INDEX.replace(
         b"- [Public profile](user-public-profile.md) -- what the web lookup found\n", b""
     )
+
+
+def test_adding_a_fact_answers_the_profile_with_it(client: FlaskClient) -> None:
+    response = client.post("/api/facts/add", json={"text": "Is learning to sail"})
+
+    assert response.status_code == 200
+    added = response.get_json()["facts"][-1]
+    assert (added["text"], added["is_told_by_user"], added["source_url"]) == ("Is learning to sail", True, None)
+
+
+def test_an_empty_or_missing_fact_is_a_400_and_changes_nothing(client: FlaskClient, workspace: Path) -> None:
+    empty = client.post("/api/facts/add", json={"text": "   "})
+    missing = client.post("/api/facts/add", json={})
+
+    assert (empty.status_code, missing.status_code) == (400, 400)
+    assert empty.get_json()["detail"] == "Type something to add."
+    assert (workspace / PROFILE_PATH).read_bytes() == SAMPLE_PROFILE
 
 
 def test_health(client: FlaskClient) -> None:

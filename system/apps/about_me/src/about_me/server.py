@@ -1,7 +1,7 @@
 """The "What Studio knows about me" app: what the opt-in web lookup remembered about the user, and their controls.
 
-One page at ``/`` lists every fact in the lookup's memory with its source and date, a Delete per fact, "Forget all
-of this", and the raw files behind a disclosure. The page is plain HTML on the page kit (the shell-built
+One page at ``/`` lists every fact in the lookup's memory with its source and date, a Delete per fact, a box to add
+a fact the user tells it, "Forget all of this", and the raw files behind a disclosure. The page is plain HTML on the page kit (the shell-built
 ``/_static/workspace_theme.css`` and ``.js``), so it wears the workspace's theme. It reads and writes only the three
 files ``about_me.store`` names, under the workspace root it runs from, and never reaches the network.
 
@@ -26,9 +26,11 @@ from flask.typing import ResponseReturnValue
 from loguru import logger
 from werkzeug.serving import run_simple
 
+from about_me.data_types import AddFactRequest
 from about_me.data_types import DeleteFactRequest
 from about_me.data_types import HealthResponse
 from about_me.data_types import ProfileResponse
+from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
 from about_me.store import ProfileStore
 from app_manifest.content_security_policy import attach_document_policy
@@ -52,8 +54,8 @@ WORKSPACE_DIR: Final[Path] = Path(os.environ.get("ABOUT_ME_WORKSPACE_DIR", "."))
 
 APP_DISPLAY_NAME: Final[str] = "What Studio knows about me"
 APP_DESCRIPTION: Final[str] = (
-    "What the web lookup you asked for remembered about you, each fact with its source and date, "
-    "and controls to delete any of it or forget all of it."
+    "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its "
+    "source and date, and controls to add to it, delete any of it, or forget all of it."
 )
 STATIC_DIR: Final[Path] = Path(__file__).parent / "static"
 # The page's own script and stylesheet, by file name under /assets/.
@@ -73,6 +75,7 @@ SHELL_STATIC_FILES: Final[dict[str, str]] = {
 }
 HEALTH_PATH: Final[str] = "/api/health"
 HTTP_NOT_FOUND: Final[int] = 404
+HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_CONFLICT: Final[int] = 409
 
 # Connects the page to the shell framing it (so its links open where the workspace opens them, and the shell
@@ -94,6 +97,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the What Studio knows about me page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="the page's own script or stylesheet"),
     ("GET", "/api/profile"): RouteModels(response_model=ProfileResponse),
+    ("POST", "/api/facts/add"): RouteModels(request_model=AddFactRequest, response_model=ProfileResponse),
     ("POST", "/api/facts/delete"): RouteModels(request_model=DeleteFactRequest, response_model=ProfileResponse),
     ("POST", "/api/forget"): RouteModels(response_model=ProfileResponse),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
@@ -149,6 +153,19 @@ def create_app(
         response = model_response(store.read())
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.post("/api/facts/add")
+    def add_fact() -> ResponseReturnValue:
+        """Keep a fact the user typed about themselves, as a "(you told me)" line after the last fact.
+
+        Creates the memory, its line in the memory index and its sources entry when there is none yet. 400 when the
+        text is empty, longer than 500 characters, or holds a comment marker.
+        """
+        body = parse_request_body(AddFactRequest)
+        try:
+            return model_response(store.add_fact(body.text))
+        except InvalidFactError as invalid:
+            return error_response(str(invalid), HTTP_BAD_REQUEST)
 
     @app.post("/api/facts/delete")
     def delete_fact() -> ResponseReturnValue:

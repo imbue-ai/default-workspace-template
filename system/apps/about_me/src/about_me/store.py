@@ -4,22 +4,26 @@
 - ``data/memories/MEMORY.md``: the memory index, whose line naming ``(user-public-profile.md)`` points at it.
 - ``data/.skills/personalized-ideas/sources.json``: the search results and pages the lookup used.
 
-Deleting a fact removes exactly its line from the profile and, from the sources, the entries nothing left cites;
+Adding a fact the user typed appends one ``(you told me)`` line after the last fact, creating the profile, its index
+line and its sources entry when there are none yet. Deleting a fact removes exactly its line from the profile and, from the sources, the entries nothing left cites;
 deleting the last fact, or forgetting all, removes the profile, its index line, and the sources, as asking the agent
 to forget does. Every write replaces its file whole (a temporary file renamed over it), and one lock serializes them,
 so a reader never sees half a file and two requests never interleave. Nothing here reaches the network.
 """
 
+import datetime
 import json
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
 
 from about_me.data_types import ProfileResponse
+from about_me.errors import InvalidFactError
 from about_me.errors import StaleFactError
 from about_me.profile import ProfileLine
 from about_me.profile import cited_urls
@@ -32,6 +36,39 @@ SOURCES_PATH: Final[Path] = Path("data/.skills/personalized-ideas/sources.json")
 # How the index line that points at the profile names it.
 PROFILE_INDEX_MARKER: Final[bytes] = b"(user-public-profile.md)"
 USER_ORIGIN: Final[str] = "user"
+MAX_FACT_CHARS: Final[int] = 500
+# A comment marker inside a fact would end or start the line's date comment early.
+_COMMENT_MARKERS: Final[tuple[str, ...]] = ("<!--", "-->")
+NEW_PROFILE_HEADER: Final[bytes] = (
+    b"---\n"
+    b"name: user-public-profile\n"
+    b"description: What the user has told Studio about themselves, and what a web lookup they asked for found\n"
+    b"metadata:\n"
+    b"  type: user\n"
+    b"---\n"
+    b"\n"
+)
+NEW_INDEX_LINE: Final[bytes] = (
+    b"- [Public profile](user-public-profile.md) -- what the user told Studio and what a web lookup found\n"
+)
+TOLD_SOURCE_TITLE: Final[str] = "What you told me"
+
+
+def normalized_fact_text(text: str) -> str:
+    """The fact as one line, its whitespace collapsed; raises ``InvalidFactError`` when it cannot be kept."""
+    line = " ".join(text.split())
+    if not line:
+        raise InvalidFactError("Type something to add.")
+    if len(line) > MAX_FACT_CHARS:
+        raise InvalidFactError(f"Keep it to {MAX_FACT_CHARS} characters.")
+    if any(marker in line for marker in _COMMENT_MARKERS):
+        raise InvalidFactError("A fact can't contain <!-- or -->.")
+    return line
+
+
+def told_fact_line(text: str, day: datetime.date) -> bytes:
+    """The memory line for a fact the user told: the shape ``about_me.profile`` parses as told by the user."""
+    return f"- {text} (you told me) <!-- found {day.isoformat()} -->\n".encode("utf-8")
 
 
 def _read_bytes(path: Path) -> bytes | None:
@@ -74,18 +111,47 @@ def _kept_sources(entries: list[object], dropped_urls: frozenset[str], is_droppi
     return [entry for entry in entries if not is_dropped(entry)]
 
 
+def _with_line_after_last_fact(content: bytes, line: bytes) -> bytes:
+    """``content`` with ``line`` inserted after its last fact line, or at the end of a profile with none."""
+    file_lines = split_lines(content)
+    facts = parse_profile(content)
+    if not facts:
+        if file_lines and not file_lines[-1].endswith(b"\n"):
+            file_lines[-1] += b"\n"
+        return b"".join(file_lines) + line
+    after = facts[-1].index + 1
+    if not file_lines[after - 1].endswith(b"\n"):
+        file_lines[after - 1] += b"\n"
+    return b"".join(file_lines[:after] + [line] + file_lines[after:])
+
+
 class ProfileStore:
     """The profile, the index and the sources under one workspace root, behind one lock."""
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, today: Callable[[], datetime.date] = datetime.date.today) -> None:
         self._profile = workspace_root / PROFILE_PATH
         self._index = workspace_root / MEMORY_INDEX_PATH
         self._sources = workspace_root / SOURCES_PATH
+        self._today = today
         self._lock = threading.Lock()
 
     def read(self) -> ProfileResponse:
         """What the page shows: every fact, and both raw files as they are."""
         with self._lock:
+            return self._read_locked()
+
+    def add_fact(self, text: str) -> ProfileResponse:
+        """Keep a fact the user typed, after the last fact; raises ``InvalidFactError`` when it cannot be one line."""
+        line = told_fact_line(normalized_fact_text(text), self._today())
+        with self._lock:
+            content = _read_bytes(self._profile)
+            if content is None:
+                self._profile.parent.mkdir(parents=True, exist_ok=True)
+                write_atomically(self._profile, NEW_PROFILE_HEADER + line)
+            else:
+                write_atomically(self._profile, _with_line_after_last_fact(content, line))
+            self._ensure_index_line()
+            self._ensure_told_source()
             return self._read_locked()
 
     def delete_fact(self, fact_id: str) -> ProfileResponse:
@@ -135,6 +201,35 @@ class ProfileStore:
             if len(kept) != len(index_lines):
                 write_atomically(self._index, b"".join(kept))
         self._sources.unlink(missing_ok=True)
+
+    def _ensure_index_line(self) -> None:
+        index = _read_bytes(self._index)
+        if index is not None and PROFILE_INDEX_MARKER in index:
+            return
+        existing = b"" if index is None else index if index.endswith(b"\n") or not index else index + b"\n"
+        write_atomically(self._index, existing + NEW_INDEX_LINE)
+
+    def _ensure_told_source(self) -> None:
+        """Add the user's own null-``url`` sources entry once; leave a sources file it cannot read alone."""
+        content = _read_bytes(self._sources)
+        entries: list[object] = []
+        if content is not None:
+            try:
+                parsed = json.loads(content)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                logger.warning("Leaving {} as it is: it is not JSON ({})", self._sources, error)
+                return
+            if not isinstance(parsed, list):
+                logger.warning("Leaving {} as it is: it is not a JSON array", self._sources)
+                return
+            entries = parsed
+        if any(isinstance(entry, dict) and entry.get("origin") == USER_ORIGIN for entry in entries):
+            return
+        entries.append(
+            {"url": None, "title": TOLD_SOURCE_TITLE, "fetched_at": self._today().isoformat(), "origin": USER_ORIGIN}
+        )
+        self._sources.parent.mkdir(parents=True, exist_ok=True)
+        write_atomically(self._sources, (json.dumps(entries, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def _prune_sources(self, deleted: ProfileLine, remaining: tuple[ProfileLine, ...]) -> None:
         """Drop the sources the deleted line cited and no remaining line does; leave a file it cannot read alone."""
