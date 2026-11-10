@@ -63,7 +63,7 @@ This is a change to the skill's instructions only.
 
 ### A "What Studio knows about me" page
 
-A small workspace app (built with the `build-app` skill, under `system/apps/`) that is the user's view onto the agent's own memory: Claude's built-in memory in `data/memories/`, one memory per file, indexed by `MEMORY.md`. It adds no store of its own, so what the page shows is exactly what the agent reads at the start of every chat, and a change on the page is a change to what the agent knows.
+A small workspace app (`system/apps/about_me/`) that is the user's view onto the agent's own memory: Claude's built-in memory in `data/memories/`, one memory per file, indexed by `MEMORY.md`. It adds no store of its own, so what the page shows is exactly what the agent reads at the start of every chat, and a change on the page is a change to what the agent knows.
 
 - Every memory, grouped by its type: **About you** (`user`), **How you like to work** (`feedback`), **Your projects** (`project`), **Links and references** (`reference`), and **Other notes** for a file with no known type. Each shows its title (its `MEMORY.md` line's), its text, and **Edit** and **Delete**.
 - **Edit** rewrites only the memory's description, its body, and its `MEMORY.md` line's hook; every other frontmatter line stays. **Delete** removes the file and its `MEMORY.md` line.
