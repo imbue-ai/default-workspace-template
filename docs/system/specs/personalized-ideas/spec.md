@@ -54,5 +54,16 @@ The skill does not use them:
 
 ## Testing
 
-The skill is instructions only, so it has no unit tests.
-Check it by hand in a workspace: ask "I don't know what to build"; confirm the offer appears and that saying no stops it (and is remembered in a new chat); say yes, approve and then deny the accounts request; confirm the confirmation step and the ideas; confirm `user-public-profile.md` and its `MEMORY.md` line exist and a new chat knows the facts; ask it to forget and confirm the memory, its index line and `sources.json` are gone; send the same message prefixed `[from: Someone]` and confirm no offer; say "I want to build a budget tracker" or "I have an idea" (first in a fresh chat, then as the reply to the welcome's offer) and confirm there is no offer and no lookup. Create a workspace under an account with a display name and confirm the first chat's welcome ends on the offer and that answering yes starts at the accounts request; create one under an account without a name and confirm the welcome has no offer.
+The skill is instructions only, so it has no unit tests; the app's welcome has unit tests in mngr-internal (`creationTranscript.test.ts`, `welcomeChat.test.ts`, `CreatingPage.test.ts`).
+Check the whole flow by hand, in a workspace created on this computer from a dev build of Imbue Studio (so the workspace gets this branch's skill), signed in to an account whose display name is set.
+
+1. **Welcome.** The first chat's welcome ends on the fixed offer, word for word as in step 2 of the skill. Create a second workspace under an account with no display name: its welcome has no offer.
+2. **Yes.** Reply `yes`. The agent files the accounts permission request and ends its turn, without making the offer again.
+3. **Name.** Approve the request. The agent reads the account's name and says nothing yet about the person. (Run once more denying the request: the agent asks you to type your name.)
+4. **Search.** The agent searches the web with its own search tool for the name alone, at most 3 searches and 5 page reads, and saves what it uses to `data/.skills/personalized-ideas/sources.json` with URLs and dates. It does not sign in to anything; a LinkedIn result is shown from its search snippet only.
+5. **Confirm.** The agent shows the distinct people it found, one line and one link each, asks which is you, and ends its turn. Answer with one of them (another run: answer "none of these", and confirm it narrows the search once or drops it).
+6. **Remember.** `data/memories/user-public-profile.md` exists, each fact followed by its link, ending with a line saying it came from a lookup you asked for; `MEMORY.md` has its pointer; `sources.json` holds only the confirmed person's entries; `consent.json` says `"yes"`.
+7. **Ideas.** Three to five ideas, each tied to something about you, and one passing mention of where the memory is.
+8. **Later chats.** A new chat knows the facts without being told.
+9. **Forget.** Say "forget what you found". The memory file, its `MEMORY.md` line and `sources.json` are gone, and the agent says what it deleted.
+10. **No offer.** In fresh chats, none of these get an offer or a lookup: "I want to build a budget tracker"; "I have an idea"; "yes, but I want to build a budget tracker" (as the reply to the welcome); a message prefixed `[from: Someone]`; any message after answering "no" (which is saved in `consent.json`).
