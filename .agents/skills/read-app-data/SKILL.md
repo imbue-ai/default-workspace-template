@@ -115,7 +115,7 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 
 The answer says `ENABLED` (read again), `DECLINED` (do not ask again in this task), `ASKING_TURNED_OFF` (do not ask again at all), `REFUSED_SHARED_WITH_FULL_ACCESS` (this workspace is shared too widely to ask), or `NOT_APPLICABLE` (the computer is not a Mac). Turning it on can take a restart of Imbue Studio; until then the request stays open and nothing arrives, so carry on with whatever else the task needs. A 400 naming the `type` means this computer's Imbue Studio predates the request: tell the user to turn it on in System Settings > Privacy & Security > Full Disk Access, then quit and reopen Imbue Studio, once.
 
-While Full Disk Access is off, Imbue Studio stops every synchronized copy of a source it protects (Notes, Reminders, Calendar, Safari, Messages). The copy stays in the workspace but no longer updates, and nothing restarts it when access comes back: to sync again, ask in a new `app-data` request with `"sync": true` once the task needs it, or let the user switch it on in the Permissions tab.
+While Full Disk Access is off, Imbue Studio stops every synchronized copy of a source it protects (Notes, Reminders, Calendar, Safari, Messages), and tells you with `App data on device host-abc: SYNC_STOPPED: reminders. ...`. The copy stays in the workspace but no longer updates, and nothing restarts it when access comes back: stop relying on it being current, and to sync again ask in a new `app-data` request with `"sync": true` once a task needs it, or let the user switch it on in the Permissions tab.
 
 ## The first-chat offer
 

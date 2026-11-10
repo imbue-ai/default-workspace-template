@@ -618,11 +618,19 @@ _APP_DATA_RESTORED_NOTICE = (
     "App data on device host-abc: RESTORED: code-projects. "
     "You can read these sources again; none of them is synced until you ask. (app-data-access: restored)"
 )
+_APP_DATA_SYNC_STOPPED_NOTICE = (
+    "App data on device host-abc: SYNC_STOPPED: reminders. Full Disk Access is off on that computer, so the "
+    "synchronized copy in this workspace no longer updates, and nothing restarts it. (app-data-access: sync_stopped)"
+)
 
 
 @pytest.mark.parametrize(
     ("notice", "label"),
-    [(_APP_DATA_REVOKED_NOTICE, "App data turned off"), (_APP_DATA_RESTORED_NOTICE, "App data turned back on")],
+    [
+        (_APP_DATA_REVOKED_NOTICE, "App data turned off"),
+        (_APP_DATA_RESTORED_NOTICE, "App data turned back on"),
+        (_APP_DATA_SYNC_STOPPED_NOTICE, "App data sync stopped"),
+    ],
 )
 def test_an_app_data_access_change_from_studio_is_a_notice_not_the_users_words(notice: str, label: str) -> None:
     decision = classify_user_message(notice)

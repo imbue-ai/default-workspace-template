@@ -177,14 +177,16 @@ _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be complet
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 # When the user turns an app-data source off or back on from Imbue Studio's
-# Permissions tab, Studio tells the chats that asked for it with a plain user message,
+# Permissions tab, or Studio stops its sync because Full Disk Access went off,
+# Studio tells the chats that asked for it with a plain user message,
 # tagged by ``format_app_data_access_notice`` in the mngr repo's
 # ``latchkey/handlers/resolution.py``: "... (app-data-access: revoked)". The tag is the
 # classification contract; the text before it is what the notice shows.
-_APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored)\)\s*$")
+_APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored|sync_stopped)\)\s*$")
 _APP_DATA_ACCESS_LABELS: Final[Mapping[str, str]] = {
     "revoked": "App data turned off",
     "restored": "App data turned back on",
+    "sync_stopped": "App data sync stopped",
 }
 
 
