@@ -2,7 +2,10 @@
  * The element menu's one installer (docs/system/blueprint/element-reference-menu/, section
  * 4.1): a ``contextmenu`` listener on the document that yields to a page's own handling (an
  * event already ``defaultPrevented``), captures the target and the selection as they were at
- * the click, builds the rows, and opens the menu at the pointer.
+ * the click, builds the rows, and opens the menu at the pointer. A right-click with Shift held
+ * is left to the browser's own menu. Where the Imbue Studio desktop app draws the menu natively
+ * (section 11), the installer opens nothing: it keeps the rows for the app, which reads them and
+ * runs the one picked through the page's ``__studioContextMenu`` bridge.
  *
  * Rendering is the one part a page may replace: a Mithril page hands ``open`` an opener backed
  * by the shared Menu (``components/contextMenuOpener.ts``), and a page without a framework --
@@ -17,9 +20,12 @@
 import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
 import {
   elementMenuRows,
+  hostMenuSections,
   targetOfEvent,
+  type ContextMenuActionRow,
   type ContextMenuRow,
   type ContextMenuTarget,
+  type HostMenuSections,
   type OpenLink,
 } from "./context_menu_rows";
 
@@ -35,9 +41,16 @@ export interface ContextMenuPoint {
   y: number;
 }
 
+/** The handshake fields the installer reads: the scope, and whether the desktop app draws the menu. */
+export interface ContextMenuHandshake extends ReferenceHandshake {
+  drawsContextMenus?: boolean;
+}
+
 interface ContextMenuBaseOptions {
   /** The page's last handshake, read at every right-click (so a getter); the scope of every reference. */
-  handshake?: () => ReferenceHandshake | null;
+  handshake?: () => ContextMenuHandshake | null;
+  /** Whether the Imbue Studio desktop app draws the menu natively; the handshake's ``drawsContextMenus`` when unset. */
+  isDrawnByHost?: () => boolean;
   /** The scope of a reference, for a page that knows more than its handshake says (the shell, which is no
    *  frame's page); ``handshake`` when unset. */
   scope?: (target: ContextMenuTarget) => ReferenceScope;
@@ -86,6 +99,91 @@ function routesOf(options: ContextMenuOptions): {
   };
 }
 
+/** The global the desktop app reads a right-click's rows through and runs a picked one by (the mngr repo's
+ *  ``apps/minds/electron/context-menu.js`` names it too). */
+export const HOST_MENU_GLOBAL = "__studioContextMenu";
+
+/** A row as the desktop app receives it: its data, without its action. */
+export type HostMenuItem =
+  | { kind: "action"; key: string; label: string; isDisabled: boolean; tooltip: string | null; symbol: string | null }
+  | { kind: "divider" };
+
+export interface HostMenuItemSections {
+  page: HostMenuItem[];
+  link: HostMenuItem[];
+  reference: HostMenuItem[];
+}
+
+/** What the desktop app calls on the page, through ``HOST_MENU_GLOBAL``. */
+export interface HostMenuBridge {
+  /** The last right-click's rows, or null when it was left to the browser's menu. */
+  sections(): HostMenuItemSections | null;
+  /** Run the last right-click's row of this key, once the page has focus. */
+  select(key: string): Promise<void>;
+}
+
+/** How long a row the desktop app runs waits for the page to take focus before it runs anyway. */
+const HOST_SELECT_FOCUS_WAIT_MS = 500;
+
+function hostMenuItemOf(row: ContextMenuRow): HostMenuItem {
+  if (row.kind === "divider") return { kind: "divider" };
+  return {
+    kind: "action",
+    key: row.key,
+    label: row.label,
+    isDisabled: row.isDisabled === true,
+    tooltip: row.tooltip ?? null,
+    symbol: row.symbol ?? null,
+  };
+}
+
+/** Resolves once the page has focus, asking for it, or after the wait. A row the desktop app runs arrives while
+ *  the window or the frame may be unfocused (a right-click focuses neither), and the clipboard refuses a page
+ *  without focus. */
+function whenFocused(ownerDocument: Document): Promise<void> {
+  const view = ownerDocument.defaultView;
+  if (view === null || ownerDocument.hasFocus()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => {
+      view.clearTimeout(timer);
+      view.removeEventListener("focus", done);
+      resolve();
+    };
+    const timer = view.setTimeout(done, HOST_SELECT_FOCUS_WAIT_MS);
+    view.addEventListener("focus", done);
+    view.focus();
+  });
+}
+
+function hostMenuBridgeOf(currentSections: () => HostMenuSections | null, ownerDocument: Document): HostMenuBridge {
+  const rowsOf = (sections: HostMenuSections): readonly ContextMenuRow[] => [
+    ...sections.page,
+    ...sections.link,
+    ...sections.reference,
+  ];
+  return {
+    sections: () => {
+      const sections = currentSections();
+      if (sections === null) return null;
+      return {
+        page: sections.page.map(hostMenuItemOf),
+        link: sections.link.map(hostMenuItemOf),
+        reference: sections.reference.map(hostMenuItemOf),
+      };
+    },
+    select: async (key) => {
+      const sections = currentSections();
+      if (sections === null) return;
+      const row = rowsOf(sections).find(
+        (candidate): candidate is ContextMenuActionRow => candidate.kind === "action" && candidate.key === key,
+      );
+      if (row === undefined || row.isDisabled === true) return;
+      await whenFocused(ownerDocument);
+      row.onSelect();
+    },
+  };
+}
+
 /** Marks the document the installer listens on, so a second install is a no-op. */
 export const CONTEXT_MENU_INSTALLED_ATTR = "data-element-context-menu";
 /** Marks the framework-free renderer's card and rows, so a test can find them. */
@@ -110,11 +208,25 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
     options.open === undefined ? createDefaultRenderer(ownerDocument) : { open: options.open };
   const { draft, isDraftAvailable, openLink } = routesOf(options);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
+  const isDrawnByHost = options.isDrawnByHost ?? (() => options.handshake?.()?.drawsContextMenus === true);
+  let hostSections: HostMenuSections | null = null;
 
   const onContextMenu = (event: MouseEvent): void => {
-    if (event.defaultPrevented) return;
-    event.preventDefault();
+    hostSections = null;
+    if (event.defaultPrevented || event.shiftKey) return;
     const target = targetOfEvent(event, ownerDocument);
+    if (isDrawnByHost()) {
+      hostSections = hostMenuSections(
+        target,
+        scopeOf(target),
+        draft,
+        isDraftAvailable(),
+        options.extraRows?.(target) ?? [],
+        openLink,
+      );
+      return;
+    }
+    event.preventDefault();
     const rows = elementMenuRows(
       target,
       scopeOf(target),
@@ -128,8 +240,16 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
 
   ownerDocument.addEventListener("contextmenu", onContextMenu);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
+  const view = ownerDocument.defaultView;
+  if (view !== null)
+    Reflect.set(
+      view,
+      HOST_MENU_GLOBAL,
+      hostMenuBridgeOf(() => hostSections, ownerDocument),
+    );
   const uninstall = (): void => {
     renderer.close?.();
+    if (view !== null) Reflect.deleteProperty(view, HOST_MENU_GLOBAL);
     ownerDocument.removeEventListener("contextmenu", onContextMenu);
     ownerDocument.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
     uninstallerByDocument.delete(ownerDocument);

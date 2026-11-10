@@ -30,6 +30,9 @@ export interface ContextMenuActionRow {
   label: string;
   isDisabled?: boolean;
   tooltip?: string;
+  /** The SF Symbol (``doc.on.doc``) the desktop app's native menu shows beside the row on macOS; a menu the page
+   *  draws itself ignores it. */
+  symbol?: string;
   onSelect: () => void;
 }
 
@@ -183,6 +186,16 @@ export function canReadClipboard(): boolean {
 /** Open a link the menu was opened on, as a click on it would. */
 export type OpenLink = (anchor: HTMLAnchorElement) => void;
 
+/** The link the target sits in, or null. */
+function anchorOf(element: Element): HTMLAnchorElement | null {
+  const anchor = element.closest("a[href]");
+  return anchor instanceof HTMLAnchorElement ? anchor : null;
+}
+
+function openLinkRow(anchor: HTMLAnchorElement, openLink: OpenLink): ContextMenuActionRow {
+  return { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) };
+}
+
 /** The standard rows the target admits (section 3.3), in the order the native menu lists them. */
 export function standardContextMenuRows(target: ContextMenuTarget, openLink: OpenLink): ContextMenuRow[] {
   const { element, selectionText } = target;
@@ -211,12 +224,12 @@ export function standardContextMenuRows(target: ContextMenuTarget, openLink: Ope
     editRows.push({ kind: "action", key: "select-all", label: "Select All", onSelect: () => selectAllIn(element) });
   }
   const mediaRows: ContextMenuRow[] = [];
-  const anchor = element.closest("a[href]");
-  if (anchor instanceof HTMLAnchorElement) {
+  const anchor = anchorOf(element);
+  if (anchor !== null) {
     const href = anchor.href;
     mediaRows.push(
       { kind: "action", key: "copy-link", label: "Copy link address", onSelect: () => void copyText(href) },
-      { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) },
+      openLinkRow(anchor, openLink),
     );
   }
   const src = imageSrcOf(element);
@@ -238,18 +251,25 @@ export function elementReferenceRows(
   isDraftAvailable: boolean,
 ): ContextMenuRow[] {
   const block = referenceBlock(reference);
-  const draftRow = (key: string, label: string, prompt: string): ContextMenuActionRow => ({
+  const draftRow = (key: string, label: string, symbol: string, prompt: string): ContextMenuActionRow => ({
     kind: "action",
     key,
     label,
     isDisabled: !isDraftAvailable,
     tooltip: isDraftAvailable ? undefined : NO_SHELL_DRAFT_REASON,
+    symbol,
     onSelect: () => draft(draftTextOf(prompt, block)),
   });
   return [
-    { kind: "action", key: "copy-reference", label: "Copy reference", onSelect: () => void copyText(block) },
-    draftRow("explain-element", "Explain...", explainPromptOf(reference.reference_id)),
-    draftRow("modify-element", "Modify...", modifyPromptOf(reference.reference_id)),
+    {
+      kind: "action",
+      key: "copy-reference",
+      label: "Copy reference",
+      symbol: "doc.on.doc",
+      onSelect: () => void copyText(block),
+    },
+    draftRow("explain-element", "Explain...", "questionmark.bubble", explainPromptOf(reference.reference_id)),
+    draftRow("modify-element", "Modify...", "pencil", modifyPromptOf(reference.reference_id)),
   ];
 }
 
@@ -262,6 +282,31 @@ export function joinRowGroups(groups: readonly (readonly ContextMenuRow[])[]): C
     rows.push(...group);
   }
   return rows;
+}
+
+/** The element menu as the desktop app draws it natively (section 11): the page's own rows; the link row only the
+ *  page can follow (its "Open link" goes where the page's links go), the rest of the standard rows being the native
+ *  menu's own; and the reference rows. The app places each section among its native items. */
+export interface HostMenuSections {
+  page: readonly ContextMenuRow[];
+  link: readonly ContextMenuRow[];
+  reference: readonly ContextMenuRow[];
+}
+
+export function hostMenuSections(
+  target: ContextMenuTarget,
+  scope: ReferenceScope,
+  draft: (text: string) => void,
+  isDraftAvailable: boolean,
+  ownRows: readonly ContextMenuRow[],
+  openLink: OpenLink,
+): HostMenuSections {
+  const anchor = anchorOf(target.element);
+  return {
+    page: ownRows,
+    link: anchor === null ? [] : [openLinkRow(anchor, openLink)],
+    reference: elementReferenceRows(describeElement(target.element, target.click, scope), draft, isDraftAvailable),
+  };
 }
 
 /** The whole element menu (section 3.3): the page's own rows, the standard rows, the reference rows. */

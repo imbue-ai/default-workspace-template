@@ -9,12 +9,15 @@ import {
   CONTEXT_MENU_CARD_ATTR,
   CONTEXT_MENU_INSTALLED_ATTR,
   CONTEXT_MENU_ROW_ATTR,
+  HOST_MENU_GLOBAL,
   installElementContextMenu,
   type ContextMenuConnection,
+  type HostMenuBridge,
 } from "./context_menu";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
+const HOST_DRAWN_HANDSHAKE = { ...HANDSHAKE, drawsContextMenus: true };
 
 let connection: ContextMenuConnection & { draftText: ReturnType<typeof vi.fn<(text: string) => void>> };
 
@@ -31,6 +34,12 @@ function row(key: string): HTMLButtonElement {
   const found = document.body.querySelector<HTMLButtonElement>(`[${CONTEXT_MENU_ROW_ATTR}="${key}"]`);
   if (found === null) throw new Error(`no row ${key}`);
   return found;
+}
+
+function hostBridge(): HostMenuBridge {
+  const bridge = Reflect.get(window, HOST_MENU_GLOBAL) as HostMenuBridge | undefined;
+  if (bridge === undefined) throw new Error("no host menu bridge");
+  return bridge;
 }
 
 function rightClick(element: Element, init: MouseEventInit = {}): MouseEvent {
@@ -192,6 +201,92 @@ describe("installElementContextMenu", () => {
       "explain-element",
       "modify-element",
     ]);
+  });
+
+  it("leaves a right-click with Shift held to the browser's own menu", () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    const event = rightClick(document.getElementById("para") as Element, { shiftKey: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(card()).toBeNull();
+  });
+
+  it("where the desktop app draws the menu, opens nothing and keeps the rows for it, with the link row the page follows", () => {
+    document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a>';
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HOST_DRAWN_HANDSHAKE,
+      extraRows: () => [
+        { kind: "action", key: "rename", label: "Rename", symbol: "pencil.line", onSelect: () => undefined },
+      ],
+    });
+    const event = rightClick(document.getElementById("docs") as Element);
+    expect(event.defaultPrevented).toBe(false);
+    expect(card()).toBeNull();
+    const sections = hostBridge().sections();
+    expect(sections).not.toBeNull();
+    const keysOf = (items: { kind: string; key?: string }[]): string[] => items.map((item) => item.key ?? "|");
+    expect(keysOf(sections!.page)).toEqual(["rename"]);
+    expect(keysOf(sections!.link)).toEqual(["open-link"]);
+    expect(sections!.reference).toEqual([
+      expect.objectContaining({ key: "copy-reference", isDisabled: false, symbol: "doc.on.doc" }),
+      expect.objectContaining({ key: "explain-element", isDisabled: false, symbol: "questionmark.bubble" }),
+      expect.objectContaining({ key: "modify-element", isDisabled: false, symbol: "pencil" }),
+    ]);
+    expect(sections!.page[0]).toEqual({
+      kind: "action",
+      key: "rename",
+      label: "Rename",
+      isDisabled: false,
+      tooltip: null,
+      symbol: "pencil.line",
+    });
+  });
+
+  it("runs the row the desktop app picks only once the page has focus, so the clipboard takes the copy", async () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const picked = hostBridge().select("copy-reference");
+    await Promise.resolve();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event("focus"));
+    await picked;
+    hasFocus.mockRestore();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(navigator.clipboard.writeText).mock.calls[0][0]).toContain('"id":"para"');
+  });
+
+  it("runs a picked row after the wait for focus even if focus never comes", async () => {
+    vi.useFakeTimers();
+    uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const picked = hostBridge().select("explain-element");
+    await vi.runAllTimersAsync();
+    await picked;
+    hasFocus.mockRestore();
+    vi.useRealTimers();
+    expect(connection.draftText).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs no disabled row and no row of an earlier right-click the browser's menu took", async () => {
+    connection = fakeConnection(false);
+    uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
+    const paragraph = document.getElementById("para") as Element;
+    rightClick(paragraph);
+    await hostBridge().select("explain-element");
+    expect(connection.draftText).not.toHaveBeenCalled();
+    rightClick(paragraph, { shiftKey: true });
+    expect(hostBridge().sections()).toBeNull();
+    await hostBridge().select("copy-reference");
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it("takes the bridge off the page when uninstalled", () => {
+    const remove = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
+    expect(Reflect.has(window, HOST_MENU_GLOBAL)).toBe(true);
+    remove();
+    expect(Reflect.has(window, HOST_MENU_GLOBAL)).toBe(false);
   });
 
   it("installs once per document and marks it, and the uninstaller takes the mark off", () => {
