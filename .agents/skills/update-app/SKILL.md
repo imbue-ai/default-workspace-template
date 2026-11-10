@@ -46,8 +46,8 @@ as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
-Requests can arrive several to a message, one per message across the feedback
-rounds, or mixed in with feedback on a change already in progress. Whenever new
+Requests can arrive several to a message, one per message over the course of the
+conversation, or mixed in with feedback on a change already in progress. Whenever new
 requests arrive, decide how they group into units of work and how large each
 unit is, before touching code for them. Both decisions change what you do
 before editing.
@@ -55,8 +55,8 @@ before editing.
 **Group the requests.** Use your judgment; any grouping is possible. For
 example, the requests may all be parts of one larger change, each be
 independent, or split into a few mid-sized groups, or two small fixes beside
-one large change. A request that arrives during the feedback rounds may extend
-the change in progress or stand apart from it. Put requests in one unit when
+one large change. A request that arrives while a change is in progress may
+extend that change or stand apart from it. Put requests in one unit when
 they only make sense together. Keep them apart when each can be confirmed and
 shipped on its own, so that waiting on the user to confirm one shape never
 holds up an unrelated fix. A new view or capability added to an existing
