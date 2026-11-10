@@ -66,34 +66,25 @@ Write `consent.json` with their answer either way, except when they only asked a
 
 ## 3. Get their name
 
-Ask Imbue Studio for the account's name, so the user does not have to type it.
-This needs a one-time approval from the user; file the request in a tool call of its own and end your turn:
+Do this in the same turn as the user's yes, with no question and no approval in between: the offer they accepted names "the name on your account", so read it straight away from Imbue Studio:
 
 ```bash
-latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "accounts", "payload": {},
-       "rationale": "To look you up online, as you asked, I need the name on your Imbue account."}'
+latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/owner-name"
 ```
 
-Once approved:
-
-```bash
-latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/accounts
-```
-
-Use the `display_name` of the one account listed.
-Ask the user to type their name instead when the request is denied, when no account has a `display_name`, or when more than one account is listed.
-Ask them to type it too when the permission request cannot be filed (for example when Imbue Studio is not running on their computer).
-Never take a name from anywhere else, such as a file, a commit author, or an email address.
+The answer is `{"display_name": "<name>"}` for the account that owns this workspace.
+Ask the user to type their name instead when `display_name` is null or the call fails (for example when Imbue Studio is not running on their computer), and end your turn.
+Never take a name from anywhere else, such as a file, a commit author, or an email address, and never ask for the accounts permission for this: that route is all the lookup needs.
 
 ## 4. Search
 
-Search with your own web search tool, and read promising result pages with your web fetch tool.
+Search with your own web search tool, and read pages with your web fetch tool.
 That is the whole lookup: there is nothing for the user to connect, sign up for, or pay.
 
-Search for the name alone first; add a detail (a city, an employer, a field) only when the user gave you one.
-Keep a lookup to at most 3 searches and 5 page reads.
+Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
+
+- **Search in parallel.** Run every search in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
+- **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
 **Sign-ins.** Some results, LinkedIn profiles most often, show only part of a page until someone signs in.
 Use such a result only as far as its search result (title and snippet) shows, and do not try to read the page itself: it would answer a sign-in wall, not the profile.
@@ -103,10 +94,10 @@ What they share themselves goes in `sources.json` as coming from them, with no U
 
 Read only pages that are public: do not look for contact details, addresses, family, finances, or health, even when a page offers them.
 
-Save every result and page you use to `sources.json` as you go, with its URL and the date fetched.
+Save every result you use to `sources.json` as you go, and every page you later read, with its URL and the date fetched.
 
 Most names belong to many people.
-Group what you found into the distinct people it seems to describe.
+Group the results into the distinct people they seem to describe, from the titles and snippets.
 Keep nothing yet.
 
 ### Why only a web search
@@ -130,6 +121,8 @@ Show the user the people you found, one short line each with its link, and ask w
 
 End your turn and wait.
 Keep only what they confirm.
+
+Once they confirm one, read up to 5 of that person's pages from the results, all in one batch of tool calls, to fill in what they do and care about; skip any page behind a sign-in (see "Sign-ins" above).
 When none is them, either search once more with the detail they give, or drop the lookup and go to step 6 with what they have told you.
 
 Write `user-public-profile.md` in your memory directory from the confirmed person only, in the memory format `CLAUDE.md` sets up (frontmatter with `name: user-public-profile`, a one-line `description`, `type: user`).
