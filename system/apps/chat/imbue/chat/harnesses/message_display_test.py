@@ -620,7 +620,9 @@ _APP_DATA_RESTORED_NOTICE = (
 )
 _APP_DATA_SYNC_STOPPED_NOTICE = (
     "App data on device host-abc: SYNC_STOPPED: reminders. Full Disk Access is off on that computer, so the "
-    "synchronized copy in this workspace no longer updates, and nothing restarts it. (app-data-access: sync_stopped)"
+    "synchronized copy in this workspace no longer updates, and nothing restarts it. You keep the copy. To sync "
+    'again once Full Disk Access is back on, ask in a new app-data request with "sync": true. '
+    "(app-data-access: sync_stopped)"
 )
 
 
