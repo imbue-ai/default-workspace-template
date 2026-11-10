@@ -269,6 +269,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   };
 
   ownerDocument.addEventListener("contextmenu", forgetHostSections, true);
+  // own-context-menu: element-menu -- the element menu itself, which draws its HTML menu only where the desktop app draws none
   ownerDocument.addEventListener("contextmenu", onContextMenu);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
   const view = ownerDocument.defaultView;

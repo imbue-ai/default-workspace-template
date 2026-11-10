@@ -38,7 +38,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   "Explain...", and "Modify..."), and the installer every page runs, built into the
   module every app serves at `/_static/context_menu.js` with its framework-free
   renderer for pages without Mithril (`src/components/contextMenuOpener.ts` is
-  the opener a Mithril page hands it, backed by the shared Menu); where the Imbue
+  the opener a Mithril page hands it, backed by the shared Menu); a page's own
+  rows (actions, check rows, and one level of submenus, which the framework-free
+  renderer opens as a flyout) go in through `extraRows`, never a right-click menu
+  the page draws itself (`.agents/shared/references/right-click-menus.md`,
+  which `system/test_context_menu_rules.py` holds every app to); where the Imbue
   Studio desktop app draws the menu natively, the installer opens none and keeps
   the rows for it on the page's `__studioContextMenu` bridge; `src/embed.ts` and
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is

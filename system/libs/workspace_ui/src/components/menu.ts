@@ -881,6 +881,7 @@ export function createMenu(options: MenuOptions): Menu {
         },
         // A right-click on the card is handled here, like one on the sheet: the page's element menu
         // yields to it rather than describing one of this menu's own rows, and the browser's own stays away.
+        // own-context-menu: dismisses -- a right-click on an open menu's own card describes none of its rows
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
         },
@@ -950,6 +951,7 @@ export function createMenu(options: MenuOptions): Menu {
           handleStackLeave();
           scheduleHoverClose();
         },
+        // own-context-menu: dismisses -- a right-click on an open submenu's card describes none of its rows
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
         },
@@ -972,6 +974,7 @@ export function createMenu(options: MenuOptions): Menu {
       },
       // A right-click on the sheet is the press that closes the menu, nothing more: the page's element
       // menu yields to a handled event, and the browser's own stays away.
+      // own-context-menu: dismisses -- a right-click on the sheet only closes the open menu
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
       },

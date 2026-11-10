@@ -2,4 +2,6 @@ In the Imbue Studio desktop app on macOS, right-clicking inside the workspace no
 
 Holding Shift while right-clicking now leaves the right-click to the browser's own menu everywhere.
 
-A menu row may name an SF Symbol (`symbol`), which the desktop app's native menu shows beside it on macOS. The reference rows use `doc.on.doc`, `questionmark.bubble`, and `pencil`. The element-reference-menu plan (section 11) and contracts.md's `shell:handshake` row describe the new behavior. The build now also fetches mngr's `apps/minds/electron/page-menu-bridge.json`, which pins the bridge's name, sections, and bounds, and workspace_ui's element menu is tested against it; mngr is pinned to a public export of the paired mngr branch that carries it.
+A new check, `system/test_context_menu_rules.py`, fails on any app's right-click handler that calls `preventDefault`, the user's apps included, unless an `// own-context-menu: <reason> -- <why>` marker above it says why it keeps the right-click; such a handler keeps the native menu away. `.agents/shared/references/right-click-menus.md` says how an app gives its rows to the element menu instead.
+
+The element-reference-menu plan (sections 4.4, 6, 9, and 11) and contracts.md's `shell:handshake` row describe the new behavior. The build now also fetches mngr's `apps/minds/electron/page-menu-bridge.json`, which pins the bridge's name, sections, row kinds, and bounds, and workspace_ui's element menu is tested against it; mngr is pinned to a public export of the paired mngr branch that carries it.
