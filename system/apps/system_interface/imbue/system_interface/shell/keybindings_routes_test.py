@@ -88,14 +88,24 @@ def _write_snapshot(tmp_path: Path, keybindings: dict[str, Any]) -> None:
     )
 
 
-def test_the_shells_app_toml_declares_the_launcher_action() -> None:
-    assert [action.model_dump(mode="json") for action in shell_keybinding_actions()] == [
-        {
-            "id": "launcher-secondary-send",
-            "label": "Launcher: send the typed text to a chosen chat",
-            "default_chords": ["ctrl+enter", "meta+enter"],
-        }
+def test_the_shells_app_toml_declares_its_workspace_wide_actions_and_the_launcher_action() -> None:
+    actions = [action.model_dump(mode="json") for action in shell_keybinding_actions()]
+
+    assert [(action["id"], action["scope"]) for action in actions] == [
+        ("close-window", "workspace"),
+        ("next-window", "workspace"),
+        ("previous-window", "workspace"),
+        ("open-launcher", "workspace"),
+        ("show-shortcuts", "workspace"),
+        ("open-overview", "workspace"),
+        ("launcher-secondary-send", "app"),
     ]
+    assert actions[-1] == {
+        "id": "launcher-secondary-send",
+        "label": "Launcher: send the typed text to a chosen chat",
+        "default_chords": ["meta+enter"],
+        "scope": "app",
+    }
 
 
 def test_me_resolves_the_owners_snapshot_value(tmp_path: Path) -> None:
@@ -103,10 +113,10 @@ def test_me_resolves_the_owners_snapshot_value(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     owner = client.get("/api/keybindings/me")
-    assert owner.get_json()["chords_by_action"] == {"launcher-secondary-send": ["alt+enter"]}
+    assert owner.get_json()["chords_by_action"]["launcher-secondary-send"] == ["alt+enter"]
 
     visitor = client.get("/api/keybindings/me", headers=identity_headers(_VISITOR))
-    assert visitor.get_json()["chords_by_action"] == {"launcher-secondary-send": ["ctrl+enter", "meta+enter"]}
+    assert visitor.get_json()["chords_by_action"]["launcher-secondary-send"] == ["meta+enter"]
 
 
 def test_the_catalog_lists_the_shell_alone_when_no_registered_app_declares_keybindings(tmp_path: Path) -> None:
@@ -118,9 +128,10 @@ def test_the_catalog_lists_the_shell_alone_when_no_registered_app_declares_keybi
     assert catalog["is_owner"] is True
     assert catalog["can_save_everywhere"] is False
     assert catalog["unsent"] == []
-    (action,) = catalog["apps"][0]["actions"]
-    assert action["chords"] == ["ctrl+enter", "meta+enter"]
+    action = next(a for a in catalog["apps"][0]["actions"] if a["id"] == "launcher-secondary-send")
+    assert action["chords"] == ["meta+enter"]
     assert action["source"] == "default"
+    assert action["scope"] == "app"
 
 
 def test_the_catalog_lists_a_stopped_apps_declared_actions_from_its_registry_row(tmp_path: Path) -> None:
@@ -139,6 +150,7 @@ def test_the_catalog_lists_a_stopped_apps_declared_actions_from_its_registry_row
             "chords": ["ctrl+s", "meta+s"],
             "reset_chords": ["ctrl+s", "meta+s"],
             "source": "default",
+            "scope": "app",
         }
     ]
 
@@ -190,7 +202,7 @@ def test_a_workspace_save_normalizes_the_chords_into_the_requesters_override(tmp
     assert overrides == {"keybindings": {"system_interface": {"launcher-secondary-send": ["meta+enter"]}}}
     # And the resolution answers it, with the source badge naming the layer.
     catalog = client.get("/api/keybindings/catalog").get_json()
-    (action,) = catalog["apps"][0]["actions"]
+    action = next(a for a in catalog["apps"][0]["actions"] if a["id"] == "launcher-secondary-send")
     assert action["chords"] == ["meta+enter"]
     assert action["source"] == "workspace"
 
@@ -271,7 +283,7 @@ def test_an_everywhere_save_without_a_gateway_stays_unsent(tmp_path: Path) -> No
             "app": "system_interface",
             "action": "launcher-secondary-send",
             "chords": ["alt+enter"],
-            "restored_chords": ["ctrl+enter", "meta+enter"],
+            "restored_chords": ["meta+enter"],
         }
     ]
     # ...and discarding drops both layers.

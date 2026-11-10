@@ -16,14 +16,14 @@ from functools import cache
 from pathlib import Path
 from typing import Final
 
-from app_manifest.manifest import KeybindingAction
+from app_manifest.manifest import KeybindingAction, KeybindingScope
 from loguru import logger
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
-from workspace_profile.manifest import find_off_grammar_default_chords
+from workspace_profile.manifest import find_invalid_default_chords
 from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.overrides import load_user_override_values
@@ -67,8 +67,8 @@ def shell_keybinding_actions() -> tuple[KeybindingAction, ...]:
 def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[AppKeybindingActions]:
     """Every app's declared keybinding actions: the shell's own, then each registered app that declares any.
 
-    A row whose default chords are off the grammar (a registration the reader cannot trust) is
-    skipped with a warning rather than offered for re-binding.
+    A row whose default chords are invalid (a registration the reader cannot trust), or that claims a
+    workspace-wide action (the shell's alone), is skipped with a warning rather than offered for re-binding.
     """
     listed = [
         AppKeybindingActions(app=SHELL_APP_NAME, display_name=SHELL_DISPLAY_NAME, actions=shell_keybinding_actions())
@@ -77,9 +77,13 @@ def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[Ap
         row = entry.row
         if str(row.name) == SHELL_APP_NAME or not row.keybindings:
             continue
-        off_grammar = find_off_grammar_default_chords(row.keybindings)
-        if off_grammar:
-            logger.warning("Skipped {}'s keybindings: default chords off the grammar: {}", row.name, off_grammar)
+        invalid = find_invalid_default_chords(row.keybindings)
+        if invalid:
+            logger.warning("Skipped {}'s keybindings: default chords it may not have: {}", row.name, invalid)
+            continue
+        workspace_wide = [str(action.id) for action in row.keybindings if action.scope is KeybindingScope.WORKSPACE]
+        if workspace_wide:
+            logger.warning("Skipped {}'s keybindings: only the shell declares workspace-wide actions: {}", row.name, workspace_wide)
             continue
         display_name = str(row.display_name) if row.display_name is not None else str(row.name)
         listed.append(AppKeybindingActions(app=str(row.name), display_name=display_name, actions=row.keybindings))

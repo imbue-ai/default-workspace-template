@@ -4,4 +4,6 @@ The keyboard shortcuts screen reads shortcuts in a context: the platform, and wh
 
 - The reserved-shortcut warning is replaced by three that never block a save: a shortcut a browser would keep (shown in the desktop app), one the OS is known to keep for itself (⌘Tab, Alt+Tab, and the rest), and one the desktop app takes from the OS (Alt+F4 on Windows). Only Ctrl+Alt+Delete is refused by the recorder, with a reason.
 
-- The launcher's Ctrl+Enter reads the same way: on Windows and Linux the Control key is `meta`, and the Windows key is no modifier.
+- The shell declares workspace-wide actions (`scope = "workspace"` in its `app.toml`): Close the focused window ⌥⌘W, Next and Previous window ⌥⌘] and ⌥⌘[, Open the launcher ⌘K, Show the keyboard shortcuts ⌘/, and Show every window (no default). The catalog answers each action's `scope`. A workspace-wide action clashes with every action of every app, since it wins inside any app's page, and an app's action with the workspace-wide ones; Replace then saves across apps. The recorder refuses, for a workspace-wide action, a shortcut typing could trigger (no modifier beyond Shift and no function key). Running these actions from the keyboard is still to come.
+
+- The launcher's secondary send defaults to ⌘Enter alone (Ctrl+Enter off a Mac), and the Windows key is no modifier.

@@ -261,6 +261,18 @@ export function isRefusedChord(chord: string): boolean {
   return REFUSED_CHORDS.includes(chord);
 }
 
+const FUNCTION_KEY = /^f([1-9]|1[0-2])$/;
+
+/**
+ * Whether a canonical chord may fire anywhere in the workspace: it holds a modifier other than Shift alone, or is a
+ * function key, so typing into any app never triggers it (mirrors `workspace_profile.keybindings`).
+ */
+export function isWorkspaceWideChord(chord: string): boolean {
+  const tokens = chord.split("+");
+  const key = tokens[tokens.length - 1];
+  return FUNCTION_KEY.test(key) || tokens.slice(0, -1).some((modifier) => modifier !== "shift");
+}
+
 function holdsControl(chord: string): boolean {
   return chord.split("+").includes("ctrl");
 }

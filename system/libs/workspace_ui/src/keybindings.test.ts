@@ -10,6 +10,7 @@ import {
   detectChordPlatform,
   isChordHiddenIn,
   isRefusedChord,
+  isWorkspaceWideChord,
   keydownMatchesAction,
   keydownMatchesChords,
 } from "./keybindings";
@@ -89,6 +90,18 @@ describe("isRefusedChord", () => {
     expect(isRefusedChord("alt+meta+delete")).toBe(true);
     expect(isRefusedChord("meta+delete")).toBe(false);
     expect(isRefusedChord("alt+meta+backspace")).toBe(false);
+  });
+});
+
+describe("isWorkspaceWideChord", () => {
+  it("wants a modifier other than Shift alone, or a function key", () => {
+    expect(isWorkspaceWideChord("meta+k")).toBe(true);
+    expect(isWorkspaceWideChord("alt+shift+k")).toBe(true);
+    expect(isWorkspaceWideChord("f6")).toBe(true);
+    expect(isWorkspaceWideChord("shift+f12")).toBe(true);
+    expect(isWorkspaceWideChord("k")).toBe(false);
+    expect(isWorkspaceWideChord("shift+k")).toBe(false);
+    expect(isWorkspaceWideChord("enter")).toBe(false);
   });
 });
 

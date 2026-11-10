@@ -35,16 +35,44 @@ def test_the_actions_an_app_toml_declares_load_in_display_order(tmp_path: Path) 
     ]
 
 
-def test_a_default_chord_off_the_grammar_refuses_to_load(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("keybinding", "match"),
+    [
+        pytest.param(
+            '[[keybindings]]\nid = "new-folder"\nlabel = "New folder"\ndefault_chords = ["meta+shift+n"]\n',
+            "new-folder: meta\\+shift\\+n",
+            id="off-grammar",
+        ),
+        pytest.param(
+            '[[keybindings]]\nid = "reboot"\nlabel = "Reboot"\ndefault_chords = ["alt+meta+delete"]\n',
+            "reboot: alt\\+meta\\+delete",
+            id="refused",
+        ),
+        pytest.param(
+            '[[keybindings]]\nid = "launcher"\nlabel = "Launcher"\ndefault_chords = ["shift+k"]\nscope = "workspace"\n',
+            "launcher: shift\\+k",
+            id="workspace-wide-without-a-real-modifier",
+        ),
+    ],
+)
+def test_a_default_chord_an_action_may_not_have_refuses_to_load(
+    tmp_path: Path, keybinding: str, match: str
+) -> None:
+    manifest_path = _write_app_toml(tmp_path, keybinding)
+
+    with pytest.raises(InvalidKeybindingDeclarationError, match=match):
+        load_app_keybinding_actions(manifest_path)
+
+
+def test_a_workspace_wide_default_holds_a_real_modifier_or_is_a_function_key(tmp_path: Path) -> None:
     manifest_path = _write_app_toml(
         tmp_path,
-        '[[keybindings]]\nid = "new-folder"\nlabel = "New folder"\ndefault_chords = ["meta+shift+n"]\n',
+        '[[keybindings]]\nid = "launcher"\nlabel = "Launcher"\ndefault_chords = ["meta+k", "f6", "alt+shift+k"]\n'
+        'scope = "workspace"\n',
     )
 
-    with pytest.raises(
-        InvalidKeybindingDeclarationError, match="new-folder: meta\\+shift\\+n"
-    ):
-        load_app_keybinding_actions(manifest_path)
+    (action,) = load_app_keybinding_actions(manifest_path)
+    assert action.default_chords == ("meta+k", "f6", "alt+shift+k")
 
 
 def test_the_me_answer_layers_the_users_override_over_the_declared_defaults(

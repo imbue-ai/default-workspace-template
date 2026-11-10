@@ -41,6 +41,7 @@ import {
   detectChordPlatform,
   isChordHiddenIn,
   isRefusedChord,
+  isWorkspaceWideChord,
 } from "@imbue/workspace-ui/src/keybindings";
 import {
   type KeybindingActionView,
@@ -57,10 +58,21 @@ import {
 import { setShortcutRecording } from "../model/shortcutRecording";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 
-/** One shortcut a step would bring to an action that another action of the app uses now. */
+/** One shortcut a step would bring to an action that another action uses now. */
 export interface ClashEntry {
   readonly chord: string;
+  readonly otherApp: KeybindingAppView;
   readonly otherAction: KeybindingActionView;
+}
+
+/** An action with the app it belongs to. */
+interface CatalogAction {
+  readonly app: KeybindingAppView;
+  readonly action: KeybindingActionView;
+}
+
+function actionKey(app: string, actionId: string): string {
+  return `${app}.${actionId}`;
 }
 
 /** The chords of the list that can arrive in the context; every chord when no context is given. */
@@ -68,9 +80,42 @@ function visibleIn(chords: readonly string[], context: ChordContext | null): rea
   return context === null ? chords : chords.filter((chord) => !isChordHiddenIn(chord, context));
 }
 
-/** Every other action of the app using one of `chords` now, once per chord it uses (conflicts are per app). An
- *  action's chords are read from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved.
- *  Only chords visible in `context` clash: a chord that cannot arrive here runs nothing here. */
+/** The actions a chord of this action could collide with (the keyboard-shortcuts spec in the mngr repo, section
+ *  5.3): the other actions of its own app; every action of every app for a workspace-wide action, since it wins
+ *  inside any app's page; and, for an app's own action, the workspace-wide actions of every other app. */
+export function clashCandidates(
+  loaded: KeybindingsCatalog,
+  app: KeybindingAppView,
+  actionId: string,
+): CatalogAction[] {
+  const own = app.actions.find((action) => action.id === actionId);
+  const isWorkspaceWide = own?.scope === "workspace";
+  return loaded.apps.flatMap((other) =>
+    other.actions
+      .filter((action) => !(other.app === app.app && action.id === actionId))
+      .filter((action) => other.app === app.app || isWorkspaceWide || action.scope === "workspace")
+      .map((action) => ({ app: other, action })),
+  );
+}
+
+/** Every candidate using one of `chords` now, once per chord it uses; `heldChordsOf` answers what each candidate
+ *  has, edits not yet saved included. Only chords visible in `context` clash: a chord that cannot arrive here runs
+ *  nothing here. */
+function clashesAmong(
+  candidates: readonly CatalogAction[],
+  chords: readonly string[],
+  heldChordsOf: (candidate: CatalogAction) => readonly string[],
+  context: ChordContext | null,
+): ClashEntry[] {
+  return visibleIn(chords, context).flatMap((chord) =>
+    candidates
+      .filter((candidate) => visibleIn(heldChordsOf(candidate), context).includes(chord))
+      .map((candidate) => ({ chord, otherApp: candidate.app, otherAction: candidate.action })),
+  );
+}
+
+/** Every other action of the app using one of `chords` now, once per chord it uses. An action's chords are read
+ *  from `chordsByActionId` ahead of what it was loaded with, for edits not yet saved. */
 export function clashesOf(
   app: KeybindingAppView,
   actionId: string,
@@ -78,14 +123,31 @@ export function clashesOf(
   chordsByActionId: ReadonlyMap<string, readonly string[]> = new Map(),
   context: ChordContext | null = null,
 ): ClashEntry[] {
-  return visibleIn(chords, context).flatMap((chord) =>
-    app.actions
-      .filter(
-        (action) =>
-          action.id !== actionId &&
-          visibleIn(chordsByActionId.get(action.id) ?? action.chords, context).includes(chord),
-      )
-      .map((otherAction) => ({ chord, otherAction })),
+  const candidates = app.actions.filter((action) => action.id !== actionId).map((action) => ({ app, action }));
+  return clashesAmong(
+    candidates,
+    chords,
+    (candidate) => chordsByActionId.get(candidate.action.id) ?? candidate.action.chords,
+    context,
+  );
+}
+
+/** The clashes across the whole catalog, by the rule of `clashCandidates`; `replacedChordsByKey` holds what Replace
+ *  has left other actions (by `actionKey`), ahead of what they were loaded with. */
+export function clashesInCatalog(
+  loaded: KeybindingsCatalog,
+  app: KeybindingAppView,
+  actionId: string,
+  chords: readonly string[],
+  replacedChordsByKey: ReadonlyMap<string, readonly string[]>,
+  context: ChordContext | null,
+): ClashEntry[] {
+  return clashesAmong(
+    clashCandidates(loaded, app, actionId),
+    chords,
+    (candidate) =>
+      replacedChordsByKey.get(actionKey(candidate.app.app, candidate.action.id)) ?? candidate.action.chords,
+    context,
   );
 }
 
@@ -105,6 +167,10 @@ export function actionsSharingShortcuts(
 
 /** The one chord the recorder refuses, and why. */
 export const REFUSED_CHORD_NOTICE = "Ctrl+Alt+Delete belongs to Windows and can't be a shortcut.";
+
+/** Why the recorder refuses a chord for a workspace-wide action. */
+export const WORKSPACE_WIDE_CHORD_NOTICE =
+  "A shortcut that works everywhere in the workspace needs a modifier other than Shift, or a function key.";
 
 /** What a row says on hover when its shortcuts are set but none can arrive here. */
 export function hiddenChordsHint(hidden: readonly string[], context: ChordContext): string {
@@ -144,12 +210,19 @@ interface PendingClash {
   readonly entries: readonly ClashEntry[];
 }
 
-/** The one action being edited: the chords it will have, and the chords Replace left its app's other actions. */
+/** What Replace left another action: its app, the action, and the chords it keeps. */
+interface ReplacedAction {
+  readonly app: KeybindingAppView;
+  readonly action: KeybindingActionView;
+  readonly chords: readonly string[];
+}
+
+/** The one action being edited: the chords it will have, and what Replace left other actions, by `actionKey`. */
 interface ActionEditor {
   readonly app: KeybindingAppView;
   readonly action: KeybindingActionView;
   stagedChords: string[];
-  readonly replacedChordsByActionId: Map<string, string[]>;
+  readonly replacedByKey: Map<string, ReplacedAction>;
   isRecording: boolean;
   clash: PendingClash | null;
   /** Why the last recorded key was refused, until the next one is recorded. */
@@ -173,19 +246,38 @@ export interface KeyboardSettingsSectionAttrs {
 const SECTION_HEADER_CLASS =
   "keybinding-app-header flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left hover:bg-fill-hover";
 
-function actionKey(app: string, actionId: string): string {
-  return `${app}.${actionId}`;
+/** The other action as a sentence names it: its label, and its app when that is another app. */
+function otherActionName(entry: ClashEntry, ownApp: string): string {
+  const label = `"${entry.otherAction.label}"`;
+  return entry.otherApp.app === ownApp ? label : `${label} (${entry.otherApp.display_name})`;
 }
 
 /** The sentence a clash box opens with: which shortcut, what has it now, and what the step would do with it. */
-function clashSentence(cause: ClashCause, entry: ClashEntry, isApple: boolean): string {
+function clashSentence(cause: ClashCause, entry: ClashEntry, ownApp: string, isApple: boolean): string {
   const shortcut = chordSpokenLabel(entry.chord, isApple);
-  if (cause === "record") return `${shortcut} already runs "${entry.otherAction.label}".`;
-  if (cause === "restore-default") {
-    return `The default includes ${shortcut}, which "${entry.otherAction.label}" uses now.`;
-  }
+  const other = otherActionName(entry, ownApp);
+  if (cause === "record") return `${shortcut} already runs ${other}.`;
+  if (cause === "restore-default") return `The default includes ${shortcut}, which ${other} uses now.`;
   const step = cause === "reset" ? "Resetting" : "Discarding";
-  return `${step} brings back ${shortcut}, which "${entry.otherAction.label}" uses now.`;
+  return `${step} brings back ${shortcut}, which ${other} uses now.`;
+}
+
+/** The chords each clashing action keeps once the clashing ones are taken off it, by `actionKey`. */
+function remainingAfterReplace(
+  entries: readonly ClashEntry[],
+  replacedByKey: ReadonlyMap<string, ReplacedAction>,
+): Map<string, ReplacedAction> {
+  const remaining = new Map(replacedByKey);
+  for (const entry of entries) {
+    const key = actionKey(entry.otherApp.app, entry.otherAction.id);
+    const held = remaining.get(key)?.chords ?? entry.otherAction.chords;
+    remaining.set(key, {
+      app: entry.otherApp,
+      action: entry.otherAction,
+      chords: held.filter((chord) => chord !== entry.chord),
+    });
+  }
+  return remaining;
 }
 
 export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAttrs> {
@@ -235,7 +327,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       app,
       action,
       stagedChords: [...action.chords],
-      replacedChordsByActionId: new Map(),
+      replacedByKey: new Map(),
       isRecording: false,
       clash: null,
       refusal: null,
@@ -244,13 +336,21 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   }
 
   function hasUnsavedChanges(current: ActionEditor): boolean {
-    return (
-      !areChordListsEqual(current.stagedChords, current.action.chords) || current.replacedChordsByActionId.size > 0
-    );
+    return !areChordListsEqual(current.stagedChords, current.action.chords) || current.replacedByKey.size > 0;
   }
 
   function addChord(current: ActionEditor, chord: string): void {
     if (!current.stagedChords.includes(chord)) current.stagedChords = [...current.stagedChords, chord];
+  }
+
+  /** What Replace has left each action so far, as the clash check reads it. */
+  function replacedChordsByKey(current: ActionEditor): ReadonlyMap<string, readonly string[]> {
+    return new Map(Array.from(current.replacedByKey, ([key, replaced]) => [key, replaced.chords]));
+  }
+
+  function clashesWith(current: ActionEditor, chords: readonly string[]): ClashEntry[] {
+    if (catalog === null) return [];
+    return clashesInCatalog(catalog, current.app, current.action.id, chords, replacedChordsByKey(current), context);
   }
 
   function onRecorderKeydown(current: ActionEditor, event: KeyboardEvent): void {
@@ -259,47 +359,40 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     const chord = chordFromKeydown(event, context.platform);
     if (chord === null) return;
     current.refusal = null;
-    if (isRefusedChord(chord)) {
-      current.refusal = REFUSED_CHORD_NOTICE;
+    if (isRefusedChord(chord)) current.refusal = REFUSED_CHORD_NOTICE;
+    else if (current.action.scope === "workspace" && !isWorkspaceWideChord(chord)) {
+      current.refusal = WORKSPACE_WIDE_CHORD_NOTICE;
+    }
+    if (current.refusal !== null) {
       setRecording(current, false);
       return;
     }
-    const entries = clashesOf(current.app, current.action.id, [chord], current.replacedChordsByActionId, context);
+    const entries = clashesWith(current, [chord]);
     if (entries.length === 0) addChord(current, chord);
     else current.clash = { cause: "record", entries };
     setRecording(current, false);
   }
 
   function restoreDefaults(current: ActionEditor): void {
-    const entries = clashesOf(
-      current.app,
-      current.action.id,
-      current.action.default_chords,
-      current.replacedChordsByActionId,
-      context,
-    );
+    const entries = clashesWith(current, current.action.default_chords);
     if (entries.length === 0) current.stagedChords = [...current.action.default_chords];
     else current.clash = { cause: "restore-default", entries };
   }
 
   /** Take every clashing shortcut off the action that has it now (saved with the edit), then finish the step. */
   function replaceClash(current: ActionEditor, clash: PendingClash): void {
-    for (const entry of clash.entries) {
-      const otherChords = current.replacedChordsByActionId.get(entry.otherAction.id) ?? [...entry.otherAction.chords];
-      current.replacedChordsByActionId.set(
-        entry.otherAction.id,
-        otherChords.filter((chord) => chord !== entry.chord),
-      );
+    for (const [key, replaced] of remainingAfterReplace(clash.entries, current.replacedByKey)) {
+      current.replacedByKey.set(key, replaced);
     }
     if (clash.cause === "restore-default") current.stagedChords = [...current.action.default_chords];
     else for (const entry of clash.entries) addChord(current, entry.chord);
     current.clash = null;
   }
 
-  /** The chords an action has: what is saved, or what Replace has left another action of the app being edited. */
+  /** The chords an action has: what is saved, or what Replace has left it while another action is being edited. */
   function heldChords(appView: KeybindingAppView, action: KeybindingActionView): readonly string[] {
-    if (editor === null || editor.app.app !== appView.app) return action.chords;
-    return editor.replacedChordsByActionId.get(action.id) ?? action.chords;
+    if (editor === null) return action.chords;
+    return editor.replacedByKey.get(actionKey(appView.app, action.id))?.chords ?? action.chords;
   }
 
   /** The chords a row shows: the held ones that can arrive here. */
@@ -316,9 +409,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     isBusy = true;
     try {
       let lastDelivery: KeybindingsDeliveryOutcome | null = null;
-      for (const [otherActionId, otherChords] of current.replacedChordsByActionId) {
-        lastDelivery = (await saveKeybinding(current.app.app, otherActionId, otherChords, scope)).delivery;
-        savedActionKeys.add(actionKey(current.app.app, otherActionId));
+      for (const [key, replaced] of current.replacedByKey) {
+        lastDelivery = (await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], scope)).delivery;
+        savedActionKeys.add(key);
       }
       lastDelivery = (await saveKeybinding(current.app.app, current.action.id, current.stagedChords, scope)).delivery;
       savedActionKeys.add(actionKey(current.app.app, current.action.id));
@@ -356,7 +449,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     cause: "reset" | "discard",
     restoredChords: readonly string[],
   ): void {
-    const entries = clashesOf(appView, action.id, restoredChords, new Map(), context);
+    const entries =
+      catalog === null ? [] : clashesInCatalog(catalog, appView, action.id, restoredChords, new Map(), context);
     if (entries.length > 0) {
       pendingRevert = { app: appView, action, clash: { cause, entries } };
       return;
@@ -374,17 +468,9 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
   function replaceAndRevert(current: PendingRevert): void {
     pendingRevert = null;
     void act(async () => {
-      const remainingChordsByActionId = new Map<string, string[]>();
-      for (const entry of current.clash.entries) {
-        const otherChords = remainingChordsByActionId.get(entry.otherAction.id) ?? [...entry.otherAction.chords];
-        remainingChordsByActionId.set(
-          entry.otherAction.id,
-          otherChords.filter((chord) => chord !== entry.chord),
-        );
-      }
-      for (const [otherActionId, otherChords] of remainingChordsByActionId) {
-        await saveKeybinding(current.app.app, otherActionId, otherChords, "workspace");
-        savedActionKeys.add(actionKey(current.app.app, otherActionId));
+      for (const [key, replaced] of remainingAfterReplace(current.clash.entries, new Map())) {
+        await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], "workspace");
+        savedActionKeys.add(key);
       }
       await runRevert(current.app.app, current.action.id, current.clash.cause);
     });
@@ -397,6 +483,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
       { class: "mb-3" },
       clashView(
         current.clash,
+        current.app.app,
         () => replaceAndRevert(current),
         () => {
           pendingRevert = null;
@@ -427,10 +514,10 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     );
   }
 
-  function clashView(clash: PendingClash, onReplace: () => void, onCancel: () => void): m.Children {
+  function clashView(clash: PendingClash, ownApp: string, onReplace: () => void, onCancel: () => void): m.Children {
     return m("div", { class: "keybinding-clash mt-3 rounded-md bg-warning-surface p-3" }, [
       ...clash.entries.map((entry) =>
-        m("p", { class: "type-helper text-primary" }, clashSentence(clash.cause, entry, isApple())),
+        m("p", { class: "type-helper text-primary" }, clashSentence(clash.cause, entry, ownApp, isApple())),
       ),
       m(
         "p",
@@ -444,18 +531,20 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
-  /** What Replace will take away from the app's other actions when this edit is saved. */
+  /** What Replace will take away from other actions when this edit is saved. */
   function replacementNotes(current: ActionEditor): m.Children {
-    return Array.from(current.replacedChordsByActionId).flatMap(([otherActionId, remainingChords]) => {
-      const other = current.app.actions.find((candidate) => candidate.id === otherActionId);
-      if (other === undefined) return [];
-      return other.chords
-        .filter((chord) => !remainingChords.includes(chord))
+    return Array.from(current.replacedByKey.values()).flatMap((replaced) => {
+      const name =
+        replaced.app.app === current.app.app
+          ? `"${replaced.action.label}"`
+          : `"${replaced.action.label}" (${replaced.app.display_name})`;
+      return replaced.action.chords
+        .filter((chord) => !replaced.chords.includes(chord))
         .map((chord) =>
           m(
             "p",
             { class: "keybinding-replaced type-helper mt-2 text-secondary" },
-            `${chordSpokenLabel(chord, isApple())} will be removed from "${other.label}".`,
+            `${chordSpokenLabel(chord, isApple())} will be removed from ${name}.`,
           ),
         );
     });
@@ -595,6 +684,7 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
         ? null
         : clashView(
             clash,
+            current.app.app,
             () => replaceClash(current, clash),
             () => {
               current.clash = null;
@@ -624,10 +714,21 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     ]);
   }
 
+  /** The actions, of this app or workspace-wide ones elsewhere, sharing one of this action's shown shortcuts. */
   function sharedShortcutWarning(appView: KeybindingAppView, action: KeybindingActionView): m.Children {
-    const sharing = actionsSharingShortcuts(appView, action.id, (candidate) => shownChords(appView, candidate));
+    if (catalog === null) return null;
+    const own = shownChords(appView, action);
+    const sharing = clashCandidates(catalog, appView, action.id).filter((candidate) =>
+      shownChords(candidate.app, candidate.action).some((chord) => own.includes(chord)),
+    );
     if (sharing.length === 0) return null;
-    const names = sharing.map((other) => `"${other.label}"`).join(", ");
+    const names = sharing
+      .map((other) =>
+        other.app.app === appView.app
+          ? `"${other.action.label}"`
+          : `"${other.action.label}" (${other.app.display_name})`,
+      )
+      .join(", ");
     return m(
       "p",
       { class: "keybinding-shared type-helper mt-0.5 text-warning" },

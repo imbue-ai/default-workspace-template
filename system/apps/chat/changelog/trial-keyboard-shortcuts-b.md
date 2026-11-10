@@ -1,0 +1,1 @@
+Send the message defaults to Enter alone: `meta` is the Command key on a Mac and the Control key elsewhere, so the Cmd/Ctrl pair of alternatives is gone. Two actions are declared for the Keyboard shortcuts screen, Start a new chat (⌥⌘N, Ctrl+Alt+N elsewhere) and Stop the agent (⌘., Ctrl+.); their handlers in the chat page are still to come.

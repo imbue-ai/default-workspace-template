@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import EntryMode
+from app_manifest.manifest import KeybindingScope
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import PinStyle
@@ -365,13 +366,15 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
             "keybindings": [
                 {"id": "rename", "label": "Rename the selected entry", "default_chords": ["f2"]},
                 {"id": "unbound", "label": "Something with no default"},
+                {"id": "launcher", "label": "Open the launcher", "default_chords": ["meta+k"], "scope": "workspace"},
             ],
         }
     )
 
-    assert [(action.id, action.label, action.default_chords) for action in manifest.keybindings] == [
-        ("rename", "Rename the selected entry", ("f2",)),
-        ("unbound", "Something with no default", ()),
+    assert [(action.id, action.label, action.default_chords, action.scope) for action in manifest.keybindings] == [
+        ("rename", "Rename the selected entry", ("f2",), KeybindingScope.APP),
+        ("unbound", "Something with no default", (), KeybindingScope.APP),
+        ("launcher", "Open the launcher", ("meta+k",), KeybindingScope.WORKSPACE),
     ]
     assert AppManifest.model_validate(_full_manifest_data()).keybindings == ()
 
@@ -383,6 +386,7 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
         pytest.param({"id": "rename", "label": ""}, "keybinding label must not be empty", id="empty-label"),
         pytest.param({"id": "rename", "label": "two\nlines"}, "is a single line", id="two-line-label"),
         pytest.param({"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"),
+        pytest.param({"id": "rename", "label": "Rename", "scope": "desktop"}, "scope", id="unknown-scope"),
     ],
 )
 def test_a_malformed_keybinding_fails_to_load_with_its_reason(action: dict[str, object], match: str) -> None:

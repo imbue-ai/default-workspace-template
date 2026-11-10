@@ -19,11 +19,50 @@ copies = {state = "data/.state/system_interface"}
 health_path = "/api/health"
 
 # The keystrokes a person may re-bind in the Keyboard shortcuts dialog (the user-profile-state spec in the mngr
-# repository, section 10). The launcher's plain Enter stays fixed.
+# repository, section 10; the keyboard-shortcuts spec there, sections 5 and 6, for the defaults and the scopes).
+# `meta` is the Command key on a Mac and the Control key elsewhere, so each default is written once. A
+# workspace-wide action fires wherever focus is in the workspace (an app's page passes its chord up), and only the
+# shell declares one; its defaults avoid the chords a browser keeps from pages (Command-W, Command-T, Shift-Command-]
+# and the like), so they work in a browser too. The launcher's plain Enter stays fixed.
+[[keybindings]]
+id = "close-window"
+label = "Close the focused window"
+default_chords = ["alt+meta+w"]
+scope = "workspace"
+
+[[keybindings]]
+id = "next-window"
+label = "Next window"
+default_chords = ["alt+meta+]"]
+scope = "workspace"
+
+[[keybindings]]
+id = "previous-window"
+label = "Previous window"
+default_chords = ["alt+meta+["]
+scope = "workspace"
+
+[[keybindings]]
+id = "open-launcher"
+label = "Open the launcher"
+default_chords = ["meta+k"]
+scope = "workspace"
+
+[[keybindings]]
+id = "show-shortcuts"
+label = "Show the keyboard shortcuts"
+default_chords = ["meta+/"]
+scope = "workspace"
+
+[[keybindings]]
+id = "open-overview"
+label = "Show every window"
+scope = "workspace"
+
 [[keybindings]]
 id = "launcher-secondary-send"
 label = "Launcher: send the typed text to a chosen chat"
-default_chords = ["ctrl+enter", "meta+enter"]
+default_chords = ["meta+enter"]
 
 # The desktop marks the contract's own parts (docs/system/blueprint/workspace-themes/, section 4.2) and declares none
 # of its own: a theme styles it through those.

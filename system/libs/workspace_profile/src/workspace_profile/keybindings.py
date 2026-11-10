@@ -128,6 +128,19 @@ def is_refused_chord(chord: str) -> bool:
     return chord in REFUSED_CHORDS
 
 
+# A function key, which may stand alone as a workspace-wide chord.
+_FUNCTION_KEY_RE: Final[re.Pattern[str]] = re.compile(r"^f([1-9]|1[0-2])$")
+
+
+@pure
+def is_workspace_wide_chord(chord: str) -> bool:
+    """Whether a canonical chord may fire anywhere in the workspace: it holds a modifier other than Shift alone, or
+    is a function key, so typing into any app never triggers it."""
+    tokens = chord.split("+")
+    modifiers, key = tokens[:-1], tokens[-1]
+    return _FUNCTION_KEY_RE.match(key) is not None or any(modifier != "shift" for modifier in modifiers)
+
+
 @pure
 def normalize_chord(spelled: str) -> str:
     """The canonical spelling of a recorder-side chord. Raises ``InvalidChordError``.

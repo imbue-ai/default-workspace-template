@@ -22,7 +22,8 @@ from app_manifest.scope import (
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
 from workspace_bare_scripts import user_packages
-from workspace_profile.manifest import find_off_grammar_default_chords
+from app_manifest.manifest import KeybindingScope
+from workspace_profile.manifest import find_invalid_default_chords
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
@@ -422,14 +423,17 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
 @pytest.mark.parametrize(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
-def test_built_in_manifest_keybindings_spell_their_default_chords_in_the_grammar(
+def test_built_in_manifest_keybindings_declare_default_chords_the_actions_may_have(
     manifest_path: Path,
 ) -> None:
     # The shell's Keyboard shortcuts dialog skips a registry row whose default chords are
-    # off the grammar, and the app's own resolved-chords route refuses to load them.
+    # invalid, and the app's own resolved-chords route refuses to load them.
     manifest = load_manifest(manifest_path)
 
-    assert find_off_grammar_default_chords(manifest.keybindings) == []
+    assert find_invalid_default_chords(manifest.keybindings) == []
+    # A workspace-wide action fires inside every app's page, so only the shell declares one.
+    workspace_wide = [action.id for action in manifest.keybindings if action.scope is KeybindingScope.WORKSPACE]
+    assert workspace_wide == [] or str(manifest.name) == "system_interface"
 
 
 @pytest.mark.parametrize(
@@ -522,8 +526,16 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         for name, manifest in by_name.items()
         if manifest.keybindings
     } == {
-        "system_interface": ["launcher-secondary-send"],
-        "chat": ["send-message"],
+        "system_interface": [
+            "close-window",
+            "next-window",
+            "previous-window",
+            "open-launcher",
+            "show-shortcuts",
+            "open-overview",
+            "launcher-secondary-send",
+        ],
+        "chat": ["send-message", "new-chat", "stop-agent"],
         "files": [
             "select-all",
             "go-up",

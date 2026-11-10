@@ -110,6 +110,8 @@ export interface KeybindingActionView {
   /** What a reset leaves: the resolution without the requester's own override in this workspace. */
   reset_chords: string[];
   source: "default" | "account" | "unsent" | "workspace";
+  /** Where the chord fires: in the app's own page, or anywhere in the workspace (the shell's actions alone). */
+  scope: "app" | "workspace";
 }
 
 export interface KeybindingAppView {

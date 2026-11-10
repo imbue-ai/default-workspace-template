@@ -8,6 +8,7 @@ from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (
     describe_keybindings_value_problem,
     is_canonical_chord,
+    is_workspace_wide_chord,
     keybinding_assignment,
     normalize_chord,
     parse_keybindings_value,
@@ -89,6 +90,24 @@ def test_normalize_chord_canonicalizes_recorder_spellings(spelled: str, canonica
 def test_normalize_chord_refuses_what_it_cannot_spell_or_may_not_bind(spelled: str) -> None:
     with pytest.raises(InvalidChordError):
         normalize_chord(spelled)
+
+
+@pytest.mark.parametrize(
+    ("chord", "is_workspace_wide"),
+    [
+        ("meta+k", True),
+        ("alt+meta+w", True),
+        ("f6", True),
+        ("shift+f6", True),
+        ("ctrl+space", True),
+        ("k", False),
+        ("shift+k", False),
+        ("enter", False),
+        ("escape", False),
+    ],
+)
+def test_a_workspace_wide_chord_holds_a_real_modifier_or_is_a_function_key(chord: str, is_workspace_wide: bool) -> None:
+    assert is_workspace_wide_chord(chord) is is_workspace_wide
 
 
 def test_a_valid_keybindings_value_has_no_problem() -> None:

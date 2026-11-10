@@ -45,9 +45,9 @@ export interface LauncherFieldAttrs {
 }
 
 /** Whether a key press is the secondary action's chord: the resolved `launcher-secondary-send`
- *  binding, Ctrl+Enter / Cmd+Enter until anything else is assigned. */
+ *  binding, Cmd+Enter on a Mac and Ctrl+Enter elsewhere until anything else is assigned. */
 export function isSecondaryChord(event: ChordKeyEvent): boolean {
-  return matchesShellKeybinding(event, "launcher-secondary-send", ["ctrl+enter", "meta+enter"]);
+  return matchesShellKeybinding(event, "launcher-secondary-send", ["meta+enter"]);
 }
 
 /** Whether a key press is the line break: Enter with Shift and nothing else. */

@@ -1,0 +1,1 @@
+A `[[keybindings]]` action may declare `scope = "workspace"` (the default is `"app"`): its chord fires wherever focus is in the workspace rather than only inside the app's own page. Only the shell declares workspace-wide actions; the shell skips any other app's row that claims one.

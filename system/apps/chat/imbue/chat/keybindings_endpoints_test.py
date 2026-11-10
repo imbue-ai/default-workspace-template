@@ -17,13 +17,11 @@ def _client() -> FlaskClient:
     return create_application(build_test_state()).test_client()
 
 
-def test_the_app_toml_declares_the_send_action_with_its_default_chords() -> None:
+def test_the_app_toml_declares_the_chat_actions_with_their_default_chords() -> None:
     assert [action.model_dump(mode="json") for action in chat_keybinding_actions()] == [
-        {
-            "id": "send-message",
-            "label": "Send the message",
-            "default_chords": ["enter", "ctrl+enter", "meta+enter"],
-        }
+        {"id": "send-message", "label": "Send the message", "default_chords": ["enter"], "scope": "app"},
+        {"id": "new-chat", "label": "Start a new chat", "default_chords": ["alt+meta+n"], "scope": "app"},
+        {"id": "stop-agent", "label": "Stop the agent", "default_chords": ["meta+."], "scope": "app"},
     ]
 
 
@@ -33,7 +31,7 @@ def test_me_answers_the_defaults_when_no_profile_file_exists() -> None:
     assert answered.status_code == 200
     assert answered.get_json() == {
         "app": "chat",
-        "chords_by_action": {"send-message": ["enter", "ctrl+enter", "meta+enter"]},
+        "chords_by_action": {"send-message": ["enter"], "new-chat": ["alt+meta+n"], "stop-agent": ["meta+."]},
     }
 
 
@@ -61,10 +59,10 @@ def test_me_resolves_the_owners_snapshot_value_but_never_a_visitors(
     client = _client()
 
     owner = client.get("/api/keybindings/me")
-    assert owner.get_json()["chords_by_action"] == {"send-message": ["alt+enter"]}
+    assert owner.get_json()["chords_by_action"]["send-message"] == ["alt+enter"]
 
     visitor = client.get(
         "/api/keybindings/me",
         headers={IDENTITY_HEADER: '{"owner": false, "user_id": "visitor-1"}'},
     )
-    assert visitor.get_json()["chords_by_action"] == {"send-message": ["enter", "ctrl+enter", "meta+enter"]}
+    assert visitor.get_json()["chords_by_action"]["send-message"] == ["enter"]

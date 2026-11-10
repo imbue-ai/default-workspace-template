@@ -267,6 +267,14 @@ class MessageHandler(FrozenModel):
         return self
 
 
+class KeybindingScope(LowerCaseStrEnum):
+    """Where an action's chord fires: inside the app's own page, or anywhere in the workspace, which only the shell's
+    actions do (the keyboard-shortcuts spec in the mngr repository, section 5.2)."""
+
+    APP = auto()
+    WORKSPACE = auto()
+
+
 class KeybindingAction(FrozenModel):
     """An action the keyboard can trigger in an app, and the chords that do so out of the box (desktop-interface
     contracts.md section 2). The chord spelling is the ``workspace_profile`` grammar, checked where chords are read."""
@@ -275,6 +283,10 @@ class KeybindingAction(FrozenModel):
     label: KeybindingActionLabel = Field(description="What the action does, as the Keyboard shortcuts dialog shows it")
     default_chords: tuple[NonEmptyStr, ...] = Field(
         default=(), description="The canonical chords that trigger it by default; none leaves it unbound"
+    )
+    scope: KeybindingScope = Field(
+        default=KeybindingScope.APP,
+        description="Where the chord fires: in the app's own page, or anywhere in the workspace (the shell's alone)",
     )
 
 

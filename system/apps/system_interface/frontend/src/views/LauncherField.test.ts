@@ -41,15 +41,15 @@ function press(input: HTMLTextAreaElement, init: KeyboardEventInit): KeyboardEve
 }
 
 describe("isSecondaryChord", () => {
-  it("is Enter with Ctrl or with Cmd by default, and nothing else", () => {
+  it("is Cmd+Enter by default on a Mac, and nothing else", () => {
     const plain = { altKey: false, shiftKey: false };
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(true);
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(true);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false, ...plain })).toBe(false);
-    expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
+    expect(isSecondaryChord({ key: "a", ctrlKey: false, metaKey: true, ...plain })).toBe(false);
   });
 
-  it("off a Mac is Enter with the Control key, where the Windows key is no modifier", () => {
+  it("off a Mac is Ctrl+Enter, where the Windows key is no modifier", () => {
     setShellChordPlatformForTest("windows");
     const plain = { altKey: false, shiftKey: false };
     expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(true);
@@ -94,11 +94,12 @@ describe("the launcher field", () => {
     expect(attrs.onRunSecondary).not.toHaveBeenCalled();
   });
 
-  it("Ctrl+Enter and Cmd+Enter run the secondary action, never the highlight", () => {
+  it("Cmd+Enter runs the secondary action, never the highlight; off a Mac, Ctrl+Enter does", () => {
     const { root, attrs } = render();
     const input = inputOf(root);
+    expect(press(input, { key: "Enter", metaKey: true }).defaultPrevented).toBe(true);
+    setShellChordPlatformForTest("windows");
     expect(press(input, { key: "Enter", ctrlKey: true }).defaultPrevented).toBe(true);
-    press(input, { key: "Enter", metaKey: true });
     expect(attrs.onRunSecondary).toHaveBeenCalledTimes(2);
     expect(attrs.onRunHighlight).not.toHaveBeenCalled();
   });

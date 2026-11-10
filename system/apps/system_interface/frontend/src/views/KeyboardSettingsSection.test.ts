@@ -9,7 +9,9 @@ import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
   REFUSED_CHORD_NOTICE,
+  WORKSPACE_WIDE_CHORD_NOTICE,
   actionsSharingShortcuts,
+  clashCandidates,
   clashesOf,
   hiddenChordsHint,
   isResetOffered,
@@ -31,6 +33,7 @@ const APP: KeybindingAppView = {
       chords: ["f2"],
       reset_chords: ["f2"],
       source: "default",
+      scope: "app",
     },
     {
       id: "delete",
@@ -39,6 +42,7 @@ const APP: KeybindingAppView = {
       chords: ["delete", "ctrl+backspace"],
       reset_chords: ["delete"],
       source: "workspace",
+      scope: "app",
     },
     {
       id: "new-folder",
@@ -47,6 +51,33 @@ const APP: KeybindingAppView = {
       chords: [],
       reset_chords: [],
       source: "account",
+      scope: "app",
+    },
+  ],
+};
+
+/** The shell's workspace-wide launcher action beside an app-local one of its own. */
+const SHELL: KeybindingAppView = {
+  app: "system_interface",
+  display_name: "Workspace",
+  actions: [
+    {
+      id: "open-launcher",
+      label: "Open the launcher",
+      default_chords: ["meta+k"],
+      chords: ["meta+k"],
+      reset_chords: ["meta+k"],
+      source: "default",
+      scope: "workspace",
+    },
+    {
+      id: "launcher-secondary-send",
+      label: "Launcher: send the typed text to a chosen chat",
+      default_chords: ["meta+enter"],
+      chords: ["meta+enter"],
+      reset_chords: ["meta+enter"],
+      source: "default",
+      scope: "app",
     },
   ],
 };
@@ -119,6 +150,22 @@ describe("isResetOffered", () => {
     expect(isResetOffered(newFolder)).toBe(false);
     expect(isResetOffered({ ...deleteAction, chords: ["delete"] })).toBe(false);
     expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] })).toBe(true);
+  });
+});
+
+describe("clashCandidates", () => {
+  it("lets an app's own action collide with its app and with every workspace-wide action, and a workspace-wide one with everything", () => {
+    const loaded = catalogOf({ apps: [SHELL, APP] });
+    const keys = (app: KeybindingAppView, actionId: string): string[] =>
+      clashCandidates(loaded, app, actionId).map((candidate) => `${candidate.app.app}.${candidate.action.id}`);
+    expect(keys(APP, "rename")).toEqual(["system_interface.open-launcher", "files.delete", "files.new-folder"]);
+    expect(keys(SHELL, "open-launcher")).toEqual([
+      "system_interface.launcher-secondary-send",
+      "files.rename",
+      "files.delete",
+      "files.new-folder",
+    ]);
+    expect(keys(SHELL, "launcher-secondary-send")).toEqual(["system_interface.open-launcher"]);
   });
 });
 
@@ -534,6 +581,57 @@ describe("editing a shortcut", () => {
     expect(
       Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).map((k) => k.getAttribute("data-chord")),
     ).toEqual(["f2"]);
+  });
+
+  it("refuses a shortcut typing could trigger for a workspace-wide action", async () => {
+    stubFetch(catalogOf({ apps: [SHELL, APP] }));
+    const root = await mountSection();
+
+    click(root.querySelector('[data-keybinding-action="system_interface.open-launcher"] .keybinding-edit'));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "k", shiftKey: true });
+
+    expect(root.querySelector(".keybinding-refused")?.textContent).toBe(WORKSPACE_WIDE_CHORD_NOTICE);
+  });
+
+  it("asks before an app's action takes a workspace-wide shortcut, and on Replace saves both apps", async () => {
+    const posted = stubFetch(catalogOf({ apps: [SHELL, APP] }));
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "k", metaKey: true });
+
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'Command+K already runs "Open the launcher" (Workspace).',
+    );
+    click(root.querySelector(".keybinding-replace"));
+    expect(
+      root.querySelector('[data-keybinding-action="system_interface.open-launcher"] .keybinding-off')?.textContent,
+    ).toBe("Off");
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual([
+      {
+        url: "/api/keybindings",
+        body: { app: "system_interface", action: "open-launcher", chords: [], scope: "workspace" },
+      },
+      {
+        url: "/api/keybindings",
+        body: { app: "files", action: "rename", chords: ["f2", "meta+k"], scope: "workspace" },
+      },
+    ]);
+  });
+
+  it("flags an app's row that shares a shortcut with a workspace-wide action", async () => {
+    const files = { ...APP, actions: [{ ...APP.actions[0], chords: ["meta+k"] }] };
+    stubFetch(catalogOf({ apps: [SHELL, files] }));
+    const root = await mountSection();
+
+    expect(row(root, "rename").querySelector(".keybinding-shared")?.textContent).toContain(
+      '"Open the launcher" (Workspace)',
+    );
   });
 
   it("hides a Mac's Control shortcut off a Mac: the row reads Off and names it on hover", async () => {
