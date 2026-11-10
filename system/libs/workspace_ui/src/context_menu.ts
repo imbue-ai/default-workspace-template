@@ -315,7 +315,10 @@ const ROW_STYLE = [
   "cursor: pointer",
 ].join("; ");
 const DISABLED_ROW_STYLE = `${ROW_STYLE}; color: #9a9a9a; cursor: default`;
-const ROW_COLOR_BY_TONE: Readonly<Record<string, string>> = { danger: "#c62828", quiet: "#6b6b6b" };
+const ROW_COLOR_BY_TONE: Readonly<Partial<Record<NonNullable<ContextMenuActionRow["tone"]>, string>>> = {
+  danger: "#c62828",
+  quiet: "#6b6b6b",
+};
 const DIVIDER_STYLE = "margin: 4px 0; border: 0; border-top: 1px solid rgba(0, 0, 0, 0.1)";
 const HOVER_BACKGROUND = "rgba(0, 0, 0, 0.06)";
 /** Gap kept between the card and each viewport edge. */
@@ -415,9 +418,8 @@ export function createDefaultRenderer(ownerDocument: Document): Required<Context
     const isDisabled = row.kind === "action" && row.isDisabled === true;
     button.setAttribute("style", isDisabled ? DISABLED_ROW_STYLE : ROW_STYLE);
     if (isDisabled) button.setAttribute("aria-disabled", "true");
-    if (row.kind === "action" && !isDisabled && row.tone !== undefined && row.tone in ROW_COLOR_BY_TONE) {
-      button.style.color = ROW_COLOR_BY_TONE[row.tone];
-    }
+    const toneColor = row.kind === "action" && row.tone !== undefined ? ROW_COLOR_BY_TONE[row.tone] : undefined;
+    if (!isDisabled && toneColor !== undefined) button.style.color = toneColor;
     if (row.tooltip !== undefined) button.title = row.tooltip;
     if (row.kind === "check") button.setAttribute("aria-checked", row.isChecked ? "true" : "false");
     if (hasCheckColumn) {
