@@ -1,5 +1,5 @@
 /**
- * One keyboard shortcut drawn as a single keycap, primary modifier first ("⌘⇧N" on an Apple platform,
+ * One keyboard shortcut drawn as a single keycap, the way a menu writes it ("⇧⌘N" on an Apple platform,
  * "Ctrl+Shift+N" elsewhere), with its name in words for screen readers and on hover.
  */
 

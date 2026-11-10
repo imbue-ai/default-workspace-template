@@ -429,10 +429,12 @@ function labelsOfToken(token: string): KeyLabels {
   return sameOnEveryPlatform(printed, printed);
 }
 
-/** A chord's tokens in the order its labels write them: the primary modifier (`meta`) first, then the other held
- *  modifiers in the grammar's order, then the key. */
-function tokensInLabelOrder(chord: string): string[] {
+/** A chord's tokens in the order its labels write them. On an Apple platform that is the grammar's own order, which
+ *  is Apple's (⌃⌥⇧⌘, as the macOS menu bar writes the same shortcut); elsewhere the primary modifier (`meta`, Ctrl)
+ *  comes first, as Windows and Linux write it, then the other held modifiers in the grammar's order, then the key. */
+function tokensInLabelOrder(chord: string, isApple: boolean): string[] {
   const tokens = chord.split("+");
+  if (isApple) return tokens;
   const modifiers = tokens.slice(0, -1);
   return [
     ...modifiers.filter((token) => token === "meta"),
@@ -443,23 +445,24 @@ function tokensInLabelOrder(chord: string): string[] {
 
 /** The keycaps one canonical chord is drawn as, in label order (`tokensInLabelOrder`). */
 export function chordKeycapLabels(chord: string, isApple: boolean): string[] {
-  return tokensInLabelOrder(chord).map((token) => {
+  return tokensInLabelOrder(chord, isApple).map((token) => {
     const labels = labelsOfToken(token);
     return isApple ? labels.appleKeycap : labels.otherKeycap;
   });
 }
 
 /**
- * One canonical chord as a single label: Apple's symbols run together on an Apple platform ("⌘⇧N"), the names joined
- * with `+` elsewhere ("Ctrl+Shift+N"), the primary modifier first either way.
+ * One canonical chord as a single label, the way a menu writes it: Apple's symbols run together in Apple's order on an
+ * Apple platform ("⇧⌘N"), the names joined with `+` and the primary modifier first elsewhere ("Ctrl+Shift+N").
  */
 export function chordDisplayLabel(chord: string, isApple: boolean): string {
   return chordKeycapLabels(chord, isApple).join(isApple ? "" : "+");
 }
 
-/** One canonical chord in words ("Command+Shift+N"), in label order, for tooltips, screen readers, and messages. */
+/** One canonical chord in words ("Shift+Command+N" on an Apple platform), in label order, for tooltips, screen
+ *  readers, and messages. */
 export function chordSpokenLabel(chord: string, isApple: boolean): string {
-  return tokensInLabelOrder(chord)
+  return tokensInLabelOrder(chord, isApple)
     .map((token) => {
       const labels = labelsOfToken(token);
       return isApple ? labels.appleWord : labels.otherWord;

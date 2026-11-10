@@ -1,4 +1,4 @@
-The keyboard shortcuts screen is redesigned. Each app's actions sit in a collapsible section with a count. Every shortcut is one keycap written the way a menu writes it ("⌘⇧N" on an Apple platform, "Ctrl+Shift+N" elsewhere, named in words on hover), with "or" between an action's alternatives. An action saved or reset is marked "Saved" until the screen is opened again.
+The keyboard shortcuts screen is redesigned. Each app's actions sit in a collapsible section with a count. Every shortcut is one keycap written the way a menu writes it ("⇧⌘N" on an Apple platform, "Ctrl+Shift+N" elsewhere, named in words on hover), with "or" between an action's alternatives. An action saved or reset is marked "Saved" until the screen is opened again.
 
 Editing one action opens its editor below the row:
 
