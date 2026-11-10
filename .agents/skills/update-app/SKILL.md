@@ -46,73 +46,88 @@ as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
-Not every change is a quick edit. Before you start, decide which of these
-the request is -- it changes what you do *before* touching code:
+Requests can arrive several to a message, one per message across the feedback
+rounds, or mixed in with feedback on a change already in progress. Whenever new
+requests arrive, decide how they group into units of work and how large each
+unit is, before touching code for them. Both decisions change what you do
+before editing.
 
-- **Small / contained change** -- a bug fix, a copy tweak, a new field, a
-  backend logic fix, a config or `command` change, a restart. Go straight
-  to the live change loop below: edit, apply, refresh, verify.
+**Group the requests.** Use your judgment; any grouping is possible. For
+example, the requests may all be parts of one larger change, each be
+independent, or split into a few mid-sized groups, or two small fixes beside
+one large change. A request that arrives during the feedback rounds may extend
+the change in progress or stand apart from it. Put requests in one unit when
+they only make sense together. Keep them apart when each can be confirmed and
+shipped on its own, so that waiting on the user to confirm one shape never
+holds up an unrelated fix. A new view or capability added to an existing
+service gets its own feedback gate (`interactive-delivery.md` phase 8): confirm
+and ship it on its own rather than bundling it with unrelated changes.
 
-- **Larger-scope change** -- a redesign, a new page or view, a meaningful
-  shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
-  `.agents/shared/references/interactive-delivery.md`**, put a cheap,
-  throwaway version of the *proposed* change in front of the user, loop until
-  they **explicitly confirm** the shape, and only then build the real thing
-  to a usable state. Never build heavy against an unconfirmed shape.
+**Size each unit.** Scope is a range:
 
-  This is the demonstrative-prototype choice from
-  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
-  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
-  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
-  a redesign, or a data-touching change -- boot the *actually changed* app as a
-  labeled preview window beside the live one (Type 1 -- the real edit shown
-  through the real surface) with `preview_app.py` (invocation under "Protect
-  the user's data while you verify"; the same preview mechanism the careful
-  flow uses). Either way, *reading* the live store to render a preview is
-  fine; never let a preview or verification *write* to it.
+- **Small and contained:** a bug fix, a copy tweak, a new field, a backend
+  logic fix, a config or `command` change, a restart, or any change to
+  behavior behind an unchanged surface. Go straight to the live change loop
+  below: edit, apply, refresh, verify.
+- **Larger scope:** a redesign, a new page or view, a meaningful shift in look
+  and feel, a new user-facing capability. Confirm the shape before building it
+  (below). If building it will take long stretches of reasoning, hand that
+  unit to a background worker (see "Hand large work to a background worker").
+- **In between:** a unit with some of each, for example a new control on an
+  existing page. Decide by how much it changes what the user sees: go straight
+  to the live change loop if that change is minor, and confirm the shape first
+  if it is substantial or you can't tell.
 
-  **Does this change warrant a preview at all?** For an ordinary app a
-  preview is the exception, not the default. If the change *works*, a taste
-  mismatch is cheap to fix next round, so most changes can just go live and
-  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
-  a data-touching change, a substantial visual shift. A routine tweak, a copy
-  change, or a behavior-only change behind an unchanged surface doesn't need one.
-  (A critical app leans the other way -- the careful flow previews by default,
-  because the live app is off-limits. It still asks this same question before
-  the *final* pre-merge preview: a change the user cannot observe gives them
-  nothing to judge.)
+### Confirming the shape
 
-  A new view or capability bolted onto an existing service is its own
-  delivery with its own feedback gate (interactive-delivery phase 8):
-  confirm and ship it on its own rather than bundling it with unrelated
-  changes.
+For a unit at the larger end, run the *same* mock-confirm flow `build-app` used
+to create the service: **read
+`.agents/shared/references/interactive-delivery.md`**, put a cheap, throwaway
+version of the *proposed* change in front of the user, loop until they
+**explicitly confirm** the shape, and only then build the real thing to a
+usable state. Never build heavy against an unconfirmed shape.
 
-  When building it will take long stretches of reasoning, hand the build to a
-  background worker once the shape is settled (see "Hand large work to a
-  background worker" below).
+This is the demonstrative-prototype choice from
+[`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+a redesign, or a data-touching change -- boot the *actually changed* app as a
+labeled preview window beside the live one (Type 1 -- the real edit shown
+through the real surface) with `preview_app.py` (invocation under "Protect
+the user's data while you verify"; the same preview mechanism the careful
+flow uses). Either way, *reading* the live store to render a preview is
+fine; never let a preview or verification *write* to it.
 
-When in doubt about which bucket you're in, treat a change that alters what
-the user *sees or perceives* as larger-scope (confirm the shape first) and a
-change that only alters behavior behind an unchanged surface as contained.
-Either way, the mechanics of surfacing the change to the user are the same
-live loop.
+**Does this change warrant a preview at all?** For an ordinary app a
+preview is the exception, not the default. If the change *works*, a taste
+mismatch is cheap to fix next round, so most changes can just go live and
+iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+a data-touching change, a substantial visual shift. A routine tweak, a copy
+change, or a behavior-only change behind an unchanged surface doesn't need one.
+(A critical app leans the other way -- the careful flow previews by default,
+because the live app is off-limits. It still asks this same question before
+the *final* pre-merge preview: a change the user cannot observe gives them
+nothing to judge.)
+
+Every unit, whatever its size, reaches the user through the live change loop
+below.
 
 ## Hand large work to a background worker
 
-Keep the main chat free for the user. Work that needs long stretches of
+Keep the main chat free for the user. A unit that needs long stretches of
 heavy reasoning goes to a background worker through the `launch-task` skill:
 a new feature that spans several files, a redesign of a page or view, a change
 applied across many records or many parts of the app, or anything else you
-expect to take more than a few minutes of building. You stay available to
-answer the user's next messages, make small changes yourself, and bring the
-worker's result in when it lands. Small, contained changes stay with you,
-because handing them off takes longer than doing them.
+expect to take more than a few minutes of building. Hand off each such unit
+on its own, never the whole set of requests: build the small and in-between
+units yourself through the live loop while the workers run, so they reach the
+user without waiting on the large ones. You stay available to answer the
+user's next messages and bring each worker's result in when it lands.
 
 To hand work off:
 
-1. If the change needs its shape confirmed (a larger-scope change above),
-   settle the shape with the user first, then hand off the build.
+1. If the unit needs its shape confirmed (see "Confirming the shape"), settle
+   its shape with the user first, then hand off the build.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the request in the user's words, the files and
    decisions you already know about, and what done looks like. It asks the
