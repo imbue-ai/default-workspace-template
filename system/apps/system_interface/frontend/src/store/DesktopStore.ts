@@ -612,6 +612,8 @@ export class DesktopStore {
   private opensKeyboardShortcuts = false;
   /** Whether the shell's own keyboard shortcuts dialog is open (no embedder shows them). */
   private isKeyboardShortcutsDialogOpenNow = false;
+  /** Bumped by every report of the shortcuts to the chrome, so a catalog read answered after a newer one's is dropped. */
+  private shellShortcutsReportGeneration = 0;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -3030,10 +3032,16 @@ export class DesktopStore {
     const chords = [...new Set(Object.values(chordsByAction).flat())];
     this.pageDriver?.sendWorkspaceChords(chords, shellChordContext().surface);
     if (!this.isEmbedderPresent) return;
+    const generation = ++this.shellShortcutsReportGeneration;
+    const isLatest = (): boolean => generation === this.shellShortcutsReportGeneration;
     void this.deps.api.fetchKeybindingsCatalog().then(
-      (catalog) => this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog)),
-      // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
-      () => this.shortcutsBridge.reportShellShortcuts(chordsByAction, []),
+      (catalog) => {
+        if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog));
+      },
+      () => {
+        // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
+        if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, []);
+      },
     );
   }
 

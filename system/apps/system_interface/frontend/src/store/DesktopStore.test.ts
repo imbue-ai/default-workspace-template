@@ -1042,6 +1042,33 @@ describe("workspace-wide actions", () => {
     });
   });
 
+  it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const answers: ((catalog: typeof api.keybindingsCatalog) => void)[] = [];
+    for (let read = 0; read < 2; read++) {
+      api.pendingKeybindingsCatalogs.push(new Promise((resolve) => answers.push(resolve)));
+    }
+
+    // Reported before the shell's own chords land, then again once they have.
+    store.setEmbedderPresent(true);
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setCanPopOut(true);
+    answers[1](api.keybindingsCatalog);
+    await settle();
+    answers[0](api.keybindingsCatalog);
+    await settle();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
   it("hands a chord the chrome intercepted to the focused window's page", async () => {
     const store = await startedStore();
     const sent: string[] = [];
