@@ -22,8 +22,19 @@ vi.mock("./presence", () => ({
 }));
 const ensureParticipants = vi.fn(() => Promise.resolve());
 vi.mock("./models/Participants", () => ({ ensureParticipants }));
+const stopComposerAgent = vi.fn();
+vi.mock("./views/MessageInput", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./views/MessageInput")>()),
+  stopComposerAgent,
+}));
 
-import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
+import {
+  SHELL_CHORD,
+  SHELL_HANDSHAKE,
+  SHELL_HIDDEN,
+  SHELL_LOCATION,
+  SHELL_SHOWN,
+} from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
 
@@ -114,6 +125,19 @@ describe("connectChatToShell", () => {
     // Hidden until the shell says shown: the page may have loaded into a background tab.
     expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-1", "hidden"]]);
     expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"], ["closed"]]);
+  });
+
+  it("runs the chat shortcut a chord the desktop app took from the OS names", async () => {
+    const parent = framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_CHORD, chord: "alt+f4" }, parent);
+    expect(stopComposerAgent).not.toHaveBeenCalled();
+    deliver({ type: SHELL_CHORD, chord: "meta+." }, parent);
+
+    expect(stopComposerAgent).toHaveBeenCalledTimes(1);
   });
 
   it("reports nothing from a subagent view of the chat", async () => {

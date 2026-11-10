@@ -7,8 +7,8 @@
  * chat in place instead, see root/relay.ts).
  *
  * The chat's shortcuts run here too, since a keystroke in this page never reaches the root that
- * frames it: Stop the agent presses this page's Stop button, and New chat starts one and asks for it
- * as a sibling.
+ * frames it, and so does one the desktop app took from the OS for them (``shell:chord``): Stop the
+ * agent presses this page's Stop button, and New chat starts one and asks for it as a sibling.
  */
 
 import m from "mithril";
@@ -16,6 +16,7 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import {
   type ChatShortcut,
+  chatShortcutOfChord,
   chatShortcutOfKeydown,
   refreshKeybindings,
   setKeybindingSurface,
@@ -119,6 +120,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
     onChordSurface: setKeybindingSurface,
+    onChord: (chord) => {
+      const shortcut = chatShortcutOfChord(chord);
+      if (shortcut !== null) runChatShortcut(shortcut);
+    },
   });
   void refreshKeybindings();
   document.addEventListener("keydown", (event) => {
