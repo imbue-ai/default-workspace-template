@@ -110,8 +110,8 @@ a couple of minutes of building goes to a background worker through the
 spans several files, or a change applied across many records or many parts of
 the app. Use one worker for all such requests: hand it the first, and send
 each later one to the same worker with `create_worker.py reply`. The worker
-may combine its requests and build them together, in whatever order works,
-without finishing one before starting the next. Build the rest yourself
+may combine its requests and build them together, in whatever order gets
+the work done fastest, without finishing one before starting the next. Build the rest yourself
 through the live loop while it runs, so they reach the user without waiting
 on the large ones. You stay available to answer the user's next messages and
 bring the worker's result in when it lands.
@@ -132,7 +132,7 @@ To hand work off:
    worker to build the change to a usable state, verify it against its own
    instance (never the live app), commit, and send a milestone report each
    time a usable part is committed, and says it may build its requests
-   together in any order. It also tells the worker not to take the
+   together in any order, to get the work done fast. It also tells the worker not to take the
    service lease, touch the live app or the user's windows, harden, or hand
    off again. Hardening still happens at turn-end, as described below.
    Handing work to a worker does not change its scope. Decide the scope
