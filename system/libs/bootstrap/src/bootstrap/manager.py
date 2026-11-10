@@ -85,7 +85,8 @@ BUILT_IN_APPS_DIR = Path("system/apps")
 # The registry writer, stdlib-only, run with a bare python3 as every app's program line runs it.
 # own-process: other-tree -- the boot rolls back an interrupted update and re-syncs the venv after this process started, so an import would load the registry writer as it was at start
 FORWARD_PORT_SCRIPT = Path("system/scripts/forward_port.py")
-# Bound on the one registry rewrite of every built-in app's keybindings: local file reads and one write.
+# Bound on the run that rewrites every built-in app's keybindings: local file reads and one locked registry rewrite
+# per app.
 _KEYBINDINGS_REFRESH_TIMEOUT_SECONDS = 60.0
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
