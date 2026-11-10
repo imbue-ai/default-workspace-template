@@ -4,7 +4,7 @@
 # the desktop offers the synthesized ``open`` at its root.
 name = "about-me"
 display_name = "What Studio knows about me"
-description = "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its source and date, and controls to add to it, delete any of it, or forget all of it."
+description = "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its source and date, and controls to add to it, edit or delete any of it, or forget all of it."
 api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
@@ -14,6 +14,11 @@ priority = "about-me"
 # Part of the workspace itself (its memory of the user) rather than an app built on it, so the Share tab tucks it
 # under its System group rather than offering it up front.
 system = true
+
+# Seeds a desktop shortcut, so what Studio remembers about the user is always one click away.
+[default_shortcut]
+launch = "open"
+mode = "focus"
 
 # Built only from the page kit and the design tokens, so every theme styles it with no work of its own
 # (docs/system/blueprint/workspace-themes/, section 7).

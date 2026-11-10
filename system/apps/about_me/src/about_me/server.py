@@ -57,7 +57,7 @@ WORKSPACE_DIR: Final[Path] = Path(os.environ.get("ABOUT_ME_WORKSPACE_DIR", "."))
 APP_DISPLAY_NAME: Final[str] = "What Studio knows about me"
 APP_DESCRIPTION: Final[str] = (
     "What Studio remembers about you, from what you told it and the web lookup you asked for, each fact with its "
-    "source and date, and controls to add to it, delete any of it, or forget all of it."
+    "source and date, and controls to add to it, edit or delete any of it, or forget all of it."
 )
 STATIC_DIR: Final[Path] = Path(__file__).parent / "static"
 # The page's own script and stylesheet, by file name under /assets/.
