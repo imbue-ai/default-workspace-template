@@ -16,7 +16,8 @@ from functools import cache
 from pathlib import Path
 from typing import Final
 
-from app_manifest.manifest import KeybindingAction, KeybindingScope
+from app_manifest.manifest import KeybindingAction
+from app_manifest.manifest import KeybindingScope
 from loguru import logger
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
