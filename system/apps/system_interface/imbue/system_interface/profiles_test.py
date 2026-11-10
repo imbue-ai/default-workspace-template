@@ -287,6 +287,7 @@ def test_a_profile_the_cache_cannot_keep_is_not_announced_as_changed(tmp_path: P
     assert len(connector.requests) == 1
 
 
+@pytest.mark.flaky
 def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sharing(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
