@@ -329,8 +329,9 @@ def test_a_visitor_cannot_save_everywhere(tmp_path: Path) -> None:
         ({"chords": ["banana+x"]}, "does not spell"),
         ({"action": "no-such-action"}, "no app declares"),
         ({"app": "no-such-app"}, "no app declares"),
+        ({"action": "open-launcher", "chords": ["shift+k"]}, "needs a modifier other than shift"),
     ],
-    ids=["bad-chord", "unknown-action", "unknown-app"],
+    ids=["bad-chord", "unknown-action", "unknown-app", "workspace-wide-without-modifier"],
 )
 def test_a_save_refuses_what_it_cannot_store(tmp_path: Path, body_patch: dict[str, Any], detail_fragment: str) -> None:
     body: dict[str, Any] = {

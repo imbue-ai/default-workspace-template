@@ -6,6 +6,7 @@ import os
 from enum import auto
 from typing import Final
 
+from app_manifest.manifest import KeybindingScope
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
@@ -13,6 +14,7 @@ from flask.typing import ResponseReturnValue
 from latchkey_access.gateway import GatewayAccess
 from pydantic import Field
 from workspace_profile.errors import InvalidChordError
+from workspace_profile.keybindings import is_workspace_wide_chord
 from workspace_profile.keybindings import normalize_chord
 from workspace_profile.keybindings import resolve_app_keybindings
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
@@ -272,12 +274,21 @@ def save_keybinding() -> ResponseReturnValue:
         chords = [normalize_chord(chord) for chord in body.chords]
     except InvalidChordError as e:
         return detail_response(str(e), HTTP_BAD_REQUEST)
-    is_known_action = any(
-        app_actions.app == body.app and any(action.id == body.action for action in app_actions.actions)
+    declared = [
+        action
         for app_actions in list_app_keybinding_actions(shell.inventory.entries())
-    )
-    if not is_known_action:
+        if app_actions.app == body.app
+        for action in app_actions.actions
+        if action.id == body.action
+    ]
+    if not declared:
         return detail_response(f"no app declares the action {body.app}.{body.action}", HTTP_BAD_REQUEST)
+    if declared[0].scope is KeybindingScope.WORKSPACE and not all(is_workspace_wide_chord(chord) for chord in chords):
+        return detail_response(
+            f"{body.app}.{body.action} works everywhere in the workspace, so each of its chords needs a modifier "
+            "other than shift, or a function key",
+            HTTP_BAD_REQUEST,
+        )
     user_id = resolve_request_user_id(identity, snapshot)
     if user_id is None:
         return detail_response("a visitor with no account cannot save keybindings", HTTP_FORBIDDEN)
