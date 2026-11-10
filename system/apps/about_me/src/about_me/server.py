@@ -62,9 +62,8 @@ ASSET_FILES: Final[dict[str, str]] = {
     "about_me.js": "text/javascript",
     "about_me.css": "text/css",
 }
-# The shell-built browser modules every app serves from its own origin (relative to the repo root the app runs
-# from): the app contract and the element context menu every page imports, and the page kit a plain-HTML page
-# wears the workspace's theme with (docs/system/blueprint/workspace-themes/, section 5.3).
+# The shell-built browser modules every app serves from its own origin, relative to the repo root the app runs
+# from (docs/system/blueprint/workspace-themes/, section 5.3).
 SHELL_STATIC_MODULES_DIR: Final[Path] = SHELL_APP_CONTRACT_PATH.parent
 SHELL_STATIC_FILES: Final[dict[str, str]] = {
     "app_contract.js": "text/javascript",

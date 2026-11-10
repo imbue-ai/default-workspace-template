@@ -537,9 +537,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             "save-file",
         ],
     }
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, the
-    # Style Guide, and What Studio knows about me stop once no window shows them; the Screen never stops for
-    # emptiness (the Screen spec, D3); and the critical ones (which the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2. The Screen never stops for emptiness (the Screen spec, D3), and
+    # the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
     } == {

@@ -1,9 +1,7 @@
-# The "What Studio knows about me" app: what the opt-in web lookup by name (the personalized-ideas skill) remembered
-# about the user, as one page at ``/``: each fact with its source link (or "You told me") and date, a Delete per
-# fact, "Forget all of this", and the raw files. It reads and writes only data/memories/user-public-profile.md, its
-# line in data/memories/MEMORY.md, and data/.skills/personalized-ideas/sources.json, and never reaches the network.
-# It declares no launch path, so the desktop offers the synthesized ``open`` at its root; it seeds no desktop
-# shortcut, and the launcher lists it after the ranked apps.
+# The "What Studio knows about me" app: one page at ``/`` showing what the opt-in web lookup by name (the
+# personalized-ideas skill) remembered about the user, with controls to delete it. It touches only the profile
+# memory files and never reaches the network. It declares no launch path, so the desktop offers the synthesized
+# ``open`` at its root.
 name = "about-me"
 display_name = "What Studio knows about me"
 description = "What the web lookup you asked for remembered about you, each fact with its source and date, and controls to delete any of it or forget all of it."
