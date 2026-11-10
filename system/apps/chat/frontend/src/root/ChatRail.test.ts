@@ -281,6 +281,19 @@ describe("ChatRail right-click", () => {
     expect(openElsewhere).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a right-click in a row's rename field to the field, without the row's verbs", () => {
+    const { openElsewhere } = mountUnderElementMenu(false);
+    root!.querySelector('[data-chat-id="agent-2"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    m.redraw.sync();
+    const field = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input')!;
+    rightClick(field);
+    expect(document.querySelector(".chat-rail-menu")).toBeNull();
+    expect(openElsewhere).toHaveBeenCalledTimes(1);
+    const [rows] = openElsewhere.mock.calls[0] as [{ key?: string }[]];
+    expect(rows.map((row) => row.key)).not.toContain("rename");
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
   it("where the desktop app draws the menu, hands it the row's verbs and runs the one it picks", async () => {
     mountUnderElementMenu(true);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);

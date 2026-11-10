@@ -260,10 +260,11 @@ export function rowMenuRows(
   ];
 }
 
-/** The row ``element`` is in, or null off the rows and on one being deleted, which offers no verbs. */
+/** The row ``element`` is in, or null off the rows and on one being deleted or renamed, which offers no verbs: a
+ *  right-click in the rename field is the field's, for its edit rows. */
 function railRowOf(context: RowMenuContext, element: Element): ChatRow | null {
   const chatId = element.closest(".chat-rail-row[data-chat-id]")?.getAttribute("data-chat-id") ?? null;
-  if (chatId === null || deletingChatIds.has(chatId)) return null;
+  if (chatId === null || isDeleting(chatId) || isRenaming(chatId)) return null;
   return context.rows.find((row) => row.chatId === chatId) ?? null;
 }
 
