@@ -1,3 +1,5 @@
 `read-app-data` says that "the apps I have installed" and "my recent projects" mean the user's Mac, never the workspace's own apps or folders, and an agent with no grant asks for one rather than describing the workspace.
 
 `read-app-data` tells the gateway's "Request not permitted by the user" (the grant is gone) from a 403 the Mac itself returns (Full Disk Access), withdraws a request still waiting once its source is `RESTORED`, and says "you approved" only after a `GRANTED` verdict.
+
+New `suggest-apps` skill: when the user wants an app built but has no idea what, or names nothing specific, the agent asks once to read everyday app data (installed apps and browser history, plus Notes, Reminders, and Calendar when Imbue Studio has Full Disk Access; never Messages, shell history, or code projects unless the user brings them up), reads it for patterns rather than details, and suggests three to five apps with why each fits, then builds the one picked. Without data it asks two or three quick questions and suggests from the answers. `do-something-new` routes such requests to it.
