@@ -19,7 +19,7 @@ import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
-import { refreshKeybindings } from "./models/keybindings";
+import { refreshKeybindings, setKeybindingSurface } from "./models/keybindings";
 import { entryOf, pageUrlOf, readPageData } from "./models/server";
 import { decodePathname, isFolderPath, titleOf } from "./models/paths";
 import { ENTRY_PATH_ATTR, FOLDER_SURFACE_ATTR } from "./views/entries";
@@ -65,6 +65,7 @@ function bootstrap(): void {
   const connection = connectToShell({
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
+    onChordSurface: setKeybindingSurface,
     onHandshake: (received) => {
       handshake = received;
       filesApp?.setOpensLocalFiles(received.opensLocalFiles);
