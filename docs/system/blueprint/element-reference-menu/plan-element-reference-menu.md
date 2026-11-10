@@ -171,6 +171,7 @@ Two references drafted before a send are two chips and two prompt lines, each na
 
 The library's installer listens for `contextmenu` on the document.
 An event that is already `defaultPrevented` is left alone (section 4.4 says how a page's own menus join in instead).
+So is one with Shift held, which the browser's own menu takes; and where the desktop app draws the menu (section 11), the installer keeps the rows for it rather than preventing the default and opening its own.
 Otherwise the installer prevents the default, reads the target (the event's target element; a text node's parent), the selection (`getSelection().toString()`), and the click position, builds the reference (section 3.1) from those and the page's last handshake, and opens the menu at the pointer.
 The menu closes on a press outside it, on Escape, and after a row runs; the shared Menu component's rules for the built-ins, the same rules in the framework-free renderer for agent-built apps.
 
