@@ -1,6 +1,6 @@
 ---
 name: personalized-ideas
-description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or answers no to the welcome's "Do you have any ideas?". Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, and then suggests a few things to build. Skip when the user already has something in mind.
+description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or answers no to the welcome's "Do you have any ideas?". Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, can use their Mac's app data (through suggest-apps) to narrow the search when they ask, and then suggests a few things to build. Skip when the user already has something in mind.
 metadata:
   author: imbue
 ---
@@ -9,7 +9,8 @@ metadata:
 
 The user wants to build something but has no idea what.
 Generic suggestions rarely land; ideas that fit their work and interests do.
-With their permission, you can learn about them from what is public about them online, and suggest from that.
+With their permission, you can learn about them from what is public about them online, and from their Mac's app data (the `suggest-apps` and `read-app-data` skills), and suggest from that.
+This skill leads the conversation; `suggest-apps` is the part of it that reads app data, and only when a step below sends you there.
 
 The lookup is something the user opts into, never something you do on your own.
 Everything in this skill serves that: ask before searching, search only for what they agreed to, use only what they confirm is them, and keep what you learn where they can see and delete it.
@@ -17,7 +18,7 @@ Everything in this skill serves that: ask before searching, search only for what
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5).
+- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5). `app_terms` is `{"approved": [...], "declined": [...]}`, the search details from their app data they picked or turned down ("Narrow it down with their Mac" in step 5).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -138,7 +139,7 @@ When a call answers an error, do not search with anything else:
 Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
 
 - **Search in parallel.** Run every search call in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
-- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. The one exception is the organization behind `email_domain`, and only after the user says yes to including it (step 5). Searching with anything else looks the user up with information they never offered.
+- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. There are two exceptions, each only after the user picks it with a button: the organization behind `email_domain` (step 5), and a detail from their app data they pick in "Narrow it down with their Mac" (step 5). Searching with anything else looks the user up with information they never offered.
 - **Widen a thin first batch.** If the first batch shows one person or none, run one more batch at once, before asking anything: the name with `LinkedIn`, with `GitHub`, and with `personal website` (at most 3 more searches). Most names belong to several people, and a single candidate is more often a thin result than a match.
 - **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
@@ -186,6 +187,28 @@ Show the user the people you found, one short line each with its link, and ask w
 - `include my organization` (or another clear yes): set `"email_org": "yes"` in `consent.json`, run one search for the name with `<Org>` (never the address), and show the people again, ranked as above.
 - `don't include it`, or a pick or detail that answers the question another way: set `"email_org": "no"` in `consent.json` and never search with it.
 
+### Narrow it down with their Mac
+
+When the results show more than one person, or none, and the message is from the owner (no `[from: <name>]` prefix), add this as the last line of the message showing them (after the organization question, when that is asked too):
+
+> [Use my Mac apps to narrow it down](#reply=use%20my%20Mac%20apps%20to%20narrow%20it%20down)
+
+On `use my Mac apps to narrow it down`:
+
+1. Get app data as the `suggest-apps` skill's steps 1 and 2 say: read what you already hold, and ask only for the rest. In this workspace's first chat, when `data/.skills/read-app-data/first_chat_offer.json` does not exist, file the request with `"origin": "first-chat-offer"` and write that file, as the `read-app-data` skill's "The first-chat offer" says (this is that offer). The reason: "To tell which of these people is you, and to suggest apps that fit how you work, I'd like to see which apps you have installed and the sites you visit most." Wait for the answer as `read-app-data` says, then end your turn if none has come.
+2. Read what was granted for patterns (`suggest-apps` step 3), and pick at most 3 short search details that a public page about them would also mention: an organization or school they use often (`MIT` from many visits to mit.edu), their field (`machine learning`), a public project or handle. Never a person's name, an address, anything about health, money or relationships, and never one listed in `app_terms.declined`.
+3. Offer them as buttons, each naming where it came from, and nothing about the raw data behind it:
+
+   > From your Mac, these might help find you. Pick any to add to the search:
+   >
+   > [MIT (your browser history)](#reply=search%20with%20MIT) [machine learning (your installed apps)](#reply=search%20with%20machine%20learning) [None of these](#reply=none%20of%20these)
+
+   End your turn. Nothing from the app data goes into a search until they pick it.
+4. Each `search with <detail>` they send adds that detail to `app_terms.approved`; search for the name with it (one search per detail, in one batch), and show the people again, ranked as above. Details they did not pick, or `none of these`, go in `app_terms.declined`: never propose them again.
+5. A confirmed fact that came from one of these searches cites its web page as usual; a detail they picked that no page confirms, kept as a fact, ends with `(you told me)`, since they chose it.
+
+Raw app data (page titles, URLs, file names, note or event text) never goes into a search, the chat, or a memory. When nothing was granted or nothing useful came out of it, say so in one line and go on with step 5's question as usual.
+
 End your turn and wait.
 Keep only what they confirm.
 
@@ -222,6 +245,8 @@ The **What Studio knows about me** page shows every memory in that directory, gr
 
 
 ## 6. Suggest
+
+Before suggesting, when you hold no app data yet and the user has not turned it down in this workspace (`data/.skills/read-app-data/first_chat_offer.json` has no skip, and they did not decline the request), ask for it once, as "Narrow it down with their Mac" step 1 says, with the reason "To suggest apps that fit how you work, I'd like to see which apps you have installed and the sites you visit most." Suggest after its answer, from what they confirmed or told you and the patterns in their app data (`suggest-apps` step 3; its rules on what never to name apply). When they decline, suggest from the rest, and do not ask again.
 
 Suggest three to five things to build, each one or two sentences, each tied to something about them ("You publish a newsletter, so: a page that drafts each issue from your saved links").
 Prefer things that can be built in this workspace in one sitting.

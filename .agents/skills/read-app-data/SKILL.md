@@ -119,12 +119,12 @@ While Full Disk Access is off, Imbue Studio stops every synchronized copy of a s
 
 ## The first-chat offer
 
-A workspace's welcome ends by saying you can suggest apps that fit how the user uses their Mac. Follow up on that once per workspace, in its first chat:
+The welcome asks "Do you have any ideas?" and says nothing about app data. Make this offer only when the `personalized-ideas` skill sends you here (after the user's no), never on your own in a first reply. Once per workspace, in its first chat:
 
 1. Check `data/.skills/read-app-data/first_chat_offer.json`. If it exists, the offer was made or skipped already: do nothing.
 2. Skip it, and record the skip, when the workspace already holds app-data grants (see "When to ask"), or when the first message carries a `[from: <name>]` prefix. (A shared workspace cannot ask: Imbue Studio refuses its request as `REFUSED_SHARED`; record that as the skip.)
 3. If the user's first message is urgent (an error, a `/assist`, something broken), wait: make the offer after your first calm reply in this chat instead.
-4. Answer the user's message as usual, and in the same turn file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
+4. In the turn `personalized-ideas` names, file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
    - `installed-apps` and `browser-history`, always;
    - `notes`, `reminders`, and `calendar` too, when the Full Disk Access status (see "Asking for Full Disk Access") is `ON` or `is_asking_allowed` is true;
    - never `messages`, `shell-history`, or `code-projects`.

@@ -35,8 +35,8 @@ Pick the flow that fits the ask:
 
 - **No idea yet** -- the user wants something built but names nothing specific
   ("build me an app", "what should I make?"), or says they have no idea. Route
-  to **`suggest-apps`**, which suggests apps from how they work and builds the one
-  they pick.
+  to **`personalized-ideas`**, which gets to know them (a web lookup by name, their
+  Mac's app data through `suggest-apps`), suggests apps, and builds the one they pick.
 
 - **Fetch / process / show data** -- the ask is "go get this data (from an
   external service, API, or third-party source), do something to it, and show me

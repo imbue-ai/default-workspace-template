@@ -1,6 +1,6 @@
 ---
 name: suggest-apps
-description: Use when the user wants an app built but has no idea what -- they say they don't know what to build, ask "what should I make?" or "any ideas?", or ask you to build something without naming anything specific ("build me an app", "make something useful for me"). Load it before do-something-new or build-app in that case. Suggests a few apps that fit how the user actually works, from their Mac's app data when they allow it, from a few quick questions when they don't. Not for a request that already names what to build, and not for a bare greeting.
+description: The app-data part of the personalized-ideas skill. Use when personalized-ideas sends you here, or when the user asks for app ideas from their Mac's apps ("look at my apps and suggest something"). For a user who simply has no idea what to build, load personalized-ideas first: it leads that conversation. Suggests a few apps that fit how the user actually works, from their Mac's app data when they allow it, from a few quick questions when they don't. Not for a request that already names what to build, and not for a bare greeting.
 compatibility: Uses the read-app-data skill to ask for and read the user's Mac app data, and build-app to build the idea they pick.
 metadata:
   author: imbue
@@ -13,6 +13,10 @@ that fit how they actually work, then build the one they pick. Their Mac's app
 data is the best evidence of how they work, so ask to read a little of it first.
 
 ## When this applies
+
+The `personalized-ideas` skill leads whenever the user has no idea what to build,
+and comes here for the app data: follow the steps it names. Its offer and its
+welcome handling come first; never make a separate offer to read app data.
 
 - The user says they have no idea what to build, or asks you for ideas.
 - The user asks you to build or make something but names nothing specific.

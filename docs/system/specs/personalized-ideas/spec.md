@@ -80,6 +80,16 @@ The skill links the page in step 6, and whenever it saves a memory about the use
 
 Open for this page: whether it belongs in the workspace or in Imbue Studio's own settings once memories from other sources exist.
 
+## With Full Disk Access: app data narrows the search
+
+When the workspace can read the user's Mac app data (the Full Disk Access work: `read-app-data`, `suggest-apps`, and mngr-internal's `specs/full-disk-access-app-data/spec.md`), this skill still leads the first chat, and the welcome stays the one above: "Do you have any ideas?" with Yes and No. The welcome no longer says anything about app data, and no separate first-chat offer to read it is made.
+
+- **Narrowing the search.** When the name search finds more than one person, or none, the confirm message ends with a **Use my Mac apps to narrow it down** button. Clicking it files the app-data request (installed apps and browser history, plus Notes, Reminders and Calendar where Full Disk Access allows; never Messages, shell history or code projects). In the first chat it is the request with `origin: "first-chat-offer"`, so Imbue Studio's pre-ticking and Full Disk Access setup rules apply to it unchanged.
+- **One button per detail.** From the patterns in what was granted, the agent proposes at most 3 short details a public page would also mention (an organization, a school, a field), each a button naming its source ("MIT (your browser history)"), with **None of these**. Only a detail the user picks is searched with, together with the name. Picks and refusals are kept in `consent.json` as `app_terms`, and a refused detail is never proposed again.
+- **Nothing raw leaves the workspace.** Page titles, URLs, file names and note or event text never go into a search, the chat or a memory; only the picked detail does. This is the second exception to "only the name and what the user told you", after the email's organization, and works the same way: proposed, never used silently.
+- **Ideas.** Before suggesting, the agent asks once for app data if it holds none and the user has not turned it down, then suggests from the lookup, what the user said and the app-data patterns.
+- **Sharing.** The Share panel keeps both of its checks: the app-data question when someone is added to a workspace that can read app data, and the notice about what the lookup found.
+
 ## Open questions
 
 - Legal review of the offer's wording before release.
@@ -103,3 +113,4 @@ Check the whole flow by hand, in a workspace created on this computer from a dev
 12. **Told in chat.** In a fresh workspace, click **No**, then **I’ll tell you myself**, and describe your job and what annoys you. The reply ends with "I’ve added what you told me about yourself to What Studio knows about me, where you can edit or delete it.", linking the page; the page shows each fact about you under **About you**, and nothing about what you want to build.
 13. **Forget.** Say "forget what you found": the lookup's facts and `sources.json` are gone, what you told the agent stays, and the agent says what it deleted. Then click **Forget everything** on the page and confirm: every memory and `MEMORY.md` are gone, and a new chat remembers nothing about you.
 14. **No offer.** In fresh chats, none of these get an offer or a lookup: "I want to build a budget tracker"; "I have an idea"; **Yes** on the welcome; describing an idea instead of clicking a button; a message prefixed `[from: Someone]`; any message after answering **I’ll tell you myself** (which is saved in `consent.json`).
+15. **Narrow it down with the Mac.** In a fresh workspace on a dev build that has the Full Disk Access work, click **No**, then **Search for me**, with a name that matches several people. The confirm message ends with **Use my Mac apps to narrow it down**. Click it: an app-data request appears in Imbue Studio; approve it. The agent proposes at most 3 details as buttons, each naming its source, and searches with only the ones you click. No search contains anything you did not type or click (the web-lookup log in the desktop app shows each query). Click **None of these** in another run: nothing more is searched, and the same details are not proposed again.
