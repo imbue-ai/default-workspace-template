@@ -90,15 +90,15 @@ Size is a range, and these are its two ends:
   confirm and ship it on its own rather than bundling it with unrelated
   changes.
 
-  When building the change will take long stretches of reasoning, hand the
-  build to a background worker once the shape is settled (see "Hand large work to a
-  background worker" below).
-
 Many requests fall somewhere in between, for example a new control on an
 existing page. Decide by how much it changes what the user sees: go straight to
 the live change loop if that change is minor, and confirm the shape first if it
 is substantial or you can't tell. Either way, the mechanics of surfacing the
 change to the user are the same live loop.
+
+Separately from how much the user sees, ask how long the change will take to
+build: one of any size that needs long stretches of reasoning goes to a
+background worker (next section).
 
 ## Hand large work to a background worker
 
