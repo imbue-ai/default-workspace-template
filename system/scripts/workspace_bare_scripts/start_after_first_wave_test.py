@@ -153,7 +153,7 @@ def test_a_bound_port_whose_app_is_still_importing_is_not_serving() -> None:
         listener.listen(8)
         started = time.monotonic()
         assert not gate.is_answering(listener.getsockname()[1], "/api/health")
-        assert time.monotonic() - started < 3
+        assert time.monotonic() - started < gate._ANSWER_TIMEOUT_SECONDS + 5
 
 
 def test_the_command_is_execed_with_its_arguments_untouched(tmp_path: Path) -> None:

@@ -12,9 +12,10 @@ and only then execs its command with its arguments untouched.
 
 The wait is bounded and boot-scoped:
 
-- Waiting for the two apps never outlasts ``FIRST_WAVE_WINDOW_SECONDS`` after supervisord started
-  (the mtime of its pid file), so a shell or chat that cannot start holds nothing back for longer
-  than that; the ``--delay`` follows either way.
+- Waiting for the two apps stops ``FIRST_WAVE_WINDOW_SECONDS`` after supervisord started (the
+  mtime of its pid file), or at most one answer wait per app past it for an app that accepts
+  connections but never answers, so a shell or chat that cannot start holds nothing back for
+  long; the ``--delay`` follows either way.
 - A program started after that window (supervisord has been up for longer) -- a restart, a wake
   from the shell's port parking, an ``supervisorctl update`` -- execs at once. One started inside it
   waits as at boot, which costs a restart in a boot's first seconds at most its ``--delay``.
@@ -47,9 +48,11 @@ SUPERVISORD_PIDFILE = Path("/var/run/supervisord.pid")
 FIRST_WAVE_WINDOW_SECONDS = 30.0
 POLL_SECONDS = 0.25
 _CONNECT_TIMEOUT_SECONDS = 0.25
-# The shell and the chat bind their port before they import (app_registration.listener), so a
-# connect succeeds early and the answer arrives once the app serves.
-_ANSWER_TIMEOUT_SECONDS = 1.0
+# The shell and the chat bind their port before they import (listen_then_exec.py), so a connect
+# succeeds early and the answer arrives once the app serves. Each check waits that long on one
+# connection rather than reconnecting: every abandoned connection is still in the app's backlog,
+# and the app would have to answer all of them before the ones that matter.
+_ANSWER_TIMEOUT_SECONDS = 5.0
 
 
 def is_answering(port: int, path: str) -> bool:
