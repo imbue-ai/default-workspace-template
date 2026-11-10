@@ -76,20 +76,27 @@ Read the name in the same turn as the user's yes, with no question and no approv
 latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/owner-name"
 ```
 
-The answer is `{"display_name": "<name>", "email_domain": "<domain>"}` for the account that owns this workspace.
+The answer is `{"display_name": "<name>", "email_domain": "<domain>", "is_shared_with_others": true | false | null}` for the account that owns this workspace.
 `email_domain` is the domain of the owner's email only when it names an organization (`imbue.com`); it is null for personal mail providers such as Gmail, and the address itself is never answered. Keep it for step 5: it ranks the results, and it is never searched with unless the user says yes to the question there.
 Ask the user to type their name instead when `display_name` is null or the call fails (for example when Imbue Studio is not running on their computer), and end your turn.
 Never take a name from anywhere else, such as a file, a commit author, or an email address, and never ask for the accounts permission for this: that route is all the lookup needs.
 
 ### Check who can see the workspace
 
-Before searching, check whether sharing is turned on for this workspace (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell).
-Sharing is often on only so the owner can reach the workspace from their own phone or browser, so it is a question for the user, not a reason to give up.
+Sharing is on by default, only so the owner can reach the workspace from their own phone or browser; that admits nobody else, and is no reason to ask.
+What matters is whether other people (or a visiting agent) can get in, which the `owner-name` answer's `is_shared_with_others` says (you cannot read the workspace's grants from inside it).
 
-- **Sharing is off**, or `consent.json` already has `"only_me": true` or `"shared_ok": true`: go straight to step 4, with no question.
-- **Sharing is on** and they have not confirmed yet: send exactly this message, word for word, then end your turn:
+- `consent.json` already has `"only_me": true` or `"shared_ok": true`: go straight to step 4, with no question.
+- **`is_shared_with_others` is `false`**: go straight to step 4, with no question.
+- **`is_shared_with_others` is `true`**: send exactly this message, word for word, then end your turn:
 
-> Sharing is turned on for this workspace, so other people may be able to get into it. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace?
+> This workspace is shared with other people, so they would also be able to see what I save about you, on **What Studio knows about me**. Do you still want me to go ahead?
+>
+> [Others can, but go ahead](#reply=others%20can%2C%20go%20ahead) [Skip the search](#reply=skip%20the%20search)
+
+- **`is_shared_with_others` is `null`** (Imbue Studio could not read who has access): when sharing is off (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell), go straight to step 4; when it is on, send exactly this message, word for word, then end your turn:
+
+> I couldn't check whether anyone else can get into this workspace. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace?
 >
 > [Only me, go ahead](#reply=only%20me) [Others can, but go ahead](#reply=others%20can%2C%20go%20ahead) [Skip the search](#reply=skip%20the%20search)
 
