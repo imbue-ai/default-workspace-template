@@ -5,12 +5,23 @@
  * own document. A sibling chat is asked for at the chat root's path for it, so the shell opens a
  * root window showing it (the root that frames this page intercepts the request and selects the
  * chat in place instead, see root/relay.ts).
+ *
+ * The chat's shortcuts run here too, since a keystroke in this page never reaches the root that
+ * frames it: Stop the agent interrupts this page's chat, and New chat starts one and asks for it
+ * as a sibling.
  */
 
 import m from "mithril";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
-import { refreshKeybindings } from "./models/keybindings";
+import {
+  type ChatShortcut,
+  chatShortcutOfKeydown,
+  refreshKeybindings,
+  setKeybindingSurface,
+} from "./models/keybindings";
+import { interruptAgent } from "./models/Response";
+import { startNewChat } from "./root/newChat";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
@@ -102,8 +113,16 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onHidden,
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
+    onChordSurface: setKeybindingSurface,
   });
   void refreshKeybindings();
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const shortcut = chatShortcutOfKeydown(event);
+    if (shortcut === null) return;
+    event.preventDefault();
+    if (!event.repeat) runChatShortcut(chatId, shortcut);
+  });
   mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
@@ -149,6 +168,21 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   });
   reportChatLocation(chatId, options.path);
   return connection;
+}
+
+/** Run a chat shortcut pressed in this page: stop this chat's agent, or start a new chat beside this one. */
+function runChatShortcut(chatId: string, shortcut: ChatShortcut): void {
+  if (shortcut === "stop-agent") {
+    void interruptAgent(chatId);
+    return;
+  }
+  void startNewChat().then((outcome) => {
+    if (outcome.kind === "refused") {
+      alert(`Failed to create chat: ${outcome.detail}`);
+      return;
+    }
+    connection?.openPath(rootPathFor(outcome.chatId), "focus");
+  });
 }
 
 /** Report where this page is and what it is called, now and whenever the chat's title changes.

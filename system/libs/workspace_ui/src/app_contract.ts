@@ -9,8 +9,9 @@
  * as a module, and a module import is a fetch without cookies, which the desktop client's
  * forwarder and the share gateway refuse across origins (the shell serves it too, with a
  * permissive CORS header, for the e2e stub pages). The chat document, which lives in this
- * same source tree, imports the source directly. It must therefore import nothing: the served
- * file has no other dependencies.
+ * same source tree, imports the source directly. It imports only the chord grammar
+ * (``keybindings.ts``), which the library build bundles in, so the served file has no other
+ * dependencies.
  *
  * Trust: a page accepts a message only from `window.parent` (a nested third-party frame can
  * post here but can never satisfy that identity), and sends only to `window.parent`. The
@@ -38,7 +39,15 @@
  * A call that names a frame of the page stays the browser's, and one that names ``_self`` follows
  * the rule for a plain click: the page's own origin navigates the page, any other link goes to the
  * shell.
+ *
+ * The workspace-wide shortcuts win inside every page (the keyboard-shortcuts spec in the mngr repo, section 6.1): the
+ * shell sends their chords, and a keydown spelling one is stopped before the page's own handlers see it and handed
+ * to the shell (``shell:shortcut``), unless the page owns every key (``ownsKeys``: a terminal, a remote desktop).
+ * The same message tells the page whether the workspace runs in the desktop app or a browser, for the page's own
+ * matching (``onChordSurface``).
  */
+
+import { type ChordSurface, chordFromKeydown, detectChordPlatform } from "./keybindings";
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
 export const SHELL_HANDSHAKE = "shell:handshake";
@@ -58,6 +67,12 @@ export const SHELL_THEME = "shell:theme";
 export const SHELL_KEYBINDINGS_CHANGED = "shell:keybindings-changed";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
+/** Shell to app: the active workspace-wide chords (filtered for where the workspace runs) and whether it runs in the
+ *  desktop app or a browser, sent after the handshake and whenever either changes. */
+export const SHELL_WORKSPACE_CHORDS = "shell:workspace-chords";
+/** Shell to app: a chord the desktop app intercepted on the page's behalf (the OS would otherwise have acted on it);
+ *  the page runs whatever its own keybindings bind to it (`onChord`). */
+export const SHELL_CHORD = "shell:chord";
 /** App to shell: what this page can do, sent once on connect. */
 export const SHELL_CAPABILITIES = "shell:capabilities";
 /** App to shell: the page received focus; the shell raises its window. */
@@ -69,6 +84,8 @@ export const SHELL_INPUT = "shell:input";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
+/** App to shell: a keydown in the page spelled one of the workspace-wide chords; the shell runs its action. */
+export const SHELL_SHORTCUT = "shell:shortcut";
 /** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
  *  launcher's primary text action with it, so a page never names the app that takes it. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
@@ -195,6 +212,13 @@ export interface ShellConnectionHandlers {
   onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
   /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
   onKeybindingsChanged?: () => void;
+  /** Whether the workspace runs in the desktop app or a browser, where a browser keeps some chords from pages; the
+   *  page reads its own chords in that context. */
+  onChordSurface?: (surface: ChordSurface) => void;
+  /** A chord the desktop app intercepted for the page: run what the page's keybindings bind to it. */
+  onChord?: (chord: string) => void;
+  /** The page's program owns every key (a terminal, a remote desktop): workspace-wide chords are not taken from it. */
+  ownsKeys?: boolean;
   capabilities?: ShellCapabilities;
 }
 
@@ -259,6 +283,15 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
     throw new ShellContractError("a page that declares capabilities.closeChord: true gives onCloseRequest");
   }
   return capabilities;
+}
+
+function readWorkspaceChords(
+  message: Record<string, unknown>,
+): { chords: readonly string[]; surface: ChordSurface } | null {
+  const { chords, surface } = message;
+  if (!Array.isArray(chords) || !chords.every((chord) => typeof chord === "string")) return null;
+  if (surface !== "desktop" && surface !== "browser") return null;
+  return { chords: chords as string[], surface };
 }
 
 function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
@@ -411,6 +444,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
   let hasShell = false;
+  let workspaceChords: readonly string[] = [];
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -447,6 +481,18 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (typeof path === "string") handlers.onNavigate?.(path);
         return;
       }
+      case SHELL_WORKSPACE_CHORDS: {
+        const received = readWorkspaceChords(message);
+        if (received === null) return;
+        workspaceChords = received.chords;
+        handlers.onChordSurface?.(received.surface);
+        return;
+      }
+      case SHELL_CHORD: {
+        const chord = message.chord;
+        if (typeof chord === "string" && chord !== "") handlers.onChord?.(chord);
+        return;
+      }
       default:
         return;
     }
@@ -466,6 +512,18 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     lastInputReportAt = now;
     send(SHELL_INPUT, {});
   };
+
+  // In the capture phase on the window, the first stop of a keydown, so a workspace-wide chord wins over the page's
+  // own handlers. A held key repeats the stop but runs the action once.
+  const onWorkspaceChordKeydown = (event: KeyboardEvent): void => {
+    if (!hasShell || workspaceChords.length === 0) return;
+    const chord = chordFromKeydown(event, detectChordPlatform());
+    if (chord === null || !workspaceChords.includes(chord)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) send(SHELL_SHORTCUT, { chord });
+  };
+  const takesWorkspaceChords = isFramed && handlers.ownsKeys !== true;
 
   // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
   const onLinkClick = (event: MouseEvent): void => {
@@ -490,6 +548,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     }
     boundWindow.open = routedOpen;
   }
+  if (takesWorkspaceChords) boundWindow.addEventListener("keydown", onWorkspaceChordKeydown, { capture: true });
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
@@ -509,6 +568,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       for (const type of ["pointerdown", "keydown"]) {
         boundWindow.removeEventListener(type, onInput, { capture: true });
       }
+      boundWindow.removeEventListener("keydown", onWorkspaceChordKeydown, { capture: true });
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };

@@ -10,6 +10,7 @@
  */
 
 import type {
+  KeybindingsCatalog,
   LaunchOutcome,
   LaunchRequest,
   LaunchTarget,
@@ -26,8 +27,16 @@ import {
   externalLinkMessageType,
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
+import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
 import { StalePlacementsSaveError } from "../model/api";
-import { refreshShellKeybindings, setShellChordSurface } from "../model/keybindings";
+import {
+  type WorkspaceActionId,
+  claimedChordsOf,
+  refreshShellKeybindings,
+  setShellChordSurface,
+  shellChordContext,
+  workspaceChordsByAction,
+} from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
@@ -243,6 +252,8 @@ export interface DesktopApi {
     payload: Readonly<Record<string, unknown>>,
     sender: string,
   ): Promise<MessageRelay>;
+  /** Every app's keybinding actions resolved for the requester, as the keyboard shortcuts screen lists them. */
+  fetchKeybindingsCatalog(): Promise<KeybindingsCatalog>;
 }
 
 /** A message this page received, from the Imbue Studio chrome or from an app's frame: its type and its own fields. */
@@ -286,6 +297,11 @@ export interface PageDriver {
   broadcastKeybindingsChanged(): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
+  /** Send every greeted page the workspace-wide chords and where the workspace runs (``shell:workspace-chords``),
+   *  and every page greeted from now on the same. */
+  sendWorkspaceChords(chords: readonly string[], surface: ChordSurface): void;
+  /** Send the window's page a chord the desktop app intercepted for it (``shell:chord``). */
+  sendChord(windowId: string, chord: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
 }
@@ -368,6 +384,23 @@ const NULL_IMMERSIVE_BRIDGE: ImmersiveBridge = {
   requestImmersive: () => undefined,
 };
 
+/** The shell's side of the keyboard shortcuts conversation with the embedding chrome (the keyboard-shortcuts spec in
+ *  the mngr repo, section 6.3). Every call is a no-op without an embedder. */
+export interface ShortcutsBridge {
+  /** Show the keyboard shortcuts in the chrome's own settings (``minds:open-keyboard-shortcuts``). */
+  openKeyboardShortcuts(): void;
+  /** Tell the chrome the workspace-wide actions' chords and every app's (``minds:shell-shortcuts``). */
+  reportShellShortcuts(
+    chordsByAction: Readonly<Record<string, readonly string[]>>,
+    claimedChords: readonly string[],
+  ): void;
+}
+
+const NULL_SHORTCUTS_BRIDGE: ShortcutsBridge = {
+  openKeyboardShortcuts: () => undefined,
+  reportShellShortcuts: () => undefined,
+};
+
 /** Immersive mode as the chrome last reported it (``minds:immersive-changed``) while it is on: the window that
  *  asked for it, when this shell did the asking, and whether the keyboard lock was obtained. */
 export interface ImmersiveStatus {
@@ -392,6 +425,7 @@ export const IMMERSIVE_REFUSED_NOTICE = "Immersive mode could not start";
 // reattach (the way back when no desktop shell can take it). The phone layout shows windows without placing them.
 const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_raised",
+  "window_lowered",
   "window_minimized",
   "window_restored",
   "window_state_set",
@@ -416,6 +450,8 @@ export interface StoreDependencies {
   readonly outsideLinks?: OutsideLinkOpener;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
+  /** The keyboard shortcuts conversation with the embedder; absent means no embedder. */
+  readonly shortcuts?: ShortcutsBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -564,6 +600,7 @@ export class DesktopStore {
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly immersiveBridge: ImmersiveBridge;
+  private readonly shortcutsBridge: ShortcutsBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
@@ -573,6 +610,8 @@ export class DesktopStore {
   private opensLocalFiles = false;
   /** Whether the embedder shows the keyboard shortcuts in its own settings; off until it says so. */
   private opensKeyboardShortcuts = false;
+  /** Whether the shell's own keyboard shortcuts dialog is open (no embedder shows them). */
+  private isKeyboardShortcutsDialogOpenNow = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -644,6 +683,7 @@ export class DesktopStore {
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.immersiveBridge = deps.immersive ?? NULL_IMMERSIVE_BRIDGE;
+    this.shortcutsBridge = deps.shortcuts ?? NULL_SHORTCUTS_BRIDGE;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -685,6 +725,7 @@ export class DesktopStore {
     if (this.canPopOut === canPopOut) return;
     this.canPopOut = canPopOut;
     setShellChordSurface(canPopOut ? "desktop" : "browser");
+    this.publishWorkspaceChords();
     this.notifyListeners();
   }
 
@@ -1195,7 +1236,7 @@ export class DesktopStore {
         this.takeThemeCatalog(catalog);
       },
       onKeybindingsChanged: () => {
-        void refreshShellKeybindings();
+        void this.refreshKeybindings();
         this.pageDriver?.broadcastKeybindingsChanged();
       },
       onLayoutOp: (event) => this.handleLayoutOp(event),
@@ -1633,6 +1674,7 @@ export class DesktopStore {
   /** The chrome that frames this page has said what it can do (``minds:embedder-capabilities``). */
   setEmbedderPresent(isPresent: boolean): void {
     this.isEmbedderPresent = isPresent;
+    this.publishWorkspaceChords();
     this.deps.redraw();
   }
 
@@ -2973,6 +3015,95 @@ export class DesktopStore {
     } catch (error) {
       this.toast(`Failed to quit ${appName}: ${(error as Error).message}`);
     }
+  }
+
+  /** Read the shell's own chords again, then tell every page and the chrome the workspace-wide ones. */
+  async refreshKeybindings(): Promise<void> {
+    await refreshShellKeybindings();
+    this.publishWorkspaceChords();
+  }
+
+  /** Tell every page the workspace-wide chords and where the workspace runs, and the chrome, when there is one, those
+   *  chords by action and every app's, all filtered for where the workspace runs. */
+  private publishWorkspaceChords(): void {
+    const chordsByAction = workspaceChordsByAction();
+    const chords = [...new Set(Object.values(chordsByAction).flat())];
+    this.pageDriver?.sendWorkspaceChords(chords, shellChordContext().surface);
+    if (!this.isEmbedderPresent) return;
+    void this.deps.api.fetchKeybindingsCatalog().then(
+      (catalog) => this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog)),
+      // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
+      () => this.shortcutsBridge.reportShellShortcuts(chordsByAction, []),
+    );
+  }
+
+  /** Run one of the shell's workspace-wide actions (the keyboard-shortcuts spec in the mngr repo, section 6.2), from
+   *  a keystroke in the shell, a page's ``shell:shortcut``, or the chrome's ``minds:run-shortcut``. */
+  runWorkspaceAction(actionId: WorkspaceActionId): void {
+    switch (actionId) {
+      case "close-window":
+        void this.closeFocusedWindow();
+        return;
+      case "next-window":
+        this.focusAdjacentWindow("next");
+        return;
+      case "previous-window":
+        this.focusAdjacentWindow("previous");
+        return;
+      case "open-launcher":
+        this.openLauncher();
+        return;
+      case "show-shortcuts":
+        this.showKeyboardShortcuts();
+        return;
+      case "open-overview":
+        this.openOverview();
+        return;
+    }
+  }
+
+  /** Focus the next or the previous window of the active desktop in this client's stacking order, skipping the
+   *  minimized and pulled-out ones: next raises the window at the back of the stack, so pressing it again visits
+   *  every window in turn, and previous sends the focused window to the back, undoing a next. A solo shell shows one
+   *  window and a phone one at a time, so neither has windows to cycle through. */
+  focusAdjacentWindow(direction: "next" | "previous"): void {
+    if (this.soloWindowId !== null || this.isPhoneLayout()) return;
+    const shown = activePlacements(this.state).filter(isPlacementShown);
+    if (shown.length < 2) return;
+    if (direction === "next") {
+      this.raiseWindow(shown[0].window_id);
+      return;
+    }
+    if (this.refuseWhileViewing("switch windows")) return;
+    this.dispatch({ type: "window_lowered", windowId: shown[shown.length - 1].window_id });
+  }
+
+  /** Hand the focused window's page a chord the chrome intercepted for it (``minds:run-chord``). */
+  forwardChordToFocusedWindow(chord: string): void {
+    const focused = this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state);
+    if (focused !== null) this.pageDriver?.sendChord(focused, chord);
+  }
+
+  /** Show the keyboard shortcuts: in the chrome's own settings when it shows them there, which teaches where they
+   *  live, else in the shell's own dialog (a plain browser has no such settings). */
+  showKeyboardShortcuts(): void {
+    if (this.opensKeyboardShortcuts) {
+      this.shortcutsBridge.openKeyboardShortcuts();
+      return;
+    }
+    if (this.isKeyboardShortcutsDialogOpenNow) return;
+    this.isKeyboardShortcutsDialogOpenNow = true;
+    this.notifyListeners();
+  }
+
+  isKeyboardShortcutsDialogOpen(): boolean {
+    return this.isKeyboardShortcutsDialogOpenNow;
+  }
+
+  closeKeyboardShortcutsDialog(): void {
+    if (!this.isKeyboardShortcutsDialogOpenNow) return;
+    this.isKeyboardShortcutsDialogOpenNow = false;
+    this.notifyListeners();
   }
 
   openLauncher(): void {

@@ -450,6 +450,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       .then(({ connectToShell }) => {
         connection = connectToShell({
           capabilities: { navigation: true, closeChord: false },
+          // The program in the terminal owns every key: workspace-wide shortcuts are not taken from it.
+          ownsKeys: true,
           onHandshake: (handshake) => takeViewing(handshake.isViewing),
           onNavigate: navigate,
           onShown: focusPty,

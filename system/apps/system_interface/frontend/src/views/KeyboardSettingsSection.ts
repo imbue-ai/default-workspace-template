@@ -424,7 +424,8 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
     try {
       let lastDelivery: KeybindingsDeliveryOutcome | null = null;
       for (const [key, replaced] of current.replacedByKey) {
-        lastDelivery = (await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], scope)).delivery;
+        lastDelivery = (await saveKeybinding(replaced.app.app, replaced.action.id, [...replaced.chords], scope))
+          .delivery;
         savedActionKeys.add(key);
       }
       lastDelivery = (await saveKeybinding(current.app.app, current.action.id, current.stagedChords, scope)).delivery;

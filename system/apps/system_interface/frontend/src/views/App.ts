@@ -20,9 +20,9 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
-import { OPEN_KEYBOARD_SHORTCUTS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { isApplePlatform } from "@imbue/workspace-ui/src/keybindings";
-import { shellChordContext } from "../model/keybindings";
+import { shellChordContext, workspaceActionOfKeydown } from "../model/keybindings";
+import { isShortcutRecording } from "../model/shortcutRecording";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
@@ -201,7 +201,6 @@ export function App(): m.Component<AppAttrs> {
   /** The desktop whose theme chooser is up. */
   let themeDialogDesktopId: string | null = null;
   /** Whether the keyboard shortcuts dialog is up. */
-  let isKeyboardShortcutsDialogOpen = false;
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
   let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
@@ -292,6 +291,16 @@ export function App(): m.Component<AppAttrs> {
   }
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
+    // A workspace-wide shortcut pressed in the shell's own document (the backdrop, the launcher, the taskbar); one
+    // pressed inside an app's page arrives as that page's ``shell:shortcut``. A recorder listening for a new shortcut
+    // takes every key.
+    const action = store === null || isShortcutRecording() ? null : workspaceActionOfKeydown(event);
+    if (store !== null && action !== null) {
+      event.preventDefault();
+      if (!event.repeat) store.runWorkspaceAction(action);
+      m.redraw();
+      return;
+    }
     if (event.key !== "Escape") return;
     // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
     // tear-out drops the desktop window the chrome was dragging.
@@ -829,12 +838,7 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "keyboard-shortcuts",
         label: "Keyboard shortcuts...",
-        // Imbue Studio keeps the shortcuts in its Workspace settings, so opening them there teaches where they
-        // live; a plain browser (a share link) has no such settings and gets the dialog.
-        onSelect: () => {
-          if (current.getOpensKeyboardShortcuts()) sendToEmbedder(OPEN_KEYBOARD_SHORTCUTS);
-          else isKeyboardShortcutsDialogOpen = true;
-        },
+        onSelect: () => current.showKeyboardShortcuts(),
       },
     ];
   }
@@ -1114,13 +1118,10 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function keyboardShortcutsDialogView(): m.Children {
+  function keyboardShortcutsDialogView(current: DesktopStore): m.Children {
     return m(KeyboardShortcutsDialog, {
-      // A chrome that can pull a window out is the desktop app; any other host is a browser.
       context: shellChordContext(),
-      onClose: () => {
-        isKeyboardShortcutsDialogOpen = false;
-      },
+      onClose: () => current.closeKeyboardShortcutsDialog(),
     });
   }
 
@@ -1561,7 +1562,7 @@ export function App(): m.Component<AppAttrs> {
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
-          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
+          current.isKeyboardShortcutsDialogOpen() ? keyboardShortcutsDialogView(current) : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),

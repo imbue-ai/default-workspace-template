@@ -124,6 +124,23 @@ export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page" =
 export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts" =
   "OPEN_KEYBOARD_SHORTCUTS" in embedContract ? embedContract.OPEN_KEYBOARD_SHORTCUTS : "minds:open-keyboard-shortcuts";
 
+// The keyboard shortcuts relays (contract v15, the keyboard-shortcuts spec in the mngr repo, section 6), probed the same
+// way. Workspace -> embedder: the workspace-wide actions' active chords and every app's, filtered for where the
+// workspace runs, after WORKSPACE_READY and on every keybindings change, so the desktop app can run them where the
+// shell hears no key (the terminal, the Screen, a pulled-out window). Payload: { chords_by_action, claimed_chords }.
+export const SHELL_SHORTCUTS: "minds:shell-shortcuts" =
+  "SHELL_SHORTCUTS" in embedContract ? embedContract.SHELL_SHORTCUTS : "minds:shell-shortcuts";
+// Embedder -> workspace: run a workspace-wide action, whose chord the desktop app took. Payload: { action }.
+export const RUN_SHORTCUT: "minds:run-shortcut" =
+  "RUN_SHORTCUT" in embedContract ? embedContract.RUN_SHORTCUT : "minds:run-shortcut";
+// Embedder -> workspace: a chord the desktop app took from the OS for an app's own action (Alt+F4 on Windows); the
+// shell hands it to the focused window's page. Payload: { chord }.
+export const RUN_CHORD: "minds:run-chord" = "RUN_CHORD" in embedContract ? embedContract.RUN_CHORD : "minds:run-chord";
+// Embedder -> the framed keyboard shortcuts page: a chord the desktop app took from the OS while the recorder was
+// listening, to record as if pressed. Payload: { chord }.
+export const RECORD_CHORD: "minds:record-chord" =
+  "RECORD_CHORD" in embedContract ? embedContract.RECORD_CHORD : "minds:record-chord";
+
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
 // (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with
@@ -154,6 +171,9 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
   IMMERSIVE_CHANGED,
+  RUN_SHORTCUT,
+  RUN_CHORD,
+  RECORD_CHORD,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

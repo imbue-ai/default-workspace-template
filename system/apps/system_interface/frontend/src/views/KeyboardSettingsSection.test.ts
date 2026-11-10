@@ -149,9 +149,9 @@ describe("isResetOffered", () => {
     expect(isResetOffered(rename, MAC_DESKTOP)).toBe(false);
     expect(isResetOffered(newFolder, MAC_DESKTOP)).toBe(false);
     expect(isResetOffered({ ...deleteAction, chords: ["delete"] }, MAC_DESKTOP)).toBe(false);
-    expect(
-      isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] }, MAC_DESKTOP),
-    ).toBe(true);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] }, MAC_DESKTOP)).toBe(
+      true,
+    );
   });
 
   it("compares only the shortcuts that can arrive in the context", () => {

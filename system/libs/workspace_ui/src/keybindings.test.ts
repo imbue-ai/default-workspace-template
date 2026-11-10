@@ -62,9 +62,7 @@ describe("chordFromKeydown on a Mac", () => {
     expect(chordFromKeydown(keydown("±", { altKey: true, shiftKey: true, code: "Equal" }), "mac")).toBe(
       "alt+shift+plus",
     );
-    expect(chordFromKeydown(keydown("Á", { altKey: true, shiftKey: true, code: "KeyY" }), "mac")).toBe(
-      "alt+shift+y",
-    );
+    expect(chordFromKeydown(keydown("Á", { altKey: true, shiftKey: true, code: "KeyY" }), "mac")).toBe("alt+shift+y");
   });
 
   it("reads the Space bar from the physical key, and refuses any other whitespace", () => {

@@ -18,7 +18,9 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, and ``shell:shortcut``. ``shell:workspace-chords`` follows every handshake
+ * and every change of the workspace-wide chords, and ``shell:chord`` hands a page a chord the desktop app intercepted
+ * for it. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -33,6 +35,7 @@
 import {
   INPUT_REPORT_INTERVAL_MS,
   SHELL_CAPABILITIES,
+  SHELL_CHORD,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
@@ -44,11 +47,15 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_SHORTCUT,
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  SHELL_WORKSPACE_CHORDS,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
+import { workspaceActionOfChord } from "../model/keybindings";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -227,6 +234,11 @@ export class LivePagesLayer implements PageDriver {
   private mountPolicy: MountPolicy = { kind: "all" };
   /** The overview's tiles while it is up, else null. */
   private overview: OverviewPresentation | null = null;
+  /** The workspace-wide chords and where the workspace runs, as last sent; every greeting sends them again. */
+  private workspaceChords: { readonly chords: readonly string[]; readonly surface: ChordSurface } = {
+    chords: [],
+    surface: "browser",
+  };
 
   constructor(
     private readonly host: HTMLElement,
@@ -247,6 +259,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_SHORTCUT, (frame, payload) => this.takeShortcut(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -364,6 +377,25 @@ export class LivePagesLayer implements PageDriver {
   requestClose(windowId: string): void {
     const page = this.pages.get(windowId);
     if (page !== undefined) sendToChildFrame(page.frame, SHELL_CLOSE_REQUEST);
+  }
+
+  sendWorkspaceChords(chords: readonly string[], surface: ChordSurface): void {
+    this.workspaceChords = { chords: [...chords], surface };
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) this.sendWorkspaceChordsTo(page);
+    }
+  }
+
+  private sendWorkspaceChordsTo(page: LivePage): void {
+    sendToChildFrame(page.frame, SHELL_WORKSPACE_CHORDS, {
+      chords: [...this.workspaceChords.chords],
+      surface: this.workspaceChords.surface,
+    });
+  }
+
+  sendChord(windowId: string, chord: string): void {
+    const page = this.pages.get(windowId);
+    if (page !== undefined && page.greetedDesktopId !== null) sendToChildFrame(page.frame, SHELL_CHORD, { chord });
   }
 
   ownsCloseChord(windowId: string): boolean {
@@ -883,6 +915,7 @@ export class LivePagesLayer implements PageDriver {
     page.greetedDesktopId = desktopId;
     page.greetedIsViewing = isViewing;
     sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
+    this.sendWorkspaceChordsTo(page);
   }
 
   /** Tell every greeted page the theme the desktop now wears. */
@@ -969,6 +1002,14 @@ export class LivePagesLayer implements PageDriver {
     const page = this.pageOfFrame(frame);
     if (page === undefined || !this.isShown(page) || this.store.viewedDesktop() !== null) return;
     this.store.raiseWindow(page.windowId);
+  }
+
+  /** ``shell:shortcut {chord}`` from a page: a keydown in it spelled a workspace-wide chord, whose action runs; the
+   *  frame has to be one the shell created. */
+  private takeShortcut(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined || typeof payload.chord !== "string") return;
+    const action = workspaceActionOfChord(payload.chord);
+    if (action !== null) this.store.runWorkspaceAction(action);
   }
 
   /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
