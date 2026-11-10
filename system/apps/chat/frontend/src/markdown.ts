@@ -2,11 +2,13 @@ import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
+import { buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
 import { classifyLink, fileUrl } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
 import { localImageUrl, uploadedImageSize } from "./models/attachments";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 import { TOOL_CALL_PART } from "./views/ToolCallBlock";
+import { REPLY_HREF_PREFIX, canSendReply, sendReplyFromMessage } from "./views/reply-senders";
 
 const marked = new Marked({
   breaks: true,
@@ -24,12 +26,60 @@ const ALLOWED_URI_REGEXP =
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
   const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true, ALLOWED_URI_REGEXP });
+  convertReplyLinks(fragment);
   rewritePathLinks(fragment);
   // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
   // element would adopt its <img>s into the page, and an adopted image starts fetching.
   const container = fragment.ownerDocument.createElement("div");
   container.append(fragment);
   return container.innerHTML;
+}
+
+/** The longest reply a button sends; a longer one is unwrapped to its text, as any other fragment link is. */
+export const MAX_REPLY_TEXT_LENGTH = 200;
+
+/** The attribute a reply button carries its reply in. */
+export const REPLY_TEXT_ATTRIBUTE = "data-reply";
+
+/** A reply button's own class: compact, inline beside its siblings, and wrapping a long label (style.css). */
+export const REPLY_BUTTON_CLASS = "message-reply-button";
+
+/** The reply a link's href offers, or null when the href is not a usable reply link: not exactly the
+ *  ``#reply=`` form, not decodable, empty, longer than ``MAX_REPLY_TEXT_LENGTH``, or a slash command (which the
+ *  composer's own guard would have to see first). */
+export function replyTextOf(href: string): string | null {
+  if (!href.startsWith(REPLY_HREF_PREFIX)) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(href.slice(REPLY_HREF_PREFIX.length));
+  } catch {
+    return null;
+  }
+  const text = decoded.trim();
+  if (text === "" || text.length > MAX_REPLY_TEXT_LENGTH || text.startsWith("/")) return null;
+  return text;
+}
+
+/**
+ * Turn each reply link into a button that sends its reply (see ``REPLY_HREF_PREFIX``), labelled with the link's
+ * text. Runs on DOMPurify's output, so the button and its attributes are ours, and the reply is set as an attribute
+ * value, never markup. A button starts disabled: ``MarkdownContent`` enables it when its chat has a composer to send
+ * through and nothing has answered the message yet. A link that is not a usable reply link is left for
+ * ``rewritePathLinks``, which unwraps a fragment link to its text.
+ */
+function convertReplyLinks(root: DocumentFragment): void {
+  for (const anchor of Array.from(root.querySelectorAll("a"))) {
+    const reply = replyTextOf(anchor.getAttribute("href") ?? "");
+    if (reply === null) continue;
+    const button = anchor.ownerDocument.createElement("button");
+    button.type = "button";
+    button.className = buttonClass("secondary", { sm: true, extra: REPLY_BUTTON_CLASS });
+    applyPartAttrs(button, buttonPartAttrs("secondary", false));
+    button.setAttribute(REPLY_TEXT_ATTRIBUTE, reply);
+    button.disabled = true;
+    button.textContent = anchor.textContent?.trim() || reply;
+    anchor.replaceWith(button);
+  }
 }
 
 /**
@@ -234,16 +284,80 @@ function handleMarkdownImageClick(event: MouseEvent): void {
   }
 }
 
-export const MarkdownContent: m.Component<{ content: string; requestedAt?: string; expansionKeyPrefix?: string }> = {
+/** How a message's reply buttons send: through the composer of ``chatId``, unless a user turn already answers the
+ *  message. Without it (a read-only view, a message that is not the agent's) the buttons stay disabled. */
+export interface MarkdownReplies {
+  readonly chatId: string;
+  readonly isAnswered: boolean;
+}
+
+export interface MarkdownContentAttrs {
+  content: string;
+  requestedAt?: string;
+  expansionKeyPrefix?: string;
+  replies?: MarkdownReplies;
+}
+
+// What each rendered container shows, read by the click handler (attached once, in oncreate) and by onupdate,
+// which rewrites the markdown only when its source changed.
+const renderedContentByElement = new WeakMap<Element, string>();
+const repliesByElement = new WeakMap<Element, MarkdownReplies | undefined>();
+// The reply state the container's buttons were last set from (see replyStateKey).
+const replyStateByElement = new WeakMap<Element, string>();
+
+function replyButtonsOf(container: Element): HTMLButtonElement[] {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>(`button[${REPLY_TEXT_ATTRIBUTE}]`));
+}
+
+/** Whether a message's reply buttons can be pressed now. */
+function areRepliesOpen(replies: MarkdownReplies | undefined): boolean {
+  return replies !== undefined && !replies.isAnswered && canSendReply(replies.chatId);
+}
+
+/** What the buttons' state is read from: the replies, and whether their chat has a composer to send through. */
+function replyStateKey(replies: MarkdownReplies | undefined): string {
+  return replies === undefined ? "" : `${replies.chatId}|${replies.isAnswered}|${canSendReply(replies.chatId)}`;
+}
+
+function syncReplyButtons(container: HTMLElement, replies: MarkdownReplies | undefined): void {
+  repliesByElement.set(container, replies);
+  replyStateByElement.set(container, replyStateKey(replies));
+  const isOpen = areRepliesOpen(replies);
+  for (const button of replyButtonsOf(container)) button.disabled = !isOpen;
+}
+
+/** A reply button's click sends its reply through the chat's composer, and disables every button of the message at
+ *  once: the transcript marks the message answered only once the send shows, and a second click must not send twice. */
+function handleReplyButtonClick(event: MouseEvent): void {
+  const container = event.currentTarget as HTMLElement;
+  const target = event.target;
+  const button =
+    target instanceof Element ? target.closest<HTMLButtonElement>(`button[${REPLY_TEXT_ATTRIBUTE}]`) : null;
+  if (button === null || !container.contains(button) || button.disabled) return;
+  event.preventDefault();
+  const replies = repliesByElement.get(container);
+  const reply = button.getAttribute(REPLY_TEXT_ATTRIBUTE) ?? "";
+  for (const sibling of replyButtonsOf(container)) sibling.disabled = true;
+  if (replies !== undefined && areRepliesOpen(replies)) sendReplyFromMessage(replies.chatId, reply);
+}
+
+function renderInto(element: HTMLElement, attrs: MarkdownContentAttrs): void {
+  element.innerHTML = renderMarkdown(attrs.content);
+  renderedContentByElement.set(element, attrs.content);
+  wrapToolCallBlocks(element, attrs.expansionKeyPrefix);
+  prepareImages(element, attrs.requestedAt || undefined);
+  syncReplyButtons(element, attrs.replies);
+}
+
+export const MarkdownContent: m.Component<MarkdownContentAttrs> = {
   oncreate(vnode) {
     const element = vnode.dom as HTMLElement;
-    element.innerHTML = renderMarkdown(vnode.attrs.content);
-    wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    prepareImages(element, vnode.attrs.requestedAt || undefined);
-    // Clicking an inline image opens it full-screen. The listener is delegated
-    // on the container, which mithril reuses across redraws, so it survives the
-    // innerHTML resets in onupdate without needing to be re-attached.
+    renderInto(element, vnode.attrs);
+    // Clicking an inline image opens it full-screen, and clicking a reply button sends its reply. The listeners are
+    // delegated on the container, which mithril reuses across redraws, so they survive the innerHTML resets in
+    // onupdate without needing to be re-attached.
     element.addEventListener("click", handleMarkdownImageClick);
+    element.addEventListener("click", handleReplyButtonClick);
   },
   // Skip the subtree diff (and the onupdate innerHTML rewrite below) whenever the
   // markdown source is unchanged. onupdate re-sets innerHTML, which destroys every
@@ -252,16 +366,22 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
   // an unguarded rewrite kills a user's text selection on the first frame. The
   // rendered element is a childless div whose content we manage by hand, so there is
   // nothing for Mithril to diff -- retaining the DOM untouched is always correct when
-  // the content matches.
+  // the content matches. A change to whether the reply buttons can be pressed only
+  // updates the buttons themselves (see onupdate).
   onbeforeupdate(vnode, old) {
-    return vnode.attrs.content !== old.attrs.content;
+    return (
+      vnode.attrs.content !== old.attrs.content ||
+      replyStateKey(vnode.attrs.replies) !== replyStateByElement.get(old.dom as Element)
+    );
   },
   onupdate(vnode) {
     const element = vnode.dom as HTMLElement;
+    if (renderedContentByElement.get(element) === vnode.attrs.content) {
+      syncReplyButtons(element, vnode.attrs.replies);
+      return;
+    }
     const expanded = saveExpandedState(element);
-    element.innerHTML = renderMarkdown(vnode.attrs.content);
-    wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    prepareImages(element, vnode.attrs.requestedAt || undefined);
+    renderInto(element, vnode.attrs);
     restoreExpandedState(element, expanded);
   },
   view() {
