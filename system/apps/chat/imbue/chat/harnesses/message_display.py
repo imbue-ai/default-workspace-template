@@ -182,11 +182,12 @@ _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 # tagged by ``format_app_data_access_notice`` in the mngr repo's
 # ``latchkey/handlers/resolution.py``: "... (app-data-access: revoked)". The tag is the
 # classification contract; the text before it is what the notice shows.
-_APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored|sync_stopped)\)\s*$")
+_APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored|sync_stopped|readable_again)\)\s*$")
 _APP_DATA_ACCESS_LABELS: Final[Mapping[str, str]] = {
     "revoked": "App data turned off",
     "restored": "App data turned back on",
     "sync_stopped": "App data sync stopped",
+    "readable_again": "App data readable again",
 }
 
 

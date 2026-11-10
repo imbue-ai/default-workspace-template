@@ -624,6 +624,11 @@ _APP_DATA_SYNC_STOPPED_NOTICE = (
     'again once Full Disk Access is back on, ask in a new app-data request with "sync": true. '
     "(app-data-access: sync_stopped)"
 )
+_APP_DATA_READABLE_AGAIN_NOTICE = (
+    "App data on device host-abc: READABLE_AGAIN: reminders. Full Disk Access is on again on that computer, so you "
+    "can read these sources again. Any synchronized copy of them stays stopped; to sync again, ask in a new app-data "
+    'request with "sync": true. (app-data-access: readable_again)'
+)
 
 
 @pytest.mark.parametrize(
@@ -632,6 +637,7 @@ _APP_DATA_SYNC_STOPPED_NOTICE = (
         (_APP_DATA_REVOKED_NOTICE, "App data turned off"),
         (_APP_DATA_RESTORED_NOTICE, "App data turned back on"),
         (_APP_DATA_SYNC_STOPPED_NOTICE, "App data sync stopped"),
+        (_APP_DATA_READABLE_AGAIN_NOTICE, "App data readable again"),
     ],
 )
 def test_an_app_data_access_change_from_studio_is_a_notice_not_the_users_words(notice: str, label: str) -> None:
