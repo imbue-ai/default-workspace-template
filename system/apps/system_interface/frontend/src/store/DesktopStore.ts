@@ -3038,7 +3038,8 @@ export class DesktopStore {
       (catalog) => {
         if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog));
       },
-      () => {
+      (error: unknown) => {
+        console.warn("[si] could not read the keybindings catalog for the chrome", error);
         // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
         if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, []);
       },
