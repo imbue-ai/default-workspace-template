@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -54,6 +55,7 @@ from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
+from imbue.chat.testing import HookedSendMngrMessenger
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
@@ -279,8 +281,10 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
+def _post_chat_json(
+    server: RunningWorkspace, path: str, body: dict[str, Any], expected_status: int = 200
+) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under ``expected_status``."""
     request = urllib.request.Request(
         f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
@@ -288,7 +292,7 @@ def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200, f"{path} answered {response.status}"
+        assert response.status == expected_status, f"{path} answered {response.status}"
         answer = json.loads(response.read())
     assert isinstance(answer, dict)
     return answer
@@ -1776,6 +1780,82 @@ def test_an_unconfirmed_message_whose_turn_lands_leaves_the_composer_and_closes_
         assert sent == [text, text]
 
 
+# An agent turn that offers one-click replies (the ``#reply=`` links README.md describes).
+_REPLY_OFFER_TEXT = "Want me to look you up? [Yes](#reply=yes) [No thanks](#reply=no%20thanks)"
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reply_button_sends_its_reply_as_the_next_message_and_leaves_the_draft(tmp_path: Path, page: Page) -> None:
+    """The agent's ``#reply=`` links show as buttons; clicking one sends its reply as the user's next message, as if
+    typed and sent, while what the user was typing stays in the composer. The buttons are disabled at once, and stay
+    so once the reply's turn is on the transcript."""
+    session_events = [
+        {
+            "type": "user",
+            "uuid": "reply-u-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Hello"},
+        },
+        _assistant_line(
+            "reply-a-1", "2026-01-01T00:00:01Z", [{"type": "text", "text": _REPLY_OFFER_TEXT}], "end_turn"
+        ),
+    ]
+    messenger = RecordingMngrMessenger()
+    with running_workspace(
+        tmp_path, find_free_port(), find_free_port(), session_events=session_events, messenger=messenger
+    ) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        buttons = chat.locator("[data-machine-bubble] button.message-reply-button")
+        expect(buttons).to_have_count(2, timeout=15000)
+        expect(buttons.nth(0)).to_have_text("Yes")
+        expect(buttons.nth(1)).to_have_text("No thanks")
+        expect(buttons.nth(0)).to_be_enabled(timeout=15000)
+        expect(buttons.nth(1)).to_be_enabled()
+        expect(chat.get_by_role("button", name="No thanks")).to_be_visible()
+        first, second = buttons.nth(0).bounding_box(), buttons.nth(1).bounding_box()
+        assert first is not None and second is not None
+        assert abs(first["y"] - second["y"]) <= 1 and second["x"] > first["x"], "the buttons are not side by side"
+
+        chat.locator(".message-input-textbox").fill("a thought I was typing")
+        buttons.nth(1).click()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=15.0, error_message="the reply never reached the agent")
+        expect(buttons.nth(0)).to_be_disabled()
+        expect(buttons.nth(1)).to_be_disabled()
+        expect(chat.locator(".message-input-textbox")).to_have_value("a thought I was typing")
+
+        _append_user_turn(server.session_file, "reply-u-2", "no thanks")
+        expect(chat.locator(".message-user", has_text="no thanks")).to_be_visible(timeout=15000)
+        expect(buttons.nth(0)).to_be_disabled()
+        expect(buttons.nth(1)).to_be_disabled()
+        assert [message for _agent_id, message in messenger.sent] == ["no thanks"]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reply_button_in_a_seeded_welcome_launches_the_chat_with_its_reply(tmp_path: Path, page: Page) -> None:
+    """A seeded welcome's reply buttons work while the chat waits for its first send: clicking one launches the chat
+    with the reply as its first message, as typing it and pressing Send would."""
+    with _running_e2e_server(tmp_path) as server:
+        welcome = server.chat_state.agent_manager.seed_chat(
+            "Welcome", (SeedTurn(role=SeedRole.ASSISTANT, text=_REPLY_OFFER_TEXT),)
+        )
+        page.goto(f"{server.chat_url}{chat_root_path(welcome.chat_id)}")
+        chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{welcome.chat_id}"]')
+        yes = chat.locator("button.message-reply-button", has_text="Yes")
+        expect(yes).to_be_enabled(timeout=15000)
+
+        with page.expect_request(lambda request: request.url.endswith("/api/chats/create")) as launched:
+            yes.click()
+
+        body = launched.value.post_data_json
+        assert body is not None
+        assert body["chat_id"] == welcome.chat_id
+        assert body["message"] == "yes"
+        expect(chat.locator("button.message-reply-button")).to_have_count(2)
+        expect(yes).to_be_disabled()
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
     tmp_path: Path, page: Page
@@ -2211,6 +2291,93 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
         expect(provider_row).not_to_contain_text("next message")
+
+
+# Records, on every change to a chat page, whether the message ``__watchedText`` names is on the page once it has been,
+# and whether the status row is ever drawn above it: what the page showed in its place each time, if anything.
+_RECORD_MESSAGE_GAPS_SCRIPT = """
+(() => {
+  window.__messageGaps = [];
+  window.__rowsAbove = [];
+  let isShown = false;
+  const check = () => {
+    const text = window.__watchedText;
+    if (!text || !document.querySelector(".message-list-wrapper, .message-list-not-found")) return;
+    const bubble = [...document.querySelectorAll(".outgoing-message, .held-send, .message-user")].find(
+      (element) => (element.innerText || "").includes(text),
+    );
+    if (bubble === undefined) {
+      if (isShown) window.__messageGaps.push((document.body.innerText || "").slice(0, 200));
+      return;
+    }
+    isShown = true;
+    const row = document.querySelector(".agent-activity-indicator");
+    if (row !== null && (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      window.__rowsAbove.push(row.innerText || "(dot)");
+    }
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_delivers_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A message sent while a chat switches is held, and the switch takes it off its held list as it delivers it,
+    before its turn reaches the transcript; the chat's state is pushed meanwhile. The message stays on the page
+    throughout, and the switch's status row stays below it."""
+    confirming = "Carry on on the other account"
+    follow_up = "Find what's using disk space here"
+    page.add_init_script(f"window.__watchedText = {json.dumps(follow_up)};" + _RECORD_MESSAGE_GAPS_SCRIPT)
+    is_delivering = {confirming: threading.Event(), follow_up: threading.Event()}
+    is_released = {confirming: threading.Event(), follow_up: threading.Event()}
+    messenger = HookedSendMngrMessenger()
+    with _switched_workspace(
+        tmp_path, messenger=messenger, additional_accounts=(("anthropic", "Anthropic"),)
+    ) as server:
+        manager = server.chat_state.agent_manager
+
+        def hold_delivery(sent: str) -> None:
+            if sent not in is_delivering:
+                return
+            is_delivering[sent].set()
+            is_released[sent].wait(timeout=60.0)
+
+        messenger.during_send.append(hold_delivery)
+        try:
+            _open_fixture_chat(page, server)
+            chat = _chat(page)
+            expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+            _open_provider_menu(chat)
+            chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
+            expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
+            _switch_and_send(chat, confirming)
+            wait_for(is_delivering[confirming].is_set, timeout=30.0, error_message="the switch never delivered")
+
+            # Sent from another window: every page shows a held send from the chat's snapshot.
+            answer = _post_chat_json(
+                server,
+                f"/api/chats/{FIXTURE_AGENT_ID}/message",
+                {"message": follow_up, "message_id": "follow-up-1"},
+                expected_status=202,
+            )
+            assert answer["status"] == "held"
+            # Holding a send pushes nothing of its own; with the delivery paused, the test stands in for the pushes
+            # a running chat makes all the time.
+            manager._broadcast_chats_updated()
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=15000)
+            is_released[confirming].set()
+
+            wait_for(is_delivering[follow_up].is_set, timeout=30.0, error_message="the follow-up was never delivered")
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=5000)
+        finally:
+            for event in is_released.values():
+                event.set()
+        frame = _chat_frame(page)
+        assert frame.evaluate("window.__messageGaps") == []
+        assert frame.evaluate("window.__rowsAbove") == []
 
 
 # A turn that failed on the chat's own credential: Claude Code's stamped login notice.

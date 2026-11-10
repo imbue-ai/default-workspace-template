@@ -58,6 +58,12 @@ Built-in apps:
   Served on port 8040 by the `system-monitor` package; it keeps nothing on
   disk (its graphs come from the `resource_sampler` program beside the memory
   guard, `system/services/oom_priority/`).
+- `about_me/` - What Studio knows about me: what the opt-in web lookup by name
+  (the `personalized-ideas` skill) remembered about the user, each fact with its
+  source and date, a Delete per fact and "Forget all of this". It reads and
+  writes only the lookup's memory file, its line in `MEMORY.md` and the
+  lookup's `sources.json`, and never reaches the network. Served on port 8070
+  by the `about-me-app` package.
 - `datalib/` - The Datalib app: datalib's web UI (`datalib-http`) over the store
   the `datalib` skill writes. Not announced to users yet: its program is not in
   `system/supervisord.conf.d/` until that skill's install script copies it there,

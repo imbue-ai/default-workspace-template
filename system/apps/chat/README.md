@@ -157,6 +157,22 @@ own, or in a chat root opened on its own, which hands its pages no handshake)
 leaves its links to the browser, which opens a web, mail, or phone link in a new
 tab, hands a custom-scheme link to the app it belongs to, and does nothing for
 a file link: a browser does not follow a `file:` link from a web page.
+
+An agent's message (or a seeded turn, such as the welcome) can offer one-click
+replies as links to a `#reply=<text>` fragment: `[Yes](#reply=yes)
+[No thanks](#reply=no%20thanks)`. Each is drawn as a small button, labelled
+with the link's text, beside its siblings; clicking one sends `<text>`
+(URL-decoded, trimmed) as the user's next message through the chat's composer,
+exactly as if it were typed and sent (so a seeded chat's click launches it),
+and leaves whatever the user was typing in the composer. A message's buttons
+are disabled once a message of the user's follows it (typed or clicked, or
+still on its way), and where the chat has no composer to send through. The
+href must be exactly `#reply=` followed by the reply: an empty reply, one over
+200 characters, one that does not decode, or a slash command is unwrapped to
+its text like any other fragment link. Because it is a fragment, a chat app
+that predates reply buttons shows the link as plain text, so an offer should
+still read sensibly as words; never use a custom URL scheme for this.
+
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
@@ -343,7 +359,9 @@ carries the switch out: once its message is sent the chip names the target,
 unmarked, until the new agent reports its model, and a failed switch leaves it
 on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends` (each carries the display decision its text would get in
+`handoff.held_sends`, which keeps listing each one the switch has delivered
+until the switch is done, so a message stays on the page until its turn is in
+the transcript (each carries the display decision its text would get in
 the transcript, so a held background-task report shows as its notice; the
 message the user switched with stands down once the `agent_switch` marker
 carrying it is on the transcript, where it renders as the successor's opening

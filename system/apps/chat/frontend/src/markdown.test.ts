@@ -5,7 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // lightbox touches the DOM imperatively; markdown.ts only needs its export to exist.
 vi.mock("./lightbox", () => ({ openImageLightbox: vi.fn() }));
 
-import { MarkdownContent, renderMarkdown, requestedAtUrl } from "./markdown";
+import {
+  MAX_REPLY_TEXT_LENGTH,
+  MarkdownContent,
+  type MarkdownReplies,
+  renderMarkdown,
+  replyTextOf,
+  requestedAtUrl,
+} from "./markdown";
+import { registerReplySender, unregisterReplySender } from "./views/reply-senders";
 import { forgetLocalImage, localImageUrl, rememberLocalImage } from "./models/attachments";
 
 function mountMarkdown(content: string, requestedAt?: string): HTMLImageElement {
@@ -261,5 +269,209 @@ describe("MarkdownContent images", () => {
     forgetLocalImage(path);
     expect(localImageUrl(path)).toBeUndefined();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:local-photo");
+  });
+});
+
+describe("renderMarkdown reply links", () => {
+  function render(source: string): HTMLElement {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(source);
+    return container;
+  }
+
+  function replyButtons(container: HTMLElement): HTMLButtonElement[] {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>("button[data-reply]"));
+  }
+
+  it("draws each reply link as a button, side by side, that carries its reply and the link's label", () => {
+    const container = render("Shall I go on? [Yes](#reply=yes) [No thanks](#reply=no%20thanks)");
+    expect(container.querySelector("a")).toBeNull();
+    const buttons = replyButtons(container);
+    expect(buttons.map((button) => [button.textContent, button.getAttribute("data-reply")])).toEqual([
+      ["Yes", "yes"],
+      ["No thanks", "no thanks"],
+    ]);
+    // Inline in the paragraph, beside each other and the question.
+    expect(buttons[0].parentElement!.tagName).toBe("P");
+    expect(buttons[1].parentElement).toBe(buttons[0].parentElement);
+    for (const button of buttons) {
+      expect(button.type).toBe("button");
+      expect(button.classList.contains("message-reply-button")).toBe(true);
+      expect(button.getAttribute("data-part")).toBe("button");
+      // Nothing to send through until MarkdownContent says so.
+      expect(button.disabled).toBe(true);
+    }
+  });
+
+  it("decodes the reply, written with an angle-bracketed href or percent-encoded", () => {
+    const container = render(
+      "[Café](<#reply=un café, s'il vous plaît>) [100%](#reply=100%25%20sure) [Spaced](#reply=%20%20ok%20)",
+    );
+    expect(replyButtons(container).map((button) => button.getAttribute("data-reply"))).toEqual([
+      "un café, s'il vous plaît",
+      "100% sure",
+      "ok",
+    ]);
+  });
+
+  it("labels a button whose link has no text with its reply, and drops the link's markup", () => {
+    const container = render("[**Go** *ahead*](#reply=go%20ahead) [](#reply=skip)");
+    const buttons = replyButtons(container);
+    expect(buttons.map((button) => button.textContent)).toEqual(["Go ahead", "skip"]);
+    expect(container.querySelector("button strong, button em")).toBeNull();
+  });
+
+  it("makes a button of a raw HTML reply link too", () => {
+    const container = render('<a href="#reply=yes">Yes</a>');
+    expect(replyButtons(container).map((button) => button.getAttribute("data-reply"))).toEqual(["yes"]);
+  });
+
+  it("leaves a link that is not a reply link as it was", () => {
+    const container = render("[Docs](https://example.com/#reply=yes) [file](/home/user/workspace/a.md#reply=yes)");
+    expect(replyButtons(container)).toEqual([]);
+    expect(Array.from(container.querySelectorAll("a"), (a) => a.getAttribute("href"))).toEqual([
+      "https://example.com/#reply=yes",
+      "file:///home/user/workspace/a.md",
+    ]);
+  });
+
+  it.each([
+    ["another fragment", "[Usage](#usage)", "Usage"],
+    ["a near miss of the form", "[Yes](#reply)", "Yes"],
+    ["another case", "[Yes](#Reply=yes)", "Yes"],
+    ["a differently named key", "[Yes](#replyto=yes)", "Yes"],
+    ["an empty reply", "[Yes](#reply=)", "Yes"],
+    ["a reply of only spaces", "[Yes](#reply=%20%20)", "Yes"],
+    ["a reply that does not decode", "[Yes](#reply=%E0%A4%A)", "Yes"],
+    ["a slash command", "[Compact](#reply=/compact)", "Compact"],
+    ["an overlong reply", `[Long](#reply=${"a".repeat(MAX_REPLY_TEXT_LENGTH + 1)})`, "Long"],
+  ])("unwraps %s to its text, as any fragment link", (_name, source, label) => {
+    const container = render(source);
+    expect(container.querySelector("a")).toBeNull();
+    expect(replyButtons(container)).toEqual([]);
+    expect(container.textContent!.trim()).toBe(label);
+  });
+
+  it("keeps a reply of exactly the longest length", () => {
+    const longest = "a".repeat(MAX_REPLY_TEXT_LENGTH);
+    expect(replyButtons(render(`[Long](#reply=${longest})`))[0].getAttribute("data-reply")).toBe(longest);
+  });
+
+  it("holds a reply that looks like markup as the attribute's text, never as markup", () => {
+    const payload = '"><img src=x onerror=alert(1)><script>alert(2)</script>';
+    const html = renderMarkdown(`[Click](#reply=${encodeURIComponent(payload)})`);
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    expect(container.querySelector("img, script")).toBeNull();
+    const buttons = replyButtons(container);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].getAttribute("data-reply")).toBe(payload);
+    expect(buttons[0].getAttributeNames().sort()).toEqual([
+      "class",
+      "data-part",
+      "data-reply",
+      "data-shape",
+      "data-variant",
+      "disabled",
+      "type",
+    ]);
+  });
+
+  it("still sanitizes the rest of a message that offers replies", () => {
+    const container = render('[Yes](#reply=yes) <img src=x onerror="alert(1)"> <button onclick="alert(1)">x</button>');
+    expect(container.querySelector("[onerror], [onclick]")).toBeNull();
+  });
+});
+
+describe("replyTextOf", () => {
+  it("reads the reply from a reply link's href, and nothing from any other", () => {
+    expect(replyTextOf("#reply=no%20thanks")).toBe("no thanks");
+    expect(replyTextOf("#reply=")).toBeNull();
+    expect(replyTextOf("https://example.com/#reply=yes")).toBeNull();
+  });
+});
+
+describe("MarkdownContent reply buttons", () => {
+  const owner = {};
+  const send = vi.fn((_text: string) => true);
+
+  afterEach(() => {
+    unregisterReplySender("chat-1", owner);
+    send.mockClear();
+  });
+
+  function mount(
+    content: string,
+    replies?: MarkdownReplies,
+  ): { root: HTMLElement; rerender: (next?: MarkdownReplies) => void } {
+    const root = document.createElement("div");
+    document.body.append(root);
+    m.render(root, m(MarkdownContent, { content, replies }));
+    return { root, rerender: (next) => m.render(root, m(MarkdownContent, { content, replies: next })) };
+  }
+
+  function buttons(root: HTMLElement): HTMLButtonElement[] {
+    return Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-reply]"));
+  }
+
+  const OFFER = "Want me to look you up? [Yes](#reply=yes) [No thanks](#reply=no%20thanks)";
+
+  it("sends the clicked button's reply through the chat's composer, once, and disables the message's buttons", () => {
+    registerReplySender("chat-1", owner, send);
+    const { root } = mount(OFFER, { chatId: "chat-1", isAnswered: false });
+    expect(buttons(root).map((button) => button.disabled)).toEqual([false, false]);
+
+    buttons(root)[1].click();
+    expect(send).toHaveBeenCalledExactlyOnceWith("no thanks");
+    expect(buttons(root).map((button) => button.disabled)).toEqual([true, true]);
+
+    buttons(root)[1].click();
+    buttons(root)[0].click();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the keyboard focus, as a real button", () => {
+    registerReplySender("chat-1", owner, send);
+    const { root } = mount(OFFER, { chatId: "chat-1", isAnswered: false });
+    const yes = buttons(root)[0];
+    yes.focus();
+    expect(document.activeElement).toBe(yes);
+  });
+
+  it("disables the buttons of a message a user turn has answered", () => {
+    registerReplySender("chat-1", owner, send);
+    const { root, rerender } = mount(OFFER, { chatId: "chat-1", isAnswered: false });
+    rerender({ chatId: "chat-1", isAnswered: true });
+    expect(buttons(root).map((button) => button.disabled)).toEqual([true, true]);
+    buttons(root)[0].click();
+    expect(send).not.toHaveBeenCalled();
+    // A send that did not happen after all (the message went back to the composer) opens them again.
+    rerender({ chatId: "chat-1", isAnswered: false });
+    expect(buttons(root).map((button) => button.disabled)).toEqual([false, false]);
+  });
+
+  it("keeps the buttons disabled where there is no composer to send through, and enables them when one comes", () => {
+    const { root, rerender } = mount(OFFER, { chatId: "chat-1", isAnswered: false });
+    expect(buttons(root).map((button) => button.disabled)).toEqual([true, true]);
+    buttons(root)[0].click();
+    expect(send).not.toHaveBeenCalled();
+
+    registerReplySender("chat-1", owner, send);
+    rerender({ chatId: "chat-1", isAnswered: false });
+    expect(buttons(root).map((button) => button.disabled)).toEqual([false, false]);
+  });
+
+  it("keeps the buttons disabled in prose given no replies (a read-only view)", () => {
+    registerReplySender("chat-1", owner, send);
+    const { root } = mount(OFFER);
+    expect(buttons(root).map((button) => button.disabled)).toEqual([true, true]);
+  });
+
+  it("updates the buttons without rewriting the message, so a selection in it survives", () => {
+    registerReplySender("chat-1", owner, send);
+    const { root, rerender } = mount(OFFER, { chatId: "chat-1", isAnswered: false });
+    const paragraph = root.querySelector("p");
+    rerender({ chatId: "chat-1", isAnswered: true });
+    expect(root.querySelector("p")).toBe(paragraph);
   });
 });
