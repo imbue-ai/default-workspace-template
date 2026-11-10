@@ -100,6 +100,7 @@ That is the whole lookup: there is nothing for the user to connect, sign up for,
 Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
 
 - **Search in parallel.** Run every search in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
+- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their account email or its domain (an `@company.com` address is not their employer), not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. Those are not the user's answer to who they are, and searching with them looks the user up with information they never offered.
 - **Widen a thin first batch.** If the first batch shows one person or none, run one more batch at once, before asking anything: the name with `LinkedIn`, with `GitHub`, and with `personal website` (at most 3 more searches). Most names belong to several people, and a single candidate is more often a thin result than a match.
 - **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
