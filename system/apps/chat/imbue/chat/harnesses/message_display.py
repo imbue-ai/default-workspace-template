@@ -465,8 +465,8 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
 
 
 def _match_app_data_access_change(content: str) -> MessageDisplay | None:
-    """Imbue Studio's note that the user turned an app-data source off or back on; a NOTICE, since it is
-    something the agent was told, not something the user said."""
+    """Imbue Studio's note that the user turned an app-data source off or back on, or that Studio stopped its
+    sync; a NOTICE, since it is something the agent was told, not something the user said."""
     match = _APP_DATA_ACCESS_TAG_RE.search(content)
     if match is None:
         return None
