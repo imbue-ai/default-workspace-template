@@ -26,8 +26,10 @@ Order of decision (:func:`classify_user_message`):
 """
 
 import re
+from collections.abc import Mapping
 from enum import auto
 from typing import Any
+from typing import Final
 from typing import assert_never
 
 from pydantic import Field
@@ -180,7 +182,7 @@ _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 # ``latchkey/handlers/resolution.py``: "... (app-data-access: revoked)". The tag is the
 # classification contract; the text before it is what the notice shows.
 _APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored)\)\s*$")
-_APP_DATA_ACCESS_LABELS = {
+_APP_DATA_ACCESS_LABELS: Final[Mapping[str, str]] = {
     "revoked": "App data turned off",
     "restored": "App data turned back on",
 }
