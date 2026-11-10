@@ -287,7 +287,6 @@ def test_a_profile_the_cache_cannot_keep_is_not_announced_as_changed(tmp_path: P
     assert len(connector.requests) == 1
 
 
-@pytest.mark.flaky
 def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sharing(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
@@ -295,10 +294,19 @@ def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sh
     resolver.resolve(_BOB, _T0)
 
     assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Bob"
+    # That stale answer started a refresh, which stamps what it fetches with the wall clock; it settles before the
+    # share goes, and staleness is judged from its stamp.
+    wait_for(
+        lambda: len(connector.requests) >= 2 and not _is_refresh_running(),
+        timeout=10.0,
+        poll_interval=0.01,
+        error_message="the profile refresh never settled",
+    )
+    refreshed_at = datetime.now(timezone.utc)
     resolver.share_env_path.unlink()
 
-    assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL) == {}
-    assert resolver.resolve_many([_BOB], _T0)["user-bob-4471"].display_name == "Bob"
+    assert resolver.resolve_many([_BOB], refreshed_at + PROFILE_CACHE_TTL) == {}
+    assert resolver.resolve_many([_BOB], refreshed_at)["user-bob-4471"].display_name == "Bob"
 
 
 def test_a_malformed_broker_url_is_a_failed_fetch(tmp_path: Path) -> None:
