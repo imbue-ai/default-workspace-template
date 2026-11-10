@@ -67,7 +67,7 @@ Write `consent.json` with their answer either way, except when they only asked a
 
 ## 3. Get their name
 
-Do this in the same turn as the user's yes, with no question and no approval in between: the offer they accepted names "the name on your account", so read it straight away from Imbue Studio:
+Read the name in the same turn as the user's yes, with no question and no approval before it: the offer they accepted names "the name on your account", so read it straight away from Imbue Studio:
 
 ```bash
 latchkey curl -sS "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/owner-name"
