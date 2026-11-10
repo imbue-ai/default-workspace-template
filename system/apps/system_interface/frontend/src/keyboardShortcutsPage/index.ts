@@ -58,7 +58,9 @@ function start(): void {
     const sent = readChromeShortcuts(message);
     if (sent === null) return;
     chromeShortcuts = sent;
-    m.redraw();
+    // Synchronously: the section settles one pending save per answer it renders, and two answers coalesced into
+    // one frame would read as one.
+    m.redraw.sync();
   });
 
   m.mount(root, {
