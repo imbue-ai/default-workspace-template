@@ -130,6 +130,8 @@ from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
+from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
@@ -244,7 +246,9 @@ class ShellState(MutableModel):
 
     def start(self) -> None:
         """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness),
-        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests)."""
+        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests).
+        Each visitor's desktop made before desktops carried an owner is given its visitor first."""
+        self.adopt_visitor_desktops()
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
@@ -285,6 +289,26 @@ class ShellState(MutableModel):
         if self._snapshot_watch is not None:
             stop_file_watch(self._snapshot_watch)
             self._snapshot_watch = None
+
+    def adopt_visitor_desktops(self) -> None:
+        """Give each desktop ``users.json`` says was made for a visitor, and which carries no owner, that visitor's
+        key (the multiplayer spec, section 8.1), on the first start that runs this: a shell older than desktop owners
+        seeded visitors' desktops with none, which reads as the workspace owner's."""
+        # CLEANUP: remove this, its call in start(), DesktopStore.adopt_visitor_desktops,
+        # VISITOR_DESKTOPS_ADOPTED_FILENAME, ownership's visitor_desktop_owners and with_visitor_owners, and their tests
+        # once no workspace can still update from a template older than minds-v0.10.0, whose visitor desktops carry no
+        # owner.
+        try:
+            with STATE_FILES_LOCK:
+                outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
+        except ShellStateError as e:
+            logger.opt(exception=e).error(
+                "Failed to give the visitors' old desktops their visitors; the next start retries"
+            )
+            return
+        if outcome.is_written:
+            logger.info("Gave the visitors' desktops made before desktop owners their visitors")
+            self.broadcaster.broadcast_desktops_updated(self.desktop_views(outcome.desktops))
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -889,8 +913,9 @@ class ShellState(MutableModel):
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
         """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
         clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
-        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
-        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted
+        or is no longer theirs), while a returning client of theirs keeps the desktop it was on. None while the
+        workspace has no desktop."""
         now = datetime.now(timezone.utc)
         user_id = visiting_user_id(identity)
         # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
@@ -935,10 +960,19 @@ class ShellState(MutableModel):
     ) -> ClientArrivalOutcome:
         """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
         them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
-        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock.
+
+        The recorded desktop counts as theirs only while they own it: their record keeps naming its id after the
+        owner deletes it, and a desktop the owner makes later may take that id, which would land them viewing
+        somebody else's desktop with nowhere for "Stop viewing" to go."""
         known = self.users.get_user(user_id)
         desktop_by_id = {desktop.id: desktop for desktop in desktops}
-        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        recorded_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        own_desktop = (
+            recorded_desktop
+            if recorded_desktop is not None and is_desktop_owned_by(recorded_desktop, identity)
+            else None
+        )
         created: Desktop | None = None
         replaced_desktop_name: str | None = None
         if own_desktop is not None:

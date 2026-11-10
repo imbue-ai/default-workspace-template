@@ -2645,7 +2645,7 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 
     assert code == 0
     # Pre-flight boots the venv's entry point on a throwaway port before the restart.
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
@@ -2656,6 +2656,27 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 def _venv_entry_point(repo_root: Path, script: str) -> str:
     """Where a pre-flight finds an app's console script: the workspace venv's bin directory."""
     return str(repo_root / ".venv" / "bin" / script)
+
+
+class _AbsoluteFolder:
+    """Equal to any absolute path: the scratch folder a pre-flight boot picks for itself."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and Path(other).is_absolute()
+
+
+_SCRATCH_FOLDER = _AbsoluteFolder()
+
+
+def _shell_preflight_argv(repo_root: Path) -> list[object]:
+    """The shell's pre-flight boot: its console script, with its state and presence in a scratch folder."""
+    return [
+        _venv_entry_point(repo_root, "system-interface"),
+        "--state-dir",
+        _SCRATCH_FOLDER,
+        "--presence-dir",
+        _SCRATCH_FOLDER,
+    ]
 
 
 _OOM_TAGGER = "system/services/oom_priority/bin/oom_tag_service.py"
@@ -2679,12 +2700,16 @@ def _supervisord_exec_target(program_conf: Path) -> list[str]:
 @pytest.mark.parametrize(
     ("program_conf", "preflight", "extra_args"),
     [
-        ("system_interface.conf", update_probes.preflight, []),
+        (
+            "system_interface.conf",
+            update_probes.preflight,
+            ["--state-dir", _SCRATCH_FOLDER, "--presence-dir", _SCRATCH_FOLDER],
+        ),
         ("chat.conf", update_probes.preflight_chat, ["--preflight"]),
     ],
 )
 def test_the_preflight_boots_the_install_supervisord_runs(
-    program_conf: str, preflight, extra_args: list[str]
+    program_conf: str, preflight, extra_args: list[object]
 ) -> None:
     # The pre-flight exists to boot what the restart will boot. Read off the real tree's
     # program lines, so a program that moves to another install moves the pre-flight too.
@@ -2705,6 +2730,26 @@ def test_the_preflight_boots_the_install_supervisord_runs(
     assert spawner.spawns == [
         [str(_WORKSPACE_ROOT / executable), *program_args, *extra_args]
     ]
+
+
+def test_the_shell_preflight_keeps_its_state_out_of_the_tree() -> None:
+    # The shell resolves its default state and presence folders against its working
+    # directory, the app's folder in a pre-flight, and writes into them as it starts; a
+    # boot left to its defaults leaves files in the tree that the next apply refuses as
+    # uncommitted changes.
+    spawner = _FakeSpawner()
+
+    update_probes.preflight(
+        _WORKSPACE_ROOT, _FakeHttp(_all_healthy), spawner, _no_sleep, expend=list
+    )
+
+    (argv,) = spawner.spawns
+    for flag in ("--state-dir", "--presence-dir"):
+        assert flag in argv, f"the pre-flight boot leaves {flag} to its in-tree default"
+        folder = Path(argv[argv.index(flag) + 1])
+        assert folder.is_absolute()
+        assert not folder.is_relative_to(_WORKSPACE_ROOT)
+        assert not folder.parent.exists(), "the boot's scratch folder outlived it"
 
 
 def _write_chat_program(repo_root: Path) -> None:
@@ -2729,7 +2774,7 @@ def test_apply_preflights_the_chat_app_beside_the_shell_when_the_tree_runs_one(
 
     assert code == 0
     assert spawner.spawns == [
-        [_venv_entry_point(apply_repo, "system-interface")],
+        _shell_preflight_argv(apply_repo),
         [_venv_entry_point(apply_repo, "chat-app"), "--preflight"],
     ]
     chat_env = spawner.envs[1]
@@ -2774,7 +2819,7 @@ def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
     code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
 
     assert code == 0
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
 
 
 def test_apply_apt_snapshot_change_provisions_before_any_restart(
@@ -2930,7 +2975,7 @@ def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) 
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
     assert not runner.ran("npm")
     assert not runner.ran(*_PROVISION)
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
@@ -8321,7 +8366,7 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
 
     assert code == 2
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran(*_RESTART)
     assert _bundle_exists(apply_repo)

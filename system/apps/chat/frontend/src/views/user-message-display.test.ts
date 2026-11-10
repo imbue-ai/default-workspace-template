@@ -221,6 +221,23 @@ describe("user-message-display other people's turns", () => {
     );
   });
 
+  it("redraws a turn whose author the roster names differently once the page reads the roster again", () => {
+    // The page read the roster before Bob arrived, when it named him by his id.
+    const beforeBobArrived = roster().map((entry) =>
+      entry.key === "user:bob-2" ? { ...entry, display_name: "bob-2-account-id" } : entry,
+    );
+    setParticipantsForTesting("user:owner-1", beforeBobArrived);
+    const root = document.createElement("div");
+    const event = turn({ author: "user:bob-2", author_name: "Bob" });
+    m.render(root, renderUserMessage(event));
+    expect(root.querySelector(".message-author")?.textContent).toBe("bob-2-account-id");
+
+    setParticipantsForTesting("user:owner-1", roster());
+    m.render(root, renderUserMessage(event));
+
+    expect(root.querySelector(".message-author")?.textContent).toBe("Bob");
+  });
+
   it("folds a turn annotated under the synthetic owner key into the owner, for the owner and for a visitor", () => {
     // Annotated before the workspace was shared, read after: the owner's key of the moment is their account's.
     setParticipantsForTesting("user:owner-1", roster());

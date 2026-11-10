@@ -1047,11 +1047,19 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # The confirming message leads the list for as long as the switch lasts: a handoff folds it
     # into the successor's prompt, a rebind delivers it first, and either way the page keeps
     # showing it until its turn appears in the transcript. A switch made with nothing to say
-    # (a fresh start picked from the provider menu) has no confirming message to show.
-    others = transition.held_sends_after_trigger()
+    # (a fresh start picked from the provider menu) has no confirming message to show. The
+    # other held sends stay listed the same way once the switch has delivered them; any of
+    # them, the confirming message included, that did not land has no turn to wait for.
+    others = transition.shown_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
-        if transition.trigger_text
+        (
+            _held_send_snapshot(
+                transition.trigger_message_id,
+                transition.trigger_text,
+                is_delivered=transition.is_delivered(transition.trigger_message_id),
+            ),
+        )
+        if transition.is_trigger_listed()
         else ()
     )
     return HandoffState(
@@ -1062,7 +1070,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
+        held_sends=(
+            *trigger,
+            *(
+                _held_send_snapshot(held.message_id, held.text, is_delivered=transition.is_delivered(held.message_id))
+                for held in others
+            ),
+        ),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
@@ -1071,11 +1085,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _held_send_snapshot(message_id: str, delivered_text: str) -> HeldSendSnapshot:
+def _held_send_snapshot(message_id: str, delivered_text: str, is_delivered: bool) -> HeldSendSnapshot:
     """One held send on the wire: the words behind the author prefix a non-owner's send carries (the record keeps the
     delivered text for the agent), with the render decision they would get in the transcript."""
     words = split_author_prefix(delivered_text)[1]
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=words), classify_user_message(words))
+    return _with_display_decision(
+        HeldSendSnapshot(message_id=message_id, text=words, is_delivered=is_delivered), classify_user_message(words)
+    )
 
 
 @pure
@@ -1986,7 +2002,9 @@ class AgentManager:
     def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChatAsShown:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
-        held_sends = tuple(_held_send_snapshot(held.message_id, held.text) for held in provisional.held_sends)
+        held_sends = tuple(
+            _held_send_snapshot(held.message_id, held.text, is_delivered=False) for held in provisional.held_sends
+        )
         return ProvisionalChatAsShown(
             chat=provisional
             if title is None
@@ -3756,7 +3774,9 @@ class AgentManager:
             raise RebindCancelledError(str(e)) from e
 
     def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
-        """Pop the oldest held send, or finish the switch (clear its entry) and return None once none remain.
+        """Move the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
+        once none remain. Either way the chat's snapshot is pushed: the page reads which listed sends are delivered off
+        it, to stand each down once its turn lands.
 
         A finished rebind on a chat of one agent takes its record with it: a record exists only
         for a chat that has had a handoff, and the agent's ``account`` label is the truth again.
@@ -3765,19 +3785,15 @@ class AgentManager:
             record = self._require_transition_locked(self._chat_record_by_id.get(chat_id), chat_id, transition_id)
             transition = record.converging
             assert transition is not None, "_require_transition_locked returned a record with a switch"
-            if transition.held_sends:
-                held = transition.held_sends[0]
-                remaining = transition.model_copy_update(
-                    to_update(transition.field_ref().held_sends, transition.held_sends[1:])
-                )
-                self._write_record_locked(record.with_converging(remaining))
-                return held
-            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
+            taken = transition.held_sends[0] if transition.held_sends else None
+            if taken is not None:
+                self._write_record_locked(record.with_converging(transition.with_oldest_held_send_delivered()))
+            elif isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
                 self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
         self._broadcast_chats_updated()
-        return None
+        return taken
 
     def _note_agent_relabeled(self, agent_id: str, labels: Mapping[str, str]) -> None:
         """Reflect labels a switch wrote before the observe stream relists the agent."""

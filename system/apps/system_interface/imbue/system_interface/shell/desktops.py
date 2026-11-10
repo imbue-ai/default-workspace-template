@@ -3,6 +3,7 @@ the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_off
 
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -62,6 +63,7 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.ownership import reordered_desktops
+from imbue.system_interface.shell.ownership import with_visitor_owners
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
@@ -77,6 +79,9 @@ DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 2
 # The record's version while it named apps (``AppsOfferedDocument``).
 _APPS_OFFERED_FILE_VERSION: Final[int] = 1
+# Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
+# runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
+VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
 
 # The one desktop a fresh workspace starts with (desktop plan section 3.2).
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
@@ -466,6 +471,23 @@ class DesktopStore(MutableModel):
             self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=ensured))
         logger.info("Reconciled the pinned windows of {} desktop(s) for {} pinned app(s)", len(ensured), len(pins))
         return DesktopsChangeOutcome(desktops=ensured, is_written=True)
+
+    def adopt_visitor_desktops(self, owner_by_desktop_id: Mapping[DesktopId, ParticipantKey]) -> DesktopsChangeOutcome:
+        """The desktops after each one with no owner that ``owner_by_desktop_id`` names is given that owner, the first
+        time this runs in the workspace; written only when one was. Raises ShellStateError when it cannot record that
+        it ran, leaving the next call to run it again."""
+        marker_path = self.state_directory / VISITOR_DESKTOPS_ADOPTED_FILENAME
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            if marker_path.is_file():
+                return DesktopsChangeOutcome(desktops=desktops, is_written=False)
+            adopted = with_visitor_owners(desktops, owner_by_desktop_id)
+            is_written = adopted != desktops
+            if is_written:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=adopted))
+            write_json_atomic(marker_path, {})
+        return DesktopsChangeOutcome(desktops=adopted, is_written=is_written)
 
     def create_desktop(
         self,
