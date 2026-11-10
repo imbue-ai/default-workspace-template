@@ -23,6 +23,10 @@ The design is the "A 'What Studio knows about me' page" section of
   the agent writes its own, with its index line.
 - **Forget everything** (after a confirm) deletes every memory, `MEMORY.md`
   and `sources.json`.
+- The page re-reads the memory when its window comes back into focus and
+  every 5 seconds while it is on screen, so what the agent or the Files app
+  changes shows up without a reload; it waits while an edit or the forget
+  confirm is open.
 - An empty state, and a "View raw files" disclosure with `MEMORY.md`, the
   lookup's memory and `sources.json` as they are on disk.
 

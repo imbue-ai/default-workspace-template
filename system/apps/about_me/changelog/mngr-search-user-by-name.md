@@ -6,6 +6,8 @@ A new built-in app, What Studio knows about me (`about-me`, port 8070): a view o
 
 - Add something about yourself writes a new memory in the format the agent writes its own, so the next chat knows it. Forget everything, after a confirm, deletes every memory.
 
+- The page keeps itself current: it re-reads the memory when you switch back to it and every few seconds while it is on screen, so what the agent saves, or what you change in Files, shows up without a reload. It waits while you are editing.
+
 - Every change names the file's content by a hash, so a page left open while the agent rewrote a memory reloads instead of overwriting it. Writes are atomic and serialized. The app never reaches the network.
 
 - The page is plain HTML on the page kit and the design tokens (`[theming] mode = "tokens"`), so it wears every workspace theme. A new desktop gets a shortcut to it; it stops when no window shows it, and sits under the Share tab's System group.

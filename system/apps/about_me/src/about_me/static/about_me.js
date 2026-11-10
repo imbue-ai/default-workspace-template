@@ -4,6 +4,11 @@
 // memories quote web pages and what people typed. It talks only to this app's own routes.
 
 const HTTP_CONFLICT = 409;
+// How often the page re-reads the memory while it is on screen, so changes the agent or the Files app make show up.
+const REFRESH_INTERVAL_MS = 5000;
+
+// The last profile drawn, as JSON, so a refresh that finds nothing new draws nothing.
+let drawnProfile = "";
 
 // The groups, in page order: the memory type each holds and its heading.
 const GROUPS = [
@@ -283,6 +288,7 @@ function group(heading, memories, facts) {
 }
 
 function render(profile) {
+  drawnProfile = JSON.stringify(profile);
   const sections = GROUPS.flatMap(([type, heading]) => {
     const memories = profile.memories.filter((memory) => memory.memory_type === type);
     const facts = type === "user" ? profile.facts : [];
@@ -378,5 +384,25 @@ elements.forgetConfirmCancel.addEventListener("click", closeForgetConfirm);
 elements.forgetConfirmYes.addEventListener("click", () =>
   post("/api/forget", { scope: "everything" }, elements.forgetConfirmYes),
 );
+
+// Whether redrawing now would throw away something the person is doing: an open edit or the forget confirm.
+function isBusy() {
+  return document.querySelector(".memory-form, .fact-edit-input") !== null || !elements.forgetConfirm.hidden;
+}
+
+async function refresh() {
+  if (document.visibilityState !== "visible" || isBusy()) return;
+  try {
+    const { ok, body } = await request("/api/profile");
+    if (!ok || isBusy() || JSON.stringify(body) === drawnProfile) return;
+    render(body);
+  } catch {
+    // A refresh that fails is retried on the next tick; the page keeps what it drew.
+  }
+}
+
+window.addEventListener("focus", refresh);
+document.addEventListener("visibilitychange", refresh);
+setInterval(refresh, REFRESH_INTERVAL_MS);
 
 load().catch(() => showNotice("Could not read what I remember."));
