@@ -47,7 +47,7 @@ The skill does not use them:
 
 - A message from someone other than the owner (`[from: <name>]`): the name belongs to the owner. The agent suggests general ideas instead.
 - Sharing is on by default only so the owner can reach the workspace from their phone; that admits nobody else and asks nothing. The owner-name route answers `is_shared_with_others` (any grant, on the workspace or one of its apps, admitting someone besides the owner, or a visiting agent holding the whole workspace; never who), and only when it is true does the agent ask, once, with a fixed question and two buttons ("Others can, but go ahead" / "Skip the search"). When Imbue Studio cannot read it, a published workspace gets the three-button question ("Only me, go ahead" / "Others can, but go ahead" / "Skip the search"). Either go-ahead is saved in `consent.json` (`only_me` or `shared_ok`) and not asked again; anything else counts as a "no" and nothing is searched. Only the owner's own messages can start the search, and it is always for the owner's account name.
-- No backend component: nothing in Imbue Studio's backend or the connector changes. The search is the agent's own web search; the offer says it goes through an outside search service.
+- Backend: one Imbue Studio route, `GET /api/v1/agents/<id>/owner-name` (the owner's display name, their email's organization domain, and whether anyone besides them can get in); nothing in the connector changes. The search is the agent's own web search; the offer says it goes through an outside search service.
 
 ## Planned: seeing and controlling what is remembered
 
