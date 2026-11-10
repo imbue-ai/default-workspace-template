@@ -27,6 +27,7 @@ Stdlib only: supervisord runs it under the system ``python3``.
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import socket
 import sys
@@ -70,8 +71,11 @@ def is_answering(port: int, path: str) -> bool:
         return False
 
 
-def is_first_wave_serving() -> bool:
-    return all(is_answering(port, path) for port, path in FIRST_WAVE)
+def first_wave_checks() -> tuple[Callable[[], bool], ...]:
+    """One check per first-wave app, each asking whether that app answers its health route."""
+    return tuple(
+        functools.partial(is_answering, port, path) for port, path in FIRST_WAVE
+    )
 
 
 def supervisord_started_at(pidfile: Path) -> float | None:
@@ -85,22 +89,25 @@ def supervisord_started_at(pidfile: Path) -> float | None:
 def seconds_to_hold(
     delay_seconds: float,
     started_at: float | None,
-    is_serving: Callable[[], bool],
+    checks: Sequence[Callable[[], bool]],
     clock: Callable[[], float],
     sleep: Callable[[float], None],
 ) -> float:
     """Wait for the first wave as the module docstring says; how long to sleep before the exec.
 
+    Each app is waited for in turn and never asked again once it answered: every gated program runs
+    this at once, and re-asking an app that already serves would load it with requests while the
+    other one is still starting. A check can itself take as long as an app's imports: the apps bind
+    their ports before importing, so a connection succeeds at once and waits for the answer.
     ``started_at`` None (no supervisord) measures the window from now.
     """
     now = clock()
     window_end = (now if started_at is None else started_at) + FIRST_WAVE_WINDOW_SECONDS
     if now >= window_end:
         return 0.0
-    # The first check can itself take as long as the apps' imports: the apps bind their ports before
-    # importing, so a connection succeeds at once and waits for the answer.
-    while not is_serving() and clock() < window_end:
-        sleep(POLL_SECONDS)
+    for check in checks:
+        while not check() and clock() < window_end:
+            sleep(POLL_SECONDS)
     return delay_seconds
 
 
@@ -137,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     hold = seconds_to_hold(
         delay_seconds=args.delay,
         started_at=supervisord_started_at(args.supervisord_pidfile),
-        is_serving=is_first_wave_serving,
+        checks=first_wave_checks(),
         clock=time.time,
         sleep=time.sleep,
     )

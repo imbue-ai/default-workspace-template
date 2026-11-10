@@ -44,7 +44,7 @@ def test_a_program_started_inside_the_window_once_the_first_wave_serves_waits_on
     hold = gate.seconds_to_hold(
         delay_seconds=5.0,
         started_at=995.0,
-        is_serving=lambda: True,
+        checks=(lambda: True,),
         clock=clock.time,
         sleep=clock.sleep,
     )
@@ -59,7 +59,7 @@ def test_a_program_started_after_the_window_is_not_held_even_with_the_first_wave
     hold = gate.seconds_to_hold(
         delay_seconds=5.0,
         started_at=1_000.0 - gate.FIRST_WAVE_WINDOW_SECONDS - 1,
-        is_serving=lambda: False,
+        checks=(lambda: False,),
         clock=clock.time,
         sleep=clock.sleep,
     )
@@ -72,7 +72,7 @@ def test_a_held_program_waits_for_the_first_wave_then_its_delay() -> None:
     hold = gate.seconds_to_hold(
         delay_seconds=6.0,
         started_at=1_000.0,
-        is_serving=_serving_after(clock, 1_003.0),
+        checks=(_serving_after(clock, 1_003.0),),
         clock=clock.time,
         sleep=clock.sleep,
     )
@@ -86,7 +86,7 @@ def test_a_first_wave_that_never_serves_holds_nobody_past_the_window() -> None:
     hold = gate.seconds_to_hold(
         delay_seconds=2.0,
         started_at=1_000.0,
-        is_serving=lambda: False,
+        checks=(lambda: False,),
         clock=clock.time,
         sleep=clock.sleep,
     )
@@ -99,7 +99,7 @@ def test_with_no_supervisord_the_window_runs_from_now() -> None:
     gate.seconds_to_hold(
         delay_seconds=0.0,
         started_at=None,
-        is_serving=lambda: False,
+        checks=(lambda: False,),
         clock=clock.time,
         sleep=clock.sleep,
     )
@@ -193,3 +193,27 @@ def test_no_command_exits_with_usage() -> None:
     )
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+def test_each_app_is_asked_until_it_answers_and_never_again() -> None:
+    clock = _FakeClock(now=1_000.0)
+    asked: list[str] = []
+
+    def shell() -> bool:
+        asked.append("shell")
+        return True
+
+    def chat() -> bool:
+        asked.append("chat")
+        return clock.now >= 1_002.0
+
+    hold = gate.seconds_to_hold(
+        delay_seconds=1.0,
+        started_at=1_000.0,
+        checks=(shell, chat),
+        clock=clock.time,
+        sleep=clock.sleep,
+    )
+    assert hold == 1.0
+    assert asked.count("shell") == 1
+    assert asked.count("chat") == round(2.0 / gate.POLL_SECONDS) + 1
