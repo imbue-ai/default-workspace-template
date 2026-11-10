@@ -1042,6 +1042,26 @@ describe("workspace-wide actions", () => {
     });
   });
 
+  it("hands a pages layer built after the chords were read the chords already published", async () => {
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    const store = makeStore();
+    await store.start(NO_LINK);
+    const sentToPages: unknown[] = [];
+
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: (chords, surface) => sentToPages.push({ chords, surface }),
+      sendChord: () => undefined,
+    });
+
+    expect(sentToPages).toEqual([{ chords: ["meta+k"], surface: "browser" }]);
+  });
+
   it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
     const reported: unknown[] = [];
     const store = makeStore(undefined, {

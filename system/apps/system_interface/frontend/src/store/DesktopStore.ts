@@ -964,6 +964,9 @@ export class DesktopStore {
 
   setPageDriver(driver: PageDriver | null): void {
     this.pageDriver = driver;
+    // A pages layer is built once the first layout lands, often after the keybindings were read, and again on a
+    // switch between the phone and desktop layouts: it starts with the chords already published.
+    if (driver !== null) this.sendWorkspaceChordsTo(driver, workspaceChordsByAction());
   }
 
   dispatch(event: DesktopEvent): void {
@@ -3029,8 +3032,7 @@ export class DesktopStore {
    *  chords by action and every app's, all filtered for where the workspace runs. */
   private publishWorkspaceChords(): void {
     const chordsByAction = workspaceChordsByAction();
-    const chords = [...new Set(Object.values(chordsByAction).flat())];
-    this.pageDriver?.sendWorkspaceChords(chords, shellChordContext().surface);
+    if (this.pageDriver !== null) this.sendWorkspaceChordsTo(this.pageDriver, chordsByAction);
     if (!this.isEmbedderPresent) return;
     const generation = ++this.shellShortcutsReportGeneration;
     const isLatest = (): boolean => generation === this.shellShortcutsReportGeneration;
@@ -3044,6 +3046,13 @@ export class DesktopStore {
         if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, []);
       },
     );
+  }
+
+  private sendWorkspaceChordsTo(
+    driver: PageDriver,
+    chordsByAction: Readonly<Record<WorkspaceActionId, readonly string[]>>,
+  ): void {
+    driver.sendWorkspaceChords([...new Set(Object.values(chordsByAction).flat())], shellChordContext().surface);
   }
 
   /** Run one of the shell's workspace-wide actions (the keyboard-shortcuts spec in the mngr repo, section 6.2), from
