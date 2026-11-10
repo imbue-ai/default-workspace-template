@@ -49,12 +49,13 @@ import {
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
-  areAccountsLoaded,
   isAccountSignedOut,
   loadAccounts,
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { isAwaitingProvider, openFirstSendChooser } from "../models/firstSendChooser";
+import { framingChatRoot } from "../embedApi";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -1885,36 +1886,29 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /**
-       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
-       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
-       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
-       * refuses lands on the page as a failed create, with its "Try again".
-       */
+      /** The chooser for a chat with no provider to start on (``models/firstSendChooser.ts``): the chat root's, when
+       *  one frames this page, else this page's own. */
       function openProviderChooserForFirstSend(awaitingChatId: string): void {
-        openProviderChooser({
-          onSignedIn: (accountId) => {
-            const awaiting = getProvisionalChat(awaitingChatId);
-            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
-            if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
-              console.error(
-                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
-              );
-            });
-          },
-          onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId),
-        });
+        const root = framingChatRoot();
+        if (root !== null) {
+          root.chooseProviderForFirstSend();
+          return;
+        }
+        openFirstSendChooser(
+          () => awaitingChatId,
+          (chatId) => void launchAwaitingChatAsRoom(chatId),
+        );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
-       *  notice appears, and its button opens it again once dismissed. */
+      /** In place of the composer while nothing is signed in that a new chat could start on; its button opens the
+       *  chooser again once dismissed. A page no chat root frames opens it as the notice appears; under a root, the
+       *  root has opened it already, over the whole list. */
       function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
           () => openProviderChooserForFirstSend(awaitingChatId),
-          () => openProviderChooserForFirstSend(awaitingChatId),
+          framingChatRoot() === null ? () => openProviderChooserForFirstSend(awaitingChatId) : undefined,
         );
       }
 
@@ -1937,11 +1931,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
       // Until the account list has loaded the composer shows as usual: most pages have an account.
-      const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
-      const isBlockedByNoProvider =
-        awaitingFirstSend?.phase === "awaiting_first_send" &&
-        areAccountsLoaded() &&
-        accountForFirstSend(awaitingFirstSend.account_id) === null;
+      const isBlockedByNoProvider = chatId !== null && isAwaitingProvider(chatId);
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
       isComposerDisabledNow = isComposerDisabled;
       const canSendNow = canSend && !isComposerDisabled;

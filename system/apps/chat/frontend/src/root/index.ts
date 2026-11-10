@@ -8,7 +8,8 @@
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
  * chat through the picker, or a first message that launches a chat) exactly once and then
  * reports the selection alone, opens the provider chooser once when its URL carries
- * ``open=providers`` (the Imbue Studio app's sign-in button), and drives its inner pages
+ * ``open=providers`` (the Imbue Studio app's sign-in button) and whenever the chat it shows awaits
+ * its first send with nothing signed in (``models/firstSendChooser.ts``), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
@@ -44,6 +45,8 @@ import {
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { makeRootFirstSendChooser } from "../models/firstSendChooser";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
@@ -200,16 +203,17 @@ function openChatForEmptyList(): void {
     });
 }
 
-// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
-let newChatRefusal: string | null = null;
-const newChatRefusalNotice = makeNoticeDialog();
+// Why the last thing started from the root's own chrome (New chat, the chooser's room row) did not start, shown as a
+// notice until dismissed; null otherwise.
+let refusal: { title: string; detail: string } | null = null;
+const refusalNotice = makeNoticeDialog();
 
 /** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
  *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
 async function openNewChat(): Promise<void> {
   const outcome = await startNewChat();
   if (outcome.kind === "refused") {
-    newChatRefusal = outcome.detail;
+    refusal = { title: "Couldn't start a new chat", detail: outcome.detail };
     m.redraw();
     return;
   }
@@ -333,6 +337,23 @@ function openRequestedProviderChooser(accountsLoaded: Promise<void>): void {
   void accountsLoaded.then(() => openProviderChooser());
 }
 
+/** The chooser's room row: the chat on screen, awaiting its first send, becomes a room with nothing said yet. */
+async function makeRoom(chatId: string): Promise<void> {
+  try {
+    await launchChat(chatId, "", "", "room");
+  } catch (error) {
+    refusal = { title: "Couldn't make a room", detail: describeRequestError(error) };
+  }
+  m.redraw();
+}
+
+// The chooser for a chat on screen that awaits its first send with nothing signed in. Over the whole root, so it
+// stays up, sign-in and all, when the selection moves to another such chat (the seeded welcome chat arriving).
+const firstSendChooser = makeRootFirstSendChooser(
+  () => selectedChatId,
+  (chatId) => void makeRoom(chatId),
+);
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -372,6 +393,8 @@ function onChatsUpdated(): void {
 }
 
 const ChatRoot: m.Component = {
+  oncreate: () => firstSendChooser.openIfAwaitingProvider(),
+  onupdate: () => firstSendChooser.openIfAwaitingProvider(),
   view() {
     const rows = railRows();
     const isCompact = compactQuery.matches;
@@ -433,14 +456,14 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
-        newChatRefusal === null
+        refusal === null
           ? null
-          : m(newChatRefusalNotice, {
-              title: "Couldn't start a new chat",
-              body: [newChatRefusal],
+          : m(refusalNotice, {
+              title: refusal.title,
+              body: [refusal.detail],
               dismissLabel: "OK",
               onDismiss: () => {
-                newChatRefusal = null;
+                refusal = null;
               },
             }),
         pendingPick === null
@@ -452,7 +475,8 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
-        // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
+        // Opened over the whole root when its URL asks for it, and for a chat on screen with no provider to start on;
+        // a chat page opens its own for its other asks (the model bar's "+ Add a provider", a provider-fault notice).
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],
     );
@@ -555,6 +579,7 @@ function bootstrap(): void {
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
+  window.chatRootEmbed = { chooseProviderForFirstSend: () => firstSendChooser.open() };
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   selectedChatId = selectionFromSearch(window.location.search);

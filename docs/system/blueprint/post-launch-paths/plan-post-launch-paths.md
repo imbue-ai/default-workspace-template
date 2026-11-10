@@ -236,7 +236,7 @@ A shortcut in `new` mode launches with target `new`; in `focus` mode it raises t
 ### 4.6 No account signed in
 
 A `new_chat` intake with nothing signed in mints an unseeded provisional chat and holds the intake.
-The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, which goes into the chat's composer as a draft; the chat's page, having no provider to start on, opens the provider chooser, and once a provider is signed in the draft is there to send.
+The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, which goes into the chat's composer as a draft; the chat having no provider to start on, the root opens the provider chooser over it, and once a provider is signed in the draft is there to send.
 A `chat_selector` or `current_chat` intake never asks for an account: it reaches an existing chat, which has one, or falls into `new_chat`.
 
 ### 4.7 Reloads and other clients
