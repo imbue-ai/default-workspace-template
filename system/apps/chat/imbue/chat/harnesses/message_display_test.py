@@ -606,3 +606,33 @@ def test_a_message_without_a_prefix_is_stamped_as_before() -> None:
     assert "author_name" not in event
     assert event["display"] == DisplayKind.HIDDEN.value
     assert event["non_turn_tail"] is True
+
+
+# Composed exactly as Imbue Studio's ``format_app_data_access_notice`` composes them (mngr repo,
+# ``latchkey/handlers/resolution.py``), whose test pins the same tag from that side.
+_APP_DATA_REVOKED_NOTICE = (
+    "App data on device host-abc: REVOKED: code-projects. "
+    "You keep what you already read, but get nothing new from these sources. (app-data-access: revoked)"
+)
+_APP_DATA_RESTORED_NOTICE = (
+    "App data on device host-abc: RESTORED: code-projects. "
+    "You can read these sources again; none of them is synced until you ask. (app-data-access: restored)"
+)
+
+
+@pytest.mark.parametrize(
+    ("notice", "label"),
+    [(_APP_DATA_REVOKED_NOTICE, "App data turned off"), (_APP_DATA_RESTORED_NOTICE, "App data turned back on")],
+)
+def test_an_app_data_access_change_from_studio_is_a_notice_not_the_users_words(notice: str, label: str) -> None:
+    decision = classify_user_message(notice)
+
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == label
+    assert decision.display_body == notice[: notice.rindex(" (app-data-access:")]
+    assert "(app-data-access" not in (decision.display_body or "")
+
+
+def test_text_that_merely_mentions_app_data_access_is_a_human_turn() -> None:
+    assert classify_user_message("what does (app-data-access: revoked) mean in the middle of a sentence?") is None

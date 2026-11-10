@@ -174,6 +174,17 @@ _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
+# When the user turns an app-data source off or back on from Imbue Studio's
+# Permissions tab, Studio tells the chats that asked for it with a plain user message,
+# tagged by ``format_app_data_access_notice`` in the mngr repo's
+# ``latchkey/handlers/resolution.py``: "... (app-data-access: revoked)". The tag is the
+# classification contract; the text before it is what the notice shows.
+_APP_DATA_ACCESS_TAG_RE = re.compile(r"\s*\(app-data-access:\s*(revoked|restored)\)\s*$")
+_APP_DATA_ACCESS_LABELS = {
+    "revoked": "App data turned off",
+    "restored": "App data turned back on",
+}
+
 
 class SecretResolutionVerdict(LowerCaseStrEnum):
     """How a secret card was answered; the wire spelling the notice's tag carries.
@@ -449,6 +460,19 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
+def _match_app_data_access_change(content: str) -> MessageDisplay | None:
+    """Imbue Studio's note that the user turned an app-data source off or back on; a NOTICE, since it is
+    something the agent was told, not something the user said."""
+    match = _APP_DATA_ACCESS_TAG_RE.search(content)
+    if match is None:
+        return None
+    return MessageDisplay(
+        display=DisplayKind.NOTICE,
+        display_label=_APP_DATA_ACCESS_LABELS[match.group(1)],
+        display_body=content[: match.start()].strip(),
+    )
+
+
 def _match_secret_resolution(content: str) -> MessageDisplay | None:
     """The chat app's notice that a secret card was answered, sent as a plain user message.
 
@@ -483,6 +507,7 @@ _DETECTORS = (
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,
+    _match_app_data_access_change,
     _match_secret_resolution,
     _match_merged_background_task_reports,
 )
