@@ -18,7 +18,8 @@ with keyboard shortcuts declares its actions and default chords as `[[keybinding
 registration copies onto its registry row for the shell's Keyboard shortcuts dialog;
 `load_app_keybinding_actions` reads the same declarations (refusing a default chord it may not
 have: one off the grammar, the refused Ctrl+Alt+Del, or on a workspace-wide action one that typing
-could trigger) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
+could trigger; and an action declaring more than `MAX_CHORDS_PER_ACTION`, 16, the most the desktop's
+embed contract carries for one action) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
 request identity, and the app consumes those instead of hard-coded chords. The chord
 grammar (lowercase tokens joined with `+`, modifiers in the fixed ctrl/alt/shift/meta order,
 named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`, and

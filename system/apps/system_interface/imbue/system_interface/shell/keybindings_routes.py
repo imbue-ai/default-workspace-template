@@ -14,6 +14,7 @@ from flask.typing import ResponseReturnValue
 from latchkey_access.gateway import GatewayAccess
 from pydantic import Field
 from workspace_profile.errors import InvalidChordError
+from workspace_profile.keybindings import MAX_CHORDS_PER_ACTION
 from workspace_profile.keybindings import is_workspace_wide_chord
 from workspace_profile.keybindings import normalize_chord
 from workspace_profile.keybindings import resolve_app_keybindings
@@ -274,6 +275,8 @@ def save_keybinding() -> ResponseReturnValue:
         chords = [normalize_chord(chord) for chord in body.chords]
     except InvalidChordError as e:
         return detail_response(str(e), HTTP_BAD_REQUEST)
+    if len(chords) > MAX_CHORDS_PER_ACTION:
+        return detail_response(f"an action takes at most {MAX_CHORDS_PER_ACTION} chords", HTTP_BAD_REQUEST)
     declared = [
         action
         for app_actions in list_app_keybinding_actions(shell.inventory.entries())

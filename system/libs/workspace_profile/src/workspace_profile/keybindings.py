@@ -82,6 +82,10 @@ CHORD_NAMED_KEYS: Final[tuple[str, ...]] = (
 # it is not a modifier of the grammar). Pinned cross-repo by the snapshot contract fixture.
 REFUSED_CHORDS: Final[tuple[str, ...]] = ("alt+meta+delete",)
 
+# The most chords one action may hold: the desktop's embed contract drops a message carrying more, so a longer
+# assignment would be lost on its way to the desktop app. Pinned to the vendored contract by the snapshot contract test.
+MAX_CHORDS_PER_ACTION: Final[int] = 16
+
 # Recorder-side spellings normalized into the canonical vocabulary.
 _TOKEN_ALIASES: Final[dict[str, str]] = {
     "cmd": "meta",
@@ -177,8 +181,9 @@ def normalize_chord(spelled: str) -> str:
 def describe_keybindings_value_problem(value: object) -> str | None:
     """Why the value is not a valid keybindings map, or None when it is.
 
-    The valid shape is app name, then action id, then a list of canonical
-    chords none of which is refused (an empty list unbinds the action). The
+    The valid shape is app name, then action id, then a list of at most
+    ``MAX_CHORDS_PER_ACTION`` canonical chords none of which is refused (an
+    empty list unbinds the action). The
     desktop's write path runs the same check, so the two sides refuse the same
     shapes.
     """
@@ -194,6 +199,8 @@ def describe_keybindings_value_problem(value: object) -> str | None:
                 return f"{action_id!r} is not an action id"
             if isinstance(chords, str) or not isinstance(chords, (list, tuple)):
                 return f"{app_name}.{action_id} must assign a list of chords"
+            if len(chords) > MAX_CHORDS_PER_ACTION:
+                return f"{app_name}.{action_id} assigns more than {MAX_CHORDS_PER_ACTION} chords"
             for chord in chords:
                 if not isinstance(chord, str) or not is_canonical_chord(chord):
                     return f"{chord!r} is not a canonical chord"
@@ -276,7 +283,7 @@ def resolve_app_keybindings(
             layered = _layer_assignment(unsent_by_key, app_name, action_id)
         if layered is None:
             layered = _layer_assignment(snapshot_by_key, app_name, action_id)
-        resolved[action_id] = list(default_chords) if layered is None else layered
+        resolved[action_id] = list(default_chords) if layered is None else layered[:MAX_CHORDS_PER_ACTION]
     return resolved
 
 

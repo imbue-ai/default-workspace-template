@@ -6,6 +6,7 @@ from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
 
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (
+    MAX_CHORDS_PER_ACTION,
     describe_keybindings_value_problem,
     effective_keybinding_assignment,
     is_canonical_chord,
@@ -129,6 +130,7 @@ def test_a_valid_keybindings_value_has_no_problem() -> None:
         ({"files": {"rename": "f2"}}, "list of chords"),
         ({"files": {"rename": ["F2"]}}, "not a canonical chord"),
         ({"files": {"rename": ["alt+meta+delete"]}}, "belongs to the operating system"),
+        ({"files": {"rename": [f"meta+{n}" for n in range(10)] + list("abcdefg")}}, "more than 16 chords"),
     ],
     ids=[
         "not-a-map",
@@ -138,6 +140,7 @@ def test_a_valid_keybindings_value_has_no_problem() -> None:
         "chords-not-a-list",
         "bad-chord",
         "refused-chord",
+        "too-many-chords",
     ],
 )
 def test_keybindings_value_problems_are_named(value: object, problem_fragment: str) -> None:
@@ -176,6 +179,17 @@ def test_resolution_order_for_the_owner(tmp_path: Path) -> None:
         "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
     )
     assert resolved_with_override == {"send-message": ["alt+enter"]}
+
+
+def test_resolution_keeps_an_assignments_first_chords_up_to_the_limit(tmp_path: Path) -> None:
+    stored = [f"meta+{n}" for n in range(10)] + list("abcdefg")
+    snapshot = _snapshot({"chat": {"send-message": stored}})
+
+    resolved = resolve_app_keybindings(
+        "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"send-message": stored[:MAX_CHORDS_PER_ACTION]}
 
 
 def test_resolution_without_the_override_answers_what_a_reset_restores(tmp_path: Path) -> None:

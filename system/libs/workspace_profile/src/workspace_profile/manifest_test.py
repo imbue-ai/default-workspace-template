@@ -55,6 +55,13 @@ def test_the_actions_an_app_toml_declares_load_in_display_order(tmp_path: Path) 
             "launcher: shift\\+k",
             id="workspace-wide-without-a-real-modifier",
         ),
+        pytest.param(
+            '[[keybindings]]\nid = "jump"\nlabel = "Jump"\ndefault_chords = ['
+            + ", ".join(f'"meta+{n}"' for n in range(10))
+            + ', "meta+a", "meta+b", "meta+c", "meta+d", "meta+e", "meta+f", "meta+g"]\n',
+            "jump: more than 16 chords",
+            id="too-many",
+        ),
     ],
 )
 def test_a_default_chord_an_action_may_not_have_refuses_to_load(

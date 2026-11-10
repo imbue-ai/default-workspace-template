@@ -148,6 +148,10 @@ export const CHROME_SHORTCUTS: "minds:chrome-shortcuts" =
 // answers with CHROME_SHORTCUTS. Payload: { id, chords }.
 export const SAVE_CHROME_SHORTCUT: "minds:save-chrome-shortcut" =
   "SAVE_CHROME_SHORTCUT" in embedContract ? embedContract.SAVE_CHROME_SHORTCUT : "minds:save-chrome-shortcut";
+// The most chords one action may hold (contract v15): a receiver drops a shortcuts message carrying more, so no save
+// may hold more.
+export const MAX_CHORDS_PER_ACTION: number =
+  "MAX_CHORDS_PER_ACTION" in embedContract ? embedContract.MAX_CHORDS_PER_ACTION : 16;
 
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window

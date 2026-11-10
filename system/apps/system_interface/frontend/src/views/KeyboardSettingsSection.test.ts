@@ -420,6 +420,20 @@ describe("editing a shortcut", () => {
     ]);
   });
 
+  it("greys out Add shortcut once the action holds as many shortcuts as an action may", async () => {
+    const full = Array.from({ length: 16 }, (_, index) => `alt+meta+${index.toString(16)}`);
+    stubFetch(
+      catalogOf({ apps: [{ ...APP, actions: [{ ...APP.actions[0], chords: full }, ...APP.actions.slice(1)] }] }),
+    );
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    const add = (): HTMLButtonElement | null => root.querySelector<HTMLButtonElement>(".keybinding-add");
+    expect(add()?.disabled).toBe(true);
+    click(root.querySelector('[aria-label^="Remove "]'));
+    expect(add()?.disabled).toBe(false);
+  });
+
   it("records Escape like any other key, since an action may be bound to it", async () => {
     const posted = stubFetch(catalogOf());
     const root = await mountSection();

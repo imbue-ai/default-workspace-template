@@ -40,6 +40,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { MAX_CHORDS_PER_ACTION } from "@imbue/workspace-ui/src/embed";
 import {
   type ChordContext,
   chordDisplayLabel,
@@ -697,20 +698,25 @@ export function KeyboardSettingsSection(): m.Component<KeyboardSettingsSectionAt
               ],
             );
           }),
-      current.isRecording
-        ? null
-        : m(
-            Button,
-            {
-              sm: true,
-              variant: "ghost",
-              extra: "keybinding-add",
-              disabled: current.clash !== null,
-              onclick: () => setRecording(current, true),
-            },
-            [m.trust(icon("plus", { size: 12 })), " Add shortcut"],
-          ),
+      current.isRecording ? null : addShortcutButton(current),
     ]);
+  }
+
+  /** Records one more shortcut; greyed out once the action holds as many as an action may. */
+  function addShortcutButton(current: ActionEditor): m.Children {
+    const isFull = current.stagedChords.length >= MAX_CHORDS_PER_ACTION;
+    return m(
+      Button,
+      {
+        sm: true,
+        variant: "ghost",
+        extra: "keybinding-add",
+        disabled: current.clash !== null || isFull,
+        ...(isFull ? hoverTooltipAttrs(`An action can have at most ${MAX_CHORDS_PER_ACTION} shortcuts`) : {}),
+        onclick: () => setRecording(current, true),
+      },
+      [m.trust(icon("plus", { size: 12 })), " Add shortcut"],
+    );
   }
 
   function recorderView(current: ActionEditor): m.Children {
