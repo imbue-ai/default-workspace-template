@@ -506,7 +506,8 @@ shell seeds for a visitor who has none left; when none of those is somewhere
 else to go, the chip says "Couldn't leave this desktop" until the window moves
 off, with its button reading "Try again" when the shell could not be asked and
 no button at all when it answered the desktop already on screen, which asking
-again would only repeat. A viewed desktop is
+again would only repeat (until a desktop of the viewer's own arrives, when the
+plain Stop viewing comes back). A viewed desktop is
 shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it

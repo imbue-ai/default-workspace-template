@@ -3959,7 +3959,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.viewedDesktop()).toBeNull();
   });
 
-  it("stop viewing that the shell answers with the viewed desktop says it could not leave, and offers no retry", async () => {
+  it("stop viewing that the shell answers with the viewed desktop offers no retry until a desktop of hers arrives", async () => {
     // The shell lands her on the desktop she is already viewing: the click must not silently do nothing, and asking
     // the shell again would only get the same answer.
     visitorWithNoDesktopOfHerOwn();
@@ -3971,6 +3971,13 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
     expect(store.stopViewingFailure()).toEqual({ canRetry: false });
+
+    socket.deliver().onDesktopsUpdated([...api.desktops, alices]);
+    await settle();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    expect(store.stopViewingFailure()).toBeNull();
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("alice");
   });
 
   it("stop viewing that cannot reach the shell offers a retry, which leaves once the shell answers", async () => {

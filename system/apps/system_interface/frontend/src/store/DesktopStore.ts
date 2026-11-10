@@ -1548,12 +1548,14 @@ export class DesktopStore {
     await this.switchDesktop(target);
   }
 
-  /** How the last "Stop viewing" on the desktop this window still views failed, or null when it did not. */
+  /** How the last "Stop viewing" on the desktop this window still views failed, or null when it did not. A failure
+   *  that could not be retried lapses once a desktop of the viewer's own arrives, since a stop now lands there. */
   stopViewingFailure(): StopViewingFailure | null {
     const failed = this.stopViewingFailedOn;
     if (failed === null || failed.desktopId !== this.state.activeDesktopId || this.viewedDesktop() === null) {
       return null;
     }
+    if (!failed.failure.canRetry && this.ownDesktops().length > 0) return null;
     return failed.failure;
   }
 
