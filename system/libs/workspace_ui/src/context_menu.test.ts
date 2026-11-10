@@ -282,6 +282,16 @@ describe("installElementContextMenu", () => {
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
 
+  it("keeps no rows for a right-click a page handler stopped short of the document", () => {
+    document.body.innerHTML += '<div id="stops">stops</div>';
+    document.getElementById("stops")!.addEventListener("contextmenu", (event) => event.stopPropagation());
+    uninstall = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    expect(hostBridge().sections()).not.toBeNull();
+    rightClick(document.getElementById("stops") as Element);
+    expect(hostBridge().sections()).toBeNull();
+  });
+
   it("takes the bridge off the page when uninstalled", () => {
     const remove = installElementContextMenu({ connection, handshake: () => HOST_DRAWN_HANDSHAKE });
     expect(Reflect.has(window, HOST_MENU_GLOBAL)).toBe(true);

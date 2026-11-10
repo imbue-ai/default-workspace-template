@@ -211,8 +211,12 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   const isDrawnByHost = options.isDrawnByHost ?? (() => options.handshake?.()?.drawsContextMenus === true);
   let hostSections: HostMenuSections | null = null;
 
-  const onContextMenu = (event: MouseEvent): void => {
+  // Cleared in the capture phase, before any handler of the page can stop the event short of the document: a
+  // right-click that never reaches onContextMenu would otherwise leave the previous right-click's rows on the bridge.
+  const forgetHostSections = (): void => {
     hostSections = null;
+  };
+  const onContextMenu = (event: MouseEvent): void => {
     if (event.defaultPrevented || event.shiftKey) return;
     const target = targetOfEvent(event, ownerDocument);
     if (isDrawnByHost()) {
@@ -238,6 +242,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
     renderer.open(rows, { x: event.clientX, y: event.clientY });
   };
 
+  ownerDocument.addEventListener("contextmenu", forgetHostSections, true);
   ownerDocument.addEventListener("contextmenu", onContextMenu);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
   const view = ownerDocument.defaultView;
@@ -250,6 +255,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   const uninstall = (): void => {
     renderer.close?.();
     if (view !== null) Reflect.deleteProperty(view, HOST_MENU_GLOBAL);
+    ownerDocument.removeEventListener("contextmenu", forgetHostSections, true);
     ownerDocument.removeEventListener("contextmenu", onContextMenu);
     ownerDocument.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
     uninstallerByDocument.delete(ownerDocument);
