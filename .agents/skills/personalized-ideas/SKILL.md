@@ -191,7 +191,7 @@ Show the user the people you found, one short line each with its link, and ask w
 
 ### Narrow it down with their Mac
 
-When the results show more than one person, or none, and the message is from the owner (no `[from: <name>]` prefix), add this as the last line of the message showing them (after the organization question, when that is asked too):
+Every time you show the results (the first time, and again after a search with the organization or a detail) and they list more than one person, or none, add this as the last line of the message, after the answer buttons and after the organization question when that is asked too. Leave it out only when the message has a `[from: <name>]` prefix, or the user already answered it in this chat (`app_terms` has entries, or they said no to the app-data request):
 
 > [Use my Mac apps to narrow it down](#reply=use%20my%20Mac%20apps%20to%20narrow%20it%20down)
 
