@@ -4,6 +4,8 @@ description: The procedure a harden worker follows to crystallize, update or hea
 metadata:
   author: imbue
   role: worker-sub-skill
+  exempt-checks: depth contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Hardening a creation (generic worker)
