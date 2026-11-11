@@ -1,6 +1,6 @@
 ---
 name: make-theme-icon
-description: "Use when an app needs an icon drawn for a workspace theme (Classic Mac, Windows 2000, or a theme the user made) -- after making a theme the user wants icons for, after building an app when the workspace's AGENTS.md asks for its icon in a theme, when `workspace-themes icon missing` names one, when an app's own icon changed, or when the user asks for a new or better icon under a theme. Works with an image tool the harness gives, or with none: the agent can draw a pixel grid or an SVG itself, and the workspace-themes tools fit any drawing onto the theme's limits."
+description: "Use when an app needs an icon drawn for a workspace theme (Classic Mac, Windows 2000, or a theme the user made) -- after making a theme the user wants icons for, after building an app when the workspace's AGENTS.md asks for its icon in a theme, when `workspace-themes icon missing` names one, when an app's own icon changed, or when the user asks for a new or better icon under a theme."
 metadata:
   author: imbue
 ---

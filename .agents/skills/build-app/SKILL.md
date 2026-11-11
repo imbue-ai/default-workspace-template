@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves, shown framed as a mock, first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Use when the user asks for one, whether scaffolded as a new Flask app (the canonical path) or wrapping a pre-existing third-party server. For changing an existing app use update-app."
 metadata:
   author: imbue
   crystallized: true

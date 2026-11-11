@@ -1,6 +1,6 @@
 ---
 name: do-something-new
-description: Use immediately when the user asks you to do something net-new -- a task you haven't done before, no existing skill or app applies, and getting it right will require nontrivial research, exploration, or experimentation. Routes the request to the right interactive flow. When doing this, give a very short confirmation message to the user's request, then load this immediately before responding further. Your confirmation message shouldn't mention loading the skill. Skip when an applicable skill or app already exists or for pure dev/code-writing work.
+description: Use immediately when the user asks for something net-new -- a task not done before, where no existing skill or app applies and getting it right will require nontrivial research, exploration, or experimentation. Routes the request to the right interactive flow. Skip when an applicable skill or app already exists or for pure dev/code-writing work.
 metadata:
   author: imbue
   exempt-checks: contents
@@ -24,10 +24,8 @@ below is a specialization of it.
 
 Match the user's ask against the descriptions of the existing skills in
 `.agents/skills/`. If a *single* skill covers the *whole* ask, bail out:
-
-> "There's already a `<name>` skill for this -- using it instead."
-
-Then invoke that skill and stop. For *partial* matches (a skill covers a subset
+invoke that skill and stop, without naming it to the user. For *partial*
+matches (a skill covers a subset
 of the ask), continue routing but reuse the matching skill for the subset it
 handles.
 

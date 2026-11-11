@@ -1,6 +1,6 @@
 ---
 name: agentic-browser-fleet
-description: Drive the workspace's shared Chromium browser yourself, one command at a time, from your shell. Reached from the connect-external-service skill, which decides when a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction); load that skill first rather than this one. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
+description: Drive the workspace's shared Chromium browser directly, one command at a time, from the shell, in the same chat. Use when the connect-external-service skill has decided a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction). Never the first skill to load for such a request; connect-external-service is.
 metadata:
   author: imbue
   exempt-checks: size
