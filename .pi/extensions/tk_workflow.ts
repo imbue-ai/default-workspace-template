@@ -1,4 +1,4 @@
-// This workspace's tk step discipline, for pi.
+// This workspace's tk step discipline, for pi. (e2e restart-test marker)
 //
 // The chat progress view is built from step records, so an agent has to declare and
 // close them. claude and codex are held to that by the hook scripts in
