@@ -4,6 +4,12 @@ Whether the review gates run on an update merge is decided by a rule, not by
 judgment. Apply it and record which branch applied, with its evidence, in the
 report.
 
+## Contents
+
+- Skip the gates only on a pure clean pull
+- Otherwise run the real gates, scoped to the locally-divergent content
+- The escape hatch
+
 ## Skip the gates only on a pure clean pull
 
 All three must hold:
