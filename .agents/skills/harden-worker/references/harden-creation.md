@@ -171,7 +171,7 @@ it true or enlarges a store the creation already had. Read
 `data-and-storage.md` before you harden a creation any of them applies to; it
 has each rule in full under the same heading.
 
-### Optimize independent work
+### Optimize independent work -- parallelize what the incremental pass left serial
 
 Applies when the creation performs multiple independent I/O-bound operations:
 data fetches, API calls, subprocess invocations. They run concurrently rather
@@ -189,7 +189,7 @@ Applies when the creation captures data. Each record keeps its raw payload and
 a reference to its source, durably, not only the processed fields (the
 preserve-and-surface principle in AGENTS.md).
 
-### Bound disk growth
+### Bound disk growth -- evict what the creation no longer needs
 
 Applies whenever the creation persists anything across runs. Every store it
 writes has an explicit retention bound, enforced by the same run that writes
