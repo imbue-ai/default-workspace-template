@@ -4,6 +4,8 @@ description: Enable, check, or disable GitHub sync for this workspace. Enabling 
 compatibility: Requires latchkey (see the connect-external-service skill) and the user approving GitHub permissions in the Imbue Studio app.
 metadata:
   author: imbue
+  exempt-checks: paths
+  exempt-reason: awaiting-restructure
 ---
 
 # GitHub sync
@@ -23,6 +25,14 @@ enabled, three pieces work together (see `system/libs/github_sync/README.md`):
 What is synced is exactly what is committed to git. Workspace data under
 `data/` (memories, tickets, uploads, per-app data) is gitignored and is
 NOT shipped to GitHub -- the restic `host-backup` service covers it.
+
+## Contents
+
+- Hard rules
+- Enable
+- Status
+- Repair (workspace recreated from a synced repo)
+- Disable
 
 ## Hard rules
 

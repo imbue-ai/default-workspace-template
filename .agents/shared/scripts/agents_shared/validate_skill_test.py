@@ -60,7 +60,13 @@ def _write_skill(
         if frontmatter_override is not None
         else (f"---\nname: {name}\ndescription: {description}{meta}\n---\n")
     )
-    body = "\n".join(f"line {i}" for i in range(body_lines))
+    module = name.replace("-", "_")
+    # Names every script these tests write into a skill, so each one is linked from SKILL.md.
+    scripts_line = (
+        f"Run `scripts/run.py`, `scripts/run.sh`, `scripts/{module}.py`, `scripts/helpers.py` "
+        f"or `python/{module}_skill/run.py`."
+    )
+    body = "\n".join([scripts_line, *(f"line {i}" for i in range(body_lines - 1))])
     (skill / "SKILL.md").write_text(fm + body)
     if include_scripts is None:
         include_scripts = metadata_crystallized

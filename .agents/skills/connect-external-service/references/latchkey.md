@@ -5,6 +5,15 @@ Credentials are managed on the outside by the Imbue Studio app: sending a permis
 request also triggers a login flow if necessary. No credential ever enters this
 workspace; the gateway attaches it to the request.
 
+## Contents
+
+- Builtin services (row 1)
+- Custom services (rows 2 to 4)
+- When the gateway is unreachable
+- Proxying requests through the user's desktop
+- Notes
+- Currently supported services
+
 ## Builtin services (row 1)
 
 - **Use `latchkey curl`** instead of regular `curl` for supported services. Pass

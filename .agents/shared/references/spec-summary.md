@@ -1,78 +1,62 @@
-# agentskills.io layout cheat sheet
+# Building a workspace skill: packaging and vocabulary
 
-The crystallized skills in this project follow the [agentskills.io
-spec](https://agentskills.io/specification). This file captures just the
-bits you need when building or updating a skill; consult the spec directly
-if anything else comes up.
+What this workspace adds to the [agentskills.io spec](https://agentskills.io/specification):
+how a skill's steps are scripted, how its Python is packaged and validated, and
+the words its prose uses. How to write the skill itself (SKILL.md size and
+order, references, descriptions, version-bound text, paths, exemptions) is in
+`docs/system/skill_authoring_guide.md`; read it before writing or restructuring
+a skill. `.agents/shared/references/user-facing-language.md` stays the authority
+for words the user reads.
 
-## What a skill is
+## Contents
 
-A skill is a SKILL.md describing a **process**, plus any supporting
-scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
-then Y, then Z." Each step of that process is one of three kinds:
+- Step kinds
+- Directory layout
+- SKILL.md frontmatter
+- The entry point, `run.py`
+- Packaging
+- Validation
+- Scenario template
+- Glossary
 
-- **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in the skill's `python/` package, run through an entry
-  file in `.agents/skills/<name>/scripts/`.
-- **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
-  the flow* (the same prompt/criteria every run, only the data varies).
-  Script it as an AI call following the `use-ai-integration` skill (see
-  "Scripting a model step" below). This is the **default for any
-  model-performed step** -- a step does not drop to prose just because it
-  needs judgement.
-- **`[prose]`** -- *user-in-the-loop work*: a step that needs the user
-  present while the skill runs (see the test below). Written in SKILL.md as
-  instructions the agent using the skill follows.
+## Step kinds
 
-The point of `[ai-script]` is that the whole flow stays runnable headless:
-once every flow step is scripted, the skill can be refreshed or scheduled
-with no extra wiring. `[prose]` is reserved for work that genuinely needs the
-executor in the loop -- never for a step that merely needs a model.
+A SKILL.md describes a process, and each step of it is one of three kinds:
 
-### The test: `[ai-script]` vs `[prose]`
+- **`[script]`**: deterministic. The same code every run; only the data varies.
+- **`[ai-script]`**: a model's judgement as a fixed part of the flow (the same
+  prompt and criteria every run). Script it as an AI call, following the
+  `use-ai-integration` skill. This is the default for any step a model performs.
+- **`[prose]`**: a step that needs the user present while the skill runs.
+  Written in SKILL.md as instructions for the agent using the skill.
 
-Two things that feel like reasons for prose are not. **Needing a model's
-judgement** isn't one -- that's exactly what `[ai-script]` is for. **Needing
-the current conversation** isn't one either -- a script can fetch the
-transcript and pass it into the prompt (this skill's own crystallize/update
-workers run headless that way). So a script can assemble its own inputs, and
-the decisive question is not about any single step but about the skill's
-**execution mode**:
+Once every flow step is scripted the skill runs headless, so it can be
+refreshed or scheduled with no extra wiring. Two things that feel like reasons
+for prose are not: needing a model's judgement (that is `[ai-script]`), and
+needing the current conversation (a script can fetch the transcript and pass it
+in). The deciding question is about the skill, not a step:
 
-> Does this skill need the user *in the loop while it runs* -- for their live
-> input (an approval, a decision, an answer to a clarifying question), or
-> because they invoke it interactively to follow along and steer?
+> Does this skill need the user in the loop while it runs: for an approval, a
+> decision or an answer, or because they invoke it to follow along and steer?
 
-- **If no** -- the typical fetch / transform / judge skill, and the vast
-  majority of cases -- every step is scriptable (`[script]` / `[ai-script]`)
-  and the skill has no `[prose]`.
-- **If yes** -- the steps that genuinely need the user are `[prose]`. You
-  must be able to name which kind of involvement each needs; if you can't, it
-  belongs in `[ai-script]`.
+- **No** (the usual fetch, transform, judge skill): every step is `[script]` or
+  `[ai-script]`.
+- **Yes**: the steps that need the user are `[prose]`. Name the kind of
+  involvement each needs; a step you cannot name one for is `[ai-script]`.
 
-(Merely wanting to *watch* an automatable skill run is not a reason for
-prose: with proper subcommand decomposition in the script, you can just choose
-at runtime to go step by step if that's what the user seems to want)
+Wanting to watch a skill run is not a reason for prose: per-step subcommands
+let an agent go step by step at run time.
 
-### Push prose to the edges
-
-Interactive involvement usually lands at the *edges* -- an approval or input
-choice up front, a decision about the result at the back -- so the healthy
-shape is **prose at the edges, scripted steps in the middle**. A `[prose]`
-step wedged *between* two scripted sections is the expensive case: it splits
-the pipeline into two halves that can't compose, which is what stops the flow
-from running unattended. Only accept it when the user must genuinely intervene
-mid-run (a mandatory sign-off before a destructive step, a human steering
-what runs next); otherwise there is almost certainly an `[ai-script]` you
-haven't written yet.
-
-A mixed flow of all three kinds is the norm for useful skills.
+Keep prose at the edges (an approval up front, a decision about the result at
+the end) and scripted steps in the middle. A `[prose]` step between two
+scripted sections splits the pipeline into halves that cannot run unattended;
+accept it only when the user must intervene mid-run.
 
 ## Directory layout
 
 ```
 .agents/skills/<name>/
-  SKILL.md                  # required; body <= 500 lines (progressive disclosure)
+  SKILL.md                  # required
   scripts/                  # optional; any shell scripts
     *.sh
   python/                   # the skill's uv project, whenever it has Python (see Packaging)
@@ -87,9 +71,8 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 
 A skill's Python lives in its own `python/` project, and any shell scripts in
-its `scripts/` directory, i.e. `.agents/skills/<name>/scripts/`. The repo-root
-`system/scripts/` is an unrelated place, for workspace provisioning and utility
-scripts.
+its own `scripts/` directory. The repo-root `system/scripts/` is an unrelated
+place, for workspace provisioning and utility scripts.
 
 Start a new skill with the scaffold, which writes this layout, installs the
 package and validates the result (`--python` for a skill with scripted steps;
@@ -106,9 +89,9 @@ layout it came with: list it in `.agents/third-party-skills.toml` with where it
 came from, and the root suite's checks on skills leave it out. Every skill not
 listed there is held to them.
 
-The `name` used in `.agents/skills/<name>/` must match the `name` field in
-SKILL.md frontmatter (1-64 chars, lowercase letters/digits + single hyphens,
-no leading/trailing or consecutive hyphens).
+The `name` in `.agents/skills/<name>/` must match the `name` field in SKILL.md
+frontmatter (1-64 chars, lowercase letters and digits with single hyphens, no
+leading, trailing or consecutive hyphens).
 
 ## SKILL.md frontmatter
 
@@ -117,14 +100,14 @@ Minimum required:
 ```yaml
 ---
 name: <skill-name>              # must match parent directory
-description: <what-and-when>    # 1-1024 chars; describe behavior + triggers
+description: <what-and-when>    # 1-1024 chars; the guide gives its shape
 metadata:
   crystallized: true            # set for skills produced by this lifecycle
 ---
 ```
 
-Omit `allowed-tools`, `license`, and `compatibility` unless you have a
-specific reason to constrain or declare them -- the defaults are fine.
+Omit `allowed-tools`, `license`, and `compatibility` unless you have a specific
+reason to constrain or declare them.
 
 A skill whose scripts run under a secret file (through
 `system/scripts/with_secrets.py`; see the `connect-external-service` skill)
@@ -138,39 +121,37 @@ secrets:
     note: an Example API key from the account's settings page
 ```
 
-## The entry point, `run.py` (optional)
+## The entry point, `run.py`
 
-Include `run.py` when the skill has `[script]` or `[ai-script]` steps that
-benefit from automation. A skill can be pure SKILL.md prose with no scripts
-only when every step is `[prose]` executor meta-work; if any flow step is
-deterministic or model-driven, it belongs in a script. Use scripts where
-they earn their keep; don't force a script for genuine executor meta-work.
+Include `run.py` when the skill has `[script]` or `[ai-script]` steps. A skill
+is pure SKILL.md prose only when every step is `[prose]`.
 
 `run.py` is a module of the skill's package
 (`python/<name_with_underscores>_skill/run.py`) with its own
-`if __name__ == "__main__":` block. When you do include it, write the flow's logic as small helper
-functions (one per step) in the skill's package (see Packaging below), and
-have `run.py` expose them two ways:
+`if __name__ == "__main__":` block. Write the flow's logic as small helper
+functions, one per step, and have `run.py` expose them two ways:
 
 - **A subcommand per step**, whenever the step's inputs and outputs serialize
-  cleanly -- data, not live handles. (A step that hands the next one an open
-  browser session, a DB connection, or a large in-memory object stays inlined;
-  splitting it is not reasonable.) Once the steps are already helper functions
-  the split is cheap, and it pays off twice: an agent running the skill in a
-  chat turn can drive the steps one at a time for a rich per-step progress
-  view, and each boundary leaves an inspectable intermediate output.
-- **A `run all` subcommand** that chains the steps in-process -- just function
-  calls, no serialization cost -- for headless and scheduled runs.
+  cleanly (data, not live handles; a step that hands the next one an open
+  browser session or a DB connection stays inlined). An agent running the skill
+  in a chat turn drives the steps one at a time, and each boundary leaves an
+  inspectable intermediate output.
+- **A `run all` subcommand** that chains the steps in-process, for headless and
+  scheduled runs.
 
-Both entry styles call the same helper functions, so the logic has one source
-of truth. The per-step split *is* the structure; don't invent subflows beyond
-the skill's natural steps.
+Both call the same helper functions. Do not invent subflows beyond the skill's
+natural steps. For `[ai-script]` steps, read and follow the
+`use-ai-integration` skill.
 
-If the process interleaves deterministic and model-judgement steps, script
-*both* (the model steps become `[ai-script]` calls -- see below) so the whole
-chain runs end-to-end.
+- `argparse` entry point; no interactive prompts.
+- Stateless across runs by default. Transient per-step I/O between subcommands
+  is fine; durable cross-run state is not. If it is needed, flag it at Gate 2
+  rather than inventing a persistence scheme.
+- Fail loudly: exit non-zero on error, write the error to stderr.
+- Document the invocation in SKILL.md:
+  `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 
-### Packaging
+## Packaging
 
 A skill's Python lives in its own uv project, `python/`, a member of the root
 workspace (the `.agents/skills/*/python` glob), so its dependencies resolve in
@@ -205,10 +186,10 @@ the one workspace lock and its package installs into the root venv:
   it is in the workspace and names the module's path from the start.
 - Keep the entry cheap to start: it runs on every call, so its module imports
   only what every invocation needs at the top, and each subcommand imports its
-  implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
-  inside the function that runs it. A test fails an entry that loads one of
-  those at import time. Code whose signatures name a heavy library's types
-  goes in a module of its own, imported inside the subcommands that need it.
+  implementation (and any heavy library: pydantic, loguru, click, httpx) inside
+  the function that runs it. A test fails an entry that loads one of those at
+  import time. Code whose signatures name a heavy library's types goes in a
+  module of its own, imported inside the subcommands that need it.
 - A skill is a member of the shared workspace, so a dependency must co-resolve
   with the built-in packages'. After adding or changing one, run `uv lock` and
   then `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
@@ -228,44 +209,43 @@ python3 .agents/skills/<name>/scripts/<name_with_underscores>.py <args>
 
 It needs no `uv lock` or sync, and starts faster. The moment it needs a
 dependency or a second module, move it into the `python/` project above.
-
-See `.agents/shared/references/running-python.md` for why, and for the bare
+`.agents/shared/references/running-python.md` says why, and covers the bare
 tier (code the system `python3` runs) in general.
-
-For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill.
-
-- `argparse` entry point; no interactive prompts.
-- Stateless across runs by default -- transient per-step I/O between
-  subcommands is fine, durable cross-run state is not. If durable state is
-  genuinely needed, flag it at Gate 2 -- don't invent a persistence scheme
-  unilaterally.
-- Fail loudly: exit non-zero on error, write the error to stderr.
-- Document the invocation in SKILL.md:
-  `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 
 ## Validation
 
-`uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py <skill_dir>` checks SKILL.md
-frontmatter, the kebab-case name rules, directory-name match, description
-length and the 500-line body limit. For a bare skill it checks that the one
-script imports only the standard library, carries no PEP 723 header, and that
-`python3 -S -s <script> --help` (no site-packages) exits 0. When the skill has
-Python otherwise (a `python/` dir, or a built-in skill's entry stub in
-`scripts/`) it checks that `python/pyproject.toml` exists and names the project
-`<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
---check` passes (the workspace lock includes the skill's dependencies), and
-that `uv run --no-sync <entry> --help` exits 0 for every package module with
-its own `if __name__ == "__main__":` block (and any entry stub in `scripts/`) -- so a broken import or a missing dependency fails validation
-here rather than only at scenario time. (This is a shallow import check:
-`--help` exercises top-level imports and the argparse wiring, not imports done
-lazily inside subcommand bodies -- those are left to scenario testing.) Prints
-`ok` and exits 0 on success; exits 1 with a clear error on failure.
+```bash
+uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --no-exemptions
+```
+
+Run it whenever you create or edit a skill. It prints `ok` and exits 0, or
+exits 1 with what to fix. It checks:
+
+- **Frontmatter**: the name rules and directory match, and the description's
+  length.
+- **The guide's measurable rules**: `size`, `reachability`, `depth`, `paths`
+  and `contents`. A failure states the goal; restructure the skill to meet it.
+- **Exemptions**: `--no-exemptions` refuses one, which is the mode for a new
+  skill and for any skill you edit. Without the flag, a skill passes with the
+  exemption its frontmatter carries, and a stale one fails.
+- **Python**: a bare skill's one script imports only the standard library,
+  carries no PEP 723 header, and `python3 -S -s <script> --help` exits 0. A
+  packaged skill's `python/pyproject.toml` names the project and package as
+  above, `uv lock --check` passes, and `uv run --no-sync <entry> --help` exits
+  0 for every package module with its own `if __name__ == "__main__":` block
+  (and any entry stub in `scripts/`). `--help` exercises top-level imports and
+  the argparse wiring only; imports inside subcommand bodies are left to
+  scenario testing.
+
+`validate_skill.py --stamp` is not for a skill you are working on. The flows
+that bring existing skills under the checks (an update, a migration, adopting
+a template) run it to record what each existing skill fails.
 
 ## Scenario template
 
-Scenarios are *ephemeral* -- they exist in your transcript for
-reproducibility, not on disk. Do NOT save scenarios as files in the skill.
-Record each scenario in the transcript in this form:
+Scenarios are ephemeral: they exist in your transcript for reproducibility, not
+on disk. Do not save scenarios as files in the skill. Record each in the
+transcript in this form:
 
 ```
 ### Scenario: <one-line description>
@@ -275,3 +255,30 @@ Record each scenario in the transcript in this form:
 - Actual: <observed>
 - Status: pass | fail
 ```
+
+## Glossary
+
+The words this workspace's skills use for its own things. One term per thing,
+in every file an agent reads. The guide's glossary covers the authoring terms
+(skill, reference, lead, worker); words shown to the user follow
+`.agents/shared/references/user-facing-language.md`.
+
+| Term | Meaning | Not |
+|---|---|---|
+| creation | Something built for the user here: an app, a skill, data, or a customization of one. | artifact |
+| app | A creation the user opens as a window: a supervisord program with an `app.toml`, under `system/apps/`. | site, view, web service |
+| service | A supervisord program with no window, under `system/services/`. | daemon, background app |
+| program | A supervisord `[program:...]` entry, when the entry itself is meant; an app or a service otherwise. | |
+| built-in skill | A skill that ships with the template. | system skill |
+| crystallized skill | A skill the harden pass made from work done in a chat. | |
+| automation | A skill that runs on a schedule. | cron job |
+| routine | Anything that runs on a schedule and exits, made with `manage-routines`. | |
+| template | A published, bootable snapshot of creations that another workspace can adopt. | inspiration |
+| harden pass | One background run of the harden worker over a change. Shortened to "pass". | run, flow |
+| operation | What a harden pass does: `crystallize`, `update` or `heal`. | |
+| gate | A point where a worker stops for its lead's answer. | checkpoint |
+| go-live | Making a hardened change the one that is running. | deploy |
+| update | Moving the workspace to a newer release of the template, with `update-self`. | sync |
+| release | A tagged version of the template. | |
+| critical app | The shell, the chat, the terminal, or any app whose `app.toml` sets `critical = true`. | |
+| shell | The top-level workspace UI, `system/apps/system_interface/`. | |

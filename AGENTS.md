@@ -153,7 +153,7 @@ checking first. Use the `find-transcripts` skill to find and read them.
 You can (and should) modify your own configuration to improve yourself:
 
 - **CLAUDE.md** or **AGENTS.md**: (this file) update these instructions if you discover better ways to operate.
-- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
+- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.) Whenever you edit a skill, run `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --no-exemptions` and restructure the skill until it prints `ok`; `docs/system/skill_authoring_guide.md` has the rules.
 - **system/supervisord.conf.d/**: Add, modify, or remove background services -- one file per program. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 

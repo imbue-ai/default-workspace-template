@@ -3,6 +3,8 @@ name: data-pipeline-builder
 description: Build a simple, fast ingestion/processing tool that turns batches of raw records (JSON/CSV/Parquet dumps, periodic exports, API pulls) into a processed, queryable store, with incremental loading and backfill. Use when asked to ingest, load, index, ETL or process exported data, especially when batches arrive periodically and overlap.
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # Building a data ingestion & processing tool
@@ -24,6 +26,20 @@ is the single full load of step 8, started in the background. No oddity scans, t
 censuses, phase timings or "let me double-check across everything" passes, at any scale, beyond
 the step-1 script; if a question needs the whole dataset, answer it from the tool's `status`
 output and ingestion log after that load.
+
+## Contents
+
+- 1. Profile the data (~3 minutes: read, one small script, run once)
+- 2. Test-first parsing (~3 minutes)
+- 3. Choose storage by access pattern (~1 minute)
+- 4. One merge rule makes incremental, backfill, idempotency and order-independence fall out
+- 5. Parallelism: choose by data shape; keep the write path single (~1 minute)
+- 6. Keep it small
+- 7. Ergonomics the callers will actually use
+- 7b. Ingestion errors: drop, count, log; never abort, never hide (~50 lines)
+- 7c. Retention: bound what the tool grows (~2 minutes)
+- 8. Verify (~4 minutes), then write it down
+- Environment hygiene
 
 ## 1. Profile the data (~3 minutes: read, one small script, run once)
 

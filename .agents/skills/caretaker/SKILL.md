@@ -3,6 +3,8 @@ name: caretaker
 description: The single idempotent Caretaker skill, invoked via /caretaker whenever the deterministic weekly check (system/services/caretaker/caretaker_check.sh) wakes the agent. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether (and how often) to keep checking; on every later run it does the weekly routine -- greets the user, scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding), and checks for finished-but-uncommitted work, all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms.
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # Caretaker
@@ -23,6 +25,19 @@ same way on every run -- the routines runner clears your chat and sends
 -- so this skill must be
 **idempotent**: the first thing it does is figure out whether this is the
 user's very first interaction with you, then branch.
+
+## Contents
+
+- First, decide: is this the first-ever run?
+- How you talk to the user (read this first)
+- First run: scan once, then introduce yourself
+- Hi, I'm a Caretaker for your workspace
+- I took a first look
+- A couple of quick questions
+- Recording the user's choices
+- The run
+- If you are interrupted mid-run
+- If the user never answers
 
 ## First, decide: is this the first-ever run?
 

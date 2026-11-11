@@ -66,6 +66,14 @@ plus a `--model` override (e.g. `WRITE_MODEL = "claude-haiku-4-5"`), so switchin
 it is a one-line change. It is independent of the chat's `/model`, which changes
 only the conversation.
 
+## Contents
+
+- Pick the scenario (weakest that does the job)
+- Scenario 1 -- one-shot completion
+- Scenario 2 -- one-shot agentic task
+- Scenario 3 -- full agent
+- Cost and the keyed onramp
+
 ## Pick the scenario (weakest that does the job)
 
 The call falls into one of three scenarios, by how much agency Claude

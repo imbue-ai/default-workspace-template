@@ -12,6 +12,14 @@ reversible; pruning is the user's call, and they make it *after* seeing the
 inventory (the skill's Step 8), not before. This is version-agnostic: it applies
 whether the source is pre-declutter or current-layout.
 
+## Contents
+
+- 1. Enumerate the agents
+- 2. Why the history file is load-bearing
+- 3. Stage the session files locally
+- 4. Recreate, dormant
+- 5. Why the primary agent is excluded
+
 ## 1. Enumerate the agents
 
 `migrate_workspace.py list-agents --host-dir <host_dir>` does this in one batched

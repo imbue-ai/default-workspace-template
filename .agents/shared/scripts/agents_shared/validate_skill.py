@@ -7,7 +7,11 @@ Static structural checks (in order, short-circuit on first failure per check):
 - SKILL.md has valid YAML frontmatter (delimited by `---` lines).
 - Frontmatter has `name` matching the directory basename.
 - Frontmatter has `description`, 1-1024 characters.
-- SKILL.md body (after frontmatter) is at most 500 lines.
+- The frontmatter's exemption, if it carries one, names known checks and a known reason.
+- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
+  from the ones the exemption names. An exemption naming a check the skill passes is stale,
+  and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill and for an
+  edited one.
 - If the skill has Python (entry files in `scripts/`, or a `python/` dir --
   optional even for crystallized skills: a skill may be pure SKILL.md prose, and
   a `scripts/` dir of shell scripts needs nothing), it is either:
@@ -36,6 +40,11 @@ scenario testing.
 
 Exits 0 and prints `ok` when valid; exits 1 with a human-readable error to
 stderr otherwise.
+
+``--stamp`` takes no skill: it recomputes the exemption of every skill in the repository that
+``.agents/third-party-skills.toml`` does not list, adding one where a skill fails a check and
+removing one that has gone stale, and prints a line per skill it changed. It is for the flows
+that bring existing skills under the checks (an update, a migration, adopting a template).
 """
 
 from __future__ import annotations
@@ -52,7 +61,23 @@ from typing import Any
 
 import yaml
 
-_MAX_BODY_LINES = 500
+from agents_shared.skill_checks import (
+    Check,
+    SkillTree,
+    check_failures,
+    describe_failures,
+    is_test_file,
+    skill_dirs,
+)
+from agents_shared.skill_exemptions import (
+    EXEMPT_CHECKS_KEY,
+    EXEMPT_REASON_KEY,
+    Exemption,
+    ExemptionReason,
+    read_exemption,
+    with_exemption,
+)
+
 _MIN_DESC_LEN = 1
 _MAX_DESC_LEN = 1024
 _MIN_NAME_LEN = 1
@@ -124,14 +149,6 @@ def package_name(skill_name: str) -> str:
     return skill_name.replace("-", "_") + "_skill"
 
 
-def _is_test_file(path: Path) -> bool:
-    return (
-        path.name.endswith("_test.py")
-        or path.name.startswith("test_")
-        or path.name == "conftest.py"
-    )
-
-
 def _is_main_guard(test: ast.expr) -> bool:
     return (
         isinstance(test, ast.Compare)
@@ -159,7 +176,7 @@ def package_entry_modules(project_dir: Path) -> list[Path]:
         module
         for init in project_dir.glob("*/__init__.py")
         for module in init.parent.glob("*.py")
-        if not _is_test_file(module) and is_entry_module(module)
+        if not is_test_file(module) and is_entry_module(module)
     )
 
 
@@ -168,7 +185,7 @@ def _script_stubs(skill_dir: Path) -> list[Path]:
     scripts_dir = skill_dir / "scripts"
     if not scripts_dir.is_dir():
         return []
-    return sorted(path for path in scripts_dir.glob("*.py") if not _is_test_file(path))
+    return sorted(path for path in scripts_dir.glob("*.py") if not is_test_file(path))
 
 
 def stdlib_shadowing_modules(package_dir: Path) -> list[str]:
@@ -389,8 +406,36 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
     return None
 
 
-def validate(skill_dir: Path) -> str | None:
-    """Return an error message if the skill is invalid; otherwise ``None``."""
+def _exemption_error(
+    exemption: Exemption | None, failed: set[Check], allow_exemptions: bool
+) -> str | None:
+    if exemption is None:
+        return None
+    if not allow_exemptions:
+        return (
+            f"frontmatter.metadata carries an exemption ({EXEMPT_CHECKS_KEY}: "
+            f"{exemption.checks_text()}), and a new or edited skill passes every check. Fix what "
+            f"those checks report, then remove `{EXEMPT_CHECKS_KEY}` and `{EXEMPT_REASON_KEY}`"
+        )
+    stale = [check.value for check in Check if check in exemption.checks - failed]
+    if stale:
+        return (
+            f"frontmatter.metadata.{EXEMPT_CHECKS_KEY} names {', '.join(stale)}, which the skill "
+            f"now passes. Remove {'it' if len(stale) == 1 else 'them'} from "
+            f"`{EXEMPT_CHECKS_KEY}`, and remove `{EXEMPT_CHECKS_KEY}` and `{EXEMPT_REASON_KEY}` "
+            "once nothing is left"
+        )
+    return None
+
+
+def validate(
+    skill_dir: Path, *, allow_exemptions: bool = True, tree: SkillTree | None = None
+) -> str | None:
+    """Return an error message if the skill is invalid; otherwise ``None``.
+
+    ``allow_exemptions=False`` holds the skill to every check and refuses an exemption.
+    ``tree`` shares one reading of the repository between calls.
+    """
     if not skill_dir.is_dir():
         return f"skill directory not found: {skill_dir}"
     skill_md = skill_dir / "SKILL.md"
@@ -398,9 +443,7 @@ def validate(skill_dir: Path) -> str | None:
         return f"SKILL.md not found at {skill_md}"
 
     try:
-        frontmatter, body_lines = _split_frontmatter(
-            skill_md.read_text(encoding="utf-8")
-        )
+        frontmatter, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
     except ValueError as exc:
         return str(exc)
 
@@ -433,13 +476,87 @@ def validate(skill_dir: Path) -> str | None:
             f"{_MIN_DESC_LEN}-{_MAX_DESC_LEN}, got {len(description)}"
         )
 
-    if len(body_lines) > _MAX_BODY_LINES:
-        return (
-            f"SKILL.md body is {len(body_lines)} lines; spec recommends "
-            f"<= {_MAX_BODY_LINES} (use references/ for overflow)"
-        )
+    error = _validate_python_project(skill_dir, name)
+    if error is not None:
+        return error
 
-    return _validate_python_project(skill_dir, name)
+    try:
+        exemption = read_exemption(frontmatter)
+    except ValueError as exc:
+        return str(exc)
+    failures = check_failures(skill_dir, tree)
+    exempted = (
+        exemption.checks if exemption is not None and allow_exemptions else frozenset()
+    )
+    unexcused = [failure for failure in failures if failure.check not in exempted]
+    if unexcused:
+        return "the skill fails these checks:\n" + describe_failures(unexcused)
+    return _exemption_error(
+        exemption, {failure.check for failure in failures}, allow_exemptions
+    )
+
+
+def _stamp_skill(
+    skill_dir: Path, reason: ExemptionReason, tree: SkillTree
+) -> str | None:
+    """Set one skill's exemption to exactly the checks it fails; describe the change, if any."""
+    skill_md = skill_dir / "SKILL.md"
+    original = skill_md.read_text(encoding="utf-8")
+    try:
+        frontmatter, _ = _split_frontmatter(original)
+    except ValueError as exc:
+        return f"{skill_dir.name}: left alone, its frontmatter cannot be read ({exc})"
+    try:
+        before = read_exemption(frontmatter)
+    except ValueError:
+        before = None
+
+    def write(text: str) -> None:
+        skill_md.write_text(text, encoding="utf-8")
+        tree.forget(skill_md)
+
+    # An exemption's own lines count toward SKILL.md's size, so judge the skill without one,
+    # then settle: writing one can itself tip the size check.
+    write(with_exemption(original, None))
+    exemption: Exemption | None = None
+    for _ in range(len(Check)):
+        failed = frozenset(failure.check for failure in check_failures(skill_dir, tree))
+        wanted = (
+            Exemption(checks=failed, reason=before.reason if before else reason)
+            if failed
+            else None
+        )
+        if wanted == exemption:
+            break
+        write(with_exemption(skill_md.read_text(encoding="utf-8"), wanted))
+        exemption = wanted
+    if exemption == before:
+        write(original)
+        return None
+    was = before.checks_text() if before else "none"
+    now = (
+        f"{exemption.checks_text()} ({exemption.reason.value})" if exemption else "none"
+    )
+    return f"{skill_dir.name}: {EXEMPT_CHECKS_KEY} {was} -> {now}"
+
+
+def stamp_exemptions(repo_root: Path, reason: ExemptionReason) -> list[str]:
+    """Recompute the exemption of every skill the workspace holds to its checks.
+
+    A skill that fails checks gets an exemption naming exactly those (keeping the reason it
+    already had, else ``reason``); one that passes loses its exemption. Third-party skills are
+    left alone. Returns a line per skill changed.
+    """
+    tree = SkillTree(repo_root)
+    listed = third_party_skills(tree.root / ".agents")
+    changes: list[str] = []
+    for skill_dir in skill_dirs(tree.root):
+        if skill_dir.name in listed:
+            continue
+        change = _stamp_skill(skill_dir, reason, tree)
+        if change is not None:
+            changes.append(change)
+    return changes
 
 
 def main() -> int:
@@ -447,11 +564,44 @@ def main() -> int:
     parser.add_argument(
         "skill_dir",
         type=Path,
+        nargs="?",
         help="Path to the skill directory to validate (e.g. .agents/skills/my-skill)",
+    )
+    parser.add_argument(
+        "--no-exemptions",
+        action="store_true",
+        help="Refuse an exemption and hold the skill to every check (a new or edited skill)",
+    )
+    parser.add_argument(
+        "--stamp",
+        action="store_true",
+        help="Recompute every skill's exemption instead of validating one skill",
+    )
+    parser.add_argument(
+        "--reason",
+        type=ExemptionReason,
+        choices=list(ExemptionReason),
+        default=ExemptionReason.PREDATES_CHECKS,
+        help="With --stamp: the reason a newly exempted skill gets (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd(),
+        help="With --stamp: the repository whose skills to stamp (default: the current directory)",
     )
     args = parser.parse_args()
 
-    error = validate(args.skill_dir)
+    if args.stamp:
+        if args.skill_dir is not None:
+            parser.error("--stamp covers every skill; do not name one")
+        for change in stamp_exemptions(args.repo_root, args.reason):
+            print(change)
+        return 0
+    if args.skill_dir is None:
+        parser.error("name the skill directory to validate, or pass --stamp")
+
+    error = validate(args.skill_dir, allow_exemptions=not args.no_exemptions)
     if error is None:
         error = check_runnable(args.skill_dir)
     if error is None:

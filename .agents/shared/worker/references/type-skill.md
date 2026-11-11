@@ -17,6 +17,15 @@ to a subcommand per cleanly-separable step plus a `run all` that chains them; ad
 surface beyond that only when a specific invariant demands it. Split into a
 *separate* skill only when the components are likely to be used independently.
 
+## Contents
+
+- Skills that ingest recurring data batches
+- Where a skill's behavior lives
+- Skills that drive an app
+- Testing a skill
+- Data capture
+- Built-in skills
+
 ## Skills that ingest recurring data batches
 
 When the skill's job is to turn batches of raw records (JSON/CSV/Parquet dumps,
@@ -90,8 +99,10 @@ belongs to the app itself is that app's own pass.
   above found an app that claims this skill, `select-tests` runs that app's
   suite too, since it exercises the surface the skill calls.
 - Validate with `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py
-  .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
-  checks).
+  .agents/skills/<name> --no-exemptions` -- it must print `ok` (see `spec-summary.md` for what it
+  checks). A new skill passes every check, and so does a skill you edit: when its
+  frontmatter carries `exempt-checks`, restructure it until those checks pass and
+  remove the exemption (`docs/system/skill_authoring_guide.md`).
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
   **ephemeral** -- run them in your transcript, never saved as files. For a
   `[script]` / `[ai-script]` step, invoke `.agents/skills/<name>/python/<name_with_underscores>_skill/run.py`

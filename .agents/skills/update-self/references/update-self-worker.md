@@ -343,6 +343,13 @@ in your report.
   (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
   lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
   which never syncs, so it would otherwise run on the pre-merge environment.
+- **Skill exemptions, on every run**, after the environment gate's sync when that
+  ran: `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp`
+  from the merged tree, then commit what it changed. It records which skill checks
+  each of the workspace's existing skills fails, as an exemption in that skill's
+  frontmatter, and removes one that has gone stale; it changes nothing else. Never
+  restructure a user's skill to clear what it reports. List its output lines under
+  your report's Validation.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test

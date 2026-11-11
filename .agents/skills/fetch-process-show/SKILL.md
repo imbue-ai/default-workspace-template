@@ -3,6 +3,8 @@ name: fetch-process-show
 description: "Fetch data from somewhere (an external service, an API, a third-party source, uploaded data) validating auth, process it, and show it to the user -- the \"go get all this stuff, do something to it, and put it in front of me\" task. Use when the ask is to retrieve real data or process real data the user uploaded, transform/summarize/classify it, and surface the result. Start here even when the ask names the surface rather than the data (\"build me a dashboard over this dump\"): this skill hands build-app the confirmed sample."
 metadata:
   author: imbue
+  exempt-checks: size depth contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Fetch, process, and show data
@@ -23,6 +25,17 @@ The non-negotiable data principle on top of the skeleton: **the confirmed sample
 is the single source of truth.** It gates crystallization, seeds the first
 surface, and defines the shape the pipeline must reproduce. Nothing downstream may
 invent a second, different way of producing the data.
+
+## Contents
+
+- Conventions
+- Clarify and scope (skeleton phases 1-3)
+- Validate auth/latchkey first (skeleton phase 4)
+- The sample loop (skeleton phase 5)
+- After confirmation: crystallize (background) and start surfaces (foreground)
+- Deliver surfaces -- one at a time, all from the single source of truth (skeleton phase 8)
+- Re-fetch while crystallize is running
+- Background crystallize gates
 
 ## Conventions
 

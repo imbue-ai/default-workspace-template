@@ -7,6 +7,17 @@ long-running service -- and why. The short version:
   instruction you are following says `python3`.
 - **Never run a long-running process under `uv run`.**
 
+## Contents
+
+- One-offs: `uv run --no-sync`
+- When the instruction says `python3`
+- The two tiers, and how scripts are laid out
+- Calling workspace code from Python
+- When a launch or an import-path edit has to stay
+- Long-running processes: sync, then `exec` the entry point
+- User packages are standalone projects
+- Keep startup imports light
+
 ## One-offs: `uv run --no-sync`
 
 A one-off is anything you start and wait for: a CLI (`mngr`, `app-manifest`,
@@ -248,7 +259,7 @@ workspace. The rules:
   its own project with `--locked`, then exec a script from its own `.venv/bin`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/my_service && uv sync --locked --project system/services/my_service && exec system/services/my_service/.venv/bin/my-service"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
   ```
 
   A stale lock or a failed sync fails that program's start and nothing else.
