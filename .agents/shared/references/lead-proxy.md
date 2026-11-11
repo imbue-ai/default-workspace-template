@@ -17,8 +17,8 @@ re-read it before you handle the next report.
 
 Every lead reads the sections marked "every pass". The others open with the
 condition that sends you to them, and four of them hand off to a file of their
-own. Those files, and every other file this one names without a directory, sit
-beside it.
+own. Those files, and every other reference this one names without a
+directory, sit beside it.
 
 - Polling for the next report (every pass)
 - Diagnose worker liveness before invoking failure flow (a poll that timed out
