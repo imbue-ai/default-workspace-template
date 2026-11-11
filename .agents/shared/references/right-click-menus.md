@@ -55,8 +55,9 @@ installElementContextMenu({
 
 A Mithril page hands the installer `open: createContextMenuOpener().open` so the menu it draws is the shared Menu,
 and `redraw: () => m.redraw()`: a row picked in the native menu runs outside the page's event handlers, so without it
-a row that only changes the page's state shows nothing until something else redraws. The Files app
-(`system/apps/files/frontend/src/index.ts`) is a working example of `extraRows`.
+a row that only changes the page's state shows nothing until something else redraws. The chat rail
+(`railContextMenuRoutes` in `system/apps/chat/frontend/src/root/ChatRail.ts`, installed in `root/index.ts`) is a
+working example of both.
 
 ## When a page has to keep the right-click
 
