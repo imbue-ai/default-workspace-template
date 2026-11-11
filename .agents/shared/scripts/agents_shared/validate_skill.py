@@ -506,10 +506,13 @@ def _stamp_skill(
         frontmatter, _ = _split_frontmatter(original)
     except ValueError as exc:
         return f"{skill_dir.name}: left alone, its frontmatter cannot be read ({exc})"
+    # An exemption that cannot be read is not the same as none: it has to be replaced even
+    # when the skill passes every check.
+    is_before_readable = True
     try:
         before = read_exemption(frontmatter)
     except ValueError:
-        before = None
+        before, is_before_readable = None, False
 
     def write(text: str) -> None:
         skill_md.write_text(text, encoding="utf-8")
@@ -530,10 +533,13 @@ def _stamp_skill(
             break
         write(with_exemption(skill_md.read_text(encoding="utf-8"), wanted))
         exemption = wanted
-    if exemption == before:
+    if is_before_readable and exemption == before:
         write(original)
         return None
-    was = before.checks_text() if before else "none"
+    if before is not None:
+        was = before.checks_text()
+    else:
+        was = "none" if is_before_readable else "unreadable"
     now = (
         f"{exemption.checks_text()} ({exemption.reason.value})" if exemption else "none"
     )
