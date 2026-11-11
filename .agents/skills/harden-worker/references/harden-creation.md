@@ -14,8 +14,8 @@ on.
 ## Contents
 
 Every pass reads the sections marked "every pass". Each of the others opens
-with the condition that sends you to it and hands off to a file of its own,
-which sits beside this one.
+with the condition that sends you to it, and all but the last hand off to a
+file of their own, which sits beside this one.
 
 - The premise and the bar (every pass)
 - Isolation (every pass)
@@ -36,7 +36,7 @@ which sits beside this one.
   `catching-up.md`)
 - A reverted milestone (the lead reverted a milestone it merged; detail in
   `catching-up.md`)
-- If you need to give up
+- If you need to give up (you cannot reach a tested, clean state)
 
 ## The premise and the bar
 
