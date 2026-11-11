@@ -182,8 +182,11 @@ with `ifPresent: "focus"`, so a window already on that page is raised instead of
 a second one opening. Outside the workspace the page opens in place. A file's
 window is for that file alone and is closed when done with: it offers no way
 back to the folder, and deleting the file leaves it saying so. A view page draws images, video, audio, and PDFs in the browser's own
-viewers and text as text; an edit page is a text editor that saves with Save or
-Cmd/Ctrl+S. Both offer Download, Rename, Copy Path, and Delete, and a view page
+viewers and text as text; an image zooms with a pinch (on a trackpad, or two
+fingers on a touch screen) or Ctrl+scroll around the pointer, moves by dragging
+or scrolling while zoomed, and a double-click zooms in or back to fit
+(`views/ZoomableImage.ts`, on `@panzoom/panzoom`). An edit page is a text editor
+that saves with Save or Cmd/Ctrl+S. Both offer Download, Rename, Copy Path, and Delete, and a view page
 of text an Edit icon beside Download.
 
 `frontend/public/404.html` is Files' own "not found" page, copied into the

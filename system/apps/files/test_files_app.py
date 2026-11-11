@@ -3,11 +3,13 @@
 Every change a test makes goes through the app's own controls and is read back off the disk.
 """
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import FloatRect
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import Request
@@ -685,6 +687,86 @@ def test_an_image_page_draws_the_image(open_files_page: OpenFilesPage) -> None:
     expect(image).to_be_visible()
     assert image.evaluate("img => img.naturalWidth") == 1
     expect(page.locator(".edit-file")).to_have_count(0)
+
+
+_WIDE_PICTURE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900">'
+    '<rect width="1600" height="900" fill="white"/><circle cx="1200" cy="600" r="100" fill="red"/></svg>'
+)
+
+_FITTED = "matrix(1, 0, 0, 1, 0, 0)"
+
+
+def _wide_picture_page(open_files_page: OpenFilesPage, files_root: Path) -> Page:
+    (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
+    page = open_files_page("/wide.svg?view")
+    expect(page.locator(".files-file-image")).to_be_visible()
+    return page
+
+
+def _image_box(page: Page) -> FloatRect:
+    box = page.locator(".files-file-image").bounding_box()
+    assert box is not None
+    return box
+
+
+def _stage_transform(page: Page) -> str:
+    return page.locator(".files-image-stage").evaluate("stage => getComputedStyle(stage).transform")
+
+
+def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
+    page.wait_for_function(
+        "([fitted, isFitted]) => (getComputedStyle(document.querySelector('.files-image-stage')).transform"
+        " === fitted) === isFitted",
+        arg=[_FITTED, is_fitted],
+    )
+
+
+def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    fitted = _image_box(page)
+    pointer = (fitted["x"] + fitted["width"] * 0.75, fitted["y"] + fitted["height"] * 0.7)
+    page.mouse.move(*pointer)
+
+    # A plain scroll leaves a fitted picture alone; a trackpad pinch reaches the page as Ctrl+wheel.
+    page.mouse.wheel(0, 120)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -100)
+    page.keyboard.up("Control")
+    _wait_for_stage_transform(page, is_fitted=False)
+
+    zoomed = _image_box(page)
+    assert zoomed["width"] / fitted["width"] == pytest.approx(math.e, rel=0.01)
+    assert (pointer[0] - zoomed["x"]) / zoomed["width"] == pytest.approx(0.75, abs=0.005)
+    assert (pointer[1] - zoomed["y"]) / zoomed["height"] == pytest.approx(0.7, abs=0.005)
+
+    page.mouse.dblclick(*pointer)
+    _wait_for_stage_transform(page, is_fitted=True)
+    assert _image_box(page) == pytest.approx(fitted)
+
+
+def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFilesPage, files_root: Path) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    fitted = _image_box(page)
+    centre = (fitted["x"] + fitted["width"] / 2, fitted["y"] + fitted["height"] / 2)
+
+    page.mouse.move(*centre)
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    assert _stage_transform(page) == _FITTED
+
+    page.mouse.dblclick(*centre)
+    _wait_for_stage_transform(page, is_fitted=False)
+    zoomed = _image_box(page)
+    page.mouse.move(*centre)
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    moved = _image_box(page)
+    assert (moved["x"] - zoomed["x"], moved["y"] - zoomed["y"]) == pytest.approx((-100, -50), abs=1)
 
 
 def test_deleting_a_file_from_its_page_leaves_the_window_saying_so(
