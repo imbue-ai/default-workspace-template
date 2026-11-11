@@ -7,11 +7,6 @@ Static structural checks (in order, short-circuit on first failure per check):
 - SKILL.md has valid YAML frontmatter (delimited by `---` lines).
 - Frontmatter has `name` matching the directory basename.
 - Frontmatter has `description`, 1-1024 characters.
-- The frontmatter's exemption, if it carries one, names known checks and a known reason.
-- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
-  from the ones the exemption names. An exemption naming a check the skill passes is stale,
-  and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill and for an
-  edited one.
 - If the skill has Python (entry files in `scripts/`, or a `python/` dir --
   optional even for crystallized skills: a skill may be pure SKILL.md prose, and
   a `scripts/` dir of shell scripts needs nothing), it is either:
@@ -21,6 +16,11 @@ Static structural checks (in order, short-circuit on first failure per check):
   - a packaged skill: `python/pyproject.toml` exists and names the project
     `<name>-skill` and its one package `<name_with_underscores>_skill` (a directory
     beside it with an `__init__.py`).
+- The frontmatter's exemption, if it carries one, names known checks and a known reason.
+- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
+  from the ones the exemption names. An exemption naming a check the skill passes is stale,
+  and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill and for an
+  edited one.
 
 Runnability checks (only when the static checks pass and the skill has Python):
 
