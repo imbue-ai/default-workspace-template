@@ -724,7 +724,7 @@ def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
 
 
 def _wait_for_stage_scale(page: Page, scale: float) -> None:
-    """Wait until the stage is drawn at ``scale``, within a hundredth of it: every event of a gesture has landed."""
+    """Wait until the stage is drawn at ``scale``, within a hundredth of it."""
     page.wait_for_function(
         "scale => Math.abs(new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform).a"
         " - scale) < scale / 100",
@@ -732,13 +732,20 @@ def _wait_for_stage_scale(page: Page, scale: float) -> None:
     )
 
 
+def _point_at(page: Page, x_fraction: float, y_fraction: float) -> tuple[float, float]:
+    """Rest the pointer on the picture at the given fractions of its size, and return that point. A hover, because
+    Fortress glides the cursor to a point after a plain move returns, so input sent at once lands along the way."""
+    box = _image_box(page)
+    page.locator(".files-file-image").hover(position={"x": box["width"] * x_fraction, "y": box["height"] * y_fraction})
+    return (box["x"] + box["width"] * x_fraction, box["y"] + box["height"] * y_fraction)
+
+
 def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
     page = _wide_picture_page(open_files_page, files_root)
     fitted = _image_box(page)
-    pointer = (fitted["x"] + fitted["width"] * 0.75, fitted["y"] + fitted["height"] * 0.7)
-    page.mouse.move(*pointer)
+    pointer = _point_at(page, 0.75, 0.7)
 
     # A plain scroll leaves a fitted picture alone (were it read as a pinch, the zoom below would not be e); a
     # trackpad pinch reaches the page as many small Ctrl+wheel events.
@@ -768,19 +775,18 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
 
 def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFilesPage, files_root: Path) -> None:
     page = _wide_picture_page(open_files_page, files_root)
-    fitted = _image_box(page)
-    centre = (fitted["x"] + fitted["width"] / 2, fitted["y"] + fitted["height"] / 2)
+    centre = _point_at(page, 0.5, 0.5)
 
-    page.mouse.move(*centre)
     page.mouse.down()
     page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
     page.mouse.up()
     assert _stage_transform(page) == _FITTED
 
+    _point_at(page, 0.5, 0.5)
     page.mouse.dblclick(*centre)
     _wait_for_stage_transform(page, is_fitted=False)
     zoomed = _image_box(page)
-    page.mouse.move(*centre)
+    _point_at(page, 0.5, 0.5)
     page.mouse.down()
     page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
     page.mouse.up()
@@ -806,8 +812,7 @@ def test_a_zoomed_image_scrolled_far_past_its_edge_still_covers_the_view(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
     page = _wide_picture_page(open_files_page, files_root)
-    fitted = _image_box(page)
-    page.mouse.dblclick(fitted["x"] + fitted["width"] / 2, fitted["y"] + fitted["height"] / 2)
+    page.mouse.dblclick(*_point_at(page, 0.5, 0.5))
     _wait_for_stage_transform(page, is_fitted=False)
 
     for _ in range(10):
