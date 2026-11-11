@@ -221,6 +221,40 @@ def test_a_long_reference_needs_a_list_naming_every_section_below_it(
     assert _failed(skill) == expected
 
 
+@pytest.mark.parametrize(
+    ("step_list", "expected"),
+    [
+        pytest.param("1. Fetch\n2. Report\n", set(), id="ordered-list"),
+        pytest.param("1) Fetch\n2) Report\n", set(), id="ordered-list-with-parens"),
+        pytest.param("- 1. Fetch\n- 2. Report\n", set(), id="bullets-with-numbers"),
+        pytest.param(
+            "1. Report\n2. Fetch\n", {Check.CONTENTS}, id="numbered-differently"
+        ),
+    ],
+)
+def test_a_numbered_step_list_names_sections_whose_headings_carry_the_step_number(
+    tmp_path: Path, step_list: str, expected: set[Check]
+) -> None:
+    skill = _skill(tmp_path, "stepped", "Read `references/steps.md`.\n")
+    sections = f"## 1. Fetch\n\n{_LONG_FILLER}\n\n## 2. Report\n\nText.\n"
+    _write(skill, "references/steps.md", f"# Steps\n\n{step_list}\n{sections}")
+    assert _failed(skill) == expected
+
+
+def test_an_anchor_keeps_an_underscore_inside_a_word_and_drops_emphasis(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "anchored", "Read `references/anchored.md`.\n")
+    contents = (
+        "- [the entry point](#the-run_allpy-entry)\n- [afterwards](#next-steps)\n"
+    )
+    sections = (
+        f"## The `run_all.py` entry\n\n{_LONG_FILLER}\n\n## _Next_ steps\n\nText.\n"
+    )
+    _write(skill, "references/anchored.md", f"# Anchored\n\n{contents}\n{sections}")
+    assert _failed(skill) == set()
+
+
 def test_a_contents_list_past_the_opening_does_not_count(tmp_path: Path) -> None:
     skill = _skill(tmp_path, "late", "Read `references/late.md`.\n")
     _write(
@@ -370,6 +404,31 @@ def test_stamping_drops_a_size_exemption_that_only_its_own_lines_keep_true(
 
     assert changes == ["borderline: exempt-checks size -> none"]
     assert validate_skill.validate(skill) is None
+
+
+def test_stamping_replaces_an_exemption_it_cannot_read_whether_or_not_the_skill_fails(
+    tmp_path: Path,
+) -> None:
+    half_written = _skill(
+        tmp_path, "half-written", metadata="metadata:\n  exempt-checks: paths\n"
+    )
+    unknown_check = _skill(tmp_path, "unknown-check", metadata=_exemption("tidiness"))
+    unknown_reason = _skill(
+        tmp_path,
+        "unknown-reason",
+        "Read `system/gone.py`.\n",
+        _exemption("paths", "because"),
+    )
+
+    changes = validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+
+    assert changes == [
+        "half-written: exempt-checks unreadable -> none",
+        "unknown-check: exempt-checks unreadable -> none",
+        "unknown-reason: exempt-checks unreadable -> paths (predates-checks)",
+    ]
+    for skill in (half_written, unknown_check, unknown_reason):
+        assert validate_skill.validate(skill) is None
 
 
 def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_reported_otherwise(
