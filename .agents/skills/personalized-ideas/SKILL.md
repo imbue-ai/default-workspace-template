@@ -13,12 +13,14 @@ With their permission, you can learn about them from what is public about them o
 This skill leads the conversation; `suggest-apps` is the part of it that reads app data, and only when a step below sends you there.
 
 The lookup is something the user opts into, never something you do on your own.
+
+**No reply buttons.** Ask every question in plain text and let the user answer in their own words. Never put `#reply=` links (reply buttons) in your messages, anywhere in this skill: free-form answers are preferred, and a typed answer can say more than a button. Read each answer for its meaning, not for exact wording.
 Everything in this skill serves that: ask before searching, search only for what they agreed to, use only what they confirm is them, and keep what you learn where they can see and delete it.
 
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answers, `{"choice": "both" | "mac" | "web" | "self", "lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5). `choice` is the button they picked in step 2; `lookup` is `"yes"` for `both` and `web`. `app_terms` is `{"approved": [...], "declined": [...]}`, the search details from their app data they picked or turned down ("Search details from their Mac" in step 5).
+- `consent.json`: the user's answers, `{"choice": "both" | "mac" | "web" | "self", "lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5). `choice` is what they chose in step 2; `lookup` is `"yes"` for `both` and `web`. `app_terms` is `{"approved": [...], "declined": [...]}`, the search details from their app data they picked or turned down ("Search details from their Mac" in step 5).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -43,7 +45,7 @@ If `consent.json` says `"yes"` and `user-public-profile.md` is in your memory, s
 ## The welcome's question
 
 A new workspace's first chat opens on the conversation from Imbue Studio's start flow, which you receive ahead of the user's first message.
-Its closing welcome asks "The best way to start is to build something. Do you have any ideas?", with two reply buttons that send a whole sentence:
+Its closing welcome asks "The best way to start is to build something. Do you have any ideas?". Imbue Studio may show Yes and No buttons under it that send a whole sentence; the user may also type an answer:
 
 - `Yes, I have an idea` (or another clear yes): they have an idea, so step 1 applies. Ask what it is, and help with it; do not offer the lookup.
 - `No, I don’t have an idea yet` (or another clear no): check step 1's exclusions, then read the name on the account (the `owner-name` call in step 3; it reads only the name, and searches nothing). When none of the exclusions holds, make the offer in step 2 (the version without the web search when `display_name` is null). When one holds, send only its first paragraph, the question about what is annoying them, and nothing else. Either way, end your turn.
@@ -51,13 +53,13 @@ Its closing welcome asks "The best way to start is to build something. Do you ha
 
 ## 2. Ask
 
-Make the offer once, as this exact message, word for word, with nothing added before or after it (its last line is four reply buttons; the chat turns `#reply=` links into buttons that send their text for the user):
+Make the offer once, as this exact message, word for word, with nothing added before or after it, and no buttons:
 
 > What’s annoying, overwhelming, or tedious in your digital life? Work or personal, big or small, tell me about it and I’ll help you build something that makes it better.
 >
 > Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can look at a little of your Mac’s app data, like which apps you use and the sites you visit most, after you approve exactly what; it stays in this workspace. I can also search public web pages for the name on your account, using an outside search service, and show you what I find so you can tell me what’s really you. Pick either, both, or neither. I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
 >
-> [My Mac apps and the web](#reply=Look%20at%20my%20Mac%20apps%20and%20search%20the%20web) [Only my Mac apps](#reply=Only%20look%20at%20my%20Mac%20apps) [Only the web](#reply=Only%20search%20the%20web) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
+> Just tell me which you’d like: your Mac apps and the web, only your Mac apps, only the web, or you’d rather tell me about yourself.
 
 When `display_name` is null, send this version instead, word for word:
 
@@ -65,18 +67,18 @@ When `display_name` is null, send this version instead, word for word:
 >
 > Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can look at a little of your Mac’s app data, like which apps you use and the sites you visit most, after you approve exactly what; it stays in this workspace. I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
 >
-> [Look at my Mac apps](#reply=Only%20look%20at%20my%20Mac%20apps) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
+> Just tell me if you’d like me to look at your Mac apps, or if you’d rather tell me about yourself.
 
 It is fixed on purpose: one wording, reviewed once, that says what each choice does without sounding like you already know something about them.
 Do not reword it, shorten it, personalize it, or mention anything about the user in it.
 Outside the welcome (the user asks for ideas later in a chat), make the same offer.
 
-Then end your turn and wait. Write their choice to `consent.json` as soon as they answer:
+Then end your turn and wait. Read their answer for which of these they mean, and write their choice to `consent.json` as soon as they answer. When it is unclear which they mean, ask once in plain words; never guess toward more data than they asked for:
 
-- `Look at my Mac apps and search the web` (`"choice": "both"`, `"lookup": "yes"`): both at once, in this same turn. In one batch of tool calls, file the app-data request ("Get the app data" below) and start the web lookup at step 3. The search does not wait for the app data, and the app data does not wait for the search. Search details from the app data are used as "Search details from their Mac" in step 5 says.
-- `Only look at my Mac apps` (`"choice": "mac"`, `"lookup": "no"`): file the app-data request ("Get the app data" below), search nothing, and go to step 6 once you have it, suggesting from its patterns and what they tell you.
-- `Only search the web` (`"choice": "web"`, `"lookup": "yes"`): go to step 3. Do not ask for app data at any point in this flow, and do not offer it.
-- `I’ll tell you myself` (`"choice": "self"`, `"lookup": "no"`): ask them to go ahead in one short line. Search nothing and do not ask for app data. What they then tell you about themselves is saved as in "What the user tells you" below.
+- Both, their Mac apps and the web (`"choice": "both"`, `"lookup": "yes"`): both at once, in this same turn. In one batch of tool calls, file the app-data request ("Get the app data" below) and start the web lookup at step 3. The search does not wait for the app data, and the app data does not wait for the search. Search details from the app data are used as "Search details from their Mac" in step 5 says.
+- Only their Mac apps (`"choice": "mac"`, `"lookup": "no"`): file the app-data request ("Get the app data" below), search nothing, and go to step 6 once you have it, suggesting from its patterns and what they tell you.
+- Only the web (`"choice": "web"`, `"lookup": "yes"`): go to step 3. Do not ask for app data at any point in this flow, and do not offer it.
+- Neither, they would rather tell you themselves (`"choice": "self"`, `"lookup": "no"`): when they have not already started, ask them to go ahead in one short line. Search nothing and do not ask for app data. What they then tell you about themselves is saved as in "What the user tells you" below.
 - Anything else (describing what annoys them, a question): no search and no app data. Answer them and use what they told you; write `consent.json` only when they clearly declined both.
 
 ### Get the app data
@@ -105,19 +107,15 @@ What matters is whether other people (or a visiting agent) can get in, which the
 - **`is_shared_with_others` is `false`**: go straight to step 4, with no question.
 - **`is_shared_with_others` is `true`**: send exactly this message, word for word, then end your turn:
 
-> This workspace is shared with other people, so they would also be able to see what I save about you, on **What Studio knows about me**. Do you still want me to go ahead?
->
-> [Others can, but go ahead](#reply=others%20can%2C%20go%20ahead) [Skip the search](#reply=skip%20the%20search)
+> This workspace is shared with other people, so they would also be able to see what I save about you, on **What Studio knows about me**. Do you still want me to go ahead, or should I skip the search?
 
 - **`is_shared_with_others` is `null`** (Imbue Studio could not read who has access): when sharing is off (the `imbue-studio` skill's "Shared workspaces are untrusted" section says how to tell), go straight to step 4; when it is on, send exactly this message, word for word, then end your turn:
 
-> I couldn't check whether anyone else can get into this workspace. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace?
->
-> [Only me, go ahead](#reply=only%20me) [Others can, but go ahead](#reply=others%20can%2C%20go%20ahead) [Skip the search](#reply=skip%20the%20search)
+> I couldn't check whether anyone else can get into this workspace. If they can, they would also see what I save about you, so I need to check with you first. Can anyone besides you use this workspace? And if so, do you still want me to go ahead?
 
-- `only me` (or another clear "only me"): add `"only_me": true` to `consent.json` and go to step 4. Do not ask again in later chats.
-- `others can, go ahead` (or another clear "others can use it, and search anyway"): add `"shared_ok": true` to `consent.json` and go to step 4. Do not ask again in later chats. In step 6, also say that people who can use this workspace can see the **What Studio knows about me** page.
-- `skip the search`, "not sure", or anything that is not a clear go-ahead (a bare "others can" is not one): set `consent.json`'s `lookup` to `"no"`, do not search, and go to step 6 with what they tell you about themselves.
+- A clear "only me": add `"only_me": true` to `consent.json` and go to step 4. Do not ask again in later chats.
+- A clear "others can use it, and search anyway": add `"shared_ok": true` to `consent.json` and go to step 4. Do not ask again in later chats. In step 6, also say that people who can use this workspace can see the **What Studio knows about me** page.
+- "Skip it", "not sure", or anything that is not a clear go-ahead (a bare "others can" is not one): set `consent.json`'s `lookup` to `"no"`, do not search, and go to step 6 with what they tell you about themselves.
 
 ## 4. Search
 
@@ -153,7 +151,7 @@ When a call answers an error, do not search with anything else:
 Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
 
 - **Search in parallel.** Run every search call in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
-- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. There are two exceptions, each only after the user picks it with a button: the organization behind `email_domain` (step 5), and a detail from their app data they pick in "Search details from their Mac" (step 5). Searching with anything else looks the user up with information they never offered.
+- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. There are two exceptions, each only after the user says yes to it: the organization behind `email_domain` (step 5), and a detail from their app data they pick in "Search details from their Mac" (step 5). Searching with anything else looks the user up with information they never offered.
 - **Widen a thin first batch.** If the first batch shows one person or none, run one more batch at once, before asking anything: the name with `LinkedIn`, with `GitHub`, and with `personal website` (at most 3 more searches). Most names belong to several people, and a single candidate is more often a thin result than a match.
 - **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
@@ -190,7 +188,7 @@ Show the user the people you found, one short line each with its link, and ask w
 >
 > Is one of these you? If not, tell me something that would narrow it down, or we can skip this.
 
-**Typed answers, no buttons.** This message gets no reply buttons: a button sends at once and turns off the message's other buttons, so it cannot answer more than one question. Ask in plain text, and when the message has more than one question, number them so the user can answer all of them in one typed reply. For example:
+**Typed answers.** Ask in plain text, and when the message has more than one question, number them so the user can answer all of them in one typed reply. For example:
 
 > 1. Is one of these you? Tell me the number (or numbers, if two are the same person), or "none".
 > 2. Your account email is at mit.edu. Want me to also search for your name with MIT?
