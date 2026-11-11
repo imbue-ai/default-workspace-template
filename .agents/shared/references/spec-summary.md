@@ -265,8 +265,8 @@ in every file an agent reads. The guide's glossary covers the authoring terms
 
 | Term | Meaning | Not |
 |---|---|---|
-| creation | Something built for the user here: an app, a skill, data, or a customization of one. | artifact |
-| app | A creation the user opens as a window: a supervisord program with an `app.toml`, under `system/apps/`. | site, view, web service |
+| creation | Something built for the user here: an app, a skill, data, or a customization of one. | |
+| app | A creation the user opens as a window: a supervisord program with an `app.toml`, under `system/apps/`. | site, view |
 | service | A supervisord program with no window, under `system/services/`. | daemon, background app |
 | program | A supervisord `[program:...]` entry, when the entry itself is meant; an app or a service otherwise. | |
 | built-in skill | A skill that ships with the template. | system skill |
