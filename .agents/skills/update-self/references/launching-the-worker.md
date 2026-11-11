@@ -9,6 +9,14 @@ not swap a command here for a newer launcher subcommand.
 Do not open a window for your own chat while the pass runs: teardown opens it
 once the results are ready.
 
+## Contents
+
+- 1. Open the tracking ticket
+- 2. Write the task file
+- 3. Clear the previous pass's worker
+- 4. Clear the previous pass's branch
+- 5. Launch, record the hand-off, arm the poll
+
 ## 1. Open the tracking ticket
 
 Note the id it prints, then `tk start <ticket-id>` as its own tool call:

@@ -10,6 +10,15 @@ change through, most-live-applicable first, and record what you found in your
 report. You stay in your worktree: you make the in-repo edits an apply
 implies; the apply script runs the provisioner and the restart.
 
+The lead reads this file too, to tell what a finding's class asks of it after
+the apply.
+
+## Contents
+
+- Toolchain-script pins
+- `.mngr/**` settings
+- A global-dependency bump with a dependent
+
 ## Toolchain-script pins
 
 A pinned-version bump in `setup_system.sh` or an installer it chains (e.g.
@@ -68,7 +77,7 @@ Cases, most clearly applyable first:
 **Escape hatch (`stuck`).** `stuck` has exactly one condition in this
 guide: leaving the running workspace on the old provisioning would **break
 it** (not merely "won't take effect until the next create"). Then report
-`stuck` (Step 6), name the setting and why it breaks. Every other finding
+`stuck` (the worker guide's Step 6), name the setting and why it breaks. Every other finding
 here -- rebuild-only, deferred until a recreate, a dependent you cannot
 verify -- is `done` with the finding reported.
 
@@ -94,7 +103,7 @@ the **provenance** of the dependent (origin, not directory: `git cat-file -e
   re-validate the built-in; judge it safe and say so.
 - **Dependent is user-created** (absent from upstream): **applied live,
   unverified in the worktree; the lead checks it after the apply** (SKILL.md
-  5b). Upstream never tested that code against the new version and you cannot
+  Step 5c). Upstream never tested that code against the new version and you cannot
   either, which is exactly what the lead's post-apply check is for. This is
   `done`, never `stuck`.
 

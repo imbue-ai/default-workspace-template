@@ -17,7 +17,7 @@ lowest floor at which that item could go by itself.
 
 ## Contents
 
-For the lead:
+The first ten are the lead's, the last four the worker's.
 
 - A copy of Steps 1-2 that came from an older release
 - The history rewrite and shallow clones
@@ -29,13 +29,10 @@ For the lead:
 - A stray preview of a critical app
 - A tree without `workspace-layout show`
 - The first apply that lands the recovery machinery
-
-For the worker:
-
-- Delivering the report by hand
-- Cron entries from before routines
-- Apps from before the app model
-- Python from before the packaged layout
+- Delivering the report by hand (worker)
+- Cron entries from before routines (worker)
+- Apps from before the app model (worker)
+- Python from before the packaged layout (worker, and the lead's repair worker)
 
 ## A copy of Steps 1-2 that came from an older release
 
@@ -89,7 +86,9 @@ fi
 The guard is what makes it a no-op elsewhere: `--unshallow` errors on a repo
 that is not shallow. `--git-common-dir`, not `--git-dir`, because the shallow
 marker is repo-wide state in the common dir, which a worktree shares, so the
-worker's call heals the whole workspace.
+worker's call heals the whole workspace. The lines ship in the target
+release's copy of the skill, so the heal applies on the first update into a
+release that carries them.
 
 **The rewrite.** The template's history was rewritten once, so a workspace
 made before that shares no commit with `$REF`, and the worker's merge would
@@ -304,9 +303,9 @@ For the worker. From minds-v0.5.1 an app has an `app.toml` and the
 `app-manifest` library computes its footprint. Two leftovers of the time
 before:
 
-- The worker runs `app-manifest` as `uv run --frozen --package app-manifest`,
-  which installs the library from the merged tree. A workspace from before
-  the app model has none of it, and the root project does not depend on it.
+- The worker's `app-manifest` calls carry `--package app-manifest`, which
+  installs the library from the merged tree. A workspace from before the app
+  model has none of it, and the root project does not depend on it.
 - An app directory with no `app.toml` has no footprint the library can
   compute. Its directory is its footprint: read `git diff` over it by hand for
   the two ranges `footprint-ranges` names.
@@ -320,11 +319,30 @@ stays while the worker reads the merged tree's library.
 
 For the worker, and for the lead's repair worker. minds-v0.10.0 moved every
 skill's Python into a package, made each user app, service and lib a
-standalone uv project, and changed how commands are launched. A workspace
-updating across that release has files of the user's in the old layout, and
-`python-packaging-migration.md` is the guide to converting them: read it when
-a failure in the worker's environment gate or suites, or a user program that
-does not come back after the apply, is one of the symptoms in its table.
+standalone uv project, and changed how commands are launched. The rules
+themselves are in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md`
+and
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/spec-summary.md`
+("Packaging"). A workspace updating across that release has files of the
+user's in the old layout, and `python-packaging-migration.md` is the guide to
+converting them:
+
+- **A user package that is not standalone yet**
+  (`system/test_user_packages_are_standalone.py` names it) is converted with
+  `user-package-migration`'s `migrate`, after its `--dry-run`, whose output
+  goes in the worker's report, per that guide ("A user app, service or lib").
+  Each converted package then gets the worker's suites, and an app or service
+  its isolated boot, from its own venv.
+- **A failure in the worker's environment gate or suites** on the workspace's
+  own skills, apps, services or docs that the update's changelog ties to a
+  changed rule is fixed by following that guide. Examples: a user skill's PEP
+  723 script that `system/test_entry_point_import_cost.py` cannot import, a
+  user service whose program line runs under `uv run`, a type error in a
+  user skill or app.
+- **A user program that does not come back after the apply** with one of the
+  symptoms in that guide's table: the lead names the guide to its repair
+  worker.
 
 CLEANUP: `python-packaging-migration.md`, the `user-package-migration`
 command and the items that name them in `worker-validation.md` and

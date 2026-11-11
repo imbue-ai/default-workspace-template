@@ -10,6 +10,15 @@ A `question` is one of four things, and its first line says which. You answer
 the first two yourself. You answer the third too, and reach the user only
 where it says so. The fourth always ends the pass with a decision for them.
 
+## Contents
+
+- Answering and re-arming
+- 1. A genuine, unresolvable merge conflict
+- 2. The worker's scope escape hatch
+- 3. A gate command shed for memory
+- 4. A customization the update cannot keep (a hold)
+- A hold ends the pass with a decision
+
 ## Answering and re-arming
 
 For the first three kinds: reply with `create_worker.py reply --task-file

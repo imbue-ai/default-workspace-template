@@ -129,9 +129,10 @@ belong in tested code rather than agent prose:
     (emergency recorded, marker cleared).
 
 Impact analysis -- which services and skills depend on a changed file -- is
-deliberately NOT scripted here: it requires open-ended exploration (imports,
-shelled-out scripts, API-surface coupling) that a deterministic helper would
-only pretend to cover. The worker reference owns that recipe.
+deliberately NOT scripted here beyond ``retired-names``: it requires open-ended
+exploration (imports, shelled-out scripts, API-surface coupling) that a
+deterministic helper would only pretend to cover. The worker reference owns that
+recipe.
 
 This module is the command line: argument parsing and the git-touching wrappers;
 ``scripts/update_self.py`` is its entry stub, run with the system ``python3`` and

@@ -5,6 +5,13 @@ them, a needs-decision ending and a `stuck` one included. Then one of "An
 ending without a landed apply" and "After a landed apply" (an apply that
 exited 0). "Show the user this chat" is last for all of them.
 
+## Contents
+
+- Every ending
+- An ending without a landed apply
+- After a landed apply
+- Show the user this chat
+
 ## Every ending
 
 Drop the history bridge (a no-op when Step 3a built none; a retry rebuilds

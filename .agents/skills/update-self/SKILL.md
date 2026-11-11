@@ -3,6 +3,8 @@ name: update-self
 description: Safely pull updates from the upstream template repo. Use to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
+  exempt-checks: contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Pulling updates from the upstream template, safely
@@ -67,8 +69,7 @@ Read the one that applies instead of starting at Step 1:
   **ends the turn**; a hold ends the pass.
 - [ ] 5. Terminal status. On `done`: (5a) audit, (5b) apply, (5c) fix what
   broke, (5d) escalate built-in defects.
-- [ ] 6. Teardown: put things back, the verdict, show this chat. **Ends the
-  turn.**
+- [ ] 6. Teardown, the verdict, show this chat. **Ends the turn.**
 
 ## 1. Preconditions
 
@@ -252,9 +253,8 @@ workspace's.
 
 ### 3b. Launch
 
-Follow `references/launching-the-worker.md` top to bottom: ticket, task
-file, clearing the previous pass's worker and branch, launch, `run-status
-delegate`, background poll. The worker follows
+Follow `references/launching-the-worker.md` top to bottom, through the
+launch, `run-status delegate` and the background poll. The worker follows
 `references/update-self-worker.md`. Once the poll is armed, **end your
 turn**; its message wakes you with the worker's report.
 
@@ -264,7 +264,9 @@ Read `references/question-gates.md` when the report's `name:` is `question`.
 It is a merge conflict to decide, a scope question to answer by the rule it
 names, a request for memory, or a **hold**: a customization the update cannot
 keep, which ends the pass `NEEDS_DECISION` with the worker stopped and kept.
-For the first three: reply, re-arm the poll, end your turn.
+For the first three: reply, re-arm the poll, end your turn. Answering a
+worker in general is
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`.
 
 ## 5. Terminal status
 
@@ -309,7 +311,6 @@ built-in defects"). Then compose the results message per
 
 ## 6. Teardown
 
-Follow `references/teardown.md`, whatever the outcome. Only an apply that
-exited 0 records the success verdict and closes the ticket. Last, show the
-user this chat and end your turn with the results message, the decision, or
-the `stuck` account.
+Follow `references/teardown.md`, whatever the outcome. It ends by showing the
+user this chat: end your turn there with the results message, the decision,
+or the `stuck` account.

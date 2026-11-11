@@ -27,10 +27,10 @@ All three must hold:
    history (whose merge adds no commit), that release's landed merge. Name the
    merge, each revert sha, and any revert conflict with how you resolved it
    in the report as this condition's evidence. A catch-up merge (the worker
-   guide's §7) is not an edit of yours: what it brings in is the workspace's
-   own work, so after one the diff runs to your tip before the *first*
-   catch-up merge (§7's `$PRE` names the newest round's, which already holds
-   the earlier rounds' incoming work). Only this pass's catch-ups count: a
+   guide's Step 7) is not an edit of yours: what it brings in is the
+   workspace's own work, so after one the diff runs to your tip before the
+   *first* catch-up merge (the catch-up's `$PRE` names the newest round's,
+   which already holds the earlier rounds' incoming work). Only this pass's catch-ups count: a
    retry's `<merge-sha>` is an earlier attempt's, whose own catch-ups landed
    after it, so the search starts at the workspace commit the newest catch-up
    merged:
@@ -93,6 +93,6 @@ local breakage, not improving upstream's code.
 
 If you believe the gates should not run -- or should run at some other scope
 -- in a situation this rule does not cover, that is a `question` gate for the
-lead (Step 6), never a silent adaptation, however well-reasoned and however
+lead (the worker guide's Step 6), never a silent adaptation, however well-reasoned and however
 openly you would have disclosed it. The lead answers it by this rule; where
 the rule is genuinely silent, the fallback is more coverage, never less.

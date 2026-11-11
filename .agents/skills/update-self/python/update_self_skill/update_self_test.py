@@ -1761,10 +1761,15 @@ def test_parse_version_orders_prereleases_semver_style() -> None:
 # SKILL.md task-file template cross-version contract
 
 
-def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
-    """The SKILL.md task-file heredoc must keep `lead_agent` and `finish_report_path`.
+def _reference(name: str) -> str:
+    """One of the skill's reference files, which each step of SKILL.md names."""
+    return (_SKILL_DIR / "references" / name).read_text(encoding="utf-8")
 
-    This SKILL.md is executed cross-version: an OLDER workspace's lead follows
+
+def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
+    """The task-file heredoc Step 3b writes must keep `lead_agent` and `finish_report_path`.
+
+    This prose is executed cross-version: an OLDER workspace's lead follows
     this (staged, target-version) prose but launches with its own, possibly
     pre-lead-agent-stamping `create_worker.py` -- so the template itself is the
     only thing that gives the worker a report address there. Removing either
@@ -1773,10 +1778,20 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     timeout in silence. The address is the lead's agent id, which a rename of
     its chat does not change; its name would.
     """
-    skill_md = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    start = skill_md.index("cat << FRONTMATTER_EOF")
-    end = skill_md.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
-    frontmatter_template = skill_md[start:end]
+    assert "references/launching-the-worker.md" in _skill_section("### 3b. Launch")
+    prose = [
+        path.read_text(encoding="utf-8")
+        for path in (
+            _SKILL_DIR / "SKILL.md",
+            *sorted((_SKILL_DIR / "references").glob("*.md")),
+        )
+    ]
+    # One template in the whole skill, and it is the one the launch step follows.
+    [launching] = [text for text in prose if "cat << FRONTMATTER_EOF" in text]
+    assert launching == _reference("launching-the-worker.md")
+    start = launching.index("cat << FRONTMATTER_EOF")
+    end = launching.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
+    frontmatter_template = launching[start:end]
     assert "lead_agent: $MNGR_AGENT_ID" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
 
@@ -1855,11 +1870,13 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
         line
         for text in prose
         for line in text.replace("\\\n", " ").splitlines()
-        if line.startswith("python3 ") and "update_self.py" in line
+        # A command inside a numbered step is indented with it.
+        if line.lstrip().startswith("python3 ") and "update_self.py" in line
     ]
     # The commands this guard exists for; without them it is vacuous.
     assert any("run-status delegate" in line for line in invocations)
     assert any("run-status verdict" in line for line in invocations)
+    assert any("update_self.py apply" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     assert [line for line in invocations if staged not in line] == []
 
@@ -1910,11 +1927,17 @@ _FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 
 def _skill_section(heading: str) -> str:
-    """One ``##``/``###`` section of SKILL.md, up to the next heading of the same or a higher level.
+    """One ``##``/``###`` section of SKILL.md."""
+    return _section((_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"), heading)
+
+
+def _section(text: str, heading: str) -> str:
+    """One ``##``/``###`` section of a markdown file, up to the next heading of the same or a
+    higher level.
 
     Lines inside fenced blocks are never headings: a bash comment starts with ``#`` too.
     """
-    lines = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").splitlines()
+    lines = text.splitlines()
     level = len(heading.split(" ", 1)[0])
     start = next(index for index, line in enumerate(lines) if line.startswith(heading))
     is_fenced = False
@@ -2085,7 +2108,10 @@ def test_step_2_resolves_a_pinned_target_without_asking_the_app(
 
 def test_step_5b_pauses_the_chats_saves_their_work_applies_then_resumes_them() -> None:
     """The apply-time order: chats paused, their uncommitted work saved, the apply, and the chats back."""
-    commands = _fenced_commands(_skill_section("### 5b. Apply the update"))
+    assert "references/applying-the-update.md" in _skill_section(
+        "### 5b. Apply the update"
+    )
+    commands = _fenced_commands(_reference("applying-the-update.md"))
     order = [
         _first_index(commands, "run-status stop-chats"),
         _first_index(commands, "git commit -F /tmp/update-self-wip-message.txt"),
@@ -2104,38 +2130,61 @@ def test_step_5b_pauses_the_chats_saves_their_work_applies_then_resumes_them() -
 def test_step_4_ends_a_hold_with_a_decision_keeping_the_worker() -> None:
     """A customization the update cannot keep ends the pass: the verdict, the worker stopped and kept,
     and the chats brought back by Step 6's opening, which runs on every terminal path."""
-    commands = _fenced_commands(_skill_section("## 4. Proxy the `question` gate"))
+    assert "references/question-gates.md" in _skill_section(
+        "## 4. Proxy the `question` gate"
+    )
+    gates = _reference("question-gates.md")
+    hold = _section(gates, "## A hold ends the pass with a decision")
+    commands = _fenced_commands(hold)
     verdict = _first_index(commands, "run-status verdict NEEDS_DECISION")
     stop = _first_index(commands, "mngr stop update-self")
     assert verdict < stop
-    # The hold's own report is consumed, so the re-land's re-armed poll waits for the reply.
-    assert stop < _first_index(commands, "reports/consumed/")
-    assert not any(
-        "mngr destroy" in command or "git branch" in command for command in commands
-    )
-    assert not any("run-status hold" in command for command in commands)
+    # The hold's own report is consumed, so the re-land's re-armed poll waits for the reply. A
+    # launcher that left it in place is an older workspace's, so the command is in that reference,
+    # and the hold sends the lead to it once the worker is stopped.
+    older = _reference("older-workspaces.md")
+    consuming = '"Consuming a report by hand"'
+    assert hold.index("mngr stop update-self") < hold.index(consuming)
     _first_index(
-        _fenced_commands(_skill_section("## 6. Teardown")), "run-status resume-chats"
+        _fenced_commands(_section(older, "## Consuming a report by hand")),
+        "reports/consumed/",
     )
+    # No gate destroys the worker, deletes its branch, or waits on the user holding the pass.
+    every_gate_command = _fenced_commands(gates)
+    assert not any(
+        "mngr destroy" in command or "git branch" in command
+        for command in every_gate_command
+    )
+    assert not any("run-status hold" in command for command in every_gate_command)
+    assert "references/teardown.md" in _skill_section("## 6. Teardown")
+    teardown_opening = _section(_reference("teardown.md"), "## Every ending")
+    assert '"Every ending"' in hold
+    _first_index(_fenced_commands(teardown_opening), "run-status resume-chats")
 
-    relanding = _fenced_commands(
-        (_SKILL_DIR / "references" / "resuming-after-a-decision.md").read_text(
-            encoding="utf-8"
-        )
-    )
+    relanding = _fenced_commands(_reference("resuming-after-a-decision.md"))
     order = [
         _first_index(relanding, "run-status start"),
         _first_index(relanding, "git merge-base --is-ancestor HEAD mngr/update-self"),
         _first_index(relanding, "worker_agent_id"),
-        _first_index(relanding, 'message_chat.py "$WORKER_ID"'),
+        _first_index(relanding, 'message_chat.py "$WORKER_ID" -m "$MESSAGE"'),
     ]
     assert order == sorted(order)
     # The stopped worker is reached the way 5b's catch-up reaches it: by its id, through a sender
-    # that starts it, never by its mngr name.
-    assert _first_index(relanding, '--start -m "$DECISION"') > order[-1]
+    # that starts it, never by its mngr name. A workspace with no message_chat.py takes the sender
+    # in the older-workspaces reference, which every sender reaches through the apply reference.
+    applying = _reference("applying-the-update.md")
+    assert "applying-the-update.md" in _reference("resuming-after-a-decision.md")
+    assert "older-workspaces.md" in _section(applying, "## Messaging the worker")
+    without_messenger = _fenced_commands(
+        _section(older, "## Sending the worker a message without `message_chat.py`")
+    )
+    _first_index(
+        without_messenger,
+        'mngr message "${WORKER_ID:-update-self}" --start -m "$MESSAGE"',
+    )
     assert not any(
         "mngr start update-self" in command or "mngr message update-self" in command
-        for command in relanding
+        for command in [*relanding, *without_messenger, *_fenced_commands(applying)]
     )
 
 
