@@ -45,7 +45,7 @@ it even without a conflict. Conclude a conflicted merge with `git commit
 Scoped by the same rules as the worker guide's Step 4b, but over
 `$PRE..HEAD` only, where `$PRE` is your branch's tip before the catch-up
 merge (that merge's first parent). Do not re-run 4b's recipe: its merged set
-re-selects the whole pass, and its `git log "$MERGE..HEAD"` line would read
+re-selects the whole pass, and its `git diff` lines from `$MERGE` would read
 the workspace's commits as your edits.
 
 - **Impact**: when the commits coming in add or change user-created code,

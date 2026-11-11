@@ -56,8 +56,8 @@ What goes in:
   of it run whether or not a file changed on both sides.
 - What 4a found impacted by search or reasoning, through
   `impacted-paths.txt`. No file means 4a found none, or did not run.
-- Your own edits. Commit them first: the `git log` line reads commits. It
-  lists the files of every commit you added on top of the merge except the
+- Your own edits. Commit them first: the `git diff` lines read commits. They
+  list what you changed on top of the merge, on each side of the
   skill-exemption commit (`Record skill-check exemptions`), which is not an
   edit of yours and selects nothing.
 
@@ -68,6 +68,8 @@ MERGE="$(git log --merges -1 --format=%H --fixed-strings \
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     classify-merge --local "$MERGE^1" --target "$TARGET_REF" \
     > data/.tasks/update-self/classify.json
+STAMP=$(git log -1 --format=%H --fixed-strings \
+    --grep "Record skill-check exemptions" "$MERGE..HEAD")
 { jq -r '.merged[].path' data/.tasks/update-self/classify.json
   for update in data/.tasks/update-self/scopes/*.update.json; do
       [ -e "$update" ] || continue
@@ -75,8 +77,12 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
           && jq -r '.diff.inside_footprint[]' "$update"
   done
   cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
-  git log --format= --name-only --no-renames --invert-grep --fixed-strings \
-      --grep "Record skill-check exemptions" "$MERGE..HEAD"; } | sed '/^[[:space:]]*$/d' | sort -u \
+  if [ -n "$STAMP" ]; then
+      git diff --name-only --no-renames "$MERGE" "$STAMP^"
+      git diff --name-only --no-renames "$STAMP" HEAD
+  else
+      git diff --name-only --no-renames "$MERGE" HEAD
+  fi; } | sed '/^[[:space:]]*$/d' | sort -u \
     > data/.tasks/update-self/validate-paths.txt
 [ -s data/.tasks/update-self/validate-paths.txt ] \
     && uv run --frozen --package app-manifest app-manifest select-tests \

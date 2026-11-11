@@ -13,6 +13,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TypedDict
 
 SKILLS_DIR = ".agents/skills"
 _PYPROJECT_NAME = "pyproject.toml"
@@ -23,6 +24,17 @@ class EntryPoint:
     name: str
     target: str
     pyproject: str
+
+
+class RemovedEntryPoint(TypedDict):
+    name: str
+    pyproject: str
+    target: str
+    same_target: list[str]
+
+
+# The functional form, because ``from`` is a keyword.
+RenamedSkill = TypedDict("RenamedSkill", {"from": str, "to": str})
 
 
 class UnreadablePyprojectError(Exception):
@@ -48,7 +60,7 @@ def entry_points(pyproject: str, text: str) -> list[EntryPoint]:
 
 def removed_entry_points(
     base: Sequence[EntryPoint], target: Sequence[EntryPoint]
-) -> list[dict[str, object]]:
+) -> list[RemovedEntryPoint]:
     """Every command the base installs that the target installs from no project.
 
     ``same_target`` lists the commands the target installs that run what the removed one
@@ -85,7 +97,7 @@ def retired_skills(
     base_skills: Sequence[str],
     target_skills: Sequence[str],
     renamed_files: Sequence[tuple[str, str]],
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[list[str], list[RenamedSkill]]:
     """The skills the target dropped, and the ones it renamed with their new names.
 
     A skill is renamed when its directory is gone and most of its files that git traced
@@ -102,7 +114,7 @@ def retired_skills(
         if old_skill in destinations and new_skill in arrived:
             destinations[old_skill][new_skill] += 1
     removed: list[str] = []
-    renamed: list[dict[str, str]] = []
+    renamed: list[RenamedSkill] = []
     for name in gone:
         if destinations[name]:
             [(successor, _)] = destinations[name].most_common(1)

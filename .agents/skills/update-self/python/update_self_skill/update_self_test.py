@@ -2195,35 +2195,15 @@ def _run_prose(repo: Path, script: str) -> str:
     ).stdout
 
 
-def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
-    tmp_path: Path,
-) -> None:
-    """The stamp writes two frontmatter lines into a user's failing skill, and the worker commits
-    them. That commit must not select a suite, and must not end the clean-pull skip, or the first
-    update into the release with the checks runs the review gates over every such workspace. The
-    prose says so by rule; this runs its own commands to hold it to that, and to hold that
-    nothing else rides out under the same exception."""
-    guide = _reference("update-self-worker.md")
-    [stamp_block] = [
-        block for block in _FENCED_BLOCK.findall(guide) if "--stamp" in block
-    ]
-    stamp_lines = stamp_block.splitlines()
-    stamp_at = next(i for i, line in enumerate(stamp_lines) if "--stamp" in line)
-    # The stamp runs on a clean tree, so its commit holds only what it wrote.
-    assert any("git status --porcelain" in line for line in stamp_lines[:stamp_at])
-    commit_the_stamp = "\n".join(stamp_lines[stamp_at + 1 :])
-    # The line of the suites recipe that lists the worker's own edits, out of the group it closes.
-    [edits_of_the_workers] = [
-        command.partition("; }")[0]
-        for command in _fenced_commands(_reference("worker-validation.md"))
-        if "--invert-grep" in command
-    ]
-    [gate_block] = [
-        block
-        for block in _FENCED_BLOCK.findall(_reference("worker-review-gates.md"))
-        if "M=<merge-sha>" in block
-    ]
+_STAMPED_SKILL = (
+    "---\nname: mine\nmetadata:\n  exempt-checks: size\n"
+    "  exempt-reason: predates-checks\n---\nbody\n"
+)
 
+
+def _workspace_with_a_landed_update(tmp_path: Path) -> tuple[Path, str]:
+    """A workspace holding a skill and an app of the user's, with a release merged into it under
+    the update's subject. Returns the repo and the merge."""
     repo = tmp_path / "workspace"
     skill_md = repo / ".agents" / "skills" / "mine" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
@@ -2248,34 +2228,75 @@ def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
         "-m",
         "update-self: merge upstream template (release)",
     )
-    merge = _git_in(repo, "rev-parse", "HEAD")
+    return repo, _git_in(repo, "rev-parse", "HEAD")
 
-    def _edits() -> list[str]:
-        return _run_prose(repo, f'MERGE="{merge}"\n{edits_of_the_workers}').split()
+
+def _own_edits(repo: Path, merge: str) -> list[str]:
+    """What the suites recipe lists as the worker's own edits: its lookup of the skill-exemption
+    commit, and the lines that close the group gathering the paths, run as written."""
+    [recipe] = [
+        block
+        for block in _FENCED_BLOCK.findall(_reference("worker-validation.md"))
+        if "validate-paths.txt" in block
+    ]
+    group = recipe.replace("\\\n", " ").partition("; } |")[0].splitlines()
+    last_other_source = next(
+        index for index, line in enumerate(group) if "impacted-paths.txt" in line
+    )
+    lines = [
+        f'MERGE="{merge}"',
+        *(line for line in group if line.startswith("STAMP=")),
+        *group[last_other_source + 1 :],
+    ]
+    return sorted(set(_run_prose(repo, "\n".join(lines)).split()))
+
+
+def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
+    tmp_path: Path,
+) -> None:
+    """The stamp writes two frontmatter lines into a user's failing skill, and the worker commits
+    them. That commit must not select a suite, and must not end the clean-pull skip, or the first
+    update into the release with the checks runs the review gates over every such workspace. The
+    prose says so by rule; this runs its own commands to hold it to that, and to hold that
+    nothing else rides out under the same exception."""
+    guide = _reference("update-self-worker.md")
+    [stamp_block] = [
+        block for block in _FENCED_BLOCK.findall(guide) if "--stamp" in block
+    ]
+    stamp_lines = stamp_block.splitlines()
+    stamp_at = next(i for i, line in enumerate(stamp_lines) if "--stamp" in line)
+    # The stamp runs on a clean tree, so its commit holds only what it wrote.
+    assert any("git status --porcelain" in line for line in stamp_lines[:stamp_at])
+    commit_the_stamp = "\n".join(stamp_lines[stamp_at + 1 :])
+    [gate_block] = [
+        block
+        for block in _FENCED_BLOCK.findall(_reference("worker-review-gates.md"))
+        if "M=<merge-sha>" in block
+    ]
+
+    repo, merge = _workspace_with_a_landed_update(tmp_path)
 
     def _gate() -> str:
         return _run_prose(repo, gate_block.replace("<merge-sha>", merge))
 
-    # With no stamp commit the gate's test is the plain diff, and it is empty.
+    # With no stamp commit both rules read the plain diff, and it is empty.
+    assert _own_edits(repo, merge) == []
     assert _gate() == ""
 
     # What the stamp writes into a user's failing skill, committed by the guide's own lines.
-    skill_md.write_text(
-        "---\nname: mine\nmetadata:\n  exempt-checks: size\n"
-        "  exempt-reason: predates-checks\n---\nbody\n"
-    )
+    (repo / ".agents" / "skills" / "mine" / "SKILL.md").write_text(_STAMPED_SKILL)
     _run_prose(repo, commit_the_stamp)
     assert _git_in(repo, "status", "--porcelain") == ""
     assert _git_in(repo, "rev-list", "--count", f"{merge}..HEAD") == "1"
 
     # It selects nothing, and the gate's test prints the stamped file's name and no diff.
-    assert _edits() == []
+    assert _own_edits(repo, merge) == []
     assert _gate().split() == [".agents/skills/mine/SKILL.md"]
 
     # A real edit on top is still an edit, for both rules.
     (repo / "app.py").write_text("fixed\n")
     _git_in(repo, "commit", "-q", "-am", "Re-fit the app")
-    assert _edits() == ["app.py"]
+    assert _own_edits(repo, merge) == ["app.py"]
     assert "diff --git a/app.py b/app.py" in _gate()
 
     # So is a second commit that borrows the stamp's subject: the gate's test reads the newest as
@@ -2285,6 +2306,30 @@ def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
     names, _, diffs = _gate().partition("diff --git")
     assert names.split() == ["app.py"]
     assert "a/app.py b/app.py" in diffs
+
+
+def test_a_retry_of_a_rolled_back_release_does_not_read_the_release_as_the_workers_edits(
+    tmp_path: Path,
+) -> None:
+    """A fresh pass that retries a release whose apply rolled back has nothing to merge, so the
+    merge the suites recipe finds is the landed attempt's, and the rollback and the worker's revert
+    of it both come after it. Each touches every file of the release and together they change
+    nothing, so they select nothing: only what the workspace committed in between is listed."""
+    repo, merge = _workspace_with_a_landed_update(tmp_path)
+    (repo / ".agents" / "skills" / "mine" / "SKILL.md").write_text(_STAMPED_SKILL)
+    _git_in(repo, "commit", "-q", "-am", "Record skill-check exemptions")
+    # The apply's rollback is a forward commit that puts the tree from before the merge back.
+    _git_in(repo, "read-tree", "-u", "--reset", f"{merge}^1")
+    _git_in(repo, "commit", "-q", "-m", "Roll back update apply (restore to base)")
+    rollback = _git_in(repo, "rev-parse", "HEAD")
+    assert not (repo / "release.txt").exists()
+    (repo / "notes.py").write_text("the workspace's own work\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "Work done after the rollback")
+    _git_in(repo, "revert", "--no-edit", rollback)
+    assert (repo / "release.txt").exists()
+
+    assert _own_edits(repo, merge) == ["notes.py"]
 
 
 # The atomic apply
