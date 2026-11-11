@@ -22,4 +22,7 @@ Internal documentation for the workspace machinery.
 - `style_guide.md` - The code style guide, a symlink to the copy
   `system/scripts/fetch_mngr_assets.sh` fetches from the pinned mngr commit at
   build time (the mngr repo is its source of truth).
+- `skill_authoring_guide.md` - How to write and restructure a skill, a symlink
+  to the copy fetched the same way. `validate_skill.py` checks its measurable
+  rules and the `skill_hygiene` review category the rest.
 
