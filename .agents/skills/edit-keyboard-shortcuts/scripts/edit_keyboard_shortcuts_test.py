@@ -112,12 +112,15 @@ class _FakeShell(Shell):
         can_save_everywhere: bool = True,
         delivery_status: str = "DELIVERED",
         failing_save_of: str | None = None,
+        is_list_applied: bool = True,
     ) -> None:
         super().__init__("http://fake.invalid")
         self.actions = list(actions)
         self.can_save_everywhere = can_save_everywhere
         self.delivery_status = delivery_status
         self.failing_save_of = failing_save_of
+        # False stands for a list the workspace stores but reads as no choice (an action's older default).
+        self.is_list_applied = is_list_applied
         self.saves: list[tuple[str, tuple[str, ...], bool]] = []
         self.resets: list[str] = []
 
@@ -150,8 +153,12 @@ class _FakeShell(Shell):
             raise CouldNotRunError("the workspace answered 500")
         self.saves.append((action.id, tuple(chords), is_everywhere))
         if not is_everywhere:
-            self._replace(action, chords, "workspace")
+            if self.is_list_applied:
+                self._replace(action, chords, "workspace")
             return {"chords": list(chords), "delivery": None}
+        # An undelivered save answers here at once; a delivered one shows only once the account syncs back.
+        if self.delivery_status != "DELIVERED" and self.is_list_applied:
+            self._replace(action, chords, "unsent")
         return {
             "chords": list(chords),
             "delivery": {"status": self.delivery_status, "detail": ""},
@@ -584,13 +591,65 @@ def test_save_everywhere_is_refused_without_an_account_and_with_a_key_to_take(
     no_account = _FakeShell(_CATALOG, can_save_everywhere=False)
     assert run_check_or_save(everywhere, no_account, _contract(), True) == EXIT_REFUSED
     assert "no connection to the account" in capsys.readouterr().out
-    taking_everywhere = _save_args("files", "back", "meta+k", "--everywhere", "--take")
+    # A clash is refused outright with --everywhere, before the user is asked about a take that cannot follow.
     shell = _FakeShell(_CATALOG)
-    assert (
-        run_check_or_save(taking_everywhere, shell, _contract(), True) == EXIT_REFUSED
-    )
+    for flags in (["--everywhere"], ["--everywhere", "--take"]):
+        clashing = _save_args("files", "back", "meta+k", *flags)
+        assert run_check_or_save(clashing, shell, _contract(), True) == EXIT_REFUSED
+        assert "cannot be combined with saving everywhere" in capsys.readouterr().out
     assert shell.saves == []
-    assert "cannot be done in one step" in capsys.readouterr().out
+
+
+def test_save_everywhere_refuses_an_os_kept_key_only_this_workspace_holds(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Back has Spotlight's key by this workspace's own choice; the account gives it meta+[.
+    here_only = _action(
+        "files",
+        "back",
+        "app",
+        ("meta+space",),
+        reset_chords=("meta+[",),
+        source="workspace",
+    )
+    shell = _FakeShell((_LAUNCHER, here_only))
+    everywhere = _save_args("files", "back", "meta+space", "--everywhere")
+    assert run_check_or_save(everywhere, shell, _contract(), True) == EXIT_REFUSED
+    assert shell.saves == []
+    assert "macOS uses ⌘Space for Spotlight" in capsys.readouterr().out
+    # The same list saved for this workspace brings it nothing new, so it is left alone.
+    here = _save_args("files", "back", "meta+space")
+    assert run_check_or_save(here, shell, _contract(), True) == EXIT_OK
+
+
+def test_an_undelivered_everywhere_save_the_workspace_does_not_apply_is_partly_done() -> (
+    None
+):
+    ignoring = _FakeShell(
+        _CATALOG, delivery_status="PERMISSION_PENDING", is_list_applied=False
+    )
+    everywhere = _save_args("files", "back", "alt+meta+j", "--everywhere")
+    with pytest.raises(PartlyDoneError) as raised:
+        run_check_or_save(everywhere, ignoring, _contract(), True)
+    assert "does not apply it as asked" in raised.value.problem
+
+
+def test_reset_warns_about_an_os_kept_key_it_brings_back_and_never_vouches_for_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from_the_account = _action(
+        "files",
+        "back",
+        "app",
+        ("meta+j",),
+        reset_chords=("meta+space",),
+        source="workspace",
+    )
+    resetting = build_command_parser("reset").parse_intermixed_args(["files", "back"])
+    assert run_reset(resetting, _FakeShell((from_the_account,)), _contract()) == EXIT_OK
+    output = capsys.readouterr().out
+    assert "is kept by an operating system: macOS uses ⌘Space for Spotlight" in output
+    assert "nothing known to keep" not in output
 
 
 def test_save_everywhere_reports_the_account_by_the_delivery_not_by_a_reread(

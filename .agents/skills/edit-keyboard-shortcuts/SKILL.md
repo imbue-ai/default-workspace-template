@@ -71,7 +71,8 @@ $KEYS save APP ACTION --none              # the action has no shortcut at all
 Add `--everywhere` only when the user asks for "everywhere" or "all my
 workspaces": it saves to their account, which may show them a request to
 approve in Imbue Studio the first time. Without it the save is for this
-workspace only. `--everywhere` cannot be combined with `--take`.
+workspace only. With `--everywhere`, a key another action has is refused
+outright (exit 2): taking a key works for this workspace only.
 
 To see what a save would do without saving, run the same command with `check`
 in place of `save`; it takes the same flags.
@@ -126,7 +127,8 @@ the user's account choice if they have one, otherwise the app's default; the
 `RESULT:` line says which, so do not promise "the default" before you read it.
 A reset can bring back a key another action has taken since: that is a clash
 (exit 3), handled like any other, with `reset APP ACTION --take` only after the
-user agrees.
+user agrees. A reset prints `WARNINGS` for the keys it brings back, the same as
+a save; tell the user every one.
 
 ## 6. Tell the user
 

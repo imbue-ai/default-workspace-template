@@ -581,10 +581,15 @@ def build_report(
     chords: Sequence[str],
     contract: Contract,
     snapshot: Mapping[str, Any] | None,
+    is_everywhere: bool = False,
 ) -> Report:
     """Decide everything about giving ``own`` exactly ``chords``. Keys the action already has are not judged
-    again: only the ones this step brings are checked for clashes and warnings."""
-    brought = tuple(chord for chord in chords if chord not in own.chords)
+    again: only the ones this step brings are checked for clashes and warnings. For a save to the account, what
+    the action already has is what the account gives it: a key only this workspace's own choice holds is brought
+    to every other workspace by the save."""
+    is_held_here_only = is_everywhere and own.source == "workspace"
+    already_held = own.reset_chords if is_held_here_only else own.chords
+    brought = tuple(chord for chord in chords if chord not in already_held)
     return Report(
         action=own,
         chords=tuple(chords),
@@ -799,7 +804,12 @@ def run_check_or_save(
     own = find_action(catalog.actions, args.app, args.action)
     chords = requested_chords(own, args.chords, args.add, contract)
     report = build_report(
-        catalog.actions, own, chords, contract, load_snapshot(contract)
+        catalog.actions,
+        own,
+        chords,
+        contract,
+        load_snapshot(contract),
+        args.everywhere,
     )
     if report.refusals:
         print(render_report(report, "NOT SAVED: refused."))
@@ -811,6 +821,15 @@ def run_check_or_save(
             "be saved everywhere from it; it can be saved for this workspace only."
         )
         return EXIT_REFUSED
+    if report.clashes and args.everywhere:
+        print(render_report(report, "NOT SAVED: refused."))
+        print(
+            "REFUSED (tell the user why):\n  - Another action has a key (under CLASHES), and taking a key cannot be "
+            "combined with saving everywhere from here. Either save for this workspace only (the same command "
+            "without --everywhere, which asks before taking the key), or the user does this one on the Keyboard "
+            "shortcuts screen."
+        )
+        return EXIT_REFUSED
     if report.clashes and not args.take:
         print(
             render_report(
@@ -819,14 +838,6 @@ def run_check_or_save(
             )
         )
         return EXIT_CLASH
-    if report.clashes and args.everywhere:
-        print(render_report(report, "NOT SAVED: refused."))
-        print(
-            "REFUSED (tell the user why):\n  - Taking a key from another action and saving everywhere cannot be done "
-            "in one step from here. Either save for this workspace only (drop --everywhere), or the user does this "
-            "one on the Keyboard shortcuts screen."
-        )
-        return EXIT_REFUSED
     if not is_saving:
         would_take = [
             f"WOULD TAKE {describe_chords(taken)} FROM: {describe_action(other)}"
@@ -860,13 +871,12 @@ def run_check_or_save(
         warnings=report.warnings,
     )
     is_key_taken = bool(report.clashes)
-    if args.everywhere:
-        is_delivered, delivery_line = account_outcome(answer)
-        outcome = (
-            "SAVED to the account, for every workspace. This workspace shows it within a few seconds."
-            if is_delivered
-            else "SAVED in this workspace only so far: it has NOT reached the account yet (see ACCOUNT DELIVERY)."
-        )
+    is_delivered, delivery_line = (
+        account_outcome(answer) if args.everywhere else (False, "")
+    )
+    if is_delivered:
+        # The workspace's copy of the account follows a few seconds later, so a read-back now proves nothing.
+        outcome = "SAVED to the account, for every workspace. This workspace shows it within a few seconds."
         print(render_report(settled, outcome, is_key_taken))
         print(delivery_line)
         return EXIT_OK
@@ -884,8 +894,13 @@ def run_check_or_save(
             "`reset` removes the stored list",
             done_lines,
         )
-    print(render_report(settled, "SAVED in this workspace.", is_key_taken))
-    for line in done_lines[:-1]:
+    outcome = (
+        "SAVED in this workspace only so far: it has NOT reached the account yet (see ACCOUNT DELIVERY)."
+        if args.everywhere
+        else "SAVED in this workspace."
+    )
+    print(render_report(settled, outcome, is_key_taken))
+    for line in [*done_lines[:-1], *([delivery_line] if args.everywhere else [])]:
         print(line)
     return EXIT_OK
 
@@ -897,13 +912,24 @@ def run_reset(args: argparse.Namespace, shell: Shell, contract: Contract) -> int
     # does not apply, and the keys stay as they are.
     had_own_choice = own.source == "workspace"
     brought = tuple(chord for chord in own.reset_chords if chord not in own.chords)
+    # A reset restores what the account or the app holds, so a key an operating system keeps is not refused
+    # here; the user is told about it instead.
+    kept_by_an_os = tuple(
+        f"{chord_in_words(chord)} is kept by an operating system: {'; '.join(os_kept_uses(chord, contract))}. "
+        "It may never reach Imbue Studio there."
+        for chord in brought
+        if os_kept_uses(chord, contract)
+    )
     report = Report(
         action=own,
         chords=own.reset_chords,
         brought=brought,
         refusals=(),
         clashes=find_clashes(catalog.actions, own, brought),
-        warnings=find_warnings(brought, contract, load_snapshot(contract)),
+        warnings=(
+            *kept_by_an_os,
+            *find_warnings(brought, contract, load_snapshot(contract)),
+        ),
     )
     if report.clashes and not args.take:
         outcome = "NOT RESET: a key the reset brings back is another action's now. Ask the user, then reset with --take."
