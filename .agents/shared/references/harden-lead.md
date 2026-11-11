@@ -137,9 +137,11 @@ no extra flag.
 
 Arm the poll with your skill's `await` command, which starts it through
 `system/scripts/workspace_bare_scripts/run_in_background.py` and returns at
-once. Then end your turn, or carry on with other work (later steps of the skill
-that sent you here, other user requests). Each report arrives in your chat as a
-message that starts your next turn; handle it then.
+once. Then end your turn; never wait on the worker any other way. The one
+reason not to end the turn is work that is already yours to do: later steps of
+a skill that invoked yours (`fetch-process-show` goes on to build its
+surfaces), or something else the user asked for. Each report arrives in your
+chat as a message that starts your next turn; handle it then.
 
 You own this poll for as long as the worker runs, even if you reached this step
 from another skill and moved on to other work: without it, gate reports never
@@ -164,7 +166,9 @@ reference ("Before merge: lease, freshness, conflicts"), in order:
 
 1. Wait out any foreground editing lease on an app or service in the pass.
 2. Confirm the branch is still fresh: no creation's footprint has changed since
-   the worker branched.
+   the worker branched. A creation that is not on your branch yet (the skill a
+   crystallize pass is building, before the first merge that brings it) is left
+   out of this check, as that reference says.
 3. Never resolve a conflicted merge yourself.
 
 A stale or conflicted pass goes back to its worker to catch up to your `HEAD`

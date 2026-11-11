@@ -26,7 +26,8 @@ Standing instructions:
 - **The worker owns outline and implementation decisions**; do not second-guess
   its structure unless something is clearly wrong.
 - **You own the poll** from launch until the worker's terminal status, even
-  when another skill invoked you and you moved on to other work.
+  when another skill invoked you and you moved on to other work: without it,
+  gate reports never reach the user and the worker deadlocks.
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
@@ -66,12 +67,13 @@ The creation's type drives which **gates** the worker emits (Step 5) and the
 
 ## When to invoke (skill, standalone)
 
-Invoke when (1) the just-finished work was a single cohesive unit, (2) a
-re-run with different inputs would follow a recognizably similar process, and
-(3) the task is likely to recur. **Default to asking the user**, not deciding
-silently; if you can name any plausible skill shape, propose it and let them
-decide. Read `references/when-to-crystallize.md` before you decline, or when
-you are unsure: it has the re-run test and the reasoning traps.
+Read `references/when-to-crystallize.md` if you haven't, for the full
+guidelines. Summary: invoke when (1) the just-finished work was a single
+cohesive unit, (2) a re-run with different inputs would follow a recognizably
+similar process, and (3) the task is likely to recur. Model-judgement steps in
+the middle of a flow do not disqualify it -- they are scripted as `[ai-script]`
+calls. **Default to asking the user**, not deciding silently; if you can name
+any plausible skill shape, propose it and let them decide.
 
 ## Step 1: Confirm (skill, standalone only)
 
@@ -91,7 +93,10 @@ Wait for the reply. If no, stop.
 
 Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
 If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
-reuse it. `harden-lead.md` ("Names and paths") has every path that follows:
+reuse it. `$CREATIONS`, where a shared reference uses it, is the one creation
+as the task file names it: `skill:$NAME`, `app:<app name>` or
+`service:<package>`. `harden-lead.md` ("Names and paths") has every path that
+follows:
 
 - Worker and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
 - Runtime dir and task file: `data/.tasks/harden/crystallize-$NAME/` and
@@ -216,10 +221,10 @@ worker too -- no extra flag.
 
 ## Step 5: Background-poll for worker reports
 
-Arm the poll, which returns at once, then end your turn or continue with other
-work (later steps of the skill that invoked you, interface design, other user
-requests). Each report arrives in your chat as a message that starts your next
-turn; handle it then.
+Arm the poll, which returns at once, then end your turn, unless work that is
+already yours remains (later steps of the skill that invoked you, interface
+design, other user requests). Each report arrives in your chat as a message
+that starts your next turn; handle it then.
 
 ```bash
 python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
@@ -229,7 +234,6 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-Without this poll, gate reports never reach the user and the worker deadlocks.
 Handle each report as `.agents/shared/references/lead-proxy.md` says (gate
 decisions, the "do not interrupt more recent user work" rule, terminal
 statuses), and re-arm this poll after every gate and every milestone. For a
@@ -240,22 +244,27 @@ crystallize pass:
   goes straight to `done`). A `question` gate can arrive at any point.
 - Milestones: any name, non-blocking → provisional merge per
   `.agents/shared/references/lead-proxy-milestones.md`, after the checks before
-  a merge in `.agents/shared/references/harden-contention.md` ("Before merge:
-  lease, freshness, conflicts"). Provisional go-live is the minimum that makes
-  the creation usable: **skill** → it is on disk at `.agents/skills/$NAME/` and
-  invocable; **app** → refresh the window. Step 6 still runs only on `done`.
+  a merge (below). Provisional go-live is the minimum that makes the creation
+  usable: **skill** → it is on disk at `.agents/skills/$NAME/` and invocable;
+  **app** → refresh the window. Step 6 still runs only on `done`.
 - Terminal statuses: `done` (Step 6); `stuck` (the failure flow in
   `.agents/skills/launch-task/references/worker-failure.md`, which stops the
   worker).
+
+Before any merge from the worker's branch, a milestone's or the one on `done`,
+run the checks in `.agents/shared/references/harden-contention.md` ("Before
+merge: lease, freshness, conflicts"). A skill that is not on your branch yet
+(`.agents/skills/$NAME/` does not exist: every merge before the first that
+brings it) has no freshness check to run, as that section says; never resolving
+a conflicted merge yourself holds for every merge.
 
 ## Step 6: Go live
 
 A provisional milestone merge does not change this step: it runs only on `done`,
 and the `done` merge brings the remainder of the branch.
 
-On `done`, run the checks before a merge (`harden-contention.md`, "Before
-merge: lease, freshness, conflicts"), then merge `mngr/crystallize-$NAME` and
-destroy the worker (`create_worker.py destroy --name crystallize-$NAME`; any
+On `done`, run the checks before a merge (the end of Step 5), then merge
+`mngr/crystallize-$NAME` and destroy the worker (`create_worker.py destroy --name crystallize-$NAME`; any
 workers it split its pass across go with it), as `lead-proxy.md` says for
 `done` ("Terminal status: act and stop polling"). Then go live by the
 creation's type, as `harden-lead.md` ("Merge, then go live by type") says, with

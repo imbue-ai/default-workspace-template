@@ -80,8 +80,8 @@ it and stop. If the user asks for changes, iterate and emit a fresh
 
 Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
-testing and hardening contract from `harden-creation.md`, and, for a creation
-that fetches or stores data, the rules in `data-and-storage.md`.
+testing and hardening contract from `harden-creation.md`, and the rules of
+`data-and-storage.md` that apply to the creation.
 
 **Pre-existing shape:** Once its own tests pass on your branch,
 commit and declare a **milestone** per `worker-reporting.md`'s "Milestone

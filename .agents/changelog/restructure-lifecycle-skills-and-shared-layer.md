@@ -10,6 +10,8 @@ The lifecycle skills, the harden worker and the shared references they rest on f
 
 - **`interactive-delivery.md`** has a contents list and a shorter opening, and links nothing.
 
+- **Two rules made exact.** The freshness check says what to do with a creation that is not on the lead's branch yet (the skill a crystallize pass is building, before the first merge that brings it): leave it out, since `pass-scope` refuses it and nothing could have moved under it. `lead-proxy.md` has a lead close its ticket where its skill says to, which for the three lifecycle skills is after go-live, as they always did; it used to say before.
+
 - **Wording.** A worker's own workers are called that, not sub-workers or siblings; a service is no longer said to have a tab; stale lines in `post-crystallize-migration.md` (a PR description, a missing `tk` list command) are corrected.
 
 `launch-task`'s `worker-failure.md` points at `harden-contention-supersede.md`. The exemptions of `launch-task`, `do-something-new`, `fetch-process-show`, `migrate-workspace`, `publish-template` and `update-app` lose the checks these shared files were the only cause of.

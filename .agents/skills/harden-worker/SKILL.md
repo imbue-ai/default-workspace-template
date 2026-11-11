@@ -70,7 +70,9 @@ type's reference once however many creations share it.
 
 Read the ones your pass selects top to bottom, then follow them. A bare
 filename is relative to `.agents/skills/harden-worker/references/`; the three
-shared references are written with their full paths.
+shared references are written with their full paths. Inside the references,
+`worker-reporting.md`, `spec-summary.md` and `lead-proxy.md` always mean those
+three shared files.
 
 Every pass:
 
@@ -90,7 +92,7 @@ By what the pass is:
 | a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
 | a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update in place, or split off a new skill |
 | a creation is an `app` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
-| a creation fetches from outside sources, captures records, or keeps anything on disk across runs | `data-and-storage.md` | concurrency for independent work, partial failure and resumption, preserve-and-surface, bounded disk growth, the `.nobackup` marker |
+| a creation performs multiple independent I/O-bound operations (fetches, API calls, subprocesses), works through many items, captures data, or keeps anything on disk across runs | `data-and-storage.md` | concurrency for independent work, partial failure and resumption, preserve-and-surface, bounded disk growth, the `.nobackup` marker |
 
 By what happens during the pass:
 

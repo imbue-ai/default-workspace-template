@@ -25,8 +25,9 @@ which sits beside this one.
 - Splitting the pass across workers of your own (the rule every pass applies;
   how to split is in `splitting-the-pass.md`)
 - Testing and hardening contract (every pass)
-- Data the creation fetches or stores (a creation that fetches, captures or
-  stores; detail in `data-and-storage.md`)
+- Concurrent work, pipelines and stored data (a creation that runs
+  independent I/O-bound operations, works through many items, captures data,
+  or keeps anything on disk; detail in `data-and-storage.md`)
 - Review gates (every pass; a run that is not a clean pass continues in
   `test-gate-cases.md`)
 - Carried work from a superseded pass (a task body with `## Carried work`;
@@ -162,42 +163,43 @@ merge and verify their work as their lead.
   the same coverage in both.
 - **Run every suite that applies** plus the relevant ratchets.
 
-## Data the creation fetches or stores
+## Concurrent work, pipelines and stored data
 
-Five rules hold for a creation that fetches from outside sources, captures
-records, or keeps anything on disk across runs. They hold **whenever** that is
-true: when you first build it, and equally when an `update` teaches a
-previously stateless creation to fetch or store, or enlarges a store it already
-had. Read `data-and-storage.md` before you harden such a creation; it has each
-rule in full under the same heading. A creation that does none of this skips
-it.
+Five rules, each with its own condition. They hold **whenever** the condition
+is true: when you first build the creation, and equally when an `update` makes
+it true or enlarges a store the creation already had. Read
+`data-and-storage.md` before you harden a creation any of them applies to; it
+has each rule in full under the same heading.
 
 ### Optimize independent work
 
-Independent I/O-bound operations (fetches, API calls, subprocesses) run
-concurrently, with bounded concurrency and a deterministic output order.
+Applies when the creation performs multiple independent I/O-bound operations:
+data fetches, API calls, subprocess invocations. They run concurrently rather
+than in a serial loop, with bounded concurrency and a deterministic output
+order.
 
 ### Tolerate partial failure and support resumption
 
-One failed item never sinks the whole run, and results are written as they
-complete so a re-run resumes.
+Applies to any multi-item pipeline. One failed item never sinks the whole run,
+and results are written as they complete so a re-run resumes.
 
 ### Preserve and surface captured data
 
-Each captured record keeps its raw payload and a reference to its source,
-durably, not only the processed fields (the preserve-and-surface principle in
-AGENTS.md).
+Applies when the creation captures data. Each record keeps its raw payload and
+a reference to its source, durably, not only the processed fields (the
+preserve-and-surface principle in AGENTS.md).
 
 ### Bound disk growth
 
-Every store the creation writes has an explicit retention bound, enforced by
-the same run that writes and covered by a test.
+Applies whenever the creation persists anything across runs. Every store it
+writes has an explicit retention bound, enforced by the same run that writes
+and covered by a test.
 
 ### Keep rebuildable data out of the backup
 
-A store the creation can rebuild (downloads, extracted archives, clones,
-caches) lives in its own directory, with an empty `.nobackup` file the code
-creates along with the directory.
+Applies whenever the creation keeps a store it can rebuild (downloads,
+extracted archives, clones, caches). The store lives in its own directory,
+with an empty `.nobackup` file the code creates along with the directory.
 
 ## Review gates
 

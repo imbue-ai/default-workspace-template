@@ -5,7 +5,8 @@ worker left to catch up: the single-flight check found an abandoned pass, a
 pass was stopped after a failure the user did not override, or an orphaned
 pass's task file names another checkout as `lead_work_dir`. It names the
 lead-proxy reference by role: the shared file, in this directory, a lead
-follows to poll and answer its worker.
+follows to poll and answer its worker. `harden-creation.md` is the harden
+worker's contract, `.agents/skills/harden-worker/references/harden-creation.md`.
 
 When there is no worker left to catch up -- an abandoned pass, or one stopped
 after a failure (a `stuck` on the catch-up itself included) whose user did not

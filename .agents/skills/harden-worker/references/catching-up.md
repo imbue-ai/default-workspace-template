@@ -87,8 +87,9 @@ starting over.
 ## A reverted milestone
 
 When the lead reverts a milestone it merged, its reply names the revert
-commit and says why. Bring the milestone back on your branch as
-`worker-reporting.md`'s "A milestone the lead reverted" says, resolve any
+commit and says why. Bring the milestone back on your branch as "A milestone
+the lead reverted" in `.agents/shared/references/worker-reporting.md` says,
+resolve any
 conflict as step 2 of "Catching up to a moved base" says, then fix the
 milestone's work per the lead's reply.
 

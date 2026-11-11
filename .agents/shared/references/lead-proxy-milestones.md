@@ -2,7 +2,8 @@
 
 A conditional path of the lead-proxy flow. Read it when `await` returns a
 `type: milestone` report, and again when the user rejects a milestone you
-merged.
+merged. It names the harden-contention reference by role: the shared file of
+that name beside this one, which holds the checks before a merge.
 
 ## Contents
 
@@ -30,16 +31,20 @@ what is usable, what `## Tested` covers at that commit, and what is
 **Default to merging** -- earlier use is the point. Do not merge when:
 
 - the body says the creation is not yet runnable (a design-only milestone),
-- one of the checks before the merge fails (below), or
+- one of the pre-merge checks below fails, or
 - the user's more recent request is still in progress (the "do not interrupt
   more recent user work" rule applies -- handle the milestone once their
   request is finished).
 
-Before merging, run the checks your skill runs before it merges a `done`,
-exactly as for `done`. A harden lead's are the three in the harden-contention
-reference ("Before merge: lease, freshness, conflicts"). Do
-not re-run a check `## Tested` names as passing at this commit; you may run
-ones it does not name.
+Before merging, run the three checks before a merge in the harden-contention
+reference ("Before merge: lease, freshness, conflicts"), exactly as for `done`.
+Every lead runs them, a harden lead or not. A lead whose task names no
+creations (a plain `launch-task` task) has nothing for the freshness check to
+read, so it runs the other two: it does not merge while another agent holds the
+editing lease on an app or service the milestone's commit changes, and when the
+merge conflicts it aborts the merge and leaves the milestone unmerged rather
+than resolving it. Do not re-run a check `## Tested` names as passing at this
+commit; you may run ones it does not name.
 
 Merge the **pinned sha, never the branch tip** (the tip keeps moving):
 

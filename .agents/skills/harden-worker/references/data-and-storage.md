@@ -1,10 +1,11 @@
-# Hardening a creation: data it fetches or stores
+# Hardening a creation: concurrent work, pipelines and stored data
 
 A conditional part of the harden contract (`harden-creation.md`, beside this
-file). Read it when the creation fetches from outside sources, captures
-records, or keeps anything on disk across runs. That includes an `update` that
-teaches a previously stateless creation to fetch or store, or enlarges a store
-it already had.
+file). Read it when the creation performs multiple independent I/O-bound
+operations, works through many items, captures data, or keeps anything on disk
+across runs. That includes an `update` that makes one of those true of a
+creation it was not true of, or enlarges a store it already had. Each section
+opens with the condition its own rule applies under.
 
 ## Contents
 

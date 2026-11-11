@@ -150,6 +150,15 @@ or a provisional milestone merge:
    output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; catch it up (below).
 
+   One creation cannot be checked at all: one that is not on your branch yet,
+   which is a skill a crystallize pass is building, at every merge before the
+   first that brings it. `pass-scope` refuses a creation that does not exist,
+   and nothing on your branch could have moved under it. Leave such a creation
+   out of `$CREATIONS` for this check, and when that leaves none, skip the
+   check: the pass is fresh. If its directory does exist on your branch (an
+   earlier milestone brought it, or another chat made one of that name), it is
+   checked like any other.
+
    No shared *authored* file remains in that footprint -- a creation's
    supervisord program lives in its own drop-in rather than in the shared
    config, and the root `pyproject.toml` needs no per-creation entry -- so two
