@@ -15,12 +15,13 @@ changing a framed app from another skill.
 The window the user has is the frame's, so the app itself is never opened and
 never refreshed (`verify_app.py --refresh`, `workspace-layout refresh --app
 <name>`) while the frame is up. Every restart of the app registers it as an
-ordinary app again, so every call that restarts it ends with one of the
-commands below, which puts the frame back.
+ordinary app again, so until the app is real, every call that restarts it ends
+with one of the first three commands below, which put the frame back.
 
 `MOCK_FRAME` stands for
 `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py`.
-Chain each after the restart with `&&`, in the same tool call. The first
+Chain each of those three after the restart with `&&`, in the same tool call;
+`down` alone goes before the restart, as shown under the table. The first
 framing is SKILL.md's step 4 call.
 
 | When | Command |
