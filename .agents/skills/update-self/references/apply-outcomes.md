@@ -122,8 +122,8 @@ so pass the path on. Read the stderr rather than assuming a path is there;
 after a backend-only or provisioner-only apply it names none.
 
 The apply leaves `data/.state/update-apply/emergency.json` beside the marker
-naming the reason, the driving agent, and where the copies are; the system
-interface shows a banner keyed off its mere presence. Nothing takes the record
+naming the reason, the driving agent, and where the copies are; the shell
+shows a banner keyed off its mere presence. Nothing takes the record
 down by itself, so **clearing it is part of the repair**. Only an outcome that
 ends with the live workspace *confirmed healthy*, frontend included, clears it:
 a later update that lands over a UI it could confirm, or a `recover` of a

@@ -17,7 +17,7 @@ Validation.
 - **Merged vs pulled-in**: which change classes reconciled and which came in
   clean.
 - **Merge work per web surface**: "none" or "nontrivial" (with a sentence on
-  what was reconciled) for the shell and each user web service. The lead
+  what was reconciled) for the shell and each user app or service with a web surface. The lead
   attaches the rollback offer to each nontrivial one.
 - **Customization survival**: each touched creation classified per Step 4b,
   with evidence paths for anything not plainly intact, and the scope-file

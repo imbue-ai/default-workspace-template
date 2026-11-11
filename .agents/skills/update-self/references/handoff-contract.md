@@ -63,7 +63,7 @@ What follows from that for one old release or another is in
   this, and to naming only paths `stage-shared-prose` stages:
   `STAGED_PROSE_PATHS` in `update_self.py`). A bare `.agents/shared/...` path
   resolves to the workspace's own tree, which may predate the file, or hold an
-  older one that contradicts this flow. Steps 1-2 run before anything is staged
+  older one that contradicts this skill. Steps 1-2 run before anything is staged
   and name the workspace's copies. Scripts are not staged this way: the ones
   this skill needs from outside are mirrored into its package.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
@@ -134,5 +134,5 @@ second parent of a catch-up merge instead.
 The handoff runs the target ref's `update_self.py` and follows its prose
 *before* the worker has validated anything. For the default target (a stable,
 already-tested `minds-v*` tag) that is the same trust basis as the merge
-itself; a `--override` to an untrusted ref means trusting that ref's flow code
+itself; a `--override` to an untrusted ref means trusting that ref's code
 and instructions. Only override to a ref you trust.

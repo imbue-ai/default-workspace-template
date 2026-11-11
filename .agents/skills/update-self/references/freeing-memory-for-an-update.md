@@ -35,7 +35,7 @@ judgment of what this pass needs, with no confirmation and no preflight script, 
 Do what the pass needs and no more, and name every one of these actions in the results message
 with its undo (`references/results-message.md`, "What the pass did on the user's behalf").
 
-This licence is this pass's alone. Every other flow offers the candidates to the user and stops
+This licence is this pass's alone. Every other skill offers the candidates to the user and stops
 only what they approve
 (`data/.tasks/update-self/skill-at-target/.agents/shared/references/freeing-memory.md`; before Step 3 nothing is
 staged yet, so there read the workspace's own copy, the same path without the
