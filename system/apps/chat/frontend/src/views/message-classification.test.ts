@@ -48,7 +48,7 @@ describe("classifyUserMessage", () => {
 
   it("prefers the backend's display_body (a stripped wrapper sentinel) for the chip body", () => {
     const c = classifyUserMessage({
-      content: "<agentic-browser-fleet>Browser foo-1 is free</agentic-browser-fleet>",
+      content: "<use-browser>Browser foo-1 is free</use-browser>",
       display: "chip",
       display_label: "Browser fleet",
       display_body: "Browser foo-1 is free",

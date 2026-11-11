@@ -1235,13 +1235,13 @@ def test_queued_command_attachment_carries_the_render_decision() -> None:
     assert events[0]["non_turn_tail"] is True
 
 
-def test_chip_classification_survives_an_attachment_block() -> None:
+# ``agentic-browser-fleet`` is the tag a nudge carried before the command was renamed ``use-browser``;
+# a transcript from then still holds it.
+@pytest.mark.parametrize("tag", ["use-browser", "agentic-browser-fleet"])
+def test_chip_classification_survives_an_attachment_block(tag: str) -> None:
     """Whole-string-anchored detectors run on the attachment-stripped text, and a chip's
     display body shows the message text rather than the raw attachment markdown."""
-    content = (
-        "<agentic-browser-fleet>Browser foo-1 is free</agentic-browser-fleet>"
-        "\n\nSee attachment here: ![](/uploads/x.png)"
-    )
+    content = f"<{tag}>Browser foo-1 is free</{tag}>\n\nSee attachment here: ![](/uploads/x.png)"
     events = parse_lines([_make_user_line("uuid-att", "2026-01-01T00:00:00Z", content)])
     assert len(events) == 1
     assert events[0]["display"] == "chip"

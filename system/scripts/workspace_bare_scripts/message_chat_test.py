@@ -139,10 +139,7 @@ def test_a_browser_fleet_nudge_is_wrapped_in_the_sentinel(
 
     assert rc == message_chat.EXIT_DELIVERED
     [(_path, body)] = fake_chat_app.posted
-    assert (
-        body["message"]
-        == "<agentic-browser-fleet>the browser is yours again</agentic-browser-fleet>"
-    )
+    assert body["message"] == "<use-browser>the browser is yours again</use-browser>"
 
 
 def test_a_blocked_send_exits_seven_and_is_never_resent(
@@ -239,7 +236,7 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_keeps_its_blocked
     assert slept == []
     [call] = _mngr_calls(fake_mngr)
     assert call["argv"][:4] == ["message", _CHAT_ID, "--start", "--message-file"]
-    assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
+    assert call["text"] == "<use-browser>wake up</use-browser>"
     # The argv is hand-built, so the live CLI, not the fake, is what says it is well-formed.
     assert_mngr_argv_valid(["mngr", *call["argv"]])
 
