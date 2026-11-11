@@ -308,6 +308,11 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             id="reload-when-raised-beside-a-path",
         ),
         pytest.param(
+            {"type": "open:file", "path": "/api/open", "reload_when_raised": False},
+            "'reload_when_raised' only beside 'show'",
+            id="reload-when-raised-false-beside-a-path",
+        ),
+        pytest.param(
             {"type": "open:file", "show": "{path?view"},
             "a placeholder is",
             id="unclosed-placeholder",

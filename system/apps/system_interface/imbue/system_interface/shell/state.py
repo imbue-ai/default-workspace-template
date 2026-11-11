@@ -481,6 +481,7 @@ class ShellState(MutableModel):
         choice = choose_show_target(self._client_desktop_view(desktop, client_id), others, app, path, showing, repoint)
         shown_on = self.get_desktop(choice.desktop_id)
         is_raised_in_own_window = False
+        raised_at: WindowPath | None = None
         if choice.window is None:
             request = WindowOpenRequest(
                 app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
@@ -488,7 +489,9 @@ class ShellState(MutableModel):
             window_id = self.open_window(shown_on.id, request, requester).window.id
         else:
             window_id = choice.window.id
-            if choice.outcome is not ShowOutcome.RAISED:
+            if choice.outcome is ShowOutcome.RAISED:
+                raised_at = choice.window.path
+            else:
                 # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
                 self.report_window_location(shown_on.id, window_id, client_id, path, choice.window.title)
             is_raised_in_own_window = placement_of(
@@ -501,6 +504,7 @@ class ShellState(MutableModel):
             window_id=window_id,
             outcome=choice.outcome,
             is_raised_in_own_window=is_raised_in_own_window,
+            raised_at=raised_at,
         )
 
     def launch(self, desktop_id: str, request: LaunchRequest) -> LaunchOutcome:

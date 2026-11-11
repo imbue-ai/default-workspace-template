@@ -1047,6 +1047,9 @@ class ShowResult(FrozenModel):
         description="The client's only open windows are pop-outs, so the page shown on the desktop waits for a "
         "desktop window to open"
     )
+    raised_at: WindowPath | None = Field(
+        description="For a raise, the path the raised window was at as the client sees it; None otherwise"
+    )
 
 
 def _show_page(
@@ -1098,6 +1101,7 @@ def _show_page(
         outcome=shown.outcome,
         is_raised_in_own_window=shown.is_raised_in_own_window,
         has_no_desktop_window=not shown.is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
+        raised_at=shown.raised_at,
     )
 
 
@@ -1132,13 +1136,14 @@ def show_page_for_client(
 ) -> ShowResult:
     """The ``show`` op as a message handler's delivery runs it (desktop contracts.md section 5.6): a page of the
     declaring app, for the client whose page sent the message, on that client's active desktop, repointing nothing;
-    a window it raises is refreshed on that client when the handler asks for it.
+    a window it raises at ``page`` itself (not at a ``showing`` page) is refreshed on that client when the handler
+    asks for it.
 
     Raises the op's own errors (a ShellError) when the page cannot be shown.
     """
     target = _resolve_target(shell, OpTarget(client=client_id), requester)
     result = _show_page(shell, app, page, set(showing), set(), target, requester)
-    if is_reloaded_when_raised and result.outcome is ShowOutcome.RAISED:
+    if is_reloaded_when_raised and result.raised_at == page:
         _announce_window_refresh(shell, result.window_id, client_id, requester)
     return result
 

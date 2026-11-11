@@ -10,11 +10,14 @@ from flask import Flask
 from flask import jsonify
 from flask.testing import FlaskClient
 
+from imbue.system_interface.shell.testing import TEST_FILES_URL
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
@@ -148,7 +151,7 @@ _VIEWER_SHOWING = ("{path}", "{path}/", "{path}/?view")
 _CLIENT_ID = "c-show-5f2a"
 
 
-def _viewer_row(is_reloaded_when_raised: bool = False) -> str:
+def _viewer_row(is_reloaded_when_raised: bool) -> str:
     return registry_row_toml(
         _VIEWER_ROW_NAME,
         "http://127.0.0.1:1",
@@ -172,7 +175,7 @@ def _viewer_windows(client: FlaskClient) -> list[dict[str, Any]]:
 def test_a_show_handler_opens_the_page_it_builds_from_the_message_and_raises_it_the_second_time(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    client = _arrived_client(tmp_path, broadcaster, _viewer_row())
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=False))
     body = {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/home/user/my notes/a?b#c é.md"}}
 
     first = _relay(client, {**body, "sender": "chat"})
@@ -213,7 +216,7 @@ def _refreshes(page_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any]]:
 def test_a_show_handler_that_reloads_when_raised_refreshes_the_window_it_raises_and_never_one_it_opens(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, is_reloaded_when_raised: bool
 ) -> None:
-    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised))
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=is_reloaded_when_raised))
     page_queue = broadcaster.register()
     broadcaster.set_client_info(page_queue, _CLIENT_ID, "home")
     body = {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/data/ad.png"}}
@@ -229,12 +232,43 @@ def test_a_show_handler_that_reloads_when_raised_refreshes_the_window_it_raises_
     assert _refreshes(page_queue) == ([({"window": window["id"]}, _CLIENT_ID)] if is_reloaded_when_raised else [])
 
 
+def test_a_files_link_reloads_the_file_window_it_raises_and_only_raises_a_folder_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Files' own ``open:file`` handler: a window at a file's view page (the handler's ``show`` page) is reloaded
+    when a link raises it, so a file rewritten under the same name shows its new content; a folder window, at one of
+    the ``showing`` pages, is only raised, so what it holds in the page (an upload, a selection) survives."""
+    registry = write_registry(tmp_path / "apps.toml", files_registry_row(TEST_FILES_URL))
+    client = shell_application(tmp_path, build_inventory(registry, broadcaster), broadcaster).test_client()
+    assert client.post(f"/api/clients/{_CLIENT_ID}/arrive").status_code == 200
+    page_queue = broadcaster.register()
+    broadcaster.set_client_info(page_queue, _CLIENT_ID, "home")
+    opened_folder = client.post(
+        "/api/desktops/home/windows",
+        json={"app": "files", "path": "/data/x-ad/", "client_id": _CLIENT_ID, "if_present": "new"},
+    )
+    assert opened_folder.status_code == 201
+
+    shown = [
+        _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": path}}).get_json()[
+            "deliveries"
+        ][0]["shown"]
+        for path in ("/data/x-ad/ad.png", "/data/x-ad/ad.png", "/data/x-ad")
+    ]
+
+    (desktop,) = client.get("/api/desktops").get_json()["desktops"]
+    window_ids = {window["path"]: window["id"] for window in desktop["windows"] if window["app"] == "files"}
+    assert shown == ["opened", "raised", "raised"]
+    assert set(window_ids) == {"/data/x-ad/", "/data/x-ad/ad.png?view"}
+    assert _refreshes(page_queue) == [({"window": window_ids["/data/x-ad/ad.png?view"]}, _CLIENT_ID)]
+
+
 def test_a_show_for_a_client_with_only_pop_outs_open_says_the_page_waits_for_a_desktop_window(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A link clicked in a pop-out after the main window closed: the page is put on the client's desktop, which no
     window shows, and the delivery says so, so the pop-out's page can tell the user."""
-    client = _arrived_client(tmp_path, broadcaster, _viewer_row())
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=False))
     broadcaster.set_pop_out_info(broadcaster.register(), _CLIENT_ID)
 
     alone = _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/x.md"}})
@@ -249,7 +283,7 @@ def test_a_show_for_a_client_with_only_pop_outs_open_says_the_page_waits_for_a_d
 def test_a_window_on_a_showing_page_counts_as_already_showing_the_message(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    client = _arrived_client(tmp_path, broadcaster, _viewer_row())
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=False))
     opened = client.post(
         "/api/desktops/home/windows",
         json={"app": _VIEWER_ROW_NAME, "path": "/data/q4/", "client_id": _CLIENT_ID, "if_present": "new"},
@@ -270,7 +304,7 @@ def test_a_payload_that_cannot_fill_a_show_handler_is_that_handlers_refusal_and_
         client = _arrived_client(
             tmp_path,
             broadcaster,
-            _viewer_row(),
+            _viewer_row(is_reloaded_when_raised=False),
             registry_row_toml("logger", logging_app.http_url, message_handlers=[(_OPEN_FILE, "/api/files-opened")]),
         )
 
@@ -289,7 +323,7 @@ def test_a_payload_that_cannot_fill_a_show_handler_is_that_handlers_refusal_and_
 def test_a_show_for_a_client_the_shell_does_not_know_is_reported_as_the_apps_failed_delivery(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    client = _relay_client(tmp_path, broadcaster, _viewer_row())
+    client = _relay_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=False))
 
     relayed = _relay(client, {"type": _OPEN_FILE, "client_id": "c-never-arrived", "payload": {"path": "/x.md"}})
 
@@ -299,7 +333,7 @@ def test_a_show_for_a_client_the_shell_does_not_know_is_reported_as_the_apps_fai
 
 
 def test_a_sender_that_is_not_an_app_name_is_a_400(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
-    client = _relay_client(tmp_path, broadcaster, _viewer_row())
+    client = _relay_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=False))
 
     answer = _relay(client, {"type": _OPEN_FILE, "client_id": "c1", "payload": {"path": "/x"}, "sender": "Not An App"})
 

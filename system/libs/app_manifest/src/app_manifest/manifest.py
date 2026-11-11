@@ -256,7 +256,8 @@ class MessageHandler(FrozenModel):
     )
     reload_when_raised: bool = Field(
         default=False,
-        description="Whether a window the message raises, rather than opens or repoints, has its page reloaded",
+        description="Whether a window the message raises at the ``show`` page itself (not at a ``showing`` page) has "
+        "its page reloaded",
     )
 
     @model_validator(mode="after")
@@ -268,7 +269,7 @@ class MessageHandler(FrozenModel):
             )
         if self.showing and self.show is None:
             raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
-        if self.reload_when_raised and self.show is None:
+        if "reload_when_raised" in self.model_fields_set and self.show is None:
             raise InvalidManifestValueError(
                 f"message handler {str(self.type)!r} gives 'reload_when_raised' only beside 'show'"
             )

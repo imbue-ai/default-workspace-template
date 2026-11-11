@@ -1,1 +1,1 @@
-The desktop-interface and workspace-app-model contracts document a message handler's `reload_when_raised` and the `refresh` layout op the shell sends when such a handler's show raises an existing window.
+The desktop-interface and workspace-app-model contracts document a message handler's `reload_when_raised` and the `refresh` layout op the shell sends when such a handler's show raises an existing window at its `show` page.

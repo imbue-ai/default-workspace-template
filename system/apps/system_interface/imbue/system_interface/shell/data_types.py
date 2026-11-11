@@ -394,6 +394,10 @@ class ShownWindow(FrozenModel):
         description="The window was pulled out into a desktop window of the embedder's own, so that was raised and "
         "nothing on the desktop moved"
     )
+    raised_at: WindowPath | None = Field(
+        description="For a raise, the path the raised window was at as the client sees it (the shown path or one of "
+        "``showing``); None otherwise"
+    )
 
 
 class ShowChoice(FrozenModel):
