@@ -1,6 +1,6 @@
 ---
 name: personalized-ideas
-description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or answers no to the welcome's "Do you have any ideas?". Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, can use their Mac's app data (through suggest-apps) to narrow the search when they ask, and then suggests a few things to build. Skip when the user already has something in mind.
+description: Use when the user does not know what to build or asks for ideas ("what should I make?", "what can you do for me?", "I'm not sure where to start"), or answers no to the welcome's "Do you have any ideas?". Offers to look the user up on the public web by name so the ideas fit them, asks for an explicit yes first, confirms which search results are really them, lets them choose between their Mac's app data (through suggest-apps), the web search, both at once, or telling you themselves, and then suggests a few things to build. Skip when the user already has something in mind.
 metadata:
   author: imbue
 ---
@@ -18,7 +18,7 @@ Everything in this skill serves that: ask before searching, search only for what
 What you learn goes into your own memory (`~/workspace/data/memories/`, see `CLAUDE.md`), so every later chat knows who you work for, not only this skill.
 The skill's own state lives in `data/.skills/personalized-ideas/`:
 
-- `consent.json`: the user's answers, `{"lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5). `app_terms` is `{"approved": [...], "declined": [...]}`, the search details from their app data they picked or turned down ("Narrow it down with their Mac" in step 5).
+- `consent.json`: the user's answers, `{"choice": "both" | "mac" | "web" | "self", "lookup": "yes" | "no", "answered_at": "<ISO 8601 time>", "only_me": true, "shared_ok": true, "email_org": "yes" | "no"}` (`only_me` is present once they have confirmed, while sharing is on, that nobody else uses this workspace, and `shared_ok` once they have said others can but to search anyway, see step 3; `email_org` once they have answered whether to search with their email's organization, see step 5). `choice` is the button they picked in step 2; `lookup` is `"yes"` for `both` and `web`. `app_terms` is `{"approved": [...], "declined": [...]}`, the search details from their app data they picked or turned down ("Search details from their Mac" in step 5).
 - `sources.json`: the raw search results and pages you used, each with its URL and the date fetched.
 
 The memory it writes:
@@ -34,7 +34,7 @@ If they later say they are stuck or ask for ideas, the steps below apply again.
 
 Otherwise, do not offer the lookup, and go straight to step 6 with general ideas, when any of these holds:
 
-- `consent.json` says `"no"`. The user already declined; do not ask again unless they bring it up.
+- `consent.json` already has a `choice`. Do not ask again unless they bring it up: follow what they chose (for `mac`, suggest from the app data; for `self`, from what they told you).
 - The message came from someone other than the owner (it starts with `[from: <name>]`). The name on the account is the owner's, not theirs.
 - The user has already told you enough about themselves to suggest from.
 
@@ -46,28 +46,42 @@ A new workspace's first chat opens on the conversation from Imbue Studio's start
 Its closing welcome asks "The best way to start is to build something. Do you have any ideas?", with two reply buttons that send a whole sentence:
 
 - `Yes, I have an idea` (or another clear yes): they have an idea, so step 1 applies. Ask what it is, and help with it; do not offer the lookup.
-- `No, I don’t have an idea yet` (or another clear no): check step 1's exclusions, then read the name on the account (the `owner-name` call in step 3; it reads only the name, and searches nothing). When none of the exclusions holds and `display_name` is set, make the offer in step 2. Otherwise send only its first paragraph, the question about what is annoying them, and nothing else. Either way, end your turn.
+- `No, I don’t have an idea yet` (or another clear no): check step 1's exclusions, then read the name on the account (the `owner-name` call in step 3; it reads only the name, and searches nothing). When none of the exclusions holds, make the offer in step 2 (the version without the web search when `display_name` is null). When one holds, send only its first paragraph, the question about what is annoying them, and nothing else. Either way, end your turn.
 - Anything else (most often, describing what they want to build or something that annoys them): help with what they said, and do not offer the lookup.
 
 ## 2. Ask
 
-Make the offer once, as this exact message, word for word, with nothing added before or after it (its last line is two reply buttons; the chat turns `#reply=` links into buttons that send their text for the user):
+Make the offer once, as this exact message, word for word, with nothing added before or after it (its last line is four reply buttons; the chat turns `#reply=` links into buttons that send their text for the user):
 
 > What’s annoying, overwhelming, or tedious in your digital life? Work or personal, big or small, tell me about it and I’ll help you build something that makes it better.
 >
-> Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can search public web pages for the name on your account, using an outside search service. I’ll show you what I find so you can tell me what’s really you, and I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
+> Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can look at a little of your Mac’s app data, like which apps you use and the sites you visit most, after you approve exactly what; it stays in this workspace. I can also search public web pages for the name on your account, using an outside search service, and show you what I find so you can tell me what’s really you. Pick either, both, or neither. I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
 >
-> [Search for me](#reply=Search%20for%20me) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
+> [My Mac apps and the web](#reply=Look%20at%20my%20Mac%20apps%20and%20search%20the%20web) [Only my Mac apps](#reply=Only%20look%20at%20my%20Mac%20apps) [Only the web](#reply=Only%20search%20the%20web) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
 
-It is fixed on purpose: one wording, reviewed once, that says what the lookup does without sounding like you already know something about them.
+When `display_name` is null, send this version instead, word for word:
+
+> What’s annoying, overwhelming, or tedious in your digital life? Work or personal, big or small, tell me about it and I’ll help you build something that makes it better.
+>
+> Or I can get to know you a little first, so I can suggest things that actually help you. If you’re comfortable with it, I can look at a little of your Mac’s app data, like which apps you use and the sites you visit most, after you approve exactly what; it stays in this workspace. I’ll only remember what you confirm, in this workspace, for future chats. You can ask me to forget it anytime.
+>
+> [Look at my Mac apps](#reply=Only%20look%20at%20my%20Mac%20apps) [I’ll tell you myself](#reply=I%E2%80%99ll%20tell%20you%20myself)
+
+It is fixed on purpose: one wording, reviewed once, that says what each choice does without sounding like you already know something about them.
 Do not reword it, shorten it, personalize it, or mention anything about the user in it.
-Outside the welcome (the user asks for ideas later in a chat), make the same offer only when the `owner-name` call answers a `display_name`; without one, ask the first paragraph's question alone.
+Outside the welcome (the user asks for ideas later in a chat), make the same offer.
 
-Then end your turn and wait.
+Then end your turn and wait. Write their choice to `consent.json` as soon as they answer:
 
-- `Search for me`, or another clear yes to the search: write `"lookup": "yes"` to `consent.json` and go to step 3.
-- `I’ll tell you myself`, or another clear no to the search: write `"lookup": "no"`, and ask them to go ahead in one short line. What they then tell you about themselves is saved as in "What the user tells you" below.
-- Anything else (describing what annoys them, a question): no search. Answer them and use what they told you; write `consent.json` only when they clearly declined the search.
+- `Look at my Mac apps and search the web` (`"choice": "both"`, `"lookup": "yes"`): both at once, in this same turn. In one batch of tool calls, file the app-data request ("Get the app data" below) and start the web lookup at step 3. The search does not wait for the app data, and the app data does not wait for the search. Search details from the app data are used as "Search details from their Mac" in step 5 says.
+- `Only look at my Mac apps` (`"choice": "mac"`, `"lookup": "no"`): file the app-data request ("Get the app data" below), search nothing, and go to step 6 once you have it, suggesting from its patterns and what they tell you.
+- `Only search the web` (`"choice": "web"`, `"lookup": "yes"`): go to step 3. Do not ask for app data at any point in this flow, and do not offer it.
+- `I’ll tell you myself` (`"choice": "self"`, `"lookup": "no"`): ask them to go ahead in one short line. Search nothing and do not ask for app data. What they then tell you about themselves is saved as in "What the user tells you" below.
+- Anything else (describing what annoys them, a question): no search and no app data. Answer them and use what they told you; write `consent.json` only when they clearly declined both.
+
+### Get the app data
+
+Follow the `suggest-apps` skill's steps 1 and 2: read what you already hold, and ask only for the rest (never `messages`, `shell-history` or `code-projects`). In this workspace's first chat, when `data/.skills/read-app-data/first_chat_offer.json` does not exist, file the request with `"origin": "first-chat-offer"` and write that file, as the `read-app-data` skill's "The first-chat offer" says (this is that offer). The reason: "To suggest apps that fit how you work, and to help find you on the web if you asked for that, I'd like to see which apps you have installed and the sites you visit most." (Leave out the part about the web for `"choice": "mac"`.) Do not wait for its answer before going on with anything else; when the answer comes, read what was granted for patterns (`suggest-apps` step 3). When nothing is granted, say so in one line and go on without it.
 
 ## 3. Get their name
 
@@ -139,7 +153,7 @@ When a call answers an error, do not search with anything else:
 Go straight from the name to the results, and keep it quick: the user is waiting on this turn.
 
 - **Search in parallel.** Run every search call in one batch of tool calls rather than one after another: the name alone, and, when the user gave you a detail (a city, an employer, a field), the name with that detail. At most 3 searches.
-- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. There are two exceptions, each only after the user picks it with a button: the organization behind `email_domain` (step 5), and a detail from their app data they pick in "Narrow it down with their Mac" (step 5). Searching with anything else looks the user up with information they never offered.
+- **Only the name and what the user told you.** A search may contain the name and details the user stated in this conversation, nothing else. Never add anything you know from elsewhere: not their email address, not the workspace's name, files, git history or connected accounts, and not anything from earlier memories. There are two exceptions, each only after the user picks it with a button: the organization behind `email_domain` (step 5), and a detail from their app data they pick in "Search details from their Mac" (step 5). Searching with anything else looks the user up with information they never offered.
 - **Widen a thin first batch.** If the first batch shows one person or none, run one more batch at once, before asking anything: the name with `LinkedIn`, with `GitHub`, and with `personal website` (at most 3 more searches). Most names belong to several people, and a single candidate is more often a thin result than a match.
 - **Show options from the search results alone.** Do not read any page before the user confirms: titles, snippets and links are enough to tell the people apart and to ask which is them. Pages are read in step 5, only for the person they confirm.
 
@@ -176,7 +190,7 @@ Show the user the people you found, one short line each with its link, and ask w
 >
 > Is one of these you? If not, tell me something that would narrow it down, or we can skip this.
 
-**Answer buttons.** End the question with reply buttons that cover every person in the list, so any answer is one click: one button per person, numbered as listed (`[1 is me](#reply=1%20is%20me)`, `[2 is me](#reply=2%20is%20me)`, and so on, for every person, never only the likely ones), then `[None of these](#reply=none%20of%20these)`. You may add one button for two entries you think are the same person (`[1 and 2 are both me](#reply=1%20and%202%20are%20both%20me)`), never in place of their own buttons. When a later question also ends the message (the organization question, or "Use my Mac apps to narrow it down"), its buttons come after these.
+**Answer buttons.** End the question with reply buttons that cover every person in the list, so any answer is one click: one button per person, numbered as listed (`[1 is me](#reply=1%20is%20me)`, `[2 is me](#reply=2%20is%20me)`, and so on, for every person, never only the likely ones), then `[None of these](#reply=none%20of%20these)`. You may add one button for two entries you think are the same person (`[1 and 2 are both me](#reply=1%20and%202%20are%20both%20me)`), never in place of their own buttons. When a later question also ends the message (the organization question, or the details from their Mac), its buttons come after these.
 
 **Rank by the email's organization.** When `email_domain` is set, list first any person whose title, snippet or link mentions that organization (its domain, or its name: `Imbue` for `imbue.com`), and say why in that line: "mentions Imbue, your email's organization". This only orders what the search already found; it sends nothing new. When no result mentions it, do not remark on that; the question below is the only place the email's organization comes up.
 
@@ -189,27 +203,23 @@ Show the user the people you found, one short line each with its link, and ask w
 - `include my organization` (or another clear yes): set `"email_org": "yes"` in `consent.json`, run one search for the name with `<Org>` (never the address), and show the people again, ranked as above.
 - `don't include it`, or a pick or detail that answers the question another way: set `"email_org": "no"` in `consent.json` and never search with it.
 
-### Narrow it down with their Mac
+### Search details from their Mac
 
-Every time you show the results (the first time, and again after a search with the organization or a detail) and they list more than one person, or none, add this as the last line of the message, after the answer buttons and after the organization question when that is asked too. Leave it out only when the message has a `[from: <name>]` prefix, or the user already answered it in this chat (`app_terms` has entries, or they said no to the app-data request):
+Only for `"choice": "both"`. The name search and the app-data request run at the same time (step 2), so either can finish first.
 
-> [Use my Mac apps to narrow it down](#reply=use%20my%20Mac%20apps%20to%20narrow%20it%20down)
-
-On `use my Mac apps to narrow it down`:
-
-1. Get app data as the `suggest-apps` skill's steps 1 and 2 say: read what you already hold, and ask only for the rest. In this workspace's first chat, when `data/.skills/read-app-data/first_chat_offer.json` does not exist, file the request with `"origin": "first-chat-offer"` and write that file, as the `read-app-data` skill's "The first-chat offer" says (this is that offer). The reason: "To tell which of these people is you, and to suggest apps that fit how you work, I'd like to see which apps you have installed and the sites you visit most." Wait for the answer as `read-app-data` says, then end your turn if none has come.
-2. Read what was granted for patterns (`suggest-apps` step 3), and pick at most 3 short search details that a public page about them would also mention: an organization or school they use often (`MIT` from many visits to mit.edu), their field (`machine learning`), a public project or handle. Never a person's name, an address, anything about health, money or relationships, and never one listed in `app_terms.declined`.
+1. When you show the results, and they list more than one person or none: if the app data has been read by then, propose details from it in the same message, after the answer buttons and after the organization question when that is asked too. If its answer has not come yet, show the results as usual and propose the details when it comes. When the results show one clear person, do not propose any.
+2. Pick at most 3 short details from the patterns that a public page about them would also mention: an organization or school they use often (`MIT` from many visits to mit.edu), their field (`machine learning`), a public project or handle. Never a person's name, an address, anything about health, money or relationships, and never one listed in `app_terms.declined`.
 3. Offer them as buttons, each naming where it came from, and nothing about the raw data behind it:
 
    > From your Mac, these might help find you. Pick any to add to the search:
    >
    > [MIT (your browser history)](#reply=search%20with%20MIT) [machine learning (your installed apps)](#reply=search%20with%20machine%20learning) [None of these](#reply=none%20of%20these)
 
-   End your turn. Nothing from the app data goes into a search until they pick it.
+   Nothing from the app data goes into a search until they pick it, even though they chose both.
 4. Each `search with <detail>` they send adds that detail to `app_terms.approved`; search for the name with it (one search per detail, in one batch), and show the people again, ranked as above. Details they did not pick, or `none of these`, go in `app_terms.declined`: never propose them again.
 5. A confirmed fact that came from one of these searches cites its web page as usual; a detail they picked that no page confirms, kept as a fact, ends with `(you told me)`, since they chose it.
 
-Raw app data (page titles, URLs, file names, note or event text) never goes into a search, the chat, or a memory. When nothing was granted or nothing useful came out of it, say so in one line and go on with step 5's question as usual.
+Raw app data (page titles, URLs, file names, note or event text) never goes into a search, the chat, or a memory.
 
 End your turn and wait.
 Keep only what they confirm.
@@ -248,7 +258,7 @@ The **What Studio knows about me** page shows every memory in that directory, gr
 
 ## 6. Suggest
 
-Before suggesting, when you hold no app data yet and the user has not turned it down in this workspace (`data/.skills/read-app-data/first_chat_offer.json` has no skip, and they did not decline the request), ask for it once, as "Narrow it down with their Mac" step 1 says, with the reason "To suggest apps that fit how you work, I'd like to see which apps you have installed and the sites you visit most." Suggest after its answer, from what they confirmed or told you and the patterns in their app data (`suggest-apps` step 3; its rules on what never to name apply). When they decline, suggest from the rest, and do not ask again.
+When they chose `both` or `mac` and the app-data answer has not come yet, wait for it (end your turn, saying in one line that you will suggest once they have answered the request). Then suggest from what they confirmed or told you and the patterns in their app data (`suggest-apps` step 3; its rules on what never to name apply). For `web` and `self`, never use app data, even if this workspace holds some.
 
 Suggest three to five things to build, each one or two sentences, each tied to something about them ("You publish a newsletter, so: a page that drafts each issue from your saved links").
 Prefer things that can be built in this workspace in one sitting.
