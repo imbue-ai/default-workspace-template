@@ -14,7 +14,7 @@ from agents_shared.skill_checks import (
     check_failures,
     unreached_shared_files,
 )
-from agents_shared.skill_exemptions import ExemptionReason
+from agents_shared.skill_exemptions import Exemption, ExemptionReason, with_exemption
 
 _LONG_FILLER = "\n".join(f"filler line {index}" for index in range(120))
 
@@ -326,6 +326,24 @@ def test_no_exemptions_mode_refuses_a_valid_exemption(tmp_path: Path) -> None:
     assert failing_error is not None and "[paths]" in failing_error
 
 
+def test_writing_an_exemption_changes_only_the_metadata_block() -> None:
+    after_metadata = "\ndescription: Does the thing.\n---\n\nBody.\n\n---\n\nMore.\n"
+    before = "---\nname: kept\nmetadata:\n  author: me\n" + after_metadata
+    exemption = Exemption(
+        checks=frozenset({Check.PATHS, Check.SIZE}),
+        reason=ExemptionReason.PREDATES_CHECKS,
+    )
+
+    stamped = with_exemption(before, exemption)
+
+    assert stamped == (
+        "---\nname: kept\nmetadata:\n  author: me\n"
+        "  exempt-checks: size paths\n  exempt-reason: predates-checks\n"
+        + after_metadata
+    )
+    assert with_exemption(stamped, None) == before
+
+
 def test_stamping_adds_missing_exemptions_drops_stale_ones_and_skips_third_parties(
     tmp_path: Path,
 ) -> None:
@@ -429,6 +447,25 @@ def test_stamping_replaces_an_exemption_it_cannot_read_whether_or_not_the_skill_
     ]
     for skill in (half_written, unknown_check, unknown_reason):
         assert validate_skill.validate(skill) is None
+
+
+def test_stamping_leaves_a_skill_as_it_was_when_a_check_cannot_be_run(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(
+        tmp_path,
+        "unreadable",
+        "Read `references/latin.md` and `system/gone.py`.\n",
+        _exemption("paths", "awaiting-restructure"),
+    )
+    (skill / "references").mkdir()
+    (skill / "references" / "latin.md").write_bytes(b"caf\xe9\n")
+    before = (skill / "SKILL.md").read_bytes()
+
+    with pytest.raises(UnicodeDecodeError):
+        validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+
+    assert (skill / "SKILL.md").read_bytes() == before
 
 
 def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_reported_otherwise(

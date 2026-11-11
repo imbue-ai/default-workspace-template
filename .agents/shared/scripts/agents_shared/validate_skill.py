@@ -7,11 +7,6 @@ Static structural checks (in order, short-circuit on first failure per check):
 - SKILL.md has valid YAML frontmatter (delimited by `---` lines).
 - Frontmatter has `name` matching the directory basename.
 - Frontmatter has `description`, 1-1024 characters.
-- The frontmatter's exemption, if it carries one, names known checks and a known reason.
-- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
-  from the ones the exemption names. An exemption naming a check the skill passes is stale,
-  and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill and for an
-  edited one.
 - If the skill has Python (entry files in `scripts/`, or a `python/` dir --
   optional even for crystallized skills: a skill may be pure SKILL.md prose, and
   a `scripts/` dir of shell scripts needs nothing), it is either:
@@ -21,6 +16,11 @@ Static structural checks (in order, short-circuit on first failure per check):
   - a packaged skill: `python/pyproject.toml` exists and names the project
     `<name>-skill` and its one package `<name_with_underscores>_skill` (a directory
     beside it with an `__init__.py`).
+- The frontmatter's exemption, if it carries one, names known checks and a known reason.
+- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
+  from the ones the exemption names. An exemption naming a check the skill passes is stale,
+  and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill and for an
+  edited one.
 
 Runnability checks (only when the static checks pass and the skill has Python):
 
@@ -514,28 +514,31 @@ def _stamp_skill(
     except ValueError:
         before, is_before_readable = None, False
 
-    def write(text: str) -> None:
-        skill_md.write_text(text, encoding="utf-8")
-        tree.forget(skill_md)
-
     # An exemption's own lines count toward SKILL.md's size, so judge the skill without one,
-    # then settle: writing one can itself tip the size check.
-    write(with_exemption(original, None))
+    # then settle: adding one can itself tip the size check. Each candidate is judged from
+    # memory, so a check that raises leaves the file as it was.
+    text = with_exemption(original, None)
     exemption: Exemption | None = None
-    for _ in range(len(Check)):
-        failed = frozenset(failure.check for failure in check_failures(skill_dir, tree))
-        wanted = (
-            Exemption(checks=failed, reason=before.reason if before else reason)
-            if failed
-            else None
-        )
-        if wanted == exemption:
-            break
-        write(with_exemption(skill_md.read_text(encoding="utf-8"), wanted))
-        exemption = wanted
+    try:
+        for _ in range(len(Check)):
+            tree.read_as(skill_md, text)
+            failed = frozenset(
+                failure.check for failure in check_failures(skill_dir, tree)
+            )
+            wanted = (
+                Exemption(checks=failed, reason=before.reason if before else reason)
+                if failed
+                else None
+            )
+            if wanted == exemption:
+                break
+            text = with_exemption(text, wanted)
+            exemption = wanted
+    finally:
+        tree.forget(skill_md)
     if is_before_readable and exemption == before:
-        write(original)
         return None
+    skill_md.write_text(text, encoding="utf-8")
     if before is not None:
         was = before.checks_text()
     else:
