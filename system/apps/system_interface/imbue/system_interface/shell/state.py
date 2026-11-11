@@ -46,6 +46,7 @@ from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Viewport
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
+from workspace_profile.errors import ProfileWriteError
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
@@ -126,6 +127,8 @@ from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
+from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStore
+from imbue.system_interface.shell.keybindings_delivery import settle_delivered_keybindings
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
@@ -272,7 +275,9 @@ class ShellState(MutableModel):
         except OSError as e:
             logger.warning("Could not prepare the profile snapshot directory: {}", e)
         else:
-            self._snapshot_watch = start_file_watch(snapshot_path, self.broadcast_keybindings_changed)
+            self._snapshot_watch = start_file_watch(snapshot_path, self._on_profile_snapshot_changed)
+        # A delivery the snapshot caught up with while the shell was down settles now; the watch only sees changes.
+        self._settle_delivered_keybindings()
 
     def stop(self) -> None:
         self.update_notice.stop()
@@ -590,6 +595,19 @@ class ShellState(MutableModel):
         self.broadcaster.broadcast_themes_changed(
             theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
         )
+
+    def _settle_delivered_keybindings(self) -> None:
+        try:
+            settle_delivered_keybindings(
+                self.repo_root, KeybindingsDeliveryStore(state_directory=self.state_directory)
+            )
+        except (ProfileWriteError, ShellStateError) as e:
+            logger.warning("Could not settle the delivered keybinding saves: {}", e)
+
+    def _on_profile_snapshot_changed(self) -> None:
+        """Settle the delivered saves the new snapshot carries, then tell every window."""
+        self._settle_delivered_keybindings()
+        self.broadcast_keybindings_changed()
 
     def broadcast_keybindings_changed(self) -> None:
         """Tell every window somebody changed a keybinding; each page re-fetches its resolved chords."""
