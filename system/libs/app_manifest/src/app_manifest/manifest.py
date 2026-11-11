@@ -254,6 +254,10 @@ class MessageHandler(FrozenModel):
         default=(),
         description="The app's other pages, built the same way, that count as already showing it",
     )
+    reload_when_raised: bool = Field(
+        default=False,
+        description="Whether a window the message raises, rather than opens or repoints, has its page reloaded",
+    )
 
     @model_validator(mode="after")
     def _check_one_delivery(self) -> Self:
@@ -264,6 +268,10 @@ class MessageHandler(FrozenModel):
             )
         if self.showing and self.show is None:
             raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
+        if self.reload_when_raised and self.show is None:
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives 'reload_when_raised' only beside 'show'"
+            )
         return self
 
 

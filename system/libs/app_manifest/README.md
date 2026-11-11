@@ -42,8 +42,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   exactly one of `path`, the route under the app's origin the shell posts each
   message of that type to, shaped like a launch path, or `show`, the
   `PageTemplate` of the app's page the shell shows for it, with `showing`, the
-  templates of the app's other pages that count as already showing it, only
-  beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
+  templates of the app's other pages that count as already showing it, and
+  `reload_when_raised`, whether a window the message raises has its page
+  reloaded, both only beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
   within the manifest; `label`, a `KeybindingActionLabel`; and
   `default_chords`, the chords that trigger it out of the box, whose grammar
   the `workspace_profile` library checks),

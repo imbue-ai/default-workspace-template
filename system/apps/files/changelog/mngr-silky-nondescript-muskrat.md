@@ -1,0 +1,1 @@
+Clicking a link to a file that is already open in a File Viewer window reloads that window, so a file rewritten under the same name (an image an agent re-renders, say) shows its new content instead of the old one. The `open:file` handler declares `reload_when_raised = true`.

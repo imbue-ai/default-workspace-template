@@ -1,14 +1,17 @@
 """The embedder-message relay (desktop contracts.md section 5.6): the shell posts a message from the Imbue Studio chrome to
 every app whose row registered its type, over real loopback servers standing in for the apps."""
 
+import queue
 from pathlib import Path
 from typing import Any
 
+import pytest
 from flask import Flask
 from flask import jsonify
 from flask.testing import FlaskClient
 
 from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
@@ -145,11 +148,12 @@ _VIEWER_SHOWING = ("{path}", "{path}/", "{path}/?view")
 _CLIENT_ID = "c-show-5f2a"
 
 
-def _viewer_row() -> str:
+def _viewer_row(is_reloaded_when_raised: bool = False) -> str:
     return registry_row_toml(
         _VIEWER_ROW_NAME,
         "http://127.0.0.1:1",
         shown_message_handlers=[(_OPEN_FILE, _VIEWER_SHOW, _VIEWER_SHOWING)],
+        reloaded_when_raised_types=[_OPEN_FILE] if is_reloaded_when_raised else [],
     )
 
 
@@ -194,6 +198,35 @@ def test_a_show_handler_opens_the_page_it_builds_from_the_message_and_raises_it_
     }
     assert second.get_json()["deliveries"][0]["shown"] == "raised"
     assert second.get_json()["deliveries"][0]["window_id"] == window["id"]
+
+
+def _refreshes(page_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any]]:
+    """The ``refresh`` layout ops a page received since the last read, as ``(args, target_client_id)``."""
+    return [
+        (message["args"], message["target_client_id"])
+        for message in drain_messages(page_queue)
+        if message["type"] == "layout_op" and message["op"] == "refresh"
+    ]
+
+
+@pytest.mark.parametrize("is_reloaded_when_raised", [True, False])
+def test_a_show_handler_that_reloads_when_raised_refreshes_the_window_it_raises_and_never_one_it_opens(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, is_reloaded_when_raised: bool
+) -> None:
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised))
+    page_queue = broadcaster.register()
+    broadcaster.set_client_info(page_queue, _CLIENT_ID, "home")
+    body = {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/data/ad.png"}}
+
+    opened = _relay(client, body)
+    refreshed_on_open = _refreshes(page_queue)
+    raised = _relay(client, body)
+
+    (window,) = _viewer_windows(client)
+    assert opened.get_json()["deliveries"][0]["shown"] == "opened"
+    assert raised.get_json()["deliveries"][0]["shown"] == "raised"
+    assert refreshed_on_open == []
+    assert _refreshes(page_queue) == ([({"window": window["id"]}, _CLIENT_ID)] if is_reloaded_when_raised else [])
 
 
 def test_a_show_for_a_client_with_only_pop_outs_open_says_the_page_waits_for_a_desktop_window(

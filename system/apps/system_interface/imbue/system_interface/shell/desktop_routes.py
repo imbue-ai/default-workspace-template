@@ -1128,14 +1128,19 @@ def show_page_for_client(
     showing: Sequence[WindowPath],
     client_id: ClientId,
     requester: OpRequester,
+    is_reloaded_when_raised: bool,
 ) -> ShowResult:
     """The ``show`` op as a message handler's delivery runs it (desktop contracts.md section 5.6): a page of the
-    declaring app, for the client whose page sent the message, on that client's active desktop, repointing nothing.
+    declaring app, for the client whose page sent the message, on that client's active desktop, repointing nothing;
+    a window it raises is refreshed on that client when the handler asks for it.
 
     Raises the op's own errors (a ShellError) when the page cannot be shown.
     """
     target = _resolve_target(shell, OpTarget(client=client_id), requester)
-    return _show_page(shell, app, page, set(showing), set(), target, requester)
+    result = _show_page(shell, app, page, set(showing), set(), target, requester)
+    if is_reloaded_when_raised and result.outcome is ShowOutcome.RAISED:
+        _announce_window_refresh(shell, result.window_id, client_id, requester)
+    return result
 
 
 def _beside_anchor(
@@ -1370,13 +1375,20 @@ def _refresh_window(
 ) -> ResponseReturnValue:
     """The transient one-window ``refresh``: the window's page on the target client."""
     window = _named_window(shell, target, arguments.window, requester).window
+    _announce_window_refresh(shell, window.id, target.client_id, requester)
+    return _transient_answer(target.client_id)
+
+
+def _announce_window_refresh(
+    shell: ShellState, window_id: WindowId, client_id: ClientId, requester: OpRequester | None
+) -> None:
+    """Tell the client's pages to reload the window's page."""
     shell.broadcaster.broadcast_layout_op(
         LayoutOpMessage(
             op=LayoutOp.REFRESH,
-            args=LayoutOpMessageArgs(window=window.id),
+            args=LayoutOpMessageArgs(window=window_id),
             requester=requester_spelling(requester),
-            target_client_id=target.client_id,
+            target_client_id=client_id,
         )
     )
-    logger.info("layout op=refresh requester={} window={} client={}", requester, window.id, target.client_id)
-    return _transient_answer(target.client_id)
+    logger.info("layout op=refresh requester={} window={} client={}", requester, window_id, client_id)

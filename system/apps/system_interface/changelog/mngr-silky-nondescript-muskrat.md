@@ -1,0 +1,1 @@
+A `show` message handler that declares `reload_when_raised` has the window it raises refreshed: when the `show` op for a relayed message raises an existing window, the shell then sends that client a `refresh` layout op for the window, so its page reloads. A window the show opens or repoints is not refreshed, and handlers without the flag still only raise.

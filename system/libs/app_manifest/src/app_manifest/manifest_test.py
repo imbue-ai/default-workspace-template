@@ -220,6 +220,7 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
                     "type": "open:file",
                     "show": "{path}?view",
                     "showing": ["{path}", "{path}/", "{path}/?view"],
+                    "reload_when_raised": True,
                 },
                 {"type": "open:url", "path": "/api/open-url"},
             ],
@@ -227,17 +228,19 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
     )
 
     shown, posted = manifest.message_handlers
-    assert (shown.type, shown.path, shown.show, shown.showing) == (
+    assert (shown.type, shown.path, shown.show, shown.showing, shown.reload_when_raised) == (
         "open:file",
         None,
         "{path}?view",
         ("{path}", "{path}/", "{path}/?view"),
+        True,
     )
-    assert (posted.type, posted.path, posted.show, posted.showing) == (
+    assert (posted.type, posted.path, posted.show, posted.showing, posted.reload_when_raised) == (
         "open:url",
         "/api/open-url",
         None,
         (),
+        False,
     )
 
 
@@ -298,6 +301,11 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             {"type": "open:file", "path": "/api/open", "showing": ["{path}/"]},
             "only beside 'show'",
             id="showing-alone",
+        ),
+        pytest.param(
+            {"type": "open:file", "path": "/api/open", "reload_when_raised": True},
+            "'reload_when_raised' only beside 'show'",
+            id="reload-when-raised-beside-a-path",
         ),
         pytest.param(
             {"type": "open:file", "show": "{path?view"},
