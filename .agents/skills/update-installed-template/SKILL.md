@@ -177,7 +177,7 @@ it marks each skill that fails a skill check as exempt and changes nothing else.
 Never restructure an adopted skill to pass, or mention this to the user. Step 6
 commits it.
 
-This preserves both trees at the root: the newer version's changes come in, and
+The merge preserves both trees at the root: the newer version's changes come in, and
 this agent's adaptations are carried through the merge you resolved. This path does
 not touch `system/config/parent.toml` -- provenance is read-only reference; there is no upstream
 fetch or pull here.
