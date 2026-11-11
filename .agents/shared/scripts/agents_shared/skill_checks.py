@@ -14,8 +14,9 @@ Five checks, each over one skill (``check_failures``):
 And one over the layer the skills share (``unreached_shared_files``).
 
 A link is a path written in a markdown file that resolves to a file: from the repository root,
-from the linking file's directory or its ``references/``, or from the skill's directory or its
-``references/``. A path holding a placeholder (``<name>``, ``$VAR``, a glob) links to nothing.
+from the linking file's directory or its ``references/``, or, in one of the skill's own files,
+from the skill's directory or its ``references/``. A script of the skill that imports a package
+of the skill's uv project reaches the project. A path holding a placeholder (``<name>``, ``$VAR``, a glob) links to nothing.
 The crawl follows links through the skill's own markdown and through ``.agents/shared/``; a
 file in another skill is a link's end, not a place to read on from.
 
@@ -253,15 +254,13 @@ class SkillTree:
         key = (markdown, skill)
         if key not in self._links:
             file_dir = posixpath.dirname(markdown)
+            # A shared file's relative path is not about whichever skill is reading it.
+            is_own = skill is not None and markdown.startswith(f"{skill}/")
             bases = [
                 "",
                 file_dir,
                 posixpath.join(file_dir, "references"),
-                *(
-                    [skill, posixpath.join(skill, "references")]
-                    if skill is not None
-                    else []
-                ),
+                *([skill, posixpath.join(skill, "references")] if is_own else []),
             ]
             found: set[str] = set()
             for token in _path_tokens(self.text(markdown)):
@@ -347,6 +346,28 @@ def _crawl(tree: SkillTree, start: str, skill: str | None) -> _Crawl:
                 parent[linked] = current
                 queue.append(linked)
     return _Crawl(depth=depth, parent=parent)
+
+
+_IMPORTED_NAME = re.compile(r"^\s*(?:from|import)\s+(\w+)", re.MULTILINE)
+
+
+def _imported_projects(tree: SkillTree, skill: str, reached: Iterable[str]) -> set[str]:
+    """The skill's uv projects that one of its reached scripts imports a package of."""
+    projects = {
+        node for node in tree.own_nodes(skill) if tree.is_file(f"{node}/pyproject.toml")
+    }
+    scripts = [
+        node
+        for node in reached
+        if node.endswith(".py") and node.startswith(f"{skill}/")
+    ]
+    return {
+        project
+        for script in scripts
+        for name in _IMPORTED_NAME.findall(tree.text(script))
+        for project in projects
+        if tree.is_file(f"{project}/{name}/__init__.py")
+    }
 
 
 def _checked_markdown(crawl: _Crawl, skill: str, tree: SkillTree) -> list[str]:
@@ -530,7 +551,8 @@ def check_failures(
     crawl = _crawl(tree, skill_md, skill)
 
     failures = _size_failures(tree, skill_md)
-    for unreached in sorted(tree.own_nodes(skill) - set(crawl.depth)):
+    reached = set(crawl.depth) | _imported_projects(tree, skill, crawl.depth)
+    for unreached in sorted(tree.own_nodes(skill) - reached):
         failures.append(
             CheckFailure(Check.REACHABILITY, f"{unreached} is linked from nothing")
         )

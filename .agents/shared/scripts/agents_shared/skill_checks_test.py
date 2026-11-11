@@ -80,6 +80,35 @@ def test_a_python_project_is_reached_by_naming_one_of_its_files(tmp_path: Path) 
     assert _failed(skill) == set()
 
 
+def test_a_python_project_is_reached_through_a_linked_script_that_imports_it(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "stubbed", "Run `scripts/run.py`.\n")
+    _write(
+        skill, "scripts/run.py", "import sys\n\nfrom stubbed_skill.run import main\n"
+    )
+    _write(skill, "python/pyproject.toml", "[project]\nname = 'stubbed-skill'\n")
+    _write(skill, "python/stubbed_skill/__init__.py", "")
+    _write(skill, "python/stubbed_skill/run.py", "")
+    assert _failed(skill) == set()
+
+    _write(skill, "scripts/run.py", "import sys\n")
+    assert _failed(skill) == {Check.REACHABILITY}
+
+
+def test_a_shared_files_relative_path_is_not_resolved_against_the_skill_reading_it(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "reader", "Read `.agents/shared/references/generic.md`.\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/generic.md",
+        "A skill has `references/own.md`.\n",
+    )
+    _write(skill, "references/own.md", "Mine.\n")
+    assert _failed(skill) == {Check.REACHABILITY}
+
+
 def test_a_filename_pattern_links_nothing(tmp_path: Path) -> None:
     skill = _skill(tmp_path, "pattern", "Read `references/op-<operation>.md`.\n")
     _write(skill, "references/op-heal.md", "Heal.\n")
