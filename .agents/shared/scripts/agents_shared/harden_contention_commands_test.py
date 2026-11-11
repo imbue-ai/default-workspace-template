@@ -1,5 +1,5 @@
-"""The commands harden-contention.md and its takeover file give a lead, run as written
-against a real ticket."""
+"""The commands harden-contention.md and its catch-up and takeover files give a lead, run
+as written against a real ticket."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _REFERENCES = _REPO_ROOT / ".agents" / "shared" / "references"
 _DOC = _REFERENCES / "harden-contention.md"
+_CATCH_UP_DOC = _REFERENCES / "harden-contention-catch-up.md"
 _TAKEOVER_DOC = _REFERENCES / "harden-contention-takeover.md"
 _TK = _REPO_ROOT / "system" / "vendor" / "tk" / "ticket"
 _BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.DOTALL)
@@ -72,7 +73,7 @@ def test_a_creation_a_catch_up_adds_is_found_by_the_single_flight_check(
         "---\noperation: update\ncreations: skill:text-stats\n---\n\n# Task\n"
     )
     widen = (
-        _bash_block_containing("ADDED=")
+        _bash_block_containing("ADDED=", _CATCH_UP_DOC)
         .replace('"<each added creation, as type:name>"', '"skill:slug-title"')
         .replace("<TASK_FILE>", str(task_file))
         .replace("<ticket-id>", ticket_id)
