@@ -100,9 +100,12 @@ change to the user are the same live loop.
 
 Separately from how much the user sees, ask how long the change will take to
 build: one of any size that will take more than a couple of minutes goes to
-a background worker (next section). A message often holds several requests.
-Size each one on its own, as if it had arrived alone: hand the long ones to the
-worker and build the short ones yourself, even when they arrive together.
+a background worker (next section). A message often holds several requests,
+and each one stays its own request. Treat each as if it had arrived alone:
+decide on its own whether it needs its shape confirmed and how long it will take
+to build, then hand the long ones to the worker and build the short ones
+yourself. A request that would not have been mocked on its own is not added to
+another request's mock or held back until that mock is approved.
 
 ## Hand large work to a background worker
 
