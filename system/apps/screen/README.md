@@ -101,7 +101,7 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   the workspace opens as a tab in Chromium, raised, and the Screen's page is shown to the
   client that clicked (the shell's `show` op); while an agent drives the Screen the page
   is held instead (below).
-- `/browsers`, `/browsers/<name>/...`: the migrated fleet API the `agentic-browser-fleet`
+- `/browsers`, `/browsers/<name>/...`: the migrated fleet API the `use-browser`
   command drives (see "The browser").
 - `/neko/...`: the reverse proxy to neko's HTTP and WebSocket on `127.0.0.1:8091`, with
   a rate limit on `/neko/api/login`.
@@ -117,7 +117,7 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 
 The browser is a launch path of the Screen, not an app (spec section 16): one Fortress
 Chromium with one profile, started by the `browser` launch path, `screen run`, or an
-agent's `agentic-browser-fleet new`, its windows ordinary X windows the window manager
+agent's `use-browser new`, its windows ordinary X windows the window manager
 places (the user opens as many as they like; nothing pins or closes them; Chromium starts
 maximized, so its window fills whatever size the controller's window gave the Screen and
 follows the Screen's later sizes), and never
@@ -167,7 +167,7 @@ with it), at `ws://127.0.0.1:8083/<name>/<token>` with the token `attach` minted
 agent. Every frame is gated on the Screen's lease: the token's agent may drive while it
 holds the lease (a frame touches the lease's idle clock and the profile's input clock),
 a free Screen is taken on the first frame, and a human holding control refuses the frame
-with a CDP error that names `agentic-browser-fleet ls`, never closing the socket (a
+with a CDP error that names `use-browser ls`, never closing the socket (a
 dropped socket poisons a playwright-cli session for good). `Browser.close`, the incognito
 context verbs, `Emulation.setDeviceMetricsOverride` and the download redirects are
 refused outright; closing the last page is refused; `Browser.setWindowBounds` is allowed,
@@ -188,9 +188,9 @@ browser fleet's were.
 
 A workspace built before the Screen takes it through `update-self` like any
 release; the apply does what the browser app's removal needs. The workspace
-venv it syncs for the merged tree carries `screen` in place of `browser` (both
-declare the `agentic-browser-fleet` console script, which now resolves to the
-Screen's), and a per-app `browser` uv tool an older workspace still holds is
+venv it syncs for the merged tree carries `screen` in place of `browser` (the
+browser app's `agentic-browser-fleet` console script goes with it; the Screen's
+is `use-browser`), and a per-app `browser` uv tool an older workspace still holds is
 dropped the way every per-app tool is (`tool_env.py drop-app-tools`).
 It builds the viewer with the other frontend bundles. It removes the browser
 app's registry row before the restart, since no program re-registers it. The
@@ -444,7 +444,7 @@ acquire|release|handoff`, `open`, `browser open [URL]` (the browser launch path)
 exit codes are the fleet CLI's: 0 ok, 1 error, 2 preempted (a human has or took
 control; end the turn), 3 busy, 4 timed out, 64 usage, 69 no service.
 
-`uv run --no-sync agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
+`uv run --no-sync use-browser` (`fleet_cli.py`, the `use-browser` skill) owns
 the browser: `ls [--include-tabs]`, `new [name] [--url]`, `close <name>`, `acquire <name>
 [--reclaim]`, `release <name>` (alias `unlock`), `handoff <name> "<reason>"` (alias
 `request-human`), against the fleet routes, with the same exit codes. `new` and `acquire`
