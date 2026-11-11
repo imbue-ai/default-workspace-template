@@ -257,7 +257,7 @@ def compose_self_restart_note(
     """
     lines = [
         "The update of this workspace has finished, and this chat was restarted so it runs on "
-        f"what the update installed: {' '.join(reason.split())}.",
+        f"what the update installed: {' '.join(reason.split()).rstrip('.')}.",
         "Check that the restart took, with the harness's own version command where it has one "
         "(for example `claude --version`), then tell the user in one or two plain sentences that "
         "the update is complete and this chat is running on the new version.",

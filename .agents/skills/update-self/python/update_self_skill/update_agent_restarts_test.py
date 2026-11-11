@@ -298,6 +298,19 @@ def test_the_note_names_every_chat_not_restarted_or_that_none_were(
     assert expected_line in note
 
 
+def test_the_note_ends_a_reason_that_already_ends_in_a_period_with_just_that_one() -> (
+    None
+):
+    note = update_agent_restarts.compose_self_restart_note(
+        "Picks up Claude Code 2.1.311 and the updated pi task extension. ", None
+    )
+
+    assert (
+        "what the update installed: Picks up Claude Code 2.1.311 and the updated pi task "
+        "extension.\n" in note
+    )
+
+
 def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
     fake_chat_app: FakeChatAppServer, recording_messengers: RecordingMessengers
 ) -> None:
