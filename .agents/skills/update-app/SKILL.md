@@ -100,7 +100,9 @@ change to the user are the same live loop.
 
 Separately from how much the user sees, ask how long the change will take to
 build: one of any size that will take more than a couple of minutes goes to
-a background worker (next section).
+a background worker (next section). A message often holds several requests.
+Size each one on its own, as if it had arrived alone: hand the long ones to the
+worker and build the short ones yourself, even when they arrive together.
 
 ## Hand large work to a background worker
 
@@ -122,12 +124,15 @@ couple of minutes, and when you're unsure, hand it off.
 
 To hand work off:
 
-1. If the change needs its shape confirmed (a larger-scope change above),
-   hand off the build right away and ask the worker for an early milestone
-   that shows the shape. Treat that milestone as the mock: show it to the user
-   and pass their changes to the worker.
+1. If a request you hand off needs its shape confirmed (a larger-scope change
+   above), hand it off right away and ask the worker for an early milestone
+   that shows that request's shape. Treat that milestone as the mock: show it
+   to the user and pass their changes to the worker. The short requests you
+   build yourself go live without waiting for it.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
-   The brief names the app, the request in the user's words, the files and
+   The brief names the app, the requests handed to the worker in the user's
+   words, the ones you are building yourself so the worker leaves them alone,
+   the files and
    decisions you already know about, and what done looks like. It asks the
    worker to build the change to a usable state, verify it against its own
    instance (never the live app), commit, and send a milestone report each
