@@ -4,7 +4,7 @@ Skills are now held to the skill authoring guide (`docs/system/skill_authoring_g
 
 - **Exemptions.** A skill that fails a check carries `exempt-checks` and `exempt-reason` in its frontmatter `metadata`. 18 built-in skills carry one, with the reason `awaiting-restructure`. A stale exemption fails. `--no-exemptions` refuses one; a new skill and an edited skill are validated that way (`op-crystallize.md`, `type-skill.md`).
 
-- **`validate_skill.py --stamp`** records what each existing skill fails as an exemption and changes nothing else. `update-self`'s worker, `migrate-workspace`, `use-template` and `update-installed-template` run it, so a user's existing skills are never restructured by a flow.
+- **`validate_skill.py --stamp`** records what each existing skill fails as an exemption and changes nothing else. `update-self`'s worker, `migrate-workspace`, `use-template` and `update-installed-template` run it, and so does the packaging migration (`python-packaging-migration.md`) when a skill it converts fails a check, so a user's existing skills are never restructured by a flow.
 
 - **`imbue-studio` is listed as a third-party skill**, so the checks leave it out; it is restructured in the mngr repository.
 
