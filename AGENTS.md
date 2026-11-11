@@ -232,7 +232,7 @@ If you get a failure when trying to commit the first time, just try committing a
 
 # Dealing with the unexpected
 
-If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
+If something unexpected happens -- errors, confusing state, things not working as documented -- use the `check-app-errors` skill to find what is failing in the apps and services, and the `assist` skill to diagnose and fix a problem the user is hitting.
 
 A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can. That advice is for your own ad-hoc commands. A shed command of a harden worker's test gate follows the gate's own shed handling (`.agents/shared/worker/references/harden-creation.md`, "The test gate"), and memory pressure is never a reason to skip one. When an agent reports a shed to you, free memory with the user per `.agents/shared/references/freeing-memory.md`.
 
