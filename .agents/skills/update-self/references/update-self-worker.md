@@ -393,7 +393,7 @@ in your report.
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
-  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
+  `.agents/skills/harden-worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation; the tree before
   your change, for attributing a failure, is `$MERGE^1` (a test absent there
   arrived with the update). mngr's own suite runs in its repo, not here.
@@ -416,7 +416,7 @@ in your report.
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
   app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
+  `.agents/skills/harden-worker/references/web-frontend-testing.md`. Those seven bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
   installed only as a set) -- name all seven locations in your report.
 - **Customization survival** -- for every user creation the update touches

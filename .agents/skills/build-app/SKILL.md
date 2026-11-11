@@ -4,7 +4,7 @@ description: "Use when you want to create a new app for the user -- a page, dash
 metadata:
   author: imbue
   crystallized: true
-  exempt-checks: size depth paths contents
+  exempt-checks: size paths contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -580,7 +580,7 @@ Two cases, two patterns:
   clones, caches) gets its own directory under `DATA_DIR` with an
   empty `.nobackup` file in it, so the hourly backup skips it; see "Keep
   rebuildable data out of the backup" in
-  `.agents/shared/worker/references/harden-creation.md`.
+  `.agents/skills/harden-worker/references/harden-creation.md`.
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
@@ -689,7 +689,7 @@ in the main agent. The test gate AGENTS.md has you run through
 `system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
 be dispatched. This is skeleton phase 7: the harden pass
-(`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
+(`.agents/skills/harden-worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
 are no worker gates.
