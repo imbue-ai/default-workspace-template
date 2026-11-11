@@ -15,6 +15,17 @@ The first release is given in file-level detail; later areas are outlined and ge
 - **Users' existing skills are never restructured by a flow.** The update, migration and adoption stamp them and move on.
 - **First release.** Foundations, the cheap cross-cutting PR, the staging change, `update-self`, `build-app` with `update-app`, and the lifecycle trio with the shared-layer tiering.
 - **Deferred.** The template family, `migrate-workspace`, the medium skills, `imbue-studio` and the remaining scripts. Tracked in the Linear MIND backlog.
+- **Decided against**, so nobody re-opens them by accident:
+  - A size limit on reference files. The contents-list rule and the review category cover them.
+  - A length cap on descriptions beyond the spec's 1,024 characters. Today's listing fits its budget.
+  - A triggering check for the description rewrite. It adds no trigger vocabulary and triggering is not a problem today.
+  - A numeric target for the load reports. The reviewer judges.
+  - A separate terminology sweep. Each restructure applies the glossary to the files it touches.
+  - An alias for the renamed browser command.
+  - A version floor for `update-self` in this refactor.
+  - A tree-wide old-patterns quarantine. Only `update-self` gets one; another skill gets one only when its shims keep it over a limit. Auditing every `CLEANUP:` marker is a separate Linear thread.
+  - Merging `blueprint` and `blueprint-generate`. Two slash commands is the point of the pair.
+  - `disable-model-invocation` on `harden-worker`. It would block the worker's own invocation.
 
 ## Expected behavior
 
@@ -58,7 +69,7 @@ The first release is given in file-level detail; later areas are outlined and ge
 
 - The root suite has one tree-wide test that runs the validator over every skill that is not third-party.
 - A stale exemption on a built-in fails that test, so the PR that fixes a skill must remove its exemption.
-- Each restructure PR states the skill's common-path load before and after.
+- Each restructure PR states the skill's common-path load before and after. There is no numeric target.
 - mngr gains the guide and the category. Its own skills are measured once and their fixes filed as a follow-up.
 
 ## Implementation plan
@@ -79,17 +90,20 @@ Paths are in dwt unless marked (mngr).
   - Why: the compaction rule and the measured bytes-per-token figure.
   - SKILL.md: 14 KB and 500 lines; standing instructions and step list first; each step names its reference.
   - References: depth of two, contents lists, reachability, no orphans.
-  - Descriptions: what, when and when not; triggers first; no body content; no first or second person.
+  - Descriptions: what, when and when not; triggers first; no body content; no first or second person. The shape is what Anthropic, OpenAI and agentskills.io agree on, so it does not overfit to one harness.
   - Old patterns: version-bound text goes in one reference with `CLEANUP:` markers.
   - Paths: a path that is not in this tree is written with a placeholder root.
   - Exemptions: what they are, the two reasons, who may write one.
   - Glossary of vendor-neutral authoring terms.
-- (mngr) `.reviewer/code-issue-categories.md`: add `## skill_hygiene`, deferring to the guide the way `comment_cruft` defers to its skill. It covers markdown an agent reads under `.agents/` and `.claude/skills/`, skips third-party skills, skips exempted criteria, and judges only what the diff adds.
+- (mngr) `.reviewer/code-issue-categories.md`: add `## skill_hygiene`, deferring to the guide the way `comment_cruft` defers to its skill.
+  - It covers markdown an agent reads under `.agents/` and `.claude/skills/`: SKILL.md files, their references, the shared references and the worker references.
+  - It skips third-party skills, skips exempted criteria, and judges only what the diff adds.
+  - It judges what no script can: a SKILL.md written as the full manual, instructions or file paths in a description, first or second person, time-bound text outside an old-patterns reference, drift from the glossary, and a fixed procedure left as prose that should be a script.
 - (mngr) `dev/changelog/<branch>.md`.
 - `system/scripts/fetch_mngr_assets.sh`: add `skill_authoring_guide.md` to `ASSET_PATHS`.
 - `docs/system/skill_authoring_guide.md`: symlink into `system/vendor/mngr-assets/`, like `style_guide.md`.
 - `.reviewer/code-issue-categories.md`: the same category, pointing at the vendored guide.
-- `.agents/shared/references/spec-summary.md`: shrink to dwt packaging rules plus the dwt glossary of product vocabulary; point at the guide for everything else.
+- `.agents/shared/references/spec-summary.md`: shrink to dwt packaging rules plus the dwt glossary of product vocabulary; point at the guide for everything else. `user-facing-language.md` stays the authority for words shown to users.
 
 **The validator** (`.agents/shared/scripts/agents_shared/validate_skill.py`)
 
@@ -136,6 +150,11 @@ Paths are in dwt unless marked (mngr).
   - `.agents/skills/dealing-with-the-unexpected/`; AGENTS.md's section of that name points at `check-app-errors` and `assist`.
   - `.agents/shared/worker/references/verification.md` and the stale review-gates line in `lead-proxy.md`.
   - The Co-Authored-By line and `CLAUDE.md` wording in `submit-upstream-changes`; the dead pointer in `launch-task`'s dead-worker reference; the stale `skill-lifecycle-shared-refs` spec.
+  - `use-template`'s reference to a v1 template's `welcome` skill stays.
+- **Small content fixes.** For each skill that no area restructures, fix the report's findings that no check will catch. Examples:
+  - `notify-user`: its `compatibility` line says the root venv while its command and script use plain `python3`.
+  - `do-something-new`: its bail-out line names a skill to the user, against AGENTS.md.
+  - `connect-external-service`: the secret-card procedure is stated three times across SKILL.md, `direct-api.md` and `mcp.md`; keep one. `latchkey.md` hard-codes a list of services that `latchkey services list` already gives.
 - **`harden-worker` moves** from `.agents/shared/worker/` to `.agents/skills/harden-worker/`, with its `references/`.
   - Its description becomes one line saying it is not for a chat to invoke.
   - `heal-creation`, `update-creation`, `crystallize-creation`: the task file says to invoke the skill, with the path as the fallback.
@@ -174,7 +193,7 @@ Paths are in dwt unless marked (mngr).
   - Other callers: `message_chat.py`, `connect-external-service`, `use-screen`, `publish-template`'s readme recipe, the Screen specs, `system/apps/README.md`.
   - (mngr) the `minds_admin` demo skill that calls the command.
   - The changelog entry names the retired command, which is what the generalised rule reads.
-- Exemptions on `update-self` are removed.
+- The dwt glossary is applied to every file the area touches. Exemptions on `update-self` are removed.
 
 ### Area: `build-app` and `update-app` (parallel agent)
 
@@ -199,15 +218,21 @@ Paths are in dwt unless marked (mngr).
 - `lead-proxy.md`, `harden-contention.md` and `harden-worker/references/harden-creation.md`: each splits into a core that keeps its path and rare-path siblings the core links conditionally.
 - `harden-worker/SKILL.md`: its load-when table lists the concrete operation and type files.
 - `interactive-delivery.md` gets a contents list and a tighter opening.
-- Exemptions on the three skills and on `harden-worker` are removed.
+- The dwt glossary is applied to every file the area touches. Exemptions on the three skills and on `harden-worker` are removed.
 
 ### Deferred areas (outline)
 
-- **Template family.** Port `build_template.sh` to the `publish_template_skill` package as a behaviour-preserving PR. Then the update mode, the publish crawl with the publisher's dwt commit in `template.toml`, the adopt-time diff in `use-template`, the retired-names search at adoption, the scripted merge-and-boot-check and ledger append, and the five skills' restructures.
-- **`migrate-workspace`.** Split the worker half out; restructure to 14 KB.
+- **Template family.**
+  - Port `build_template.sh` to the `publish_template_skill` package as a behaviour-preserving PR, held by its existing tests and exit codes. The update mode is added there afterwards.
+  - Publish crawl: the build follows a published skill's shared references. Each must be a built-in of the base or included in the publish; otherwise the build refuses. The list and the publisher's dwt commit go into `template.toml`.
+  - Adoption: `use-template` shows the agent the diff of each listed file between that commit and the adopter's tree, and runs the retired-names search over the incoming template.
+  - The merge-and-boot-check shared by `use-template` and `update-installed-template`, and the installed-template ledger append, become scripts.
+  - The five skills are restructured, which brings `publish-template` and `use-template` under 14 KB.
+  - The latchkey permission-request body repeated in `publish-template`, `update-published-template` and `use-template` becomes one pointer at `connect-external-service`'s `latchkey.md`.
+- **`migrate-workspace`.** Split the worker half out; restructure to 14 KB; replace its copy of the latchkey permission-request body with the same pointer.
 - **Medium skills.** `manage-desktop`, `caretaker`, `file-sharing`, `github-sync`, `data-pipeline-builder`, `datalib`, and `use-browser`'s own restructure.
 - **`imbue-studio`.** Restructured at its source in mngr.
-- **Remaining scripts.** `submit-upstream-changes`' cherry-pick flow, `check-app-errors`' scan, `manage-routines`' timezone repair.
+- **Remaining scripts.** `submit-upstream-changes`' cherry-pick flow, `check-app-errors`' scan, `manage-routines`' timezone repair. Each scripted procedure, here and in the template family, is its own PR.
 - Each area's acceptance: its skills pass every check with no exemption, the load report is in the PR, and its verification below has run.
 
 ## Implementation phases
