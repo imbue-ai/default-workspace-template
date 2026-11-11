@@ -1,6 +1,6 @@
 ---
 name: submit-upstream-changes
-description: Push local improvements to shared infrastructure (skills, scripts, CLAUDE.md scaffolding, Dockerfile, system/supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
+description: Push local improvements to shared infrastructure (skills, scripts, AGENTS.md scaffolding, Dockerfile, supervisord config) back to the parent template repo. Use when the user asks to push changes upstream, or after improving shared skills, scripts, or configuration that would benefit other agents derived from the template. Not for agent-specific content (memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
 metadata:
   author: imbue
 ---

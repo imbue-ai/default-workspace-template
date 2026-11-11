@@ -1,6 +1,6 @@
 ---
 name: caretaker
-description: The single idempotent Caretaker skill, invoked via /caretaker whenever the deterministic weekly check (system/services/caretaker/caretaker_check.sh) wakes the agent. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether (and how often) to keep checking; on every later run it does the weekly routine -- greets the user, scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding), and checks for finished-but-uncommitted work, all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms.
+description: The weekly Caretaker, invoked via /caretaker whenever the weekly check wakes the agent. Scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding) and finished-but-uncommitted work, and proposes fixes, all with the user's permission. Its first run only looks, introduces itself and asks whether to keep checking.
 metadata:
   author: imbue
   exempt-checks: size
