@@ -10,9 +10,9 @@ metadata:
 This is the **create** lead of the creation lifecycle. The user has signed off
 on a shape -- a process from the just-finished turn, a confirmed data sample,
 an app confirmed live -- and you put in the thorough, expensive pass that turns
-it into a hardened, committed, reviewed creation, in the background. You dispatch the
-build to a harden worker; your role is to package context, launch, proxy gates,
-merge, and go live.
+it into a hardened, committed, reviewed creation, in the background. You
+dispatch the build to a harden worker; your role is to package context, launch,
+proxy gates, merge, and go live.
 
 Standing instructions:
 
@@ -61,22 +61,17 @@ How you got here decides where you start:
   is armed)
 - Step 6: Go live, on `done`
 
-The type drives two things: which **gates** the worker emits (skill →
-`outline-approval` then `final-creation`; app → none, since the user confirmed
-the live app already) and the **go-live** after merge (skill → post-crystallize
-migration; app → refresh the window). The worker reads the type from the task
-file's `creations` and loads the matching type reference; you proxy whatever
-gates it emits.
+The creation's type drives which **gates** the worker emits (Step 5) and the
+**go-live** after the merge (Step 6).
 
 ## When to invoke (skill, standalone)
 
-Read `references/when-to-crystallize.md` if you haven't, for the full
-guidelines. Summary: invoke when (1) the just-finished work was a single
-cohesive unit, (2) a re-run with different inputs would follow a recognizably
-similar process, and (3) the task is likely to recur. Model-judgement steps in
-the middle of a flow do not disqualify it -- they are scripted as `[ai-script]`
-calls. **Default to asking the user**, not deciding silently; if you can name
-any plausible skill shape, propose it and let them decide.
+Invoke when (1) the just-finished work was a single cohesive unit, (2) a
+re-run with different inputs would follow a recognizably similar process, and
+(3) the task is likely to recur. **Default to asking the user**, not deciding
+silently; if you can name any plausible skill shape, propose it and let them
+decide. Read `references/when-to-crystallize.md` before you decline, or when
+you are unsure: it has the re-run test and the reasoning traps.
 
 ## Step 1: Confirm (skill, standalone only)
 
@@ -234,16 +229,15 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-You own this poll even if another skill invoked you and you moved on to other
-work -- without it, gate reports never reach the user and the worker
-deadlocks. Handle each report as `.agents/shared/references/lead-proxy.md`
-says (gate decisions, the "do not interrupt more recent user work" rule,
-terminal statuses), and re-arm this poll after every gate and every milestone.
-For a crystallize pass:
+Without this poll, gate reports never reach the user and the worker deadlocks.
+Handle each report as `.agents/shared/references/lead-proxy.md` says (gate
+decisions, the "do not interrupt more recent user work" rule, terminal
+statuses), and re-arm this poll after every gate and every milestone. For a
+crystallize pass:
 
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
-  **app** → none (the worker goes straight to `done`). A `question` gate can
-  arrive at any point.
+  **app** → none, since the user confirmed the live app already (the worker
+  goes straight to `done`). A `question` gate can arrive at any point.
 - Milestones: any name, non-blocking → provisional merge per
   `.agents/shared/references/lead-proxy-milestones.md`, after the checks before
   a merge in `.agents/shared/references/harden-contention.md` ("Before merge:
