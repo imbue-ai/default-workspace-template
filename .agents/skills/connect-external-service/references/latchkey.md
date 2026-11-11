@@ -12,7 +12,6 @@ workspace; the gateway attaches it to the request.
 - When the gateway is unreachable
 - Proxying requests through the user's desktop
 - Notes
-- Currently supported services
 
 ## Builtin services (row 1)
 
@@ -298,11 +297,3 @@ desktop whenever possible.
 - Do not call `latchkey auth` commands yourself. The Imbue Studio app runs them on the
   user's computer as part of approving a permission request; for services with no
   browser auth, it provides the form the user pastes a credential into.
-
-## Currently supported services
-
-Latchkey offers varying levels of support for AWS, Calendly, Coolify, Discord,
-Dropbox, Figma, GitHub, GitLab, Gmail, Google Analytics, Google Calendar, Google
-Docs, Google Drive, Google Sheets, Google Slides, Linear, Mailchimp, Notion, Ramp,
-Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more. The list
-that counts is `latchkey services list`.

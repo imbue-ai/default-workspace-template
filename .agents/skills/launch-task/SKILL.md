@@ -35,10 +35,10 @@ tk start cod-step-XXXX
 
 The sub-agent will use its own `.tickets/` for its own internal progress — that work renders in the sub-agent's chat, not yours. Don't try to surface the sub-agent's individual steps in your timeline; the user can open the sub-agent's chat if they want that level of detail.
 
-When the sub-agent finishes (Step 4 below), close your step. The closing summary describes the *work you did* — e.g. "Briefed a sub-agent on the dark-mode toggle fix and reviewed its result." — not the outcome. Save the actual outcome / result for your final assistant message to the user.
+When the sub-agent finishes (Step 4 below), close your step. The closing summary describes the *work you did* — e.g. "Briefed a background agent on the dark-mode toggle fix and reviewed its result." — not the outcome. Save the actual outcome / result for your final assistant message to the user.
 
 ```bash
-tk close cod-step-XXXX "Briefed a sub-agent on the <task> and reviewed its result."
+tk close cod-step-XXXX "Briefed a background agent on the <task> and reviewed its result."
 ```
 
 ## 1. Write the task file

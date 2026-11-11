@@ -1,6 +1,6 @@
 ---
 name: heal-creation
-description: "Fix an existing creation that errored or delivered a wrong result. This applies to skills, apps, and services. Invoke at turn-end, after you worked around the failure to satisfy the user's request."
+description: "Fix an existing creation that errored or delivered a wrong result. This applies to skills, apps, and services. Invoke at turn-end, after the failure was worked around to satisfy the user's request."
 metadata:
   author: imbue
   exempt-checks: contents

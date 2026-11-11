@@ -1,6 +1,6 @@
 ---
 name: submit-upstream-changes
-description: Push local improvements to shared infrastructure (skills, scripts, CLAUDE.md scaffolding, Dockerfile, system/supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
+description: Push local improvements to shared infrastructure (skills, scripts, AGENTS.md scaffolding, Dockerfile, supervisord config) back to the parent template repo. Use when the user asks to push changes upstream, or after improving shared skills, scripts, or configuration that would benefit other agents derived from the template. Not for agent-specific content (memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
 metadata:
   author: imbue
 ---
@@ -15,7 +15,7 @@ Push **shared infrastructure** that benefits other agents derived from the templ
 
 - Skills (`.agents/skills/`)
 - Scripts (`system/scripts/`, `.agents/shared/scripts/`)
-- CLAUDE.md scaffolding (template-level sections only)
+- `AGENTS.md` scaffolding (template-level sections only)
 - Dockerfile
 - `system/supervisord.conf` and `system/supervisord.conf.d/` (template-level service programs)
 
@@ -24,7 +24,7 @@ Do **not** push agent-specific content:
 - `PURPOSE.md`
 - Memory contents
 - Workspace data and runtime state (`data/`)
-- Agent-specific services, settings, or CLAUDE.md sections
+- Agent-specific services, settings, or `AGENTS.md` sections
 
 mngr changes are not template changes: mngr is installed here from the commit
 `pyproject.toml` pins, and a change to it gets its own PR on the mngr repo. See
@@ -36,7 +36,6 @@ mngr changes are not template changes: mngr is installed here from the commit
 - **One logical fix per PR.** Multiple commits are fine if they form one logical unit; otherwise split them across PRs so each can be reviewed/CI'd/merged independently.
 - **Title:** short, imperative, scoped. e.g. `forwarder: redirect HTTPS by default`.
 - **Body:** a single paragraph explaining the *why* (the motivating bug, missing capability, or constraint). Reviewers can read the diff for the *what*. Skip checklists and section headers.
-- **Co-Authored-By trailer** on the commit (the standard one used in this repo).
 
 ## Recipe
 
