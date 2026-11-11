@@ -957,6 +957,107 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     assert json.loads(capsys.readouterr().out)["added"] == added
 
 
+def test_retired_names_lists_removed_commands_and_removed_or_renamed_skills(
+    tmp_path, capsys
+) -> None:
+    # A user's skill or routine calls the template by name, and nothing fails until it next
+    # runs. So the worker searches the user's creations for every name a release retires,
+    # and this is where it gets the names the tree itself declares.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def _scripts(**scripts: str) -> str:
+        lines = [
+            f'{name.replace("_", "-")} = "{target}"' for name, target in scripts.items()
+        ]
+        return '[project]\nname = "p"\n\n[project.scripts]\n' + "\n".join(lines) + "\n"
+
+    usage = "".join(f"usage line {index}\n" for index in range(40))
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write(
+        "system/apps/screen/pyproject.toml",
+        _scripts(
+            agentic_browser_fleet="screen.fleet:main", screen="screen.service:main"
+        ),
+    )
+    _write(
+        "system/libs/tools/pyproject.toml",
+        _scripts(old_tool="tools.old:main", moved_tool="tools.moved:main"),
+    )
+    _write("system/vendor/broken/pyproject.toml", "[project\n")
+    _write(".agents/skills/agentic-browser-fleet/SKILL.md", "drive a browser\n")
+    _write(".agents/skills/agentic-browser-fleet/references/usage.md", usage)
+    _write(".agents/skills/dealing-with-the-unexpected/SKILL.md", "what to do\n")
+    _write(".agents/skills/kept/SKILL.md", "kept\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("tag", "base")
+
+    # The command and its skill are renamed (the skill's SKILL.md rewritten on the way, so
+    # only its reference traces the move), one command and one skill are dropped, and one
+    # command moves to another project, which retires nothing.
+    _write(
+        "system/apps/screen/pyproject.toml",
+        _scripts(use_browser="screen.fleet:main", screen="screen.service:main"),
+    )
+    _write("system/libs/tools/pyproject.toml", '[project]\nname = "p"\n')
+    _write("system/libs/other/pyproject.toml", _scripts(moved_tool="other.moved:main"))
+    _git("rm", "-r", "-q", ".agents/skills/agentic-browser-fleet")
+    _git("rm", "-r", "-q", ".agents/skills/dealing-with-the-unexpected")
+    _write(".agents/skills/use-browser/SKILL.md", "a new document entirely\n" * 20)
+    _write(".agents/skills/use-browser/references/usage.md", usage)
+    _write(".agents/skills/brand-new/SKILL.md", "new\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "target")
+    _git("tag", "target")
+
+    expected = {
+        "removed_entry_points": [
+            {
+                "name": "agentic-browser-fleet",
+                "pyproject": "system/apps/screen/pyproject.toml",
+                "target": "screen.fleet:main",
+                "same_target": ["use-browser"],
+            },
+            {
+                "name": "old-tool",
+                "pyproject": "system/libs/tools/pyproject.toml",
+                "target": "tools.old:main",
+                "same_target": [],
+            },
+        ],
+        "removed_skills": ["dealing-with-the-unexpected"],
+        "renamed_skills": [{"from": "agentic-browser-fleet", "to": "use-browser"}],
+        "unreadable_pyprojects": ["system/vendor/broken/pyproject.toml"],
+    }
+    # From the root and from a subdirectory: a git path is otherwise relative to the cwd.
+    for repo_root in (tmp_path, tmp_path / "system" / "apps" / "screen"):
+        assert (
+            update_self.main(
+                [
+                    "retired-names",
+                    "--base",
+                    "base",
+                    "--target",
+                    "target",
+                    "--repo-root",
+                    str(repo_root),
+                ]
+            )
+            == 0
+        )
+        assert json.loads(capsys.readouterr().out) == expected
+    _git("diff", "--quiet")
+    _git("diff", "--cached", "--quiet")
+
+
 def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     tmp_path, capsys
 ) -> None:

@@ -58,6 +58,12 @@ belong in tested code rather than agent prose:
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
 
+``retired-names``
+    List the names the tree itself declares that the target no longer has: the
+    ``[project.scripts]`` commands of every ``pyproject.toml`` and the skill
+    directories under ``.agents/skills/``, each renamed skill with its new name.
+    The worker's impact analysis searches the user's creations for each.
+
 ``pending-rollbacks``
     List the rollbacks of earlier updates that nothing has undone yet, newest
     first -- the commits the worker reverts before it merges, since until then git
@@ -137,7 +143,8 @@ classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``,
-``update_history_bridge``, ``update_apply`` (the apply and recover
+``update_history_bridge``, ``update_retired_names`` (the commands and skills a
+release drops), ``update_apply`` (the apply and recover
 orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
 ``resume-chats``), ``update_app_pause`` (``run-status stop-apps`` /
 ``resume-apps``) and ``update_resume_note`` (the note a resumed chat is
@@ -206,6 +213,15 @@ from update_self_skill.update_history_bridge import (
     drop_history_bridge,
 )
 from update_self_skill.update_layout import FRONTEND_BUNDLES
+from update_self_skill.update_retired_names import (
+    SKILLS_DIR,
+    EntryPoint,
+    UnreadablePyprojectError,
+    entry_points,
+    is_pyproject,
+    removed_entry_points,
+    retired_skills,
+)
 from update_self_skill.update_runtime import (
     ApplyPreconditionError,
     HttpClient,
@@ -583,6 +599,76 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
         )
     )
     print(json.dumps({"added": added}))
+    return 0
+
+
+def _entry_points_at(ref: str, repo_root: Path) -> tuple[list[EntryPoint], list[str]]:
+    """Every entry point the tree at ``ref`` declares, and the manifests that do not parse."""
+    found: list[EntryPoint] = []
+    unreadable: list[str] = []
+    tracked = _list_names(
+        _git(["ls-tree", "-r", "--full-tree", "--name-only", ref], repo_root)
+    )
+    for path in filter(is_pyproject, tracked):
+        try:
+            found.extend(entry_points(path, _git(["show", f"{ref}:{path}"], repo_root)))
+        except UnreadablePyprojectError:
+            unreadable.append(path)
+    return found, unreadable
+
+
+def _skills_at(ref: str, repo_root: Path) -> list[str]:
+    listed = _git(
+        ["ls-tree", "-d", "--full-tree", "--name-only", ref, f"{SKILLS_DIR}/"],
+        repo_root,
+    )
+    return [Path(path).name for path in _list_names(listed)]
+
+
+def _cmd_retired_names(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args)
+    base_entries, base_unreadable = _entry_points_at(args.base, repo_root)
+    target_entries, target_unreadable = _entry_points_at(args.target, repo_root)
+    # ``-l0`` lifts the rename limit, so a release that moves many skill files at once
+    # is still traced; ``top`` anchors the pathspec at the repository root.
+    renames = _list_names(
+        _git(
+            [
+                "diff",
+                "--name-status",
+                "-M",
+                "-l0",
+                "--diff-filter=R",
+                args.base,
+                args.target,
+                "--",
+                f":(top){SKILLS_DIR}",
+            ],
+            repo_root,
+        )
+    )
+    renamed_files = [
+        (old_path, new_path)
+        for _, old_path, new_path in (line.split("\t") for line in renames)
+    ]
+    removed_skills, renamed_skills = retired_skills(
+        _skills_at(args.base, repo_root),
+        _skills_at(args.target, repo_root),
+        renamed_files,
+    )
+    print(
+        json.dumps(
+            {
+                "removed_entry_points": removed_entry_points(
+                    base_entries, target_entries
+                ),
+                "removed_skills": removed_skills,
+                "renamed_skills": renamed_skills,
+                "unreadable_pyprojects": sorted({*base_unreadable, *target_unreadable}),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1216,6 +1302,16 @@ def build_parser() -> argparse.ArgumentParser:
     changelog_parser.add_argument("--base", required=True, help="Base ref.")
     changelog_parser.add_argument("--target", required=True, help="Target ref.")
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
+
+    retired_parser = sub.add_parser(
+        "retired-names",
+        help="List the commands ([project.scripts] of every pyproject.toml) and the "
+        "skill directories the target no longer has, as JSON. Reads only.",
+        parents=[common],
+    )
+    retired_parser.add_argument("--base", required=True, help="Base ref.")
+    retired_parser.add_argument("--target", required=True, help="Target ref.")
+    retired_parser.set_defaults(func=_cmd_retired_names)
 
     pending_parser = sub.add_parser(
         "pending-rollbacks",
