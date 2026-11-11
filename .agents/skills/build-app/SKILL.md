@@ -241,8 +241,8 @@ On confirmation, invoke the `crystallize-creation` skill with `type=app`. It
 owns the rest: the tracking ticket, the task file (`creations: app:<name>`),
 the harden worker, the poll, the merge on `done`, and the window refresh after
 it. Give it the slug (the app's name) and a task body naming the app's package
-path, its name, its URL segment and what it does. The app is on disk and
-confirmed live, so the worker reconstructs nothing and has no gate of its own.
+path, its name and what it does. The app is on disk and confirmed live, so the
+worker reconstructs nothing and has no gate of its own.
 If the pass changes the look and feel, confirm with the user again before
 calling the work done.
 
