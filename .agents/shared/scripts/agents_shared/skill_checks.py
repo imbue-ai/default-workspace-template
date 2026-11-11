@@ -16,7 +16,8 @@ And one over the layer the skills share (``unreached_shared_files``).
 A link is a path written in a markdown file that resolves to a file: from the repository root,
 from the linking file's directory or its ``references/``, or, in one of the skill's own files,
 from the skill's directory or its ``references/``. A script of the skill that imports a package
-of the skill's uv project reaches the project. A path holding a placeholder (``<name>``, ``$VAR``, a glob) links to nothing.
+of the skill's uv project reaches the project. A path holding a placeholder (``<name>``,
+``$VAR``, a glob) links to nothing.
 The crawl follows links through the skill's own markdown and through ``.agents/shared/``; a
 file in another skill is a link's end, not a place to read on from.
 
