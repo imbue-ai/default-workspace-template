@@ -12,7 +12,7 @@ The first rule that applies wins:
   side-pick or hand-merge.** See "Lockfiles" below.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
-- **Mixed files (`AGENTS.md` and similar) -> merge by judgment.** Keep the
+- **Mixed files (`AGENTS.md`, `CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions.
   Side-picking one side of a code file outside the agent-owned rule is a last
   resort, and "ours is a superset" is a claim you must **verify, not

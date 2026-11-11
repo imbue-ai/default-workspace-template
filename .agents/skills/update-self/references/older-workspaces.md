@@ -180,8 +180,7 @@ A launcher from minds-v0.6.2 on moves a report into
 one leaves it at `data/.tasks/update-self/reports/report.md`, where a re-armed
 poll would return it again at once and the next pass's `launch` refuses to
 start over it. When the report file is still there after the poll delivered
-it, move it aside before you re-arm the poll, stop the worker, or end the
-pass:
+it, move it aside at the point the step that sent you here names:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports/consumed
@@ -189,12 +188,18 @@ mkdir -p data/.tasks/update-self/reports/consumed
     data/.tasks/update-self/reports/consumed/$(date +%s)-report.md
 ```
 
-Three places need it: a hold, after the worker is stopped
-(`question-gates.md`); a catch-up or retry, before the worker is messaged
-(`applying-the-update.md`); and teardown after a landed apply
-(`teardown.md`).
+Five places point here:
 
-CLEANUP: remove this section and its three pointers at a floor of
+- `question-gates.md`, "Answering and re-arming": before the reply to a
+  gate, which `auditing-the-report.md` also uses to send a report back.
+- `question-gates.md`, "A hold ends the pass with a decision": after the
+  worker is stopped.
+- `applying-the-update.md`, "Catching the worker up": before the worker is
+  messaged.
+- `apply-outcomes.md`, "Exit 2": before the retry is sent.
+- `teardown.md`, "After a landed apply": before the worker is stopped.
+
+CLEANUP: remove this section and those five pointers at a floor of
 minds-v0.6.2.
 
 ## Apps built before `stop_when_no_windows`
@@ -276,7 +281,8 @@ checkout is then the main worktree of this same repo.
 
 CLEANUP: at a floor of minds-v0.6.2, the worker guide's Step 6 and the task
 file in `launching-the-worker.md` may deliver through `report` as the shared
-reference says, and the `LEAD_WORK_DIR` fallbacks in Steps 4a and 6 can go.
+reference says, and the `LEAD_WORK_DIR` fallbacks (the cron listing of the
+worker guide's Step 4a, and its Step 6) can go.
 
 ## Cron entries from before routines
 
@@ -285,17 +291,17 @@ For the worker. From minds-v0.9.0 a scheduled task is a routine, a tracked
 of older workspaces across, but may have left one in place. Those live under
 the gitignored `data/.state/cron.d`, so git shows none of them and your
 worktree holds none (the launcher syncs only this pass's
-`data/.tasks/update-self/` into it). Read the lead's copy: list
-`$LEAD_WORK_DIR/data/.state/cron.d` (the main worktree of this same repo when
-`LEAD_WORK_DIR` is unset, since a directory you cannot read answers exactly
-like a workspace with no such entry) and grep its lines for every retired
-name and every deleted or renamed path, as the worker guide's Step 4a greps
-the routines. A hit is a user-created consumer, and the impact analysis runs
-in full.
+`data/.tasks/update-self/` into it). So the worker guide's Step 4a lists the
+lead's copy on every pass, `$LEAD_WORK_DIR/data/.state/cron.d`, and greps any
+entry it holds for every retired name and every deleted or renamed path, as
+it greps the routines. Without `LEAD_WORK_DIR` it lists the main worktree of
+this same repo, since a directory you cannot read answers exactly like a
+workspace with no such entry. A hit is a user-created consumer, and the
+impact analysis runs in full.
 
-CLEANUP: remove this section and its pointer in the worker guide's Step 4a
-once no supported workspace holds a cron drop-in (a floor of minds-v0.9.0,
-and a fleet check for leftovers).
+CLEANUP: remove this section and the cron listing in the worker guide's Step
+4a and in `worker-impact-analysis.md` once no supported workspace holds a
+cron drop-in (a floor of minds-v0.9.0, and a fleet check for leftovers).
 
 ## Apps from before the app model
 

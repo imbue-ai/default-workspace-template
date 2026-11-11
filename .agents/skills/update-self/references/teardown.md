@@ -1,7 +1,9 @@
 # Teardown (SKILL.md Step 6)
 
-Every pass ends here, whatever its outcome. "Every ending" runs for all of
-them, a needs-decision ending and a `stuck` one included. Then one of "An
+Every pass that reached Step 3a's bridge ends here, whatever its outcome.
+(One that stopped earlier has nothing to put back: `version-ceiling.md`,
+"When no target resolves", ends it.) "Every ending" runs for all of them, a
+needs-decision ending and a `stuck` one included. Then one of "An
 ending without a landed apply" and "After a landed apply" (an apply that
 exited 0). "Show the user this chat" is last for all of them.
 
@@ -53,7 +55,8 @@ says.
 ## An ending without a landed apply
 
 Release the leases either way, each as its own command: every `editing
-critical app <name>` lease Step 5b took, then the `updating workspace` lease
+critical app <name>` lease Step 5b took that you still hold, then the
+`updating workspace` lease
 (`tk close "$UPDATE_LEASE_ID" "<why the pass ended>"`), unless that ending's
 own steps already released it (a hold, a stop at the user's request).
 

@@ -49,10 +49,12 @@ re-selects the whole pass, and its `git diff "$MERGE" HEAD` line would read
 the workspace's commits as your edits.
 
 - **Impact**: when the commits coming in add or change user-created code,
-  check it against what the update changed (`worker-impact-analysis.md`,
-  sections 2 and 3), and list each impacted creation in
-  `data/.tasks/update-self/catchup-impacted.txt`, one stand-in file per line,
-  as `impacted-paths.txt` does.
+  check it against what the update changed. Search it for the names the
+  update retires (`worker-impact-analysis.md`, section 2), and for a use of a
+  file the update changed: the dependents search and the interface coupling
+  of that file's section 3 (its items 2 and 3). List each impacted creation
+  in `data/.tasks/update-self/catchup-impacted.txt`, one stand-in file per
+  line, as `impacted-paths.txt` does.
 - **Environment gate** when a manifest or lockfile changed in `$PRE..HEAD`.
 - **Suites**: commit first, then run every printed line:
 

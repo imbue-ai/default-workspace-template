@@ -144,9 +144,9 @@ git diff -z --name-only --diff-filter=AM "$TARGET_REF" HEAD \
     | xargs -0 -r grep -n -H -F -f data/.tasks/update-self/retired-names.txt --
 ```
 
-Search the routines as the worker guide's Step 4a does, and a cron entry
-where one may remain. A name that is a common word matches lines that do not
-use it: read each hit before you count it.
+Search the routines and the lead's `data/.state/cron.d` as the worker guide's
+Step 4a does. A name that is a common word matches lines that do not use it:
+read each hit before you count it.
 
 **Dispose** of each hit:
 
@@ -170,7 +170,8 @@ path.
 1. **Enumerate the consumer universe** up front: every
    `system/supervisord.conf.d/` program (and what its `command` invokes),
    every app or service under `system/services/` and `system/apps/`, every
-   workspace-added skill under `.agents/skills/`, and every routine. Start
+   workspace-added skill under `.agents/skills/`, and every routine and cron
+   entry (the worker guide's Step 4a says where each is). Start
    from the scope files: they already name every manifest app with local
    content and, through `references`, the skills, scripts and docs each
    claims, which is the part of this list that is declared rather than

@@ -75,9 +75,12 @@ stderr and the `apply phase timings:` line, then:
   the results message says so.
 
 A retry goes back to the worker, which still holds its branch and its
-validation; it is never a re-run of the same apply (below). If the `done` you
-applied is still in place, consume it (`older-workspaces.md`, "Consuming a
-report by hand"). Then send the worker the cause and the retry
+validation; it is never a re-run of the same apply (below). First release the
+`editing critical app` leases you took for the apply, each `tk close` as its
+own command: a retry is a catch-up round, and Step 5b takes them again right
+before the next apply. If the `done` you applied is still in place, consume
+it (`older-workspaces.md`, "Consuming a report by hand"). Then send the
+worker the cause and the retry
 (`applying-the-update.md`, "Messaging the worker", reads the exit code),
 re-arm the poll, and audit the `done` it sends back (Step 5a) before Step 5b
 applies again:

@@ -168,8 +168,10 @@ Take them all or none:
    chore`, then `tk start` it, each as its own command.
 
 Take them only now, once the chats are paused and the last fast-forward check
-has passed, so no catch-up round runs while you hold them. Release them in
-teardown.
+has passed, so no catch-up round runs while you hold them. Release them
+after the apply: in teardown when the pass ends there, and at once when the
+apply's outcome sends the pass back to the worker (a retry after exit 2, a
+refusal at exit 1). This step takes them again right before the next apply.
 
 ## 5. Run the apply
 

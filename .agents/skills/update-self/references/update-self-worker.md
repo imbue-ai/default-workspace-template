@@ -75,8 +75,11 @@ BASE=$(git merge-base HEAD "$TARGET_REF")
 echo "$BASE" > data/.tasks/update-self/base.txt
 ```
 
-A later block that needs `$TARGET_REF` or `$BASE` in a fresh shell reads them
-again: the `eval` line above, and `BASE=$(cat data/.tasks/update-self/base.txt)`.
+Each bash call is a fresh shell. A command below that uses `$TARGET_REF`,
+`$LEAD_WORK_DIR`, `$FINISH_REPORT_PATH` or `$BASE` needs them set in the same
+call: put the `eval` line above first in that call, and `BASE=$(cat
+data/.tasks/update-self/base.txt)` once this step has written it. A block
+that already starts with those lines is complete as written.
 
 **An empty `BASE` means the histories share no commit** (the lead's bridge is
 missing): report `stuck` saying so. Never merge with
@@ -184,10 +187,13 @@ built-in, restarted by the apply and tested upstream, so do only this:
    a routine, a tracked `system/routines/<id>.toml` whose `command` or
    `skill` names what runs. Grep the `command` field of every definition for
    each removed command and each deleted or renamed path, and match each
-   `skill` against the removed and renamed skills. Where a cron entry from
-   before routines may remain, check it too
-   (`references/older-workspaces.md`, "Cron entries from before routines").
-   A hit is a user-created consumer: run the analysis in full after all.
+   `skill` against the removed and renamed skills. Then list the lead's
+   `data/.state/cron.d`, which git does not show (`ls
+   "$LEAD_WORK_DIR/data/.state/cron.d"`; under the main worktree of this same
+   repo when `LEAD_WORK_DIR` is unset), and grep the lines of any entry it
+   holds the same way; `references/older-workspaces.md` ("Cron entries from
+   before routines") says why one may be there. A hit in either is a
+   user-created consumer: run the analysis in full after all.
 3. Work the provisioning files and global-dependency bumps, which always
    count as impacted, per `references/worker-provisioning-changes.md`.
 4. Record the footprint evidence in your report: `has_local_footprint: false`
@@ -259,6 +265,7 @@ it before deciding either way.
 ## 5. Gather the "what's new" inputs
 
 ```bash
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 BASE=$(cat data/.tasks/update-self/base.txt)
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     changelog-entries --base "$BASE" --target "$TARGET_REF"

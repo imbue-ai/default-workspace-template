@@ -43,6 +43,12 @@ chosen. Stop: relay it in plain terms, offer the next step, and record the
 verdict it calls for. Never resolve a ref by hand, and never pick another
 release.
 
+A pass that stops here has staged, launched, bridged and paused nothing, so
+there is no teardown to run: after the verdict, release the `updating
+workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass finished."`) and
+end your turn with what you told the user. The same holds for a stop in Step
+2a, and for a Step 3a stop before the bridge.
+
 - **Already on the release it may take.** Nothing is wrong with the
   workspace: `run-status verdict ALREADY_CURRENT`.
 - **A fault.** Three things leave the app's release out of reach, and what to
@@ -77,8 +83,9 @@ plainly what they asked for and what it risks ("that version is newer than
 your Imbue Studio app, so parts of your workspace may stop working until you
 update the app itself") and get an explicit go-ahead. While you wait, record
 the wait with `run-status hold`, so the app shows what the pass is waiting
-on, and clear it with `run-status resume` once they answer; SKILL.md Step 2
-has both commands.
+on, and clear it once they answer with `run-status resume`, which takes no
+arguments. SKILL.md Step 2 has the `hold` command; `resume` runs the same
+script.
 
 This is the one confirmation the otherwise-unattended pass keeps: it fires at
 launch, while the user is present, and asks whether to *attempt* an
@@ -94,7 +101,7 @@ rollback offer after the apply stands as usual.
 
 If the user declines, record `run-status verdict REFUSED --detail "<the
 version they asked for, and that they chose not to attempt it>"` and end the
-pass.
+pass as "When no target resolves" ends one.
 
 ## When Step 3a finds the target above the ceiling
 
