@@ -16,8 +16,10 @@ guide to audit one.
   - the clean-pull skip's three conditions: `has_merge_work: false`; no
     impacted user-created code; and no in-branch edits of the worker's own
     beyond its Step 1 rollback reverts (as git made them, or with a `both
-    added` file taken at the target's version), shown by an empty diff
-    against the landed merge;
+    added` file taken at the target's version) and its skill-exemption commit
+    (`Record skill-check exemptions`, touching only skills' frontmatter),
+    shown by an empty diff against the landed merge on each side of that
+    commit;
   - the gate run's own evidence: the fix commits kept or reverted, or a clean
     run, plus the architecture-gate verdicts.
 - **A side-picked conflict** carries the discarded-side accounting.

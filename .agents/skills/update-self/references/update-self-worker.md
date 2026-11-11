@@ -211,7 +211,8 @@ through. Widening the scope is the one deviation this rule never licenses.
 A file you edited yourself in the branch reads as merged content for every
 condition: `classify-merge` ran on the pre-merge local ref and cannot see
 your edits. So a mirror edit from 4a selects its project's suite and its
-service's boot.
+service's boot. The one commit that is not an edit is the skill-exemption
+commit below.
 
 | Item | Runs when |
 |---|---|
@@ -233,16 +234,26 @@ MERGE="$(git log --merges -1 --format=%H --fixed-strings \
     --grep "update-self: merge upstream template ($TARGET_REF)")"
 [ -z "$(git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock')" ] \
     || uv sync --all-packages --frozen
+[ -z "$(git status --porcelain)" ] || { echo "commit your own changes first" >&2; exit 1; }
 uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp
+git add -A .agents/skills
+git diff --cached --quiet || git commit -m "Record skill-check exemptions"
 ```
 
 When the environment gate's condition holds, run that gate before this block
 (`references/worker-validation.md`, "Environment gate"). The stamp records
 which skill checks each of the workspace's existing skills fails, as an
 exemption in that skill's frontmatter, and removes one that has gone stale;
-it changes nothing else. Commit what it changed, and list its output lines
-under your report's Validation. Never restructure a user's skill to clear
-what it reports.
+it changes nothing else. List its output lines under your report's
+Validation. Never restructure a user's skill to clear what it reports.
+
+**That commit is not an edit of yours.** The block commits what the stamp
+wrote, alone, under the exact subject `Record skill-check exemptions`. A
+commit of that subject holding only that is left out wherever a rule here
+reads your edits: it selects no suite and no boot in 4b, and it does not end
+the clean-pull skip in 4c. Never put anything else into it, and never reuse
+the subject. `references/worker-review-gates.md` has the test that tells it
+from an edit.
 
 On a clean pull with no local footprint and no edits of your own, every other
 condition is false and nothing else here runs. Otherwise read
@@ -253,7 +264,8 @@ condition is false and nothing else here runs. Otherwise read
 **Skip the gates only on a pure clean pull**, when all three hold:
 `has_merge_work` is false; 4a found no user-created code depending on
 anything the update changed, and no global-dependency bump with a
-user-created dependent; and you authored no in-branch edits of your own.
+user-created dependent; and you authored no in-branch edits of your own
+(the skill-exemption commit of 4b is not one).
 **Otherwise run the real gates**, scoped to every file whose merged content
 differs from the target release. 4b's suites are their test gate, so select
 tests again only over what you commit after it.

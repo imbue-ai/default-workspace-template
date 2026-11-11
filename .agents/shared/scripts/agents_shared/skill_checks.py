@@ -58,7 +58,7 @@ _TRACKED_PREFIXES = (".agents/", "system/", "docs/")
 _PATH_RUN = re.compile(r"[\w.~<>{}$*@+/-]+")
 _PLACEHOLDER = re.compile(r"[<>{}$*]|\.\.\.")
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|(\d+)[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 _PRUNED_DIR_NAMES = frozenset({".git", ".venv", "__pycache__", "node_modules"})
 
@@ -455,7 +455,10 @@ def _outline(text: str) -> tuple[list[tuple[int, str]], list[_List]]:
             if current is None:
                 current = _List(start=index, end=index)
                 lists.append(current)
-            current.items.append(item.group(1))
+            # An ordered item keeps its number: a step's heading often carries it too
+            # (`## 1. Preconditions`), and the list names the heading by that text.
+            number, item_text = item.groups()
+            current.items.append(f"{number}. {item_text}" if number else item_text)
             current.end = index
         elif not line.strip():
             continue
@@ -476,7 +479,11 @@ def _plain(markdown: str) -> str:
 
 
 def _anchor(heading: str) -> str:
-    slug = re.sub(r"[^\w\s-]", "", _plain(heading))
+    """The anchor a markdown renderer gives the heading. An underscore inside a word is part
+    of it (`update_self.py`); one beside a word is emphasis and is not."""
+    text = _MARKDOWN_LINK.sub(r"\1", heading)
+    text = re.sub(r"[`*]|(?<![^\W_])_|_(?![^\W_])", "", text)
+    slug = re.sub(r"[^\w\s-]", "", " ".join(text.lower().split()))
     return "#" + re.sub(r"\s+", "-", slug)
 
 

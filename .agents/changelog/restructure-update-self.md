@@ -10,6 +10,8 @@
 
 - **One home each** for the ceiling's rules, the apply's exit codes, and the licence to stop chats and apps.
 
+- **The skill-exemption commit is not an edit of the worker's.** The worker commits what `validate_skill.py --stamp` wrote, alone, as `Record skill-check exemptions`. That commit selects no suite, and does not end the clean-pull skip of the review gates.
+
 - **Fixed**: the catch-up's "all three" frontend bundles (there are seven), and a browser README path that does not exist.
 
 `update-self` keeps an exemption for the `contents` check only, which it fails through two shared files.
