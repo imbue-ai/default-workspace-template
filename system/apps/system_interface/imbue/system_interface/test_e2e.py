@@ -656,6 +656,17 @@ def _open_launcher(page: Page) -> Locator:
     return menu
 
 
+def _primary_modifier(page: Page) -> str:
+    """The key that is the chord grammar's ``meta`` on the platform the page reads itself as (the rule of
+    ``detectChordPlatform`` in ``workspace_ui``'s ``keybindings.ts``): Command on a Mac, Control elsewhere. The
+    workspace's browser presents a machine of its own choosing, so the page's platform need not be the host's,
+    which is the one Playwright's ``ControlOrMeta`` follows."""
+    is_mac = page.evaluate(
+        "() => /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent)"
+    )
+    return "Meta" if is_mac else "Control"
+
+
 def _own_window_path(base_url: str, client_id: str, window_id: str) -> str | None:
     """The client's own stored path for an independent window, off the layout route; None while it has none."""
     layout = _get_json(f"{base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")
@@ -901,11 +912,12 @@ def test_launcher_menu_lists_launch_paths_and_windows_and_runs_the_highlight(tmp
 @pytest.mark.timeout(90, func_only=False)
 def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: Path, page: Page) -> None:
     """The launch paths that take typed text are the menu's free-text rows: Enter with no match runs the primary
-    one, Ctrl+Enter the secondary, each posting the launch path with the text (and this client's id and the
-    window's path, the shell's envelope) and pointing this client's view of the app's independent pinned window at
-    the page the app answers (no second window opens) and showing it; the row at the pin's home path is a focus row
-    that raises the pinned window; an empty field offers no secondary row; and Shift+Enter breaks the line, after
-    which the menu offers the free-text rows alone and the text goes with its line break."""
+    one, Ctrl+Enter (Cmd+Enter on a Mac) the secondary, each posting the launch path with the text (and this
+    client's id and the window's path, the shell's envelope) and pointing this client's view of the app's
+    independent pinned window at the page the app answers (no second window opens) and showing it; the row at the
+    pin's home path is a focus row that raises the pinned window; an empty field offers no secondary row; and
+    Shift+Enter breaks the line, after which the menu offers the free-text rows alone and the text goes with its
+    line break."""
     with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
@@ -961,7 +973,7 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         # without the no-match note.
         expect(menu.locator("[data-launch]")).to_have_count(3)
         expect(menu.locator(".launcher-no-matches")).to_have_count(0)
-        page.keyboard.press("Control+Enter")
+        page.keyboard.press(f"{_primary_modifier(page)}+Enter")
         send_page_path = _launched_page_path(_PINNED_SEND_LAUNCH_ID, {_PINNED_TEXT_PARAM: "again\nand more"})
         _wait_for_own_window_path(server.base_url, client_id, pinned["id"], send_page_path)
         expect(frame.locator("#where")).to_have_text(send_page_path, timeout=15000)

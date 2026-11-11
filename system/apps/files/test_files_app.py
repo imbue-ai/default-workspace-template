@@ -35,6 +35,17 @@ def _entry(page: Page, path: str) -> Locator:
     return page.locator(f'[data-entry-path="{path}"]')
 
 
+def _primary_modifier(page: Page) -> str:
+    """The key that is the chord grammar's ``meta`` on the platform the page reads itself as (the rule of
+    ``detectChordPlatform`` in ``workspace_ui``'s ``keybindings.ts``): Command on a Mac, Control elsewhere. The
+    workspace's browser presents a machine of its own choosing, so the page's platform need not be the host's,
+    which is the one Playwright's ``ControlOrMeta`` follows."""
+    is_mac = page.evaluate(
+        "() => /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent)"
+    )
+    return "Meta" if is_mac else "Control"
+
+
 def _shown_paths(page: Page) -> list[str]:
     return page.locator("[data-entry-path]").evaluate_all("els => els.map(el => el.dataset.entryPath)")
 
@@ -116,10 +127,10 @@ def test_double_clicking_a_folder_opens_it_and_the_history_keys_return(
     expect(_entry(page, "/projects/app/")).to_be_visible()
     assert page.url.endswith("/projects/")
 
-    page.keyboard.press("ControlOrMeta+BracketLeft")
+    page.keyboard.press(f"{_primary_modifier(page)}+BracketLeft")
     expect(_entry(page, "/projects/")).to_be_visible()
     assert page.url.endswith("/")
-    page.keyboard.press("ControlOrMeta+BracketRight")
+    page.keyboard.press(f"{_primary_modifier(page)}+BracketRight")
     expect(_entry(page, "/projects/app/")).to_be_visible()
 
 
@@ -133,7 +144,7 @@ def test_going_back_to_a_folder_opened_without_its_slash_lists_it_by_its_own_pat
     _entry(page, "/projects/app/").dblclick()
     expect(_entry(page, "/projects/app/main.py")).to_be_visible()
 
-    page.keyboard.press("ControlOrMeta+BracketLeft")
+    page.keyboard.press(f"{_primary_modifier(page)}+BracketLeft")
     expect(_entry(page, "/projects/app/")).to_be_visible()
     assert page.url.endswith("/projects/")
 
