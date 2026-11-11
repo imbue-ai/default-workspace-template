@@ -158,6 +158,11 @@ class SkillTree:
         for key in [key for key in self._links if key[0] == relative]:
             del self._links[key]
 
+    def read_as(self, path: Path, text: str) -> None:
+        """Take ``text`` for the contents of ``path``, whatever is on disk, until ``forget``."""
+        self.forget(path)
+        self._text[self.relative(path)] = text
+
     def _listed(self) -> tuple[frozenset[str], frozenset[str]]:
         if self._git_files is None or self._git_dirs is None:
             listing = subprocess.run(
