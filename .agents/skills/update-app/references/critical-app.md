@@ -8,16 +8,32 @@ of the shell's layout routes that the shell, the chat, and the terminal all run,
 or under `system/libs/workspace_themes/`, the theme catalog and theme route the
 same three run.
 A broken build of one of these is served straight to the user as their
-workspace, or as the surface they would use to fix it. That forces
-three adjustments to `update-app`'s ordinary live loop, and nothing else changes:
-the editing lease, the demonstrative-prototype taxonomy, and the turn-end harden
-handoff are all `update-app`'s and the references it points at.
+workspace, or as the surface they would use to fix it. That forces three
+adjustments to SKILL.md's ordinary steps, and nothing else changes: the
+standing instructions, the editing lease and the rule that the harden pass
+waits for the user are all SKILL.md's.
+
+Re-read this file after a compaction: it is the whole flow, and a pass runs
+over many turns.
+
+## Contents
+
+- The three adjustments
+- The hard rule
+- Step 1: On entry, take the leases and provision in the background
+- Step 2: The live loop, in the worktree and its preview
+- Step 3: On approval, hand off to a harden worker on the same branch
+- Step 4: Go live: freshness-check, apply, tear down
+- Why this shape
+
+## The three adjustments
 
 **The whole change takes this flow, not just its critical part.** When the
 change also touches creations that are not critical -- an ordinary app the
 critical one now talks to, a skill that drives it -- edit them in the same
 worktree, preview them from it, and hand them to the same harden pass, which
-lands everything in the same apply (`update-creation`, "One change, one pass").
+lands everything in the same apply (the `update-creation` skill's "One change,
+one pass").
 Never split the change into a careful pass and an ordinary one: neither would
 test the two sides together.
 
@@ -30,12 +46,12 @@ test the two sides together.
    terminal included.
 3. **Go-live is the atomic apply, after the harden pass.** Merging is not
    enough: the change lands through the update apply (pre-flight,
-   health-checked, auto-rollback), and only once a background worker has
-   hardened it. The apply keeps its rollback point, and the shell offers it back
-   to the user as a notice they alone close.
+   health-checked, auto-rollback), and only once a harden worker has hardened
+   it. The apply keeps its rollback point, and the shell offers it back to the
+   user as a notice they alone close.
 
 The loop stays cheap: you edit the worktree, build, and refresh the preview in
-place (seconds); the expensive test and review gate runs once, in a background
+place (seconds). The expensive test and review gate runs once, in a harden
 worker, only after the user approves the shape.
 
 ## The hard rule
@@ -46,12 +62,12 @@ worker, only after the user approves the shape.
 from uncommitted edits. Every change is made in the worktree, built and
 previewed there, and landed on the live tree only through the apply once the
 user has approved it and the worker has hardened it. (A heal of a critical app
-is the one exception, and `heal-creation` says what it costs.)
+is the one exception, and the `heal-creation` skill says what it costs.)
 
-## 1. On entry: take the leases, provision in the background, clarify the shape
+## Step 1: On entry, take the leases and provision in the background
 
-**Take the editing leases first**, exactly as `update-app`'s "One editor at a
-time" describes. Three deltas:
+**Take the editing leases first**, as SKILL.md's step 2, "One editor at a
+time", describes. Three differences:
 
 - **One lease per critical app the pass touches:** `editing critical app
   <name>` for every critical app whose code it changes or whose preview it
@@ -70,17 +86,17 @@ time" describes. Three deltas:
   before touching it; if another agent holds it, surface that together with
   the leases this pass already holds, since that holder may be waiting on one
   of yours.
-  Passes on different critical apps run side by side: step 4's freshness check
+  Passes on different critical apps run side by side: Step 4's freshness check
   catches a pass whose files moved under it, the apply refuses to start while
   another apply is in flight, and it builds the bundles from the merged tree
   instead of installing yours when another pass changed their sources.
 - **They are held for the whole pass**, not per turn: entry through go-live or
   abandonment, including the waits for the user's feedback. Release them only
-  at final teardown (step 4) or on explicit abandonment.
+  at final teardown (Step 4) or on explicit abandonment.
 - **Breaking a stale one means tearing down its orphaned pass too:** its
-  preview and its window, its worktree, and its worker if one exists. Run the step 4
-  teardown for whatever the abandoned pass left behind. A stale lease is broken
-  only on the user's call, never silently.
+  preview and its window, its worktree, and its worker if one exists. Run Step
+  4's teardown for whatever the abandoned pass left behind. A stale lease is
+  broken only on the user's call, never silently.
 
 **Check for an open notice.** If a "recently updated" notice from an earlier
 apply is still open (`GET /api/updates/pending` on the shell answers a `notice` that
@@ -117,22 +133,22 @@ so.
 How rough the first previewed pass should be scales with shape-uncertainty, not
 with whether it changes what the user sees: an obvious contained change (font,
 color, copy) you implement directly; a redesign or a non-obvious layout starts
-as a deliberately rough pass for fast signal. The prototype *type* is the
-shared taxonomy in `interactive-delivery.md` phase 5: a critical app defaults to
-Type 1 (a janky real edit in the worktree, shown through the real preview).
+as a deliberately rough pass for fast signal. Either way a critical app's
+preview is the real edit in the worktree, however rough, shown through the real
+preview (the "janky real edit" of
+`.agents/shared/references/interactive-delivery.md`), never a detached mock.
 
-## 2. The live loop: edit the worktree, refresh the preview in place
+## Step 2: The live loop, in the worktree and its preview
 
-Work entirely inside the worktree. The loop itself, including the
-`frontend-design` and `use-ai-integration` rules for what you write, is
-`update-app`'s; the build and test mechanics for a critical app are the
-worker's job at harden time (`type-app.md`, "Critical apps"). In the live loop
-you need a clean build, not the full gate.
+Work entirely inside the worktree. What the change owes (SKILL.md's step 3) and
+the `frontend-design` and `use-ai-integration` rules for what you write hold
+here too. The build and test mechanics for a critical app are the worker's job
+at harden time. In the live loop you need a clean build, not the full gate.
 
-`update-app`'s step 4, **Verify**, carries over with its timing rule intact:
-*verify before the user can see it*. Here that rule is per round, not just the
-first: the preview's window is closed while you edit and check, and re-opened
-when the round is ready. The preview reads real state (the chat preview follows
+SKILL.md's standing instruction, *verify before the user can see it*, holds
+per round, not just for the first: the preview's window is closed while you
+edit and check, and re-opened when the round is ready. The preview reads real
+state (the chat preview follows
 the real agents, the shell preview lists the real apps), so driving it while the
 user is looking at it is driving their workspace under them; with the window
 closed you can drive it freely on its own port.
@@ -265,15 +281,14 @@ holds; there is just no shape to preview.
 
 The preview and its worktree **persist across turns**; if the user drifts away
 and never approves, nothing is released automatically. Explicit abandonment
-tears everything down (the step 4 teardown) and releases the leases.
+tears everything down (Step 4's teardown) and releases the leases.
 
-## 3. On approval: hand off to a background harden worker on the same branch
+## Step 3: On approval, hand off to a harden worker on the same branch
 
-Once the user approves the shape, hand the branch to a background worker that
-runs the full test and review gate. This reuses `update-creation`'s
-orchestration core, with two deviations: the worker is created
-**at approval, on the existing branch**, and the task frames one of two handoff
-shapes.
+Once the user approves the shape, hand the branch to a harden worker that runs
+the full test and review gate. This reuses the `update-creation` skill's
+dispatch, with two deviations: the worker is created **at approval, on the
+existing branch**, and the task frames one of two handoff shapes.
 
 **Free the branch first.** Git forbids the same branch checked out in two
 worktrees, so before creating the worker, release your hold on it:
@@ -289,11 +304,12 @@ so a worktree whose rounds you committed removes cleanly. If git refuses, the
 worktree holds uncommitted work; commit it and retry. Never discard it: the
 branch you are about to hand the worker is the only copy.
 
-**Create the worker on the branch.** Follow `update-creation` steps 1-3 (the
-tracking ticket, the task file with `operation: update` and `creations` naming
-every creation the change touched -- `app:<name>` for each app, critical or
-not, `skill:<name>` for a skill, `service:<package>` for a background service --
-launch, background-poll) with these specifics:
+**Create the worker on the branch.** Follow the dispatch steps of
+`.agents/skills/update-creation/SKILL.md` (the tracking ticket, the task file
+with `operation: update` and `creations` naming every creation the change
+touched -- `app:<name>` for each app, critical or not, `skill:<name>` for a
+skill, `service:<package>` for a service -- the launch, and the background
+poll) with these specifics:
 
 - The task file's `diff_base` is the commit the branch forked from the served
   tree, `$(git merge-base HEAD "mngr/update-$SLUG")` run in the served tree, so
@@ -311,23 +327,24 @@ launch, background-poll) with these specifics:
   ```
 
 - **Task body: one of two handoff shapes**, named as such so the worker knows
-  which (`op-update.md`, the critical-app handoff):
+  which (its update guide calls this the critical-app handoff):
   - *Implement for real, then harden:* the branch carries an approved but
     deliberately rough edit.
   - *Harden only:* the branch already carries the real, user-approved change;
     verify and harden it, do not re-implement it.
 
   There is **no `## Change origin` marker and no worker gate**: the user already
-  approved the shape in your live loop. Name the apps (`type-app.md`'s
-  "Critical apps" section tells the worker to build every bundle at the npm root
-  and report each path). Include a `## Real scenario` section when a real
+  approved the shape in your live loop. Name the apps (the worker's own guide
+  tells it to build every bundle at the npm root and report each path). Include
+  a `## Real scenario` section when a real
   conversation motivated the change, naming the motivating chat (usually your
   own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`) and what looked wrong, so the worker opens *that*
   conversation rather than reconstructing it from prose.
 
-- **Terminal handling:** on `done`, go to step 4. On `stuck` or a dead-worker
-  timeout, surface to the user per `launch-task`'s `worker-failure.md`; do not
-  merge or apply, and do not retry silently.
+- **Terminal handling:** on `done`, go to Step 4. On `stuck` or a dead-worker
+  timeout, surface to the user per
+  `.agents/skills/launch-task/references/worker-failure.md`; do not merge or
+  apply, and do not retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work
 the user has not seen** (the implement-for-real shape) and the user can
@@ -348,10 +365,11 @@ at; for those, the evidence is the regression test the harden gate produced, so
 say that instead of booting a preview. If the user rejects here, do not merge;
 tear the preview down and decide with them whether to re-brief the worker.
 
-## 4. Go live: freshness-check, apply, tear down
+## Step 4: Go live: freshness-check, apply, tear down
 
-With the worker `done` (and any final preview approved), land the change. Your
-leases from step 1 keep other passes off the critical apps you touched, but a
+With the worker `done` (and any final preview approved), land the change in
+four parts: the freshness check, the apply, the notice, the teardown. Your
+leases from Step 1 keep other passes off the critical apps you touched, but a
 pass on another critical app may have applied since you branched, and an
 ordinary app in the pass holds no lease, so another chat may have changed it.
 
@@ -380,14 +398,15 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
 
    Empty output means fresh: continue. Any output means the pass is stale; do
    **not** merge, and never resolve a conflicted merge yourself. Catch the
-   pass up per `harden-contention.md` ("Catching up a stale pass"): the worker
+   pass up per `.agents/shared/references/harden-contention.md` ("Catching up a
+   stale pass"): the worker
    merges the served `HEAD` into the branch, resolves any conflict, re-verifies
    what came in, rebuilds the bundles, and reports `done` again, which comes
    back through this check. When the catch-up changed something the user
    previewed, offer the final preview again from the worker's work_dir.
 
    If a "recently updated" notice has appeared since entry (another pass's
-   apply), tell the user this apply will replace its rollback point, as step 1
+   apply), tell the user this apply will replace its rollback point, as Step 1
    does.
 
 2. **Apply.** Run the general update apply, the same script `update-self` lands
@@ -406,7 +425,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
        --keep-rollback-point --pass-scope "data/.tasks/harden/update-$SLUG/pass-scope.json"
    ```
 
-   `--pass-scope` is the file step 1 wrote: the rollback point records the
+   `--pass-scope` is the file the freshness check wrote: the rollback point records the
    pass's other apps and services from it, and a rollback restarts the
    programs its wiring names (one with none is named in the rollback's
    outcome, for you to restart).
@@ -420,8 +439,8 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    *settle* healthy, refreshes every open view, and **auto-rolls-back the entire
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
-   back; any later apply replaces them. Interpret the exit code and report it,
-   per `update-self`'s `apply-outcomes.md`:
+   back; any later apply replaces them. Interpret the exit code and report it
+   (the codes are the apply's own, the same ones an `update-self` run reads):
 
    - `0`: applied; the live app is updated and healthy.
    - `2`: the change was bad and was **automatically rolled back**; the live
@@ -432,7 +451,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
      Escalate immediately, with the snapshot paths the stderr names.
    - `1`: precondition error (a dirty tree, another apply in flight, a
      conflicted merge); nothing was changed. A conflicted merge is a stale
-     pass: catch it up as step 1 says.
+     pass: catch it up as the freshness check says.
 
    Only the critical apps' health gates the apply. After a `0`, check that any
    ordinary app or service in the pass works, and fix what doesn't.
@@ -442,10 +461,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    critical app the apply touched, and every other app in the pass): recently
    updated, with "Roll back" and "Everything seems good". It
    rolls all of them back together. Frontend applies include both chat and
-   shell because every bundle (the shell's, the chat's, and those of Getting
-   Started, Files and Routines, whose owners are not critical and so are named
-   only when they are in the pass) is replaced; an extra app restart is
-   acceptable.
+   shell because every bundle is replaced (the shell's, the chat's, and those
+   of the built-in apps that are not critical, which are named only when they
+   are in the pass); an extra app restart is acceptable.
    Tell the user the banner is at the top of the workspace and what it does.
    **Never confirm or roll back on the user's behalf.** Only a person closes
    it: confirming discards the kept snapshots, rolling back restores them and
@@ -468,9 +486,8 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    The close goes first: nothing takes a window away when its app leaves the
    registry, so a window closed after `down` would stay on the desktop pointing
    at a page nothing serves. `down` is idempotent and tears down the siblings it
-   booted. This flow does not pass through
-   `update-creation` step 4, so the worker's teardown is yours. After a `0`,
-   destroy it:
+   booted. This flow does not pass through `update-creation`'s own merge and
+   go-live step, so the worker's teardown is yours. After a `0`, destroy it:
 
    ```bash
    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
