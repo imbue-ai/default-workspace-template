@@ -54,7 +54,7 @@ _TRACKED_PREFIXES = (".agents/", "system/", "docs/")
 _PATH_RUN = re.compile(r"[\w.~<>{}$*@+/-]+")
 _PLACEHOLDER = re.compile(r"[<>{}$*]|\.\.\.")
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|(\d+)[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 _PRUNED_DIR_NAMES = frozenset({".git", ".venv", "__pycache__", "node_modules"})
 
@@ -427,7 +427,10 @@ def _outline(text: str) -> tuple[list[tuple[int, str]], list[_List]]:
             if current is None:
                 current = _List(start=index, end=index)
                 lists.append(current)
-            current.items.append(item.group(1))
+            # An ordered item keeps its number: a step's heading often carries it too
+            # (`## 1. Preconditions`), and the list names the heading by that text.
+            number, item_text = item.groups()
+            current.items.append(f"{number}. {item_text}" if number else item_text)
             current.end = index
         elif not line.strip():
             continue
