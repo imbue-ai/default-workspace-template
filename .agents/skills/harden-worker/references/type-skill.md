@@ -2,10 +2,10 @@
 
 A reusable skill under `.agents/skills/<name>/` -- a SKILL.md process recipe plus
 the scripts its steps call. `.agents/shared/references/spec-summary.md` is the
-authority on the agentskills.io spec: directory layout, frontmatter, the
+authority on how a skill is packaged here: directory layout, frontmatter, the
 `[script]` / `[ai-script]` / `[prose]` step kinds, `run.py` packaging,
-validation, and the scenario template. This reference adds only what that spec
-cheat-sheet and the universal `harden-creation.md` contract don't already cover.
+validation, and the scenario template. This reference adds only what that
+reference and the universal `harden-creation.md` contract don't already cover.
 
 A new skill starts from the scaffold (`spec-summary.md`, "Directory layout"),
 which writes the layout, installs the package and validates it:
@@ -55,7 +55,9 @@ has scripts; a pure-prose skill (no scripts) has all of its behavior in
 SKILL.md.
 
 - A crystallized skill is marked `metadata.crystallized: true`.
-- Keep SKILL.md under ~500 lines; split long content into `references/`.
+- Keep SKILL.md within the guide's limits (14,000 bytes, 500 body lines):
+  it carries the standing instructions and the step list, and each step's
+  detail goes in `references/` (`docs/system/skill_authoring_guide.md`).
 - **Cross-section alignment sweep** (after any localized edit): update the
   frontmatter `description`, the H1/opening prose, any principle bullets, section
   headings, cross-references, and `## Conventions` / `## Gotchas` -- every place
@@ -116,7 +118,7 @@ belongs to the app itself is that app's own pass.
 
 ## Data capture
 
-Beyond the universal preserve-and-surface rule (`harden-creation.md`), persist
+Beyond the universal preserve-and-surface rule (`data-and-storage.md`), persist
 each record under `data/.skills/<name>/`, capture *all reasonable fields per record*
 in the calls you already make (not just the fields the original turn displayed),
 and treat pagination as normal when the ask requires it -- but do NOT make extra

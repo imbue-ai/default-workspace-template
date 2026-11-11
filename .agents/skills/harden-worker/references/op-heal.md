@@ -11,6 +11,7 @@ exists; you are not redesigning it, just repairing it.
 ## Contents
 
 - Valid report `name:` values
+- Critical-app exception
 - Stage 1: Replicate
 - Stage 2: Diagnose the root cause
 - Stage 3: Apply the minimal fix
@@ -25,7 +26,9 @@ exists; you are not redesigning it, just repairing it.
   answer is not in your task file or the repo.
 - Terminal statuses: `done`, `stuck`.
 
-**Critical-app exception.** When the creation is a critical app (the shell, the
+## Critical-app exception
+
+When the creation is a critical app (the shell, the
 chat, the terminal, or an app whose manifest says so; see `type-app.md`,
 "Critical apps"), emit **no `final-creation` gate**: user approval happens
 through the lead's live preview, not a worker gate. Run Stages 1-5 as written,
@@ -62,7 +65,7 @@ Fixed <app> on branch `<branch>`. Ready to preview.
   describing what you observed. Don't apply a speculative fix.
 - If an earlier change introduced the break, note that commit: once your fix
   has its test, check whether the gate would have caught it, per
-  `harden-creation.md` ("A regression the gate let through").
+  `test-gate-cases.md` ("A regression the gate let through").
 
 ## Stage 3: Apply the minimal fix
 
@@ -125,7 +128,7 @@ run, `Outside footprint`, which the scope file judges against every creation at
 once, `Undeclared couplings`, `Flaky tests`) may instead come once, after the
 last block.
 
-Push it and stop. On approval, commit on your branch and emit a `name: done`
+Deliver it and stop. On approval, commit on your branch and emit a `name: done`
 terminal report.
 
 ## If you cannot fix it
