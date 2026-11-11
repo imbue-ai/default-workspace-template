@@ -8,8 +8,9 @@ workers hardening the same creation at once, and a hardened branch getting
 merged after the base it was verified against has moved.
 
 This file names one other shared reference by role, without sending you to
-it: the lead-proxy reference, in this directory, which a lead follows to poll
-and answer its worker. The skill that sent you here names its path.
+it: the lead-proxy reference, which a lead follows to poll and answer its
+worker. The skill that sent you here names its path. The two files this one
+does send you to sit beside it.
 
 Three principles drive every rule below:
 
@@ -34,9 +35,9 @@ Three principles drive every rule below:
 - Catching up a stale pass: when a check before the merge fails, or a ticket
   note names a creation the pass does not cover
 - Taking over a pass whose holder is gone: detail in
-  `.agents/shared/references/harden-contention-takeover.md`
+  `harden-contention-takeover.md`
 - Superseding a pass whose worker is gone: detail in
-  `.agents/shared/references/harden-contention-supersede.md`
+  `harden-contention-supersede.md`
 
 ## Before dispatch: one pass per creation (single-flight)
 
@@ -267,10 +268,9 @@ milestone file).
 A pass whose holder stopped while its worker is still there is neither stale
 nor abandoned: the worker holds verified work and is waiting for a lead, often
 on a gate nobody relayed. Become that lead; do not replace the pass. Read
-`.agents/shared/references/harden-contention-takeover.md` when the
-single-flight check reports an orphaned pass: it has how to locate the pass's
-task file, take its ticket and its worker, read the last report the worker
-sent, and act on it.
+`harden-contention-takeover.md` when the single-flight check reports an
+orphaned pass: it has how to locate the pass's task file, take its ticket and
+its worker, read the last report the worker sent, and act on it.
 
 ## Superseding a pass whose worker is gone
 
@@ -278,7 +278,7 @@ When there is no worker left to catch up -- an abandoned pass, one stopped
 after a failure the user did not override, or an orphaned pass whose reports
 cannot reach you -- replace it with **one** new pass that carries whatever
 work the old one left unmerged. That work is never dropped. Read
-`.agents/shared/references/harden-contention-supersede.md` before you destroy
-anything: it has how to commit and keep the old pass's work, the destroy, what
+`harden-contention-supersede.md` before you destroy anything: it has how to
+commit and keep the old pass's work, the destroy, what
 the new pass's task names under `## Carried work`, and the two wrinkles of a
 pass that had already delivered a provisional milestone merge.

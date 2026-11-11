@@ -37,7 +37,7 @@ what is usable, what `## Tested` covers at that commit, and what is
 
 Before merging, run the checks your skill runs before it merges a `done`,
 exactly as for `done`. A harden lead's are the three in the harden-contention
-reference beside this file ("Before merge: lease, freshness, conflicts"). Do
+reference ("Before merge: lease, freshness, conflicts"). Do
 not re-run a check `## Tested` names as passing at this commit; you may run
 ones it does not name.
 

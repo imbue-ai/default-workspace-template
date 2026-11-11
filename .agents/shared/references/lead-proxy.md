@@ -17,21 +17,22 @@ re-read it before you handle the next report.
 
 Every lead reads the sections marked "every pass". The others open with the
 condition that sends you to them, and four of them hand off to a file of their
-own in this directory.
+own. Those files, and every other file this one names without a directory, sit
+beside it.
 
 - Polling for the next report (every pass)
 - Diagnose worker liveness before invoking failure flow (a poll that timed out
-  or exited 76; detail in `.agents/shared/references/lead-proxy-liveness.md`)
+  or exited 76; detail in `lead-proxy-liveness.md`)
 - Do not interrupt more recent user work (every pass)
 - Parsing the report (every pass)
 - Deciding: answer gate yourself vs. escalate (on `type: gate`)
 - Milestone reports: provisional merge (on `type: milestone`; detail in
-  `.agents/shared/references/lead-proxy-milestones.md`)
+  `lead-proxy-milestones.md`)
 - Terminal status: act and stop polling (on `type: status`)
 - When you are a worker yourself (a worker that launched its own worker; detail
-  in `.agents/shared/references/lead-proxy-intermediate-lead.md`)
+  in `lead-proxy-intermediate-lead.md`)
 - `mngr rsync` rationale (debugging the launcher's transfer; detail in
-  `.agents/shared/references/lead-proxy-rsync.md`)
+  `lead-proxy-rsync.md`)
 
 ## Polling for the next report
 
@@ -70,8 +71,8 @@ one-line summary. Read the exit code first:
   pending. Diagnose it the same way, at once rather than after the timeout.
 - **75** -- the worker's own agent was **shed by the OOM daemon** to relieve
   memory pressure: it will not report until revived. This is not a worker bug.
-  Free memory with the user per `.agents/shared/references/freeing-memory.md`
-  first, since a revival into the same pressure is shed again, then revive the
+  Free memory with the user per `freeing-memory.md` first, since a revival
+  into the same pressure is shed again, then revive the
   worker by nudging it to continue with `create_worker.py reply --task-file
   <TASK_FILE> -m continue`, whose send relaunches a shed agent. You do not need
   to resend the task: it survives in the worker's conversation history, and a
@@ -110,9 +111,9 @@ A poll that timed out (exit 124) or exited 76 has not shown a failure. Long
 stages (the test gate, a large implementation) can legitimately exceed 30
 minutes on a healthy worker, and a worker whose session died is a crash to
 recover, not a failure to surface. Before invoking the failure flow, read
-`.agents/shared/references/lead-proxy-liveness.md` and follow it: it has the
-check of the worker's session, what counts as alive, the recovery of a dead
-worker, and what exit 76 does and does not mean.
+`lead-proxy-liveness.md` and follow it: it has the check of the worker's
+session, what counts as alive, the recovery of a dead worker, and what exit 76
+does and does not mean.
 
 ## Do not interrupt more recent user work
 
@@ -180,10 +181,10 @@ On `type: milestone` the worker is not asking for anything: it committed
 something usable and carried on. The default is to merge the commit the report
 pins, make it usable, tell the user in one line, and re-arm the poll; the
 worker's gates and terminal status are still coming. Read
-`.agents/shared/references/lead-proxy-milestones.md` when a milestone report
-arrives: it has when not to merge, the checks before the merge, the merge
-itself, and the provisional go-live. Its "Rolling back a provisional merge" is
-what you follow when the user rejects a milestone you merged.
+`lead-proxy-milestones.md` when a milestone report arrives: it has when not to
+merge, the checks before the merge, the merge itself, and the provisional
+go-live. Its "Rolling back a provisional merge" is what you follow when the
+user rejects a milestone you merged.
 
 ## Terminal status: act and stop polling
 
@@ -196,8 +197,7 @@ On `type: status`:
   `<REPORTS_DIR>/consumed/`), which carries them instead. If it lists
   `Undeclared couplings:`, they are built-in defects (a built-in suite
   observes a path nothing declares, so the test selector missed it): add them
-  to the pass's single report per
-  `.agents/shared/references/report-built-in-issues.md`. If it lists
+  to the pass's single report per `report-built-in-issues.md`. If it lists
   `Flaky tests:`, the worker left them unfixed: a test of a built-in suite is
   a built-in defect and goes in that same report; a test of a creation the
   workspace built goes in a regular ticket (`tk create`), so it is fixed later
@@ -236,7 +236,7 @@ On `type: status`:
   line per agent and exits non-zero if any could not be destroyed; report that
   rather than retrying blindly.
   On a conflict, recovery depends on your skill: if it defines a staleness rule
-  (the harden skills do, in the harden-contention reference beside this file),
+  (the harden skills do, in the harden-contention reference),
   abort the merge and follow that rule -- the worker catches its branch up and
   resolves the conflict there -- rather than resolving it yourself; otherwise
   resolve the conflict manually.
@@ -284,12 +284,12 @@ the `await` poll and end your turn.
 Everything above holds unchanged when you are an intermediate lead: a worker
 that launched its own worker. Four rules are yours alone, about answering your
 worker's `question`, merging one level, destroying or stopping it, and how long
-you await it. Read `.agents/shared/references/lead-proxy-intermediate-lead.md`
-before you launch a worker from a worker.
+you await it. Read `lead-proxy-intermediate-lead.md` before you launch a
+worker from a worker.
 
 ## `mngr rsync` rationale
 
 The launcher copies the runtime directory to the worker itself at `launch`, at
 whatever level of the dispatch is launching, so no lead runs `mngr rsync` by
-hand. Read `.agents/shared/references/lead-proxy-rsync.md` when you are
-debugging that transfer, or writing a sync of your own.
+hand. Read `lead-proxy-rsync.md` when you are debugging that transfer, or
+writing a sync of your own.
