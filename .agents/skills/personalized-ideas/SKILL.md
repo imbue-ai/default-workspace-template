@@ -190,35 +190,31 @@ Show the user the people you found, one short line each with its link, and ask w
 >
 > Is one of these you? If not, tell me something that would narrow it down, or we can skip this.
 
-**One row of buttons, every button a whole answer.** The chat sends a button's text the moment it is clicked and then turns off every button in that message, so a message can only ever get one click. Never put two questions with their own buttons in one message. End the message with one question and one row of buttons, every one of which answers it completely:
+**Typed answers, no buttons.** This message gets no reply buttons: a button sends at once and turns off the message's other buttons, so it cannot answer more than one question. Ask in plain text, and when the message has more than one question, number them so the user can answer all of them in one typed reply. For example:
 
-1. one button per person, numbered as listed (`[1 is me](#reply=1%20is%20me)`, `[2 is me](#reply=2%20is%20me)`, and so on, for every person, never only the likely ones). You may add one button for two entries you think are the same person (`[1 and 2 are both me](#reply=1%20and%202%20are%20both%20me)`), never in place of their own buttons;
-2. then the searches you can run next, when they apply: the organization (below) and the details from their Mac ("Search details from their Mac" below), one button each;
-3. last, `[None of these](#reply=none%20of%20these)`.
+> 1. Is one of these you? Tell me the number (or numbers, if two are the same person), or "none".
+> 2. Your account email is at mit.edu. Want me to also search for your name with MIT?
+> 3. From your Mac, these might help find you: MIT (your browser history), machine learning (your installed apps). Want me to search with any of them?
 
-When there are searches to offer, the question says so: "Is one of these you? If not, I can also search with one of these." Each button is one answer: a person, one more search, or none. After a search button, show the people again with a new row the same way, without the details already used or declined.
+Read the whole reply and act on every answer in it. A question they leave unanswered counts as no. When they name a person, you are done searching, whatever else they said; otherwise run every search they said yes to, in one batch, and show the people again the same way, without the searches already used or turned down.
 
 **Rank by the email's organization.** When `email_domain` is set, list first any person whose title, snippet or link mentions that organization (its domain, or its name: `Imbue` for `imbue.com`), and say why in that line: "mentions Imbue, your email's organization". This only orders what the search already found; it sends nothing new. When no result mentions it, do not remark on that; the question below is the only place the email's organization comes up.
 
-**Offer to search with it.** When `email_domain` is set, no result mentions that organization (whether the name searches, the widened batch included, found other people or no one at all), and `consent.json` has no `"email_org"` answer yet: show the people you found as usual (or say you found no one by that name), and say in one line before the question: "Your account email is at <domain>." Put this button in the row, with the organization's readable name in place of `<Org>`:
+**Offer to search with it.** When `email_domain` is set, no result mentions that organization (whether the name searches, the widened batch included, found other people or no one at all), and `consent.json` has no `"email_org"` answer yet: show the people you found as usual (or say you found no one by that name), and ask, as one of the message's questions, with the organization's readable name in place of `<Org>` and its domain in place of `<domain>`: "Your account email is at <domain>. Want me to also search for your name with <Org>?"
 
-> [Also search with <Org>](#reply=include%20my%20organization)
-
-- `include my organization`: set `"email_org": "yes"` in `consent.json`, run one search for the name with `<Org>` (never the address), and show the people again, ranked as above.
-- Any other answer (a person, another search, `none of these`, or saying they do not want it): set `"email_org": "no"` in `consent.json` and never search with it.
+- A yes: set `"email_org": "yes"` in `consent.json`, run one search for the name with `<Org>` (never the address), and show the people again, ranked as above.
+- A no, or no answer to it: set `"email_org": "no"` in `consent.json` and never search with it.
 
 ### Search details from their Mac
 
 Only for `"choice": "both"`. The name search and the app-data request run at the same time (step 2), so either can finish first.
 
-1. When you show the results, and they list more than one person or none: if the app data has been read by then, put its details in that message's row of buttons. If its answer comes later, send the people again in a new message, with the full row (every person, the details, `None of these`). When the results show one clear person, do not propose any.
+1. When you show the results, and they list more than one person or none: if the app data has been read by then, ask about its details as one of that message's questions. If its answer comes later and they have not replied yet, send one short message with that question alone. When the results show one clear person, do not propose any.
 2. Pick at most 3 short details from the patterns that a public page about them would also mention: an organization or school they use often (`MIT` from many visits to mit.edu), their field (`machine learning`), a public project or handle. Never a person's name, an address, anything about health, money or relationships, and never one listed in `app_terms.declined`.
-3. Each is one button in the row, naming where it came from, and nothing about the raw data behind it; say once, before the question, that these come from their Mac:
+3. Name each with where it came from, and nothing about the raw data behind it: "From your Mac, these might help find you: MIT (your browser history), machine learning (your installed apps). Want me to search with any of them?" No buttons.
 
-   > [Search with MIT (from your browser history)](#reply=search%20with%20MIT) [Search with machine learning (from your installed apps)](#reply=search%20with%20machine%20learning)
-
-   Nothing from the app data goes into a search until they click it, even though they chose both.
-4. A `search with <detail>` click adds that detail to `app_terms.approved`; search for the name with it, and show the people again with a new row (the details not yet used still in it). When they answer with a person or `none of these`, every detail that was offered and not clicked goes in `app_terms.declined`: never propose those again.
+   Nothing from the app data goes into a search until they say yes to it, even though they chose both.
+4. Each detail they say yes to goes in `app_terms.approved`; search for the name with each (one search per detail, in one batch), and show the people again. Every detail they did not say yes to goes in `app_terms.declined`: never propose those again.
 5. A confirmed fact that came from one of these searches cites its web page as usual; a detail they picked that no page confirms, kept as a fact, ends with `(you told me)`, since they chose it.
 
 Raw app data (page titles, URLs, file names, note or event text) never goes into a search, the chat, or a memory.
