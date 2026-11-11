@@ -62,7 +62,7 @@ Validation.
   - **Which branch of the 4b scope rule applied, with its evidence**: each
     item's condition and whether it held; on a clean pull with no footprint,
     that only the skill-exemption stamp ran, and why.
-  - The stamp's output lines.
+  - The stamp's output lines, and the sha of its commit when it made one.
   - The suites, boots and Playwright that did run, all passing.
   - Any test that failed and then passed when rerun alone, here or after a 4c
     commit, as flaky.

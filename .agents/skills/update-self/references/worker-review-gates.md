@@ -46,6 +46,34 @@ All three must hold:
    A conflict you resolved in any catch-up, a lockfile you regenerated in one,
    and any commit you added after one are edits.
 
+   The skill-exemption commit of the worker guide's Step 4b is not an edit of
+   yours either, as the command made it: the one commit on your branch whose
+   subject is exactly `Record skill-check exemptions`, holding only what
+   `validate_skill.py --stamp` wrote. It changes nothing but the frontmatter
+   `metadata` block of `.agents/skills/<name>/SKILL.md` files. With one on the
+   branch, the empty-diff test leaves it out and tests each side of it:
+
+   ```bash
+   M=<merge-sha>
+   STAMP=$(git log -1 --format=%H --fixed-strings \
+       --grep "Record skill-check exemptions" "$M..HEAD")
+   if [ -n "$STAMP" ]; then
+       git diff --name-only "$STAMP^" "$STAMP"
+       git diff "$M" "$STAMP^"
+       git diff "$STAMP" HEAD
+   else
+       git diff "$M" HEAD
+   fi
+   ```
+
+   The first line must list only `.agents/skills/<name>/SKILL.md` files, and
+   every `git diff` after it must print nothing. After a catch-up, the last
+   diff runs from `$STAMP` to `"$FIRST^1"` in place of `HEAD`. Nothing else
+   is left out: a commit under that subject that touches any other file, a
+   second commit under it, and a SKILL.md you changed in any other commit are
+   edits, and the test above reads each as one. Name the stamp commit's sha
+   in the report with this condition's other evidence.
+
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would
 review *upstream's* code and could apply local fixes to it -- manufacturing
@@ -70,7 +98,9 @@ the `question` gate like any other.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own
-in-branch edits, and any lockfile you regenerated. A file byte-identical to
+in-branch edits, and any lockfile you regenerated. The skill-exemption commit
+adds nothing to it: the two lines it writes in a user's skill are not an edit
+of yours. A file byte-identical to
 the release arrived exactly as upstream tested it, and a fix to it would only
 manufacture local divergence. Over an 800-file release this is the difference
 between reviewing four reconciled files and reviewing upstream's code. Name

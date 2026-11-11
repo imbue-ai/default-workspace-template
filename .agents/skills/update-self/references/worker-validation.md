@@ -56,7 +56,10 @@ What goes in:
   of it run whether or not a file changed on both sides.
 - What 4a found impacted by search or reasoning, through
   `impacted-paths.txt`. No file means 4a found none, or did not run.
-- Your own edits. Commit them first: the `git diff` line reads commits.
+- Your own edits. Commit them first: the `git log` line reads commits. It
+  lists the files of every commit you added on top of the merge except the
+  skill-exemption commit (`Record skill-check exemptions`), which is not an
+  edit of yours and selects nothing.
 
 ```bash
 eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
@@ -72,7 +75,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
           && jq -r '.diff.inside_footprint[]' "$update"
   done
   cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
-  git diff --name-only --no-renames "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
+  git log --format= --name-only --no-renames --invert-grep --fixed-strings \
+      --grep "Record skill-check exemptions" "$MERGE..HEAD"; } | sed '/^[[:space:]]*$/d' | sort -u \
     > data/.tasks/update-self/validate-paths.txt
 [ -s data/.tasks/update-self/validate-paths.txt ] \
     && uv run --frozen --package app-manifest app-manifest select-tests \

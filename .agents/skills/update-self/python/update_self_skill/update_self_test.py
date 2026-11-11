@@ -2188,6 +2188,105 @@ def test_step_4_ends_a_hold_with_a_decision_keeping_the_worker() -> None:
     )
 
 
+def _run_prose(repo: Path, script: str) -> str:
+    """Run commands lifted from the skill's prose in ``repo``; their stdout."""
+    return subprocess.run(
+        ["bash", "-c", script], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
+
+
+def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
+    tmp_path: Path,
+) -> None:
+    """The stamp writes two frontmatter lines into a user's failing skill, and the worker commits
+    them. That commit must not select a suite, and must not end the clean-pull skip, or the first
+    update into the release with the checks runs the review gates over every such workspace. The
+    prose says so by rule; this runs its own commands to hold it to that, and to hold that
+    nothing else rides out under the same exception."""
+    guide = _reference("update-self-worker.md")
+    [stamp_block] = [
+        block for block in _FENCED_BLOCK.findall(guide) if "--stamp" in block
+    ]
+    stamp_lines = stamp_block.splitlines()
+    stamp_at = next(i for i, line in enumerate(stamp_lines) if "--stamp" in line)
+    # The stamp runs on a clean tree, so its commit holds only what it wrote.
+    assert any("git status --porcelain" in line for line in stamp_lines[:stamp_at])
+    commit_the_stamp = "\n".join(stamp_lines[stamp_at + 1 :])
+    # The line of the suites recipe that lists the worker's own edits, out of the group it closes.
+    [edits_of_the_workers] = [
+        command.partition("; }")[0]
+        for command in _fenced_commands(_reference("worker-validation.md"))
+        if "--invert-grep" in command
+    ]
+    [gate_block] = [
+        block
+        for block in _FENCED_BLOCK.findall(_reference("worker-review-gates.md"))
+        if "M=<merge-sha>" in block
+    ]
+
+    repo = tmp_path / "workspace"
+    skill_md = repo / ".agents" / "skills" / "mine" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: mine\n---\nbody\n")
+    (repo / "app.py").write_text("base\n")
+    _git_in(tmp_path, "init", "-q", "-b", "main", str(repo))
+    _git_in(repo, "config", "user.email", "t@example.com")
+    _git_in(repo, "config", "user.name", "t")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "base")
+    _git_in(repo, "checkout", "-q", "-b", "release")
+    (repo / "release.txt").write_text("release\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "release")
+    _git_in(repo, "checkout", "-q", "main")
+    _git_in(
+        repo,
+        "merge",
+        "-q",
+        "--no-ff",
+        "release",
+        "-m",
+        "update-self: merge upstream template (release)",
+    )
+    merge = _git_in(repo, "rev-parse", "HEAD")
+
+    def _edits() -> list[str]:
+        return _run_prose(repo, f'MERGE="{merge}"\n{edits_of_the_workers}').split()
+
+    def _gate() -> str:
+        return _run_prose(repo, gate_block.replace("<merge-sha>", merge))
+
+    # With no stamp commit the gate's test is the plain diff, and it is empty.
+    assert _gate() == ""
+
+    # What the stamp writes into a user's failing skill, committed by the guide's own lines.
+    skill_md.write_text(
+        "---\nname: mine\nmetadata:\n  exempt-checks: size\n"
+        "  exempt-reason: predates-checks\n---\nbody\n"
+    )
+    _run_prose(repo, commit_the_stamp)
+    assert _git_in(repo, "status", "--porcelain") == ""
+    assert _git_in(repo, "rev-list", "--count", f"{merge}..HEAD") == "1"
+
+    # It selects nothing, and the gate's test prints the stamped file's name and no diff.
+    assert _edits() == []
+    assert _gate().split() == [".agents/skills/mine/SKILL.md"]
+
+    # A real edit on top is still an edit, for both rules.
+    (repo / "app.py").write_text("fixed\n")
+    _git_in(repo, "commit", "-q", "-am", "Re-fit the app")
+    assert _edits() == ["app.py"]
+    assert "diff --git a/app.py b/app.py" in _gate()
+
+    # So is a second commit that borrows the stamp's subject: the gate's test reads the newest as
+    # the stamp and shows the file it must not touch, with the real edit before it.
+    (repo / "app.py").write_text("slipped in\n")
+    _git_in(repo, "commit", "-q", "-am", "Record skill-check exemptions")
+    names, _, diffs = _gate().partition("diff --git")
+    assert names.split() == ["app.py"]
+    assert "a/app.py b/app.py" in diffs
+
+
 # The atomic apply
 #
 # The orchestration tests inject a recording ``Runner`` (so no real
