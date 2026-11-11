@@ -26,6 +26,7 @@ from workspace_profile.snapshot import load_workspace_profile_snapshot
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.keybindings import PROFILE_FILES_LOCK
 from imbue.system_interface.shell.keybindings import SHELL_APP_NAME
 from imbue.system_interface.shell.keybindings import discard_unsent_keybinding
 from imbue.system_interface.shell.keybindings import list_app_keybinding_actions
@@ -38,8 +39,8 @@ from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryOutcome
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStatus
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStore
-from imbue.system_interface.shell.keybindings_delivery import delivered_chords_by_app
 from imbue.system_interface.shell.keybindings_delivery import deliver_unsent_keybindings
+from imbue.system_interface.shell.keybindings_delivery import delivered_chords_by_app
 from imbue.system_interface.shell.keybindings_delivery import merged_account_keybindings
 from imbue.system_interface.shell.keybindings_delivery import undelivered_keybindings
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -304,8 +305,9 @@ def save_keybinding() -> ResponseReturnValue:
         if not identity.owner:
             return detail_response("only the owner can save a keybinding for every workspace", HTTP_FORBIDDEN)
         store = KeybindingsDeliveryStore(state_directory=shell.state_directory)
-        save_unsent_keybinding(shell.repo_root, user_id, body.app, body.action, chords)
-        store.forget_delivered(body.app, body.action)
+        with PROFILE_FILES_LOCK:
+            save_unsent_keybinding(shell.repo_root, user_id, body.app, body.action, chords)
+            store.forget_delivered(body.app, body.action)
         shell.broadcast_keybindings_changed()
         delivery = deliver_unsent_keybindings(shell.repo_root, user_id, store, is_filing_allowed=True)
         return model_response(SaveKeybindingResponse(chords=tuple(chords), delivery=delivery))

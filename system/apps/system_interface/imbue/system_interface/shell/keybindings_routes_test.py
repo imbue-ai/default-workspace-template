@@ -3,6 +3,9 @@
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,7 @@ from workspace_profile.overrides import load_user_override_values
 from workspace_profile.overrides import write_user_override_values
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.system_interface.shell.keybindings import save_unsent_keybinding
 from imbue.system_interface.shell.keybindings import shell_keybinding_actions
 from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStore
@@ -420,6 +424,8 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
     @gateway.put("/minds-api-proxy/api/v1/workspaces/<workspace_id>/account-settings/keybindings")
     def put_keybindings(workspace_id: str) -> Any:
         record["puts"].append({"workspace_id": workspace_id, "body": flask_request.get_json(force=True)})
+        if record["during_put"] is not None:
+            record["during_put"]()
         if not record["is_granted"]:
             return {"detail": "not permitted"}, 403
         return {"account_id": "account-1", "keybindings": flask_request.get_json(force=True)["keybindings"]}, 200
@@ -435,7 +441,7 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
 @contextmanager
 def _served_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> Generator[dict[str, Any], None, None]:
     """Serve the stand-in gateway and point the shell's environment at it; yields the gateway's record."""
-    record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False}
+    record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False, "during_put": None}
     with serve_app(_fake_gateway_app(record)) as served:
         monkeypatch.setenv(ENV_GATEWAY, f"http://{served.host}:{served.port}")
         monkeypatch.setenv(ENV_GATEWAY_PASSWORD, "pw")
@@ -540,6 +546,11 @@ def _save_everywhere(client: FlaskClient, chords: list[str]) -> dict[str, Any]:
     return answered.get_json()
 
 
+def _after_the_delivery() -> str:
+    """A written_at the desktop would stamp on a snapshot it worked out after taking a delivery sent just now."""
+    return (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+
+
 def _settle(tmp_path: Path) -> None:
     """What the shell's snapshot watch runs when the desktop rewrites the snapshot."""
     settle_delivered_keybindings(_repo_root(tmp_path), KeybindingsDeliveryStore(state_directory=tmp_path / "state"))
@@ -570,9 +581,16 @@ def test_a_delivered_save_keeps_applying_until_the_snapshot_carries_it(
         assert client.post("/api/keybindings/deliver", json={}).get_json()["status"] == "NOTHING_TO_DELIVER"
         assert len(record["puts"]) == 1
 
-        # Once the snapshot carries the value, the unsent copy goes and the snapshot answers alone.
+        # A snapshot the desktop worked out before it took the save can land after it: the save still applies.
+        _write_snapshot(tmp_path, {"files": {"rename": ["f3"]}}, "2026-10-28T00:00:05Z")
+        _settle(tmp_path)
+        assert client.get("/api/keybindings/me").get_json()["chords_by_action"]["launcher-secondary-send"] == [
+            "alt+enter"
+        ]
+
+        # The first snapshot written after the delivery settles it: the unsent copy goes, the snapshot answers.
         _write_snapshot(
-            tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}}, "2026-10-28T00:00:05Z"
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}}, _after_the_delivery()
         )
         _settle(tmp_path)
         assert load_unsent_change_values(_repo_root(tmp_path)) == {}
@@ -590,7 +608,7 @@ def test_a_newer_snapshot_with_another_value_settles_a_delivered_save(
 
         # Another computer changed the action after this delivery: the account's newer value wins.
         _write_snapshot(
-            tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter"]}}, "2026-10-28T00:00:05Z"
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter"]}}, _after_the_delivery()
         )
         _settle(tmp_path)
 
@@ -613,3 +631,25 @@ def test_saving_a_delivered_value_everywhere_again_delivers_it_again(
         assert len(record["puts"]) == 2
         # The owner's override copy is cleared again, so nothing reads as changed only here.
         assert _launcher_send(client)["source"] == "account"
+
+
+def test_a_save_made_while_a_delivery_is_out_is_left_to_deliver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        repo_root = _repo_root(tmp_path)
+        record["during_put"] = lambda: save_unsent_keybinding(
+            repo_root, "owner-1", "system_interface", "launcher-secondary-send", ["ctrl+enter"]
+        )
+
+        _save_everywhere(client, ["alt+enter"])
+
+        # The account took alt+enter, but ctrl+enter came after it: that one still waits to be delivered.
+        catalog = client.get("/api/keybindings/catalog").get_json()
+        assert [(entry["action"], entry["chords"]) for entry in catalog["unsent"]] == [
+            ("launcher-secondary-send", ["ctrl+enter"])
+        ]
+        assert _launcher_send(client)["chords"] == ["ctrl+enter"]

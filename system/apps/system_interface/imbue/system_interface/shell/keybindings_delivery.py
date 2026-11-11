@@ -10,17 +10,23 @@ delivery. A denial or an unreachable desktop leaves the saves in the unsent file
 override file), retried whenever a save, a resolution, or the Keyboard settings asks again, until
 one lands or the user discards them.
 
-A delivered save stays in the unsent file, marked delivered, until the profile snapshot carries it:
-the desktop rewrites the snapshot only on its next sync pass, seconds later, and without the unsent
-copy every read in between would resolve the previous chord. The snapshot watch settles the marks
-(``settle_delivered_keybindings``) once the snapshot holds the delivered value, or once a newer
-snapshot holds another one (the account moved on, from another computer).
+A delivered save stays in the unsent file, marked delivered, until the desktop rewrites the profile
+snapshot after taking it: the rewrite rides the desktop's next sync pass, seconds later, and without
+the unsent copy every read in between would resolve the previous chord. The snapshot watch settles
+the marks (``settle_delivered_keybindings``) on the first snapshot written after the delivery was
+sent, whatever it carries (another value there is the account moving on, from another computer). A
+snapshot the desktop worked out before taking the delivery can land after it, so a snapshot only
+counts once its ``written_at`` is later than the delivery; that compares the desktop's clock with
+this machine's, so skew can delay a settle (harmless: the unsent copy equals the account's value) or,
+beyond the seconds a pass takes, let an older snapshot settle early.
 """
 
 import json
 import os
 from collections.abc import Mapping
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from enum import auto
 from pathlib import Path
 from typing import Any
@@ -32,7 +38,6 @@ from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
 from workspace_profile.keybindings import KEYBINDINGS_SETTING_KEY
-from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import parse_keybindings_value
 from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.snapshot import load_workspace_profile_snapshot
@@ -41,6 +46,7 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.keybindings import PROFILE_FILES_LOCK
 from imbue.system_interface.shell.keybindings import clear_delivered_override_copies
 from imbue.system_interface.shell.keybindings import drop_settled_unsent_keybindings
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -86,9 +92,7 @@ class DeliveredKeybinding(FrozenModel):
     app: str = Field(description="The app the assignment is for")
     action: str = Field(description="The action")
     chords: tuple[str, ...] = Field(description="The delivered chords")
-    snapshot_written_at: str = Field(
-        description="The snapshot's written_at when the delivery landed; a snapshot written later is newer"
-    )
+    sent_at: datetime = Field(description="When the delivery was sent; a snapshot written after it reflects it")
 
 
 class KeybindingsDeliveryStore(MutableModel):
@@ -135,16 +139,14 @@ class KeybindingsDeliveryStore(MutableModel):
         document["delivered"] = [entry.model_dump(mode="json") for entry in delivered]
         write_json_atomic(self._path(), document)
 
-    def mark_delivered(self, delivered: Mapping[str, Mapping[str, Sequence[str]]], snapshot_written_at: str) -> None:
+    def mark_delivered(self, delivered: Mapping[str, Mapping[str, Sequence[str]]], sent_at: datetime) -> None:
         """Record the assignments the account just took, replacing an older mark of the same action."""
         with STATE_FILES_LOCK:
             kept = [
                 entry for entry in self.delivered_keybindings() if entry.action not in delivered.get(entry.app, {})
             ]
             added = [
-                DeliveredKeybinding(
-                    app=app_name, action=action_id, chords=tuple(chords), snapshot_written_at=snapshot_written_at
-                )
+                DeliveredKeybinding(app=app_name, action=action_id, chords=tuple(chords), sent_at=sent_at)
                 for app_name, chords_by_action in delivered.items()
                 for action_id, chords in chords_by_action.items()
             ]
@@ -187,10 +189,14 @@ def undelivered_keybindings(
     return undelivered
 
 
-def merged_account_keybindings(workspace_root: Path) -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
+def merged_account_keybindings(
+    workspace_root: Path,
+) -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
     """The account value to PUT (the snapshot's overlaid with the unsent saves), and the unsent part alone."""
     snapshot = load_workspace_profile_snapshot(workspace_root)
-    account = parse_keybindings_value(snapshot.value_by_key.get(KEYBINDINGS_SETTING_KEY)) if snapshot is not None else {}
+    account = (
+        parse_keybindings_value(snapshot.value_by_key.get(KEYBINDINGS_SETTING_KEY)) if snapshot is not None else {}
+    )
     unsent = parse_keybindings_value(load_unsent_change_values(workspace_root).get(KEYBINDINGS_SETTING_KEY))
     merged = {app: dict(chords_by_action) for app, chords_by_action in account.items()}
     for app_name, chords_by_action in unsent.items():
@@ -250,6 +256,7 @@ def deliver_unsent_keybindings(
             status=KeybindingsDeliveryStatus.UNAVAILABLE,
             detail="This workspace is not connected to Imbue Studio, so the change stays in this workspace.",
         )
+    sent_at = datetime.now(timezone.utc)
     try:
         response = httpx.put(
             gateway.url(f"/minds-api-proxy/api/v1/workspaces/{agent_id}/account-settings/keybindings"),
@@ -264,12 +271,14 @@ def deliver_unsent_keybindings(
             detail="Imbue Studio could not be reached; the change stays in this workspace until it can.",
         )
     if response.status_code == 200:
-        clear_delivered_override_copies(workspace_root, owner_user_id, undelivered)
-        snapshot = load_workspace_profile_snapshot(workspace_root)
-        store.mark_delivered(undelivered, snapshot.written_at if snapshot is not None else "")
+        # One step against a save of the same action: a save landing between the two would keep its override copy
+        # and find its value already marked, so it would never be sent or cleared.
+        with PROFILE_FILES_LOCK:
+            clear_delivered_override_copies(workspace_root, owner_user_id, undelivered)
+            store.mark_delivered(undelivered, sent_at)
+            # The rewrite may already have landed, its watch having fired before the mark existed.
+            settle_delivered_keybindings(workspace_root, store)
         store.set_pending_request_id(None)
-        # The snapshot may already carry the value, its watch having fired before the mark existed.
-        settle_delivered_keybindings(workspace_root, store)
         logger.info("Delivered {} keybinding save(s) to the account", sum(len(v) for v in undelivered.values()))
         return KeybindingsDeliveryOutcome(status=KeybindingsDeliveryStatus.DELIVERED)
     if response.status_code == 403:
@@ -296,23 +305,30 @@ def deliver_unsent_keybindings(
     )
 
 
+def _written_after(snapshot_written_at: str, sent_at: datetime) -> bool:
+    """Whether the snapshot was written after the delivery was sent; an unreadable time counts as after, so a mark
+    never outlives the snapshot that should settle it."""
+    try:
+        written_at = datetime.fromisoformat(snapshot_written_at)
+    except ValueError:
+        return True
+    if written_at.tzinfo is None:
+        written_at = written_at.replace(tzinfo=timezone.utc)
+    return written_at > sent_at
+
+
 def settle_delivered_keybindings(workspace_root: Path, store: KeybindingsDeliveryStore) -> None:
-    """Drop the delivered saves the snapshot answers for now: it carries the delivered value, or it is newer than
-    the delivery and carries another (the account moved on). Their unsent copies go with them."""
-    delivered = store.delivered_keybindings()
-    if not delivered:
-        return
-    snapshot = load_workspace_profile_snapshot(workspace_root)
-    if snapshot is None:
-        return
-    settled = [
-        entry
-        for entry in delivered
-        if keybinding_assignment(snapshot.value_by_key, entry.app, entry.action) == list(entry.chords)
-        or snapshot.written_at != entry.snapshot_written_at
-    ]
-    if not settled:
-        return
-    drop_settled_unsent_keybindings(workspace_root, delivered_chords_by_app(settled))
-    store.remove_delivered(settled)
+    """Drop the delivered saves a snapshot written after them answers for now, with their unsent copies."""
+    with PROFILE_FILES_LOCK:
+        delivered = store.delivered_keybindings()
+        if not delivered:
+            return
+        snapshot = load_workspace_profile_snapshot(workspace_root)
+        if snapshot is None:
+            return
+        settled = [entry for entry in delivered if _written_after(snapshot.written_at, entry.sent_at)]
+        if not settled:
+            return
+        drop_settled_unsent_keybindings(workspace_root, delivered_chords_by_app(settled))
+        store.remove_delivered(settled)
     logger.info("The profile snapshot now answers {} delivered keybinding save(s)", len(settled))
