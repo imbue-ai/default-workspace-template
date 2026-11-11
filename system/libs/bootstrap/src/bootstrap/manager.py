@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import time
+import tomllib
 import uuid
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -79,6 +80,14 @@ UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
 # written straight into /etc/cron.d at every boot.
 ROUTINES_TICK_CRON_NAME = "routines"
 ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
+# Where the built-in apps live (``_built_in_app_manifests`` says which of its directories are built in).
+BUILT_IN_APPS_DIR = Path("system/apps")
+# The registry writer, stdlib-only, run with a bare python3 as every app's program line runs it.
+# own-process: other-tree -- the boot rolls back an interrupted update and re-syncs the venv after this process started, so an import would load the registry writer as it was at start
+FORWARD_PORT_SCRIPT = Path("system/scripts/forward_port.py")
+# Bound on the run that rewrites every built-in app's keybindings: local file reads and one locked registry rewrite
+# per app.
+_KEYBINDINGS_REFRESH_TIMEOUT_SECONDS = 60.0
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
 # /run/lock, so `flock` there fails and the guard never runs.
@@ -676,6 +685,71 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _built_in_app_manifests() -> list[Path]:
+    """The ``app.toml`` of every built-in app: each root workspace member under ``system/apps``
+    that has one (a user's app is a standalone project, never a member). An unreadable root
+    ``pyproject.toml`` reads as no apps."""
+    try:
+        root_pyproject = tomllib.loads(
+            Path("pyproject.toml").read_text(encoding="utf-8")
+        )
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        logger.warning(
+            "Could not read the workspace members to refresh the apps' keybindings: {}",
+            e,
+        )
+        return []
+    members = (
+        root_pyproject.get("tool", {})
+        .get("uv", {})
+        .get("workspace", {})
+        .get("members", [])
+    )
+    manifests: list[Path] = []
+    for pattern in members:
+        for member in sorted(Path(".").glob(pattern)):
+            if member.parent == BUILT_IN_APPS_DIR and (member / "app.toml").is_file():
+                manifests.append(member / "app.toml")
+    return manifests
+
+
+def _refresh_built_in_app_keybindings() -> None:
+    """Rewrite the keybindings on every built-in app's registry row from its manifest BEFORE any
+    service starts.
+
+    An app writes its row only when its program starts, so an app that is stopped when the
+    workspace starts (one that stops when no window shows it) would keep the keybindings of the
+    release it last ran under, and the shortcuts screen and every app's resolved chords would read
+    its old defaults. Best-effort: the boot must reach supervisord either way, and each app
+    rewrites its whole row when it next starts.
+    """
+    manifests = _built_in_app_manifests()
+    if not manifests:
+        return
+    try:
+        result = subprocess.run(
+            [
+                "python3",
+                str(FORWARD_PORT_SCRIPT),
+                "--refresh-keybindings",
+                *(str(manifest) for manifest in manifests),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_KEYBINDINGS_REFRESH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("Skipped refreshing the apps' keybindings: {}", e)
+        return
+    if result.returncode != 0:
+        logger.warning(
+            "Refreshing the apps' keybindings failed (rc={}): {}",
+            result.returncode,
+            result.stderr.strip()[-500:],
+        )
+
+
 def _read_update_marker_dri_agent() -> str:
     """The DRI agent recorded in the update-apply marker, or "" when unreadable.
 
@@ -971,9 +1045,12 @@ def main() -> None:
     with _bootstrap_step("set_timezone", "Setting the clock to your timezone"):
         _set_container_timezone()
 
-    # Overlay symlinks must exist before services start writing.
+    # Overlay symlinks must exist before services start writing, and the
+    # registry must carry every built-in app's current keybindings before the
+    # shell reads it, whether or not the app itself starts.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
         _run_env_converge_fast_phase()
+        _refresh_built_in_app_keybindings()
 
     # Re-engage the agent whose update the boot-time rollback undid. Held until
     # here on purpose: waking it starts a live agent running `uv run`, which

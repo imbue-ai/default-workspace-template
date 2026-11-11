@@ -144,3 +144,12 @@
 .windows-viewing * {
   pointer-events: none !important;
 }
+
+/* The keyboard shortcuts page, which Imbue Studio's Workspace settings frames: the frame takes the page's height
+   and shows the settings pane through it, so the page neither clips nor paints a background of its own. It
+   overrides the base layer's body rule, which is unlayered, so a utility cannot. */
+body.keyboard-shortcuts-page-body {
+  height: auto;
+  overflow: visible;
+  background-color: transparent;
+}

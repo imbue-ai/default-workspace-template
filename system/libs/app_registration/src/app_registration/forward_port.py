@@ -10,6 +10,7 @@ Usage:
     python3 system/scripts/forward_port.py --name terminal --url http://localhost:7681
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
     python3 system/scripts/forward_port.py --remove --name terminal
+    python3 system/scripts/forward_port.py --refresh-keybindings system/apps/files/app.toml system/apps/chat/app.toml
 
 This module is deliberately standard-library only, so it runs under a plain
 ``python3``: app program lines run it that way before their own command,
@@ -27,9 +28,11 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing),
-``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
+``keybindings`` (id, label, default_chords, and scope when given), and ``theming_mode`` (the ``[theming]`` table's mode,
 when the manifest has one); the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
+``--refresh-keybindings`` rewrites only the ``keybindings`` of existing rows from their manifests, so the
+boot can carry a release's new defaults onto the row of an app that is not running.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -869,8 +872,9 @@ def _copied_message_handler(
 def _copied_keybinding(
     action: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest keybinding action as the registry row carries it: ``id``, ``label``, and ``default_chords``.
-    Returns ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    """One manifest keybinding action as the registry row carries it: ``id``, ``label``, ``default_chords``, and
+    ``scope`` when the manifest wrote one. Returns ``(copied, None)``, or ``(None, error)`` when the entry is not
+    shaped as the manifest requires."""
     if not (
         isinstance(action, dict)
         and isinstance(action.get("id"), str)
@@ -889,11 +893,19 @@ def _copied_keybinding(
             None,
             f"manifest {str(path)!r}: a keybinding's default_chords must be an array of strings",
         )
-    return {
+    copied: dict[str, object] = {
         "id": action["id"],
         "label": action["label"],
         "default_chords": list(default_chords),
-    }, None
+    }
+    if "scope" in action:
+        if not isinstance(action["scope"], str):
+            return (
+                None,
+                f"manifest {str(path)!r}: a keybinding's scope must be a string",
+            )
+        copied["scope"] = action["scope"]
+    return copied, None
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
@@ -1150,6 +1162,32 @@ def register_manifest(
     return name
 
 
+def refresh_keybindings(path: Path, manifest_path: Path) -> str | None:
+    """Rewrite the ``keybindings`` of the row of the app ``manifest_path`` describes from the manifest,
+    leaving every other key alone; return the app's name, or None when it has no row to refresh.
+
+    An app writes its row only when its program starts, so one that is stopped (or stops when no
+    window shows it) would otherwise keep the keybindings of the release it last ran under. A row is
+    never created here: only the app's own registration knows its URL. Raises RegistrationError when
+    the manifest is refused.
+    """
+    manifest_fields, _icon_path, manifest_error = _read_manifest(manifest_path, None)
+    if manifest_error is not None:
+        raise RegistrationError(manifest_error)
+    name = str(manifest_fields["name"])
+    with _registry_lock(path):
+        apps = _load_apps(path)
+        row = next((app for app in apps if app.get("name") == name), None)
+        if row is None:
+            return None
+        if "keybindings" in manifest_fields:
+            row["keybindings"] = manifest_fields["keybindings"]
+        else:
+            row.pop("keybindings", None)
+        _save_apps(path, apps)
+    return name
+
+
 def remove(path: Path, name: str) -> None:
     """Remove ``name`` from the registry at ``path``; a name with no entry is a no-op."""
     name_error = validate_service_name(name)
@@ -1231,7 +1269,35 @@ def main() -> None:
             "no manifest to carry one (a preview of the app). Authoritative per call."
         ),
     )
+    parser.add_argument(
+        "--refresh-keybindings",
+        nargs="+",
+        metavar="MANIFEST",
+        help=(
+            "Rewrite only the keybindings of each named app.toml's existing row from the manifest, whether or "
+            "not the app is running; an app with no row is skipped. Combines with no other option."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.refresh_keybindings is not None:
+        if any(
+            value not in (None, False)
+            for key, value in vars(args).items()
+            if key != "refresh_keybindings"
+        ):
+            parser.error(
+                "--refresh-keybindings cannot be combined with any other option"
+            )
+        errors: list[str] = []
+        for manifest in args.refresh_keybindings:
+            try:
+                refresh_keybindings(apps_file(), Path(manifest))
+            except RegistryError as error:
+                errors.append(str(error))
+        if errors:
+            parser.error("; ".join(errors))
+        return
 
     if args.manifest is None and args.name is None:
         parser.error("--name is required without --manifest")

@@ -12,6 +12,7 @@ import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
+  SHELL_CHORD,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
@@ -23,10 +24,13 @@ import {
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_SHORTCUT,
   SHELL_SHOWN,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  SHELL_WORKSPACE_CHORDS,
 } from "@imbue/workspace-ui/src/app_contract";
+import { setResolvedShellKeybindingsForTest, setShellChordPlatformForTest } from "../model/keybindings";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -418,6 +422,7 @@ describe("creating and positioning", () => {
     expect(spy.mock.calls.map((call) => call[0])).toMatchObject([
       { type: SHELL_HANDSHAKE, windowId: "win-a", desktopId: "alice", isViewing: true },
       { type: SHELL_THEME },
+      { type: SHELL_WORKSPACE_CHORDS },
     ]);
 
     // Back on an own desktop, a page's focus raises its window again, and its capabilities greet it unviewed.
@@ -578,9 +583,11 @@ describe("covered pages", () => {
     expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
       SHELL_HANDSHAKE,
       SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
       SHELL_SHOWN,
       SHELL_HANDSHAKE,
       SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
       SHELL_SHOWN,
     ]);
     store.minimizeWindow("win-2");
@@ -682,6 +689,40 @@ describe("covered pages", () => {
 });
 
 describe("the contract", () => {
+  it("hands every greeted page the workspace-wide chords, on a change and in the greeting", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    layer.sendWorkspaceChords(["alt+meta+w"], "desktop");
+    load("win-1");
+    const chordMessages = spy.mock.calls
+      .map((call) => call[0])
+      .filter((message) => message.type === SHELL_WORKSPACE_CHORDS);
+    expect(chordMessages).toEqual([
+      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
+      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"], surface: "desktop" },
+      { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+meta+w"], surface: "desktop" },
+    ]);
+  });
+
+  it("runs the workspace-wide action of a page's shortcut, and hands a page a chord intercepted for it", () => {
+    setShellChordPlatformForTest("mac");
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    try {
+      load("win-1");
+      messageFromPage("win-1", { type: SHELL_SHORTCUT, chord: "meta+j" });
+      expect(store.isLauncherOpen()).toBe(false);
+      messageFromPage("win-1", { type: SHELL_SHORTCUT, chord: "meta+k" });
+      expect(store.isLauncherOpen()).toBe(true);
+
+      const spy = spyOnFrame("win-1");
+      layer.sendChord("win-1", "alt+f4");
+      expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_CHORD, chord: "alt+f4" }]);
+    } finally {
+      setResolvedShellKeybindingsForTest(null);
+      setShellChordPlatformForTest(null);
+    }
+  });
+
   it("tells every greeted page a theme the shell wears, from the newest layer only", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
@@ -728,6 +769,8 @@ describe("the contract", () => {
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
+      // So are the workspace-wide chords and where the workspace runs (the keyboard-shortcuts spec, section 6.1).
+      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
       { type: SHELL_SHOWN },
     ]);
     store.minimizeWindow("win-1");
@@ -747,6 +790,7 @@ describe("the contract", () => {
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
+      { type: SHELL_WORKSPACE_CHORDS, chords: [], surface: "browser" },
       { type: SHELL_HIDDEN },
     ]);
   });
@@ -759,16 +803,23 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
       SHELL_HANDSHAKE,
       SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
       SHELL_SHOWN,
       SHELL_HANDSHAKE,
       SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
     ]);
     store.minimizeWindow("win-1");
     layer.reconcile();
     load("win-1");
     spy.mockClear();
     messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
-    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
+      SHELL_HIDDEN,
+    ]);
   });
 
   it("tells a hidden page whose contract connects before its load that it is hidden once, not again on a reconcile", () => {
@@ -777,7 +828,12 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
     layer.reconcile();
-    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([
+      SHELL_HANDSHAKE,
+      SHELL_THEME,
+      SHELL_WORKSPACE_CHORDS,
+      SHELL_HIDDEN,
+    ]);
   });
 
   it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {

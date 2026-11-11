@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.manifest import KeybindingAction
+from app_manifest.manifest import KeybindingScope
 from loguru import logger
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
+from workspace_profile.keybindings import effective_keybinding_assignment
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
-from workspace_profile.manifest import find_off_grammar_default_chords
+from workspace_profile.manifest import find_invalid_default_chords
 from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.overrides import load_user_override_values
@@ -34,6 +36,7 @@ from workspace_profile.snapshot import WorkspaceProfileSnapshot
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.desktop_document import launcher_order
 
 SHELL_APP_NAME: Final[str] = "system_interface"
 SHELL_DISPLAY_NAME: Final[str] = "Workspace"
@@ -65,21 +68,29 @@ def shell_keybinding_actions() -> tuple[KeybindingAction, ...]:
 
 
 def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[AppKeybindingActions]:
-    """Every app's declared keybinding actions: the shell's own, then each registered app that declares any.
+    """Every app's declared keybinding actions: the shell's own, then each registered app that declares any, in the
+    launcher's order (``launcher_order``), so the screen lists the apps where the launcher does.
 
-    A row whose default chords are off the grammar (a registration the reader cannot trust) is
-    skipped with a warning rather than offered for re-binding.
+    A row whose default chords are invalid (a registration the reader cannot trust), or that claims a
+    workspace-wide action (the shell's alone), is skipped with a warning rather than offered for re-binding.
     """
     listed = [
         AppKeybindingActions(app=SHELL_APP_NAME, display_name=SHELL_DISPLAY_NAME, actions=shell_keybinding_actions())
     ]
-    for entry in entries:
-        row = entry.row
+    for row in launcher_order([entry.row for entry in entries]):
         if str(row.name) == SHELL_APP_NAME or not row.keybindings:
             continue
-        off_grammar = find_off_grammar_default_chords(row.keybindings)
-        if off_grammar:
-            logger.warning("Skipped {}'s keybindings: default chords off the grammar: {}", row.name, off_grammar)
+        invalid = find_invalid_default_chords(row.keybindings)
+        if invalid:
+            logger.warning("Skipped {}'s keybindings: default chords it may not have: {}", row.name, invalid)
+            continue
+        workspace_wide = [str(action.id) for action in row.keybindings if action.scope is KeybindingScope.WORKSPACE]
+        if workspace_wide:
+            logger.warning(
+                "Skipped {}'s keybindings: only the shell declares workspace-wide actions: {}",
+                row.name,
+                workspace_wide,
+            )
             continue
         display_name = str(row.display_name) if row.display_name is not None else str(row.name)
         listed.append(AppKeybindingActions(app=str(row.name), display_name=display_name, actions=row.keybindings))
@@ -97,12 +108,18 @@ def resolve_assignment_source(
     """Which layer answers the action for this identity, by the resolution's own order."""
     user_id = resolve_request_user_id(identity, snapshot)
     if user_id is not None:
-        if keybinding_assignment(load_user_override_values(workspace_root, user_id), app_name, action_id) is not None:
+        if (
+            effective_keybinding_assignment(load_user_override_values(workspace_root, user_id), app_name, action_id)
+            is not None
+        ):
             return SOURCE_WORKSPACE
     if identity.owner:
-        if keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id) is not None:
+        if effective_keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id) is not None:
             return SOURCE_UNSENT
-        if snapshot is not None and keybinding_assignment(snapshot.value_by_key, app_name, action_id) is not None:
+        if (
+            snapshot is not None
+            and effective_keybinding_assignment(snapshot.value_by_key, app_name, action_id) is not None
+        ):
             return SOURCE_ACCOUNT
     return SOURCE_DEFAULT
 

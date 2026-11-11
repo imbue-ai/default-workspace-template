@@ -3,7 +3,7 @@ import {
   DEVICE_STORAGE_KEY,
   ENGINE_STORAGE_KEY,
   describeHost,
-  dictationShortcutChord,
+  DICTATION_SHORTCUT_CHORD,
   dictationShortcutLabel,
   isApplePlatform,
   isDictationSupported,
@@ -55,7 +55,6 @@ describe("dictation support", () => {
     expect(isApplePlatform({ platform: "Win32", userAgent: "Mozilla/5.0 (Windows NT 10.0)" })).toBe(false);
     expect(dictationShortcutLabel(true)).toBe("Cmd+Shift+M");
     expect(dictationShortcutLabel(false)).toBe("Ctrl+Shift+M");
-    expect(dictationShortcutChord(true)).toBe("shift+meta+m");
-    expect(dictationShortcutChord(false)).toBe("ctrl+shift+m");
+    expect(DICTATION_SHORTCUT_CHORD).toBe("shift+meta+m");
   });
 });

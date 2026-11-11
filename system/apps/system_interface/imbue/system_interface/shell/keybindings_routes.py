@@ -6,6 +6,7 @@ import os
 from enum import auto
 from typing import Final
 
+from app_manifest.manifest import KeybindingScope
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
@@ -13,6 +14,8 @@ from flask.typing import ResponseReturnValue
 from latchkey_access.gateway import GatewayAccess
 from pydantic import Field
 from workspace_profile.errors import InvalidChordError
+from workspace_profile.keybindings import MAX_CHORDS_PER_ACTION
+from workspace_profile.keybindings import is_workspace_wide_chord
 from workspace_profile.keybindings import normalize_chord
 from workspace_profile.keybindings import resolve_app_keybindings
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
@@ -72,7 +75,11 @@ class KeybindingActionView(FrozenModel):
     label: str = Field(description="What the action does")
     default_chords: tuple[str, ...] = Field(description="The app's out-of-the-box chords")
     chords: tuple[str, ...] = Field(description="The chords resolved for this requester")
+    reset_chords: tuple[str, ...] = Field(
+        description="The chords a reset leaves: the resolution without the requester's override in this workspace"
+    )
     source: str = Field(description="Which layer answered: default, account, unsent, or workspace")
+    scope: KeybindingScope = Field(description="Where the chord fires: 'app' (its own page) or 'workspace' (anywhere)")
 
 
 class KeybindingAppView(FrozenModel):
@@ -89,6 +96,9 @@ class UnsentKeybindingView(FrozenModel):
     app: str = Field(description="The app the assignment is for")
     action: str = Field(description="The action")
     chords: tuple[str, ...] = Field(description="The saved chords")
+    restored_chords: tuple[str, ...] = Field(
+        description="The chords a discard of this save leaves: the resolution without it and without the override"
+    )
 
 
 class KeybindingsCatalogResponse(FrozenModel):
@@ -184,13 +194,34 @@ def get_keybindings_catalog() -> ResponseReturnValue:
     identity = request_identity()
     snapshot = load_workspace_profile_snapshot(shell.repo_root)
     apps = []
+    restored_chords_by_app: dict[str, dict[str, list[str]]] = {}
     for app_actions in list_app_keybinding_actions(shell.inventory.entries()):
+        default_chords_by_action = {
+            str(action.id): tuple(str(chord) for chord in action.default_chords) for action in app_actions.actions
+        }
         resolved = resolve_app_keybindings(
             app_actions.app,
-            {str(action.id): tuple(str(chord) for chord in action.default_chords) for action in app_actions.actions},
+            default_chords_by_action,
             snapshot=snapshot,
             identity=identity,
             workspace_root=shell.repo_root,
+        )
+        resolved_without_override = resolve_app_keybindings(
+            app_actions.app,
+            default_chords_by_action,
+            snapshot=snapshot,
+            identity=identity,
+            workspace_root=shell.repo_root,
+            is_user_override_applied=False,
+        )
+        restored_chords_by_app[app_actions.app] = resolve_app_keybindings(
+            app_actions.app,
+            default_chords_by_action,
+            snapshot=snapshot,
+            identity=identity,
+            workspace_root=shell.repo_root,
+            is_user_override_applied=False,
+            is_unsent_applied=False,
         )
         actions = tuple(
             KeybindingActionView(
@@ -198,6 +229,7 @@ def get_keybindings_catalog() -> ResponseReturnValue:
                 label=str(action.label),
                 default_chords=tuple(str(chord) for chord in action.default_chords),
                 chords=tuple(resolved[str(action.id)]),
+                reset_chords=tuple(resolved_without_override[str(action.id)]),
                 source=resolve_assignment_source(
                     app_actions.app,
                     str(action.id),
@@ -205,13 +237,19 @@ def get_keybindings_catalog() -> ResponseReturnValue:
                     identity=identity,
                     workspace_root=shell.repo_root,
                 ),
+                scope=action.scope,
             )
             for action in app_actions.actions
         )
         apps.append(KeybindingAppView(app=app_actions.app, display_name=app_actions.display_name, actions=actions))
     _merged, unsent = merged_account_keybindings(shell.repo_root)
     unsent_views = tuple(
-        UnsentKeybindingView(app=app_name, action=action_id, chords=tuple(chords))
+        UnsentKeybindingView(
+            app=app_name,
+            action=action_id,
+            chords=tuple(chords),
+            restored_chords=tuple(restored_chords_by_app.get(app_name, {}).get(action_id, ())),
+        )
         for app_name, chords_by_action in sorted(unsent.items())
         for action_id, chords in sorted(chords_by_action.items())
     )
@@ -237,12 +275,23 @@ def save_keybinding() -> ResponseReturnValue:
         chords = [normalize_chord(chord) for chord in body.chords]
     except InvalidChordError as e:
         return detail_response(str(e), HTTP_BAD_REQUEST)
-    is_known_action = any(
-        app_actions.app == body.app and any(action.id == body.action for action in app_actions.actions)
+    if len(chords) > MAX_CHORDS_PER_ACTION:
+        return detail_response(f"an action takes at most {MAX_CHORDS_PER_ACTION} chords", HTTP_BAD_REQUEST)
+    declared = [
+        action
         for app_actions in list_app_keybinding_actions(shell.inventory.entries())
-    )
-    if not is_known_action:
+        if app_actions.app == body.app
+        for action in app_actions.actions
+        if action.id == body.action
+    ]
+    if not declared:
         return detail_response(f"no app declares the action {body.app}.{body.action}", HTTP_BAD_REQUEST)
+    if declared[0].scope is KeybindingScope.WORKSPACE and not all(is_workspace_wide_chord(chord) for chord in chords):
+        return detail_response(
+            f"{body.app}.{body.action} works everywhere in the workspace, so each of its chords needs a modifier "
+            "other than shift, or a function key",
+            HTTP_BAD_REQUEST,
+        )
     user_id = resolve_request_user_id(identity, snapshot)
     if user_id is None:
         return detail_response("a visitor with no account cannot save keybindings", HTTP_FORBIDDEN)

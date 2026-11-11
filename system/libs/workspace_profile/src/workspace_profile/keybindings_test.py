@@ -6,8 +6,11 @@ from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
 
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (
+    MAX_CHORDS_PER_ACTION,
     describe_keybindings_value_problem,
+    effective_keybinding_assignment,
     is_canonical_chord,
+    is_workspace_wide_chord,
     keybinding_assignment,
     normalize_chord,
     parse_keybindings_value,
@@ -15,6 +18,7 @@ from workspace_profile.keybindings import (
     with_keybinding_assignment,
     without_keybinding_assignment,
 )
+from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.overrides import (
     UNSENT_CHANGES_RELATIVE_PATH,
     load_unsent_change_values,
@@ -23,6 +27,7 @@ from workspace_profile.overrides import (
     write_user_override_values,
 )
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
+from workspace_profile.superseded_defaults import SUPERSEDED_DEFAULT_CHORDS
 
 _VISITOR = RequestIdentity(owner=False, user_id="visitor-1", email="v@example.com")
 
@@ -85,10 +90,28 @@ def test_normalize_chord_canonicalizes_recorder_spellings(spelled: str, canonica
     assert is_canonical_chord(normalized)
 
 
-@pytest.mark.parametrize("spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey"])
-def test_normalize_chord_refuses_what_it_cannot_spell(spelled: str) -> None:
+@pytest.mark.parametrize("spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey", "Alt+Cmd+Delete"])
+def test_normalize_chord_refuses_what_it_cannot_spell_or_may_not_bind(spelled: str) -> None:
     with pytest.raises(InvalidChordError):
         normalize_chord(spelled)
+
+
+@pytest.mark.parametrize(
+    ("chord", "is_workspace_wide"),
+    [
+        ("meta+k", True),
+        ("alt+meta+w", True),
+        ("f6", True),
+        ("shift+f6", True),
+        ("ctrl+space", True),
+        ("k", False),
+        ("shift+k", False),
+        ("enter", False),
+        ("escape", False),
+    ],
+)
+def test_a_workspace_wide_chord_holds_a_real_modifier_or_is_a_function_key(chord: str, is_workspace_wide: bool) -> None:
+    assert is_workspace_wide_chord(chord) is is_workspace_wide
 
 
 def test_a_valid_keybindings_value_has_no_problem() -> None:
@@ -106,8 +129,19 @@ def test_a_valid_keybindings_value_has_no_problem() -> None:
         ({"files": {"Rename!": ["f2"]}}, "not an action id"),
         ({"files": {"rename": "f2"}}, "list of chords"),
         ({"files": {"rename": ["F2"]}}, "not a canonical chord"),
+        ({"files": {"rename": ["alt+meta+delete"]}}, "belongs to the operating system"),
+        ({"files": {"rename": [f"meta+{n}" for n in range(10)] + list("abcdefg")}}, "more than 16 chords"),
     ],
-    ids=["not-a-map", "bad-app-name", "no-action-level", "bad-action-id", "chords-not-a-list", "bad-chord"],
+    ids=[
+        "not-a-map",
+        "bad-app-name",
+        "no-action-level",
+        "bad-action-id",
+        "chords-not-a-list",
+        "bad-chord",
+        "refused-chord",
+        "too-many-chords",
+    ],
 )
 def test_keybindings_value_problems_are_named(value: object, problem_fragment: str) -> None:
     problem = describe_keybindings_value_problem(value)
@@ -147,6 +181,66 @@ def test_resolution_order_for_the_owner(tmp_path: Path) -> None:
     assert resolved_with_override == {"send-message": ["alt+enter"]}
 
 
+def test_resolution_keeps_an_assignments_first_chords_up_to_the_limit(tmp_path: Path) -> None:
+    stored = [f"meta+{n}" for n in range(10)] + list("abcdefg")
+    snapshot = _snapshot({"chat": {"send-message": stored}})
+
+    resolved = resolve_app_keybindings(
+        "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"send-message": stored[:MAX_CHORDS_PER_ACTION]}
+
+
+def test_resolution_without_the_override_answers_what_a_reset_restores(tmp_path: Path) -> None:
+    defaults = {"send-message": ["enter"]}
+    snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
+    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"chat": {"send-message": ["alt+enter"]}}})
+
+    without_override = resolve_app_keybindings(
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+        is_user_override_applied=False,
+    )
+    with_override = resolve_app_keybindings(
+        "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert with_override == {"send-message": ["alt+enter"]}
+    assert without_override == {"send-message": ["ctrl+enter"]}
+
+
+def test_resolution_without_the_unsent_layer_answers_what_a_discard_restores(tmp_path: Path) -> None:
+    defaults = {"send-message": ["enter"]}
+    snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
+    write_unsent_change_values(tmp_path, {"keybindings": {"chat": {"send-message": ["meta+enter"]}}})
+    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"chat": {"send-message": ["meta+enter"]}}})
+
+    without_override = resolve_app_keybindings(
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+        is_user_override_applied=False,
+    )
+    without_override_or_unsent = resolve_app_keybindings(
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+        is_user_override_applied=False,
+        is_unsent_applied=False,
+    )
+
+    assert without_override == {"send-message": ["meta+enter"]}
+    assert without_override_or_unsent == {"send-message": ["ctrl+enter"]}
+
+
 def test_a_visitor_never_sees_the_owners_account_or_unsent_values(tmp_path: Path) -> None:
     defaults = {"send-message": ["enter"]}
     snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
@@ -178,6 +272,104 @@ def test_an_empty_assignment_unbinds_rather_than_falling_back(tmp_path: Path) ->
         "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
     )
     assert resolved == {"send-message": []}
+
+
+def test_a_save_of_an_actions_superseded_default_list_resolves_as_no_assignment(tmp_path: Path) -> None:
+    # Files' Go up and the shell's launcher action as saved before each default was written once, in any order,
+    # in the owner's override file and in the account alike: each action gets its current default.
+    write_user_override_values(
+        tmp_path, "owner-1", {"keybindings": {"files": {"go-up": ["alt+arrowup", "meta+arrowup", "ctrl+arrowup"]}}}
+    )
+    snapshot = _snapshot({"system_interface": {"launcher-secondary-send": ["meta+enter", "ctrl+enter"]}})
+
+    files = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+    shell = resolve_app_keybindings(
+        "system_interface",
+        {"launcher-secondary-send": ["meta+enter"]},
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
+    )
+
+    assert files == {"go-up": ["meta+arrowup"]}
+    assert shell == {"launcher-secondary-send": ["meta+enter"]}
+
+
+def test_a_superseded_override_gives_way_to_the_accounts_real_choice(tmp_path: Path) -> None:
+    write_user_override_values(
+        tmp_path, "owner-1", {"keybindings": {"files": {"go-up": ["ctrl+arrowup", "meta+arrowup", "alt+arrowup"]}}}
+    )
+    snapshot = _snapshot({"files": {"go-up": ["alt+meta+arrowup"]}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"go-up": ["alt+meta+arrowup"]}
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        ["ctrl+arrowup", "meta+arrowup"],
+        ["ctrl+arrowup", "meta+arrowup", "alt+arrowup", "f6"],
+        ["ctrl+arrowup", "meta+arrowup", "alt+arrowleft"],
+        [],
+    ],
+    ids=["a-subset", "a-superset", "one-chord-changed", "unbound"],
+)
+def test_a_save_that_differs_from_the_superseded_default_list_is_kept(tmp_path: Path, saved: list[str]) -> None:
+    snapshot = _snapshot({"files": {"go-up": saved}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"go-up": ["meta+arrowup"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"go-up": saved}
+
+
+def test_another_actions_superseded_list_is_a_real_choice() -> None:
+    layer = {"keybindings": {"files": {"select-all": ["ctrl+s", "meta+s"]}}}
+
+    assert effective_keybinding_assignment(layer, "files", "select-all") == ["ctrl+s", "meta+s"]
+
+
+def test_the_stored_assignment_keeps_a_superseded_list_that_resolution_reads_as_none() -> None:
+    layer = {"keybindings": {"chat": {"send-message": ["meta+enter", "enter", "ctrl+enter"]}}}
+
+    assert keybinding_assignment(layer, "chat", "send-message") == ["meta+enter", "enter", "ctrl+enter"]
+    assert effective_keybinding_assignment(layer, "chat", "send-message") is None
+
+
+def test_every_superseded_default_names_an_action_its_app_still_declares() -> None:
+    apps_directory = Path(__file__).resolve().parents[4] / "apps"
+    for app_name, chords_by_action in SUPERSEDED_DEFAULT_CHORDS.items():
+        declared = load_app_keybinding_actions(apps_directory / app_name / "app.toml")
+        assert set(chords_by_action) <= {str(action.id) for action in declared}, app_name
+
+
+def test_no_superseded_default_is_the_actions_current_default() -> None:
+    apps_directory = Path(__file__).resolve().parents[4] / "apps"
+    for app_name, chords_by_action in SUPERSEDED_DEFAULT_CHORDS.items():
+        current = {
+            str(action.id): frozenset(str(chord) for chord in action.default_chords)
+            for action in load_app_keybinding_actions(apps_directory / app_name / "app.toml")
+        }
+        for action_id, superseded in chords_by_action.items():
+            assert superseded != current[action_id], f"{app_name}.{action_id}"
+
+
+def test_an_override_saving_the_current_default_wins_over_the_accounts_choice(tmp_path: Path) -> None:
+    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"files": {"rename": ["f2"]}}})
+    snapshot = _snapshot({"files": {"rename": ["f3"]}})
+
+    resolved = resolve_app_keybindings(
+        "files", {"rename": ["f2"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+    )
+
+    assert resolved == {"rename": ["f2"]}
 
 
 def test_assignment_helpers_round_trip_one_layer() -> None:

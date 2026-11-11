@@ -95,7 +95,7 @@ import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from 
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
 import {
   describeHost,
-  dictationShortcutChord,
+  DICTATION_SHORTCUT_CHORD,
   dictationShortcutLabel,
   isApplePlatform,
   isDictationSupported,
@@ -316,6 +316,8 @@ function clearComposerHint(chatId: string): void {
  *  text (``stageElementReferences``). */
 // The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
 let mountedComposerTextarea: HTMLTextAreaElement | null = null;
+// What the mounted composer's Stop button does, while the button is showing; null otherwise.
+let mountedComposerStop: (() => Promise<void>) | null = null;
 
 /** Put the keyboard in the page's composer; false when there is none to take it (not mounted, or disabled). */
 export function focusComposer(): boolean {
@@ -324,6 +326,13 @@ export function focusComposer(): boolean {
   }
   mountedComposerTextarea.focus();
   return true;
+}
+
+/** Press the page's Stop button (the Stop the agent shortcut): stop the agent's turn and take its queued messages
+ *  back into the composer. Nothing happens when the button is not showing: no turn to stop, or a stop already
+ *  under way. */
+export function stopComposerAgent(): void {
+  if (mountedComposerStop !== null) void mountedComposerStop();
 }
 
 export function prependToComposer(chatId: string, block: string): void {
@@ -723,7 +732,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   }
 
   function handleDictationShortcut(event: KeyboardEvent): void {
-    if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
+    if (!keydownMatchesChords(event, [DICTATION_SHORTCUT_CHORD])) return;
     event.preventDefault();
     toggleDictation();
   }
@@ -1438,7 +1447,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The fallback is the manifest's defaults, so sending works in the moment
         // before the resolved chords land; Shift+Enter stays the fixed line break.
-        if (matchesKeybinding(event, "send-message", ["enter", "ctrl+enter", "meta+enter"])) {
+        if (matchesKeybinding(event, "send-message", ["enter"])) {
           event.preventDefault();
           void handleSubmit();
         }
@@ -2050,6 +2059,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     oncreate: (textareaVnode: m.VnodeDOM) => {
                       messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                       mountedComposerTextarea = messageTextareaElement;
+                      mountedComposerStop = isStopButtonVisible ? handleStopToComposer : null;
                       wasComposerDisabled = isComposerDisabled;
                       refitComposer();
                       focusMessageTextarea();
@@ -2057,13 +2067,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     onupdate: (textareaVnode: m.VnodeDOM) => {
                       messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                       mountedComposerTextarea = messageTextareaElement;
+                      mountedComposerStop = isStopButtonVisible ? handleStopToComposer : null;
                       refitComposer(isTypingUntilRedraw);
                       isTypingUntilRedraw = false;
                       if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                       wasComposerDisabled = isComposerDisabled;
                     },
                     onremove: () => {
-                      if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
+                      if (mountedComposerTextarea === messageTextareaElement) {
+                        mountedComposerTextarea = null;
+                        mountedComposerStop = null;
+                      }
                       messageTextareaElement = null;
                     },
                     oninput: (event: Event) => {

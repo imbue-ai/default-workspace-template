@@ -16,7 +16,9 @@ A keybindings value is one map of app name, then action id, then the assigned
 chords. Unlike a scalar setting it resolves per assignment: for each action,
 the requesting user's override in this workspace wins, then (owner only) the
 shell's unsent account changes, then (owner only) the owner account's value
-from the snapshot, then the app's declared default.
+from the snapshot, then the app's declared default. A layer whose assignment is
+exactly the action's default from before the defaults were written once
+(``superseded_defaults``) holds none, so the action takes its current default.
 """
 
 import re
@@ -34,6 +36,7 @@ from workspace_profile.overrides import (
 )
 from workspace_profile.resolve import resolve_request_user_id
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
+from workspace_profile.superseded_defaults import is_superseded_default_assignment
 
 # The one snapshot/override/unsent key keybindings live under.
 KEYBINDINGS_SETTING_KEY: Final[str] = "keybindings"
@@ -73,6 +76,15 @@ CHORD_NAMED_KEYS: Final[tuple[str, ...]] = (
     "f11",
     "f12",
 )
+
+# The chords no binding may claim: Ctrl+Alt+Del, which Windows keeps for itself, refused on every
+# platform so one account's bindings mean the same everywhere (the Windows key needs no entry:
+# it is not a modifier of the grammar). Pinned cross-repo by the snapshot contract fixture.
+REFUSED_CHORDS: Final[tuple[str, ...]] = ("alt+meta+delete",)
+
+# The most chords one action may hold: the desktop's embed contract drops a message carrying more, so a longer
+# assignment would be lost on its way to the desktop app. Pinned to the vendored contract by the snapshot contract test.
+MAX_CHORDS_PER_ACTION: Final[int] = 16
 
 # Recorder-side spellings normalized into the canonical vocabulary.
 _TOKEN_ALIASES: Final[dict[str, str]] = {
@@ -118,12 +130,31 @@ def is_canonical_chord(chord: str) -> bool:
 
 
 @pure
+def is_refused_chord(chord: str) -> bool:
+    """Whether the chord is one no binding may claim (``REFUSED_CHORDS``)."""
+    return chord in REFUSED_CHORDS
+
+
+# A function key, which may stand alone as a workspace-wide chord.
+_FUNCTION_KEY_RE: Final[re.Pattern[str]] = re.compile(r"^f([1-9]|1[0-2])$")
+
+
+@pure
+def is_workspace_wide_chord(chord: str) -> bool:
+    """Whether a canonical chord may fire anywhere in the workspace: it holds a modifier other than Shift alone, or
+    is a function key, so typing into any app never triggers it."""
+    tokens = chord.split("+")
+    modifiers, key = tokens[:-1], tokens[-1]
+    return _FUNCTION_KEY_RE.match(key) is not None or any(modifier != "shift" for modifier in modifiers)
+
+
+@pure
 def normalize_chord(spelled: str) -> str:
     """The canonical spelling of a recorder-side chord. Raises ``InvalidChordError``.
 
     Lowercases, maps the aliases (``cmd`` to ``meta``, ``esc`` to ``escape``, ...),
     and reorders the modifiers; the key itself must already be one the grammar
-    knows.
+    knows, and the result must not be a refused chord.
     """
     raw_tokens = spelled.split("+")
     # "ctrl++" splits as ["ctrl", "", ""]: the chord ends in the literal "+"
@@ -140,16 +171,21 @@ def normalize_chord(spelled: str) -> str:
     if len(set(modifiers)) != len(modifiers) or any(modifier not in CHORD_MODIFIER_ORDER for modifier in modifiers):
         raise InvalidChordError(f"{spelled!r} does not spell held modifiers")
     ordered = [modifier for modifier in CHORD_MODIFIER_ORDER if modifier in modifiers]
-    return "+".join([*ordered, key])
+    chord = "+".join([*ordered, key])
+    if is_refused_chord(chord):
+        raise InvalidChordError(f"{spelled!r} belongs to the operating system")
+    return chord
 
 
 @pure
 def describe_keybindings_value_problem(value: object) -> str | None:
     """Why the value is not a valid keybindings map, or None when it is.
 
-    The valid shape is app name, then action id, then a list of canonical
-    chords (an empty list unbinds the action). The desktop's write path runs
-    the same check, so the two sides refuse the same shapes.
+    The valid shape is app name, then action id, then a list of at most
+    ``MAX_CHORDS_PER_ACTION`` canonical chords none of which is refused (an
+    empty list unbinds the action). The
+    desktop's write path runs the same check, so the two sides refuse the same
+    shapes.
     """
     if not isinstance(value, Mapping):
         return f"keybindings must be an object of apps, not {type(value).__name__}"
@@ -163,9 +199,13 @@ def describe_keybindings_value_problem(value: object) -> str | None:
                 return f"{action_id!r} is not an action id"
             if isinstance(chords, str) or not isinstance(chords, (list, tuple)):
                 return f"{app_name}.{action_id} must assign a list of chords"
+            if len(chords) > MAX_CHORDS_PER_ACTION:
+                return f"{app_name}.{action_id} assigns more than {MAX_CHORDS_PER_ACTION} chords"
             for chord in chords:
                 if not isinstance(chord, str) or not is_canonical_chord(chord):
                     return f"{chord!r} is not a canonical chord"
+                if is_refused_chord(chord):
+                    return f"{chord!r} belongs to the operating system"
     return None
 
 
@@ -193,12 +233,20 @@ def parse_keybindings_value(raw: object) -> dict[str, dict[str, list[str]]]:
     return parsed
 
 
-def _layer_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
+def _stored_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
     assignments = parse_keybindings_value(layer_value_by_key.get(KEYBINDINGS_SETTING_KEY))
     by_action = assignments.get(app_name)
     if by_action is None or action_id not in by_action:
         return None
     return by_action[action_id]
+
+
+def _layer_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
+    """The layer's assignment as resolution reads it: a save of the action's superseded default list is none."""
+    stored = _stored_assignment(layer_value_by_key, app_name, action_id)
+    if stored is not None and is_superseded_default_assignment(app_name, action_id, stored):
+        return None
+    return stored
 
 
 def resolve_app_keybindings(
@@ -210,13 +258,21 @@ def resolve_app_keybindings(
     snapshot: WorkspaceProfileSnapshot | None,
     identity: RequestIdentity,
     workspace_root: Path,
+    # False answers what the requester's own override in this workspace would leave: what a reset of it restores.
+    is_user_override_applied: bool = True,
+    # False, with the override also left out, answers what discarding an undelivered "everywhere" save restores.
+    is_unsent_applied: bool = True,
 ) -> dict[str, list[str]]:
     """The chords of each declared action for this request, by the spec's per-assignment order."""
     user_id = resolve_request_user_id(identity, snapshot)
     override_by_key: Mapping[str, object] = (
-        load_user_override_values(workspace_root, user_id) if user_id is not None else {}
+        load_user_override_values(workspace_root, user_id)
+        if user_id is not None and is_user_override_applied
+        else {}
     )
-    unsent_by_key: Mapping[str, object] = load_unsent_change_values(workspace_root) if identity.owner else {}
+    unsent_by_key: Mapping[str, object] = (
+        load_unsent_change_values(workspace_root) if identity.owner and is_unsent_applied else {}
+    )
     snapshot_by_key: Mapping[str, object] = (
         snapshot.value_by_key if identity.owner and snapshot is not None else {}
     )
@@ -227,7 +283,7 @@ def resolve_app_keybindings(
             layered = _layer_assignment(unsent_by_key, app_name, action_id)
         if layered is None:
             layered = _layer_assignment(snapshot_by_key, app_name, action_id)
-        resolved[action_id] = list(default_chords) if layered is None else layered
+        resolved[action_id] = list(default_chords) if layered is None else layered[:MAX_CHORDS_PER_ACTION]
     return resolved
 
 
@@ -261,5 +317,14 @@ def without_keybinding_assignment(
 
 @pure
 def keybinding_assignment(value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
-    """One layer's assignment for the action, or None when the layer holds none."""
+    """One layer's assignment for the action as stored, or None when the layer holds none."""
+    return _stored_assignment(value_by_key, app_name, action_id)
+
+
+@pure
+def effective_keybinding_assignment(
+    value_by_key: Mapping[str, object], app_name: str, action_id: str
+) -> list[str] | None:
+    """One layer's assignment for the action as resolution reads it, or None when it holds none that counts:
+    a save of the action's superseded default list (``superseded_defaults``) is none."""
     return _layer_assignment(value_by_key, app_name, action_id)

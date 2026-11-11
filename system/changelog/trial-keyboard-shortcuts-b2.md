@@ -1,0 +1,1 @@
+The desktop-interface contracts (section 5.1) describe the Imbue Studio section of the keyboard shortcuts page: the desktop app hands the page Imbue Studio's own shortcuts with `minds:chrome-shortcuts` and saves one to the account on `minds:save-chrome-shortcut`. The chat's ⌘. action is listed as `stop-agent`.

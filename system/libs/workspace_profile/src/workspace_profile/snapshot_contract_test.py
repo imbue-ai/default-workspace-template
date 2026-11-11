@@ -12,11 +12,17 @@ vendor directory skips rather than fails.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from workspace_profile.keybindings import CHORD_MODIFIER_ORDER, CHORD_NAMED_KEYS
+from workspace_profile.keybindings import (
+    CHORD_MODIFIER_ORDER,
+    CHORD_NAMED_KEYS,
+    MAX_CHORDS_PER_ACTION,
+    REFUSED_CHORDS,
+)
 from workspace_profile.snapshot import (
     CONSUMED_SETTING_KEYS,
     SNAPSHOT_HEADER_KEYS,
@@ -34,6 +40,9 @@ _FIXTURE_PATH = (
     / "minds"
     / "desktop_client"
     / "workspace_profile_contract.json"
+)
+_EMBED_CONTRACT_PATH = (
+    _VENDOR_ASSETS_DIR / "apps" / "minds" / "imbue" / "minds" / "desktop_client" / "static" / "embed_contract.js"
 )
 
 
@@ -54,3 +63,15 @@ def test_the_snapshot_contract_matches_the_desktops_fixture() -> None:
     # validates every stored chord against its mirror of this grammar.
     assert tuple(contract["chord_modifier_order"]) == CHORD_MODIFIER_ORDER
     assert tuple(contract["chord_named_keys"]) == CHORD_NAMED_KEYS
+    assert tuple(contract["refused_chords"]) == REFUSED_CHORDS
+
+
+def test_the_chord_limit_matches_the_embed_contracts() -> None:
+    if not _VENDOR_ASSETS_DIR.is_dir():
+        pytest.skip("mngr assets are not vendored here; run system/scripts/fetch_mngr_assets.sh first")
+    contract_source = _EMBED_CONTRACT_PATH.read_text(encoding="utf-8")
+
+    match = re.search(r"^export const MAX_CHORDS_PER_ACTION = (\d+);$", contract_source, re.MULTILINE)
+
+    assert match is not None
+    assert int(match.group(1)) == MAX_CHORDS_PER_ACTION

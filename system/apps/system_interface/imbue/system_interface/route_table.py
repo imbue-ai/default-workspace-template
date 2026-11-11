@@ -49,6 +49,7 @@ from imbue.system_interface.avatar.api_models import AvatarSelected
 from imbue.system_interface.avatar.api_models import AvatarsListing
 from imbue.system_interface.avatar.catalog import DesignRegistration
 from imbue.system_interface.avatar.selection import AvatarSelection
+from imbue.system_interface.documents import KEYBOARD_SHORTCUTS_ROUTE
 from imbue.system_interface.documents import MANIFEST_PATH
 from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.documents import TOUCH_ICON_PATH
@@ -202,6 +203,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", f"{WALLPAPER_ROUTE_PREFIX}/{{kind}}/{{name}}"): _IMAGE,
     # The workspace-themes plan: the gallery, the catalog and its default, each desktop's theme, icons, and theme files
     ("GET", THEME_GALLERY_ROUTE): SchemalessRoute(reason="the theme gallery page"),
+    ("GET", KEYBOARD_SHORTCUTS_ROUTE): SchemalessRoute(reason="the keyboard shortcuts page"),
     ("GET", "/api/themes"): RouteModels(response_model=ThemeCatalogWire),
     ("POST", "/api/themes/default"): RouteModels(
         request_model=ThemeChoiceRequest, response_model=DefaultThemeResponse

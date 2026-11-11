@@ -116,6 +116,16 @@ export function withWindowRaised(layout: Layout, windowId: string): Layout {
   return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, is_detached: false });
 }
 
+/** Send to the back: the window moved to the bottom of the stack, as it is otherwise, so the window above it takes
+ *  the focus. */
+export function withWindowLowered(layout: Layout, windowId: string): Layout {
+  const placement = placementOf(layout, windowId);
+  const bottom = layout.placements[0];
+  if (bottom !== undefined && isSamePlacement(bottom, placement)) return layout;
+  const others = layout.placements.filter((candidate) => candidate.window_id !== windowId);
+  return { ...layout, placements: [placement, ...others] };
+}
+
 /** Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out; what goes out of
  *  sight is its ghost, which ``withWindowDetached`` shows again. */
 export function withWindowMinimized(layout: Layout, windowId: string): Layout {

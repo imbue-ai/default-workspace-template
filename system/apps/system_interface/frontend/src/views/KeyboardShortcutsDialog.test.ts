@@ -14,7 +14,7 @@ function card(): HTMLElement {
 describe("KeyboardShortcutsDialog", () => {
   it("titles the dialog, holds the keyboard section, and closes from its button", () => {
     const onClose = vi.fn();
-    mountView(() => m(KeyboardShortcutsDialog, { onClose }));
+    mountView(() => m(KeyboardShortcutsDialog, { onClose, context: { platform: "mac", surface: "browser" } }));
     expect(card().textContent).toContain("Keyboard shortcuts");
     // The section is still fetching the catalog when the dialog first paints.
     expect(card().textContent).toContain("Loading the shortcuts...");

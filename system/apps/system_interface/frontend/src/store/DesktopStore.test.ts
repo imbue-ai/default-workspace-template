@@ -27,6 +27,11 @@ import type { GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
+  setResolvedShellKeybindingsForTest,
+  setShellChordPlatformForTest,
+  setShellChordSurface,
+} from "../model/keybindings";
+import {
   DesktopStore,
   IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
@@ -102,7 +107,10 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
+  extra: Pick<
+    StoreDependencies,
+    "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive" | "shortcuts"
+  > = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -742,6 +750,8 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -760,6 +770,8 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -776,6 +788,8 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -822,6 +836,8 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
@@ -840,6 +856,8 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     socket.deliver().onAppsUpdated([appRecord("docs", { theming: "on" }), appRecord("notes")]);
     resent.length = 0;
@@ -857,6 +875,303 @@ describe("windows", () => {
     deliverDesktopNews("home", 2, null, "other");
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
+  });
+});
+
+describe("workspace-wide actions", () => {
+  beforeEach(() => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-2", "notes", "/b"),
+          windowRecord("win-3", "docs", "/c"),
+          windowRecord("win-4", "notes", "/d"),
+        ],
+      }),
+      desktopRecord("work"),
+    ];
+    // Back to front: win-1, win-2 (minimized), win-3, win-4 (focused).
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [
+        placementRecord("win-1"),
+        placementRecord("win-2", { is_minimized: true }),
+        placementRecord("win-3"),
+        placementRecord("win-4"),
+      ],
+    });
+    setShellChordPlatformForTest("mac");
+  });
+
+  afterEach(() => {
+    setResolvedShellKeybindingsForTest(null);
+    setShellChordPlatformForTest(null);
+    setShellChordSurface("browser");
+  });
+
+  function shownOrder(store: DesktopStore): string[] {
+    return activePlacements(store.getState())
+      .filter((placement) => !placement.is_minimized)
+      .map((placement) => placement.window_id);
+  }
+
+  it("next window raises the window at the back, skipping minimized ones, so pressing it again visits every window", async () => {
+    const store = await startedStore();
+
+    store.runWorkspaceAction("next-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.runWorkspaceAction("next-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+    store.runWorkspaceAction("next-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-4");
+  });
+
+  it("previous window sends the focused window to the back, undoing a next", async () => {
+    const store = await startedStore();
+
+    store.runWorkspaceAction("next-window");
+    expect(shownOrder(store)).toEqual(["win-3", "win-4", "win-1"]);
+    store.runWorkspaceAction("previous-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-4");
+    expect(shownOrder(store)).toEqual(["win-1", "win-3", "win-4"]);
+    store.runWorkspaceAction("previous-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+  });
+
+  it("switches nothing with one window shown", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_minimized: true }), placementRecord("win-3")],
+    });
+    const store = await startedStore();
+
+    store.runWorkspaceAction("next-window");
+    store.runWorkspaceAction("previous-window");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-3");
+  });
+
+  it("opens the launcher, the overview, and the shortcuts dialog when no chrome shows the shortcuts", async () => {
+    const opened: string[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: { openKeyboardShortcuts: () => opened.push("chrome"), reportShellShortcuts: () => undefined },
+    });
+    await store.start(NO_LINK);
+
+    store.runWorkspaceAction("open-launcher");
+    store.runWorkspaceAction("open-overview");
+    store.runWorkspaceAction("show-shortcuts");
+    expect(store.isLauncherOpen()).toBe(true);
+    expect(store.isOverviewOpen()).toBe(true);
+    expect(store.isKeyboardShortcutsDialogOpen()).toBe(true);
+    expect(opened).toEqual([]);
+
+    store.closeKeyboardShortcutsDialog();
+    store.setOpensKeyboardShortcuts(true);
+    store.runWorkspaceAction("show-shortcuts");
+    expect(store.isKeyboardShortcutsDialogOpen()).toBe(false);
+    expect(opened).toEqual(["chrome"]);
+  });
+
+  it("tells the pages the workspace-wide chords for where it runs, and the chrome every app's as well", async () => {
+    setResolvedShellKeybindingsForTest({
+      app: "system_interface",
+      chords_by_action: { "close-window": ["alt+meta+w", "meta+w"], "open-launcher": ["meta+k"] },
+    });
+    const action = {
+      label: "",
+      default_chords: [],
+      reset_chords: [],
+      source: "default" as const,
+      scope: "app" as const,
+    };
+    api.keybindingsCatalog = {
+      ...api.keybindingsCatalog,
+      apps: [
+        {
+          app: "files",
+          display_name: "Files",
+          actions: [
+            { ...action, id: "rename", chords: ["f2", "meta+w"] },
+            { ...action, id: "reload", chords: ["ctrl+r"] },
+          ],
+        },
+      ],
+    };
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const sentToPages: unknown[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: (chords, surface) => sentToPages.push({ chords, surface }),
+      sendChord: () => undefined,
+    });
+
+    // A browser keeps Command-W from its pages, so it is no workspace-wide chord there.
+    store.setCanPopOut(true);
+    store.setCanPopOut(false);
+    expect(sentToPages[sentToPages.length - 1]).toEqual({ chords: ["alt+meta+w", "meta+k"], surface: "browser" });
+    expect(reported).toEqual([]);
+
+    store.setCanPopOut(true);
+    store.setEmbedderPresent(true);
+    await settle();
+    expect(sentToPages[sentToPages.length - 1]).toEqual({
+      chords: ["alt+meta+w", "meta+w", "meta+k"],
+      surface: "desktop",
+    });
+    expect(reported[reported.length - 1]).toEqual({
+      chordsByAction: {
+        "close-window": ["alt+meta+w", "meta+w"],
+        "next-window": [],
+        "previous-window": [],
+        "open-launcher": ["meta+k"],
+        "show-shortcuts": [],
+        "open-overview": [],
+      },
+      claimed: ["f2", "meta+w", "ctrl+r"],
+    });
+  });
+
+  it("hands a pages layer built after the chords were read the chords already published", async () => {
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    const store = makeStore();
+    await store.start(NO_LINK);
+    const sentToPages: unknown[] = [];
+
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: (chords, surface) => sentToPages.push({ chords, surface }),
+      sendChord: () => undefined,
+    });
+
+    expect(sentToPages).toEqual([{ chords: ["meta+k"], surface: "browser" }]);
+  });
+
+  it("reports nothing to the chrome until the shell's own chords are read, so it keeps its close-tab chord", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    setResolvedShellKeybindingsForTest(null);
+
+    store.setEmbedderPresent(true);
+    await settle();
+    expect(reported).toEqual([]);
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setCanPopOut(true);
+    await settle();
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
+  it("still reports the workspace-wide chords to the chrome, claiming no app's, when the catalog cannot be read", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.pendingKeybindingsCatalogs.push(Promise.reject(new Error("catalog unavailable")));
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
+    await settle();
+    warn.mockRestore();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] }, claimed: [] });
+  });
+
+  it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const answers: ((catalog: typeof api.keybindingsCatalog) => void)[] = [];
+    for (let read = 0; read < 2; read++) {
+      api.pendingKeybindingsCatalogs.push(new Promise((resolve) => answers.push(resolve)));
+    }
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
+    store.setCanPopOut(true);
+    answers[1](api.keybindingsCatalog);
+    await settle();
+    answers[0](api.keybindingsCatalog);
+    await settle();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
+  it("hands a chord the chrome intercepted to the focused window's page", async () => {
+    const store = await startedStore();
+    const sent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: (windowId, chord) => sent.push(`${windowId}:${chord}`),
+    });
+
+    store.forwardChordToFocusedWindow("alt+f4");
+    expect(sent).toEqual(["win-4:alt+f4"]);
+  });
+
+  it("hands a solo shell's chord to its own window, which the desktop holds pulled out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-2"), placementRecord("win-1", { is_detached: true })],
+    });
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    const sent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: (windowId, chord) => sent.push(`${windowId}:${chord}`),
+    });
+
+    store.forwardChordToFocusedWindow("alt+f4");
+    expect(sent).toEqual(["win-1:alt+f4"]);
   });
 });
 
@@ -2942,6 +3257,8 @@ describe("the phone layout", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: () => undefined,
     });
     socket.deliver().onConnected();
     socket.deliver().onConnected();

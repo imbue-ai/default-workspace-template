@@ -1,6 +1,5 @@
 import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   HIGHLIGHT_CHROME,
@@ -19,12 +18,11 @@ import {
 import "./style.css";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
-import { refreshShellKeybindings } from "./model/keybindings";
 import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
-import { connectEmbedderToStore, immersiveBridge } from "./store/embedderBridge";
+import { connectEmbedderToStore, immersiveBridge, shortcutsBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
@@ -123,6 +121,7 @@ function bootstrap(): void {
           popOut: popOutBridge,
           outsideLinks,
           immersive: immersiveBridge,
+          shortcuts: shortcutsBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -155,14 +154,13 @@ function bootstrap(): void {
   // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
-  setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
   // A permission verdict may answer the keybindings delivery's own request: the backend matches
   // the entries against the request it filed and retries the unsent saves (spec section 9.3).
   setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, (message) => {
     const entries = permissionResolutionEntries(message);
     if (entries.length > 0) void api.deliverKeybindings(entries).catch(() => undefined);
   });
-  void refreshShellKeybindings();
+  void desktopStore.refreshKeybindings();
   // A phone's page sleeps while it is out of sight; coming back, the store reads the shell's word again.
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),

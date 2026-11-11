@@ -1,0 +1,1 @@
+The chat's ⌘. shortcut (Ctrl+. elsewhere) is Stop the agent (`stop-agent`), and it does exactly what the composer's Stop button does: it stops the running turn and puts any queued messages back in the composer, does nothing while no turn is running, and takes one press at a time. In the chat list it stops the selected chat's turn the same way.

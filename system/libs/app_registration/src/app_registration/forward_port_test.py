@@ -815,6 +815,7 @@ default_chords = ["f2"]
 [[keybindings]]
 id = "unbound"
 label = "Something with no default"
+scope = "app"
 """
 
 
@@ -900,14 +901,20 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
         {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
     ]
-    # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
+    # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound, and its scope
+    # when the manifest wrote one.
     assert row["keybindings"] == [
         {
             "id": "rename",
             "label": "Rename the selected entry",
             "default_chords": ["f2"],
         },
-        {"id": "unbound", "label": "Something with no default", "default_chords": []},
+        {
+            "id": "unbound",
+            "label": "Something with no default",
+            "default_chords": [],
+            "scope": "app",
+        },
     ]
 
 
@@ -1062,6 +1069,11 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             id="keybinding-default-chords-not-an-array",
         ),
         pytest.param(
+            '[[keybindings]]\nid = "rename"\nlabel = "Rename"\nscope = 1\n',
+            "a keybinding's scope must be a string",
+            id="keybinding-scope-not-a-string",
+        ),
+        pytest.param(
             '[pin]\nstyle = "avatar"\n',
             "pin must be a table with a string 'path'",
             id="pin-without-a-path",
@@ -1177,6 +1189,116 @@ def test_a_manifest_registration_with_overrides_lasts_until_the_next_plain_one(
     forward_port.register_manifest(apps_file, manifest, "http://localhost:8300")
 
     assert _read_apps(apps_file)[0] == plain_row
+
+
+def test_a_keybindings_refresh_rewrites_only_the_keybindings_of_a_stopped_apps_row(
+    tmp_path: Path,
+) -> None:
+    """A stopped app's row keeps everything its last start wrote except the keybindings, which follow
+    the manifest on disk."""
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    assert (
+        _run(
+            ["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file
+        ).returncode
+        == 0
+    )
+    registered_row = _read_apps(apps_file)[0]
+    manifest.write_text(
+        _FULL_MANIFEST.replace(
+            'display_name = "Files"', 'display_name = "Renamed"'
+        ).replace('default_chords = ["f2"]', 'default_chords = ["f2", "meta+enter"]')
+    )
+
+    result = _run(["--refresh-keybindings", str(manifest)], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    refreshed_row = _read_apps(apps_file)[0]
+    assert refreshed_row["keybindings"] == [
+        {
+            "id": "rename",
+            "label": "Rename the selected entry",
+            "default_chords": ["f2", "meta+enter"],
+        },
+        {
+            "id": "unbound",
+            "label": "Something with no default",
+            "default_chords": [],
+            "scope": "app",
+        },
+    ]
+    assert {
+        key: value for key, value in refreshed_row.items() if key != "keybindings"
+    } == {key: value for key, value in registered_row.items() if key != "keybindings"}
+
+
+def test_a_keybindings_refresh_drops_keybindings_the_manifest_no_longer_declares(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    forward_port.register_manifest(apps_file, manifest, "http://localhost:8300")
+    manifest.write_text(_FULL_MANIFEST.split("[[keybindings]]")[0])
+
+    assert forward_port.refresh_keybindings(apps_file, manifest) == "files"
+
+    assert "keybindings" not in _read_apps(apps_file)[0]
+
+
+def test_a_keybindings_refresh_never_creates_a_row(tmp_path: Path) -> None:
+    """Only an app's own registration knows its URL, so an app that never registered stays absent."""
+    apps_file = tmp_path / "apps.toml"
+    forward_port.register(
+        apps_file, "terminal", "http://localhost:7681", is_icon_declined=True
+    )
+    registry_before = apps_file.read_text()
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    assert forward_port.refresh_keybindings(apps_file, manifest) is None
+
+    assert apps_file.read_text() == registry_before
+
+
+def test_a_keybindings_refresh_reports_a_bad_manifest_and_still_refreshes_the_others(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    forward_port.register_manifest(apps_file, manifest, "http://localhost:8300")
+    manifest.write_text(
+        _FULL_MANIFEST.replace('default_chords = ["f2"]', 'default_chords = ["f3"]')
+    )
+    broken_manifest = tmp_path / "broken.toml"
+    broken_manifest.write_text("name = ")
+
+    result = _run(
+        ["--refresh-keybindings", str(broken_manifest), str(manifest)], apps_file
+    )
+
+    assert result.returncode != 0
+    assert "is not valid TOML" in result.stderr
+    refreshed_row = tomllib.loads(apps_file.read_text())["apps"][0]
+    assert refreshed_row["keybindings"][0]["default_chords"] == ["f3"]
+
+
+def test_a_keybindings_refresh_combines_with_no_other_option(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    result = _run(
+        [
+            "--refresh-keybindings",
+            str(manifest),
+            "--url",
+            "http://localhost:8300",
+        ],
+        apps_file,
+    )
+
+    assert result.returncode != 0
+    assert "--refresh-keybindings cannot be combined" in result.stderr
+    assert not apps_file.exists()
 
 
 def test_manifest_registration_with_a_matching_name_flag_is_accepted(

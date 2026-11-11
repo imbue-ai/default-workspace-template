@@ -92,9 +92,13 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - Keyboard shortcuts (the user-profile-state spec in the mngr repo, sections 9
   and 10): the requester's resolved chords for the shell's own actions
   (`/api/keybindings/me`, the route every built-in app with keybindings
-  serves), the catalog the Keyboard shortcuts dialog lists: every app's
+  serves), the catalog the keyboard shortcuts screen lists: every app's
   `[[keybindings]]`, read from its registry row so an app that is stopped is
-  listed all the same, resolved for the requester (`/api/keybindings/catalog`),
+  listed all the same, resolved for the requester, with what a reset or a
+  discard of each change would restore (`/api/keybindings/catalog`), the
+  screen as a page of its own (`/keyboard-shortcuts`, which Imbue Studio's
+  Workspace settings frames; it reports its height and whether its recorder
+  is listening with `minds:keyboard-shortcuts-page`),
   and the save, reset, discard, and retry flows (`POST /api/keybindings`,
   `.../reset`, `.../discard`, `.../deliver`). A save lands in the profile
   files under `data/system/profile/` (the requester's override file; for the
@@ -102,7 +106,25 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   through the latchkey gateway's `minds-workspaces-account-settings` verb,
   whose first use files one permission request). Every save, and a watch on
   the account's profile snapshot (`data/.state/profile/account.json`, written
-  from outside the workspace), says `keybindings_changed`.
+  from outside the workspace), says `keybindings_changed`. The catalog answers
+  each action's `scope`; the shell's own `app.toml` declares the
+  workspace-wide actions (`scope = "workspace"`: Close window, Next and
+  Previous window, Open the launcher, Show the keyboard shortcuts, Show every
+  window), which no other app may declare. The frontend runs them for a key
+  in its own document, a page's `shell:shortcut`, and Imbue Studio's
+  `minds:run-shortcut`, hands their chords to every page with
+  `shell:workspace-chords`, and reports them and every app's chords to Imbue
+  Studio with `minds:shell-shortcuts` (the keyboard-shortcuts spec in the mngr
+  repo, section 6); a chord Imbue Studio takes from the OS for an app's own
+  action (`minds:run-chord`) goes to the focused window's page as
+  `shell:chord`. The screen reads chords in a context, the platform and
+  whether the workspace runs in the desktop app or a browser (`canPopOut`),
+  and hides, warns about, and checks clashes among the chords by it.
+  In the desktop app the screen ends with Imbue Studio's own shortcuts (New
+  window, Close window, Quit, the zoom keys), which the desktop app hands the
+  page (`minds:chrome-shortcuts`) and saves to the account when the page asks
+  (`minds:save-chrome-shortcut`; the keyboard-shortcuts spec in the mngr repo,
+  section 8).
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
@@ -497,7 +519,10 @@ click on the bare backdrop closes it. The backdrop's own context menu offers
 wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
 became: a desktop's colour and glyph are no longer shown or edited), "Change
 theme...", which opens the theme chooser (`ThemeChooserDialog.ts`), and
-"Keyboard shortcuts...", which opens the viewer's keyboard shortcuts
+"Keyboard shortcuts...", which opens the viewer's keyboard shortcuts: in
+Imbue Studio's Workspace settings when the chrome announced
+`opensKeyboardShortcuts` (`minds:open-keyboard-shortcuts`), which shows where
+they live, and otherwise (a plain browser) in a dialog
 (`KeyboardShortcutsDialog.ts` around `KeyboardSettingsSection.ts`; the
 user-profile-state spec, section 10.3). A person's
 tray card lists the desktops they own, and a click on one of somebody else's

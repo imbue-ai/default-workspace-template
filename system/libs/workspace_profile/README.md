@@ -16,11 +16,14 @@ Keybindings (`keybindings.py` and `manifest.py`) are the one setting with a decl
 per-user override, and resolve per assignment rather than as one value: each built-in app
 with keyboard shortcuts declares its actions and default chords as `[[keybindings]]` in its `app.toml`, which
 registration copies onto its registry row for the shell's Keyboard shortcuts dialog;
-`load_app_keybinding_actions` reads the same declarations (refusing a default chord off the
-grammar) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
+`load_app_keybinding_actions` reads the same declarations (refusing a default chord it may not
+have: one off the grammar, the refused Ctrl+Alt+Del, or on a workspace-wide action one that typing
+could trigger; and an action declaring more than `MAX_CHORDS_PER_ACTION`, 16, the most the desktop's
+embed contract carries for one action) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
 request identity, and the app consumes those instead of hard-coded chords. The chord
 grammar (lowercase tokens joined with `+`, modifiers in the fixed ctrl/alt/shift/meta order,
-named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`) is
+named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`, and
+`alt+meta+delete`, Ctrl+Alt+Del, refused as `REFUSED_CHORDS`) is
 mirrored by the desktop's write path and pinned cross-repo through the same contract fixture.
 
 Resolution order for one setting, earliest wins: the requesting user's override, then (owner
@@ -28,6 +31,10 @@ only) the unsent changes, then (owner only) the snapshot's account value, then t
 Owner detection follows the `X-Imbue-Identity` header exactly as the shell does: a request is
 the owner's when the header says so, and the owner's user id is then the snapshot's owner id,
 so an unshared workspace (whose header carries no user id) still keys the owner's overrides.
+A keybindings layer whose assignment is exactly an action's default list from before each
+default was written once (a Ctrl form and a ⌘ form; `superseded_defaults.py`, compared as sets)
+holds no assignment, so the action gets its current default; any other list is a choice and is
+kept.
 
 Every read is tolerant: an absent or unreadable snapshot (a workspace created by an older
 client) resolves from overrides and defaults alone, and a snapshot a newer client wrote (a

@@ -66,6 +66,13 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import {
+  type ChatShortcut,
+  listenForChatShortcutKeys,
+  refreshKeybindings,
+  runChatShortcutOfChord,
+  setKeybindingSurface,
+} from "../models/keybindings";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
@@ -483,9 +490,19 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
   addChatsUpdatedListener(onceListed);
 }
 
+/** Run a chat shortcut the root heard (a key on its own rail, or one the desktop app intercepted): New chat as its
+ *  button does, or Stop the agent as the selected chat's Stop button does. */
+function runChatShortcut(shortcut: ChatShortcut): void {
+  if (shortcut === "new-chat") void openNewChat();
+  else if (selectedChatId !== null) pool?.stopAgent(selectedChatId);
+}
+
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
+    onKeybindingsChanged: () => void refreshKeybindings(),
+    onChordSurface: setKeybindingSurface,
+    onChord: (chord) => runChatShortcutOfChord(chord, runChatShortcut),
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
@@ -550,6 +567,9 @@ function bootstrap(): void {
   });
   touchQuery.addEventListener("change", () => m.redraw());
   const shell = connectRootToShell(accountsLoaded);
+  void refreshKeybindings();
+  // The chat's shortcuts pressed on the root's own rail; one pressed in the selected chat runs in that page.
+  listenForChatShortcutKeys(runChatShortcut);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     () => pool?.innerWindows() ?? [],

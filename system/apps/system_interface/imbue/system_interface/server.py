@@ -49,6 +49,7 @@ from imbue.system_interface.avatar.routes import register_avatar_routes
 from imbue.system_interface.avatar.routes import selected_design_id
 from imbue.system_interface.avatar.status import avatar_status_wire_json
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import KEYBOARD_SHORTCUTS_ROUTE
 from imbue.system_interface.documents import MANIFEST_PATH
 from imbue.system_interface.documents import SHELL_BACKGROUND_COLOR
 from imbue.system_interface.documents import THEME_GALLERY_ROUTE
@@ -454,13 +455,23 @@ def _frontend_not_built_response(missing_page: Path) -> Response:
     return document_response(render_frontend_not_built_page(_terminal_origin_label()), is_frontend_built=False)
 
 
-def _theme_gallery() -> Response:
-    """The theme gallery page (workspace-themes plan section 8.2), a second page of the shell's build."""
-    gallery_path = get_state().static_directory / THEME_GALLERY_FILENAME
-    if not gallery_path.exists():
-        return _frontend_not_built_response(gallery_path)
-    html_content = inject_base_path_meta_tag(gallery_path.read_text(), _root_path())
+def _built_page_response(filename: str) -> Response:
+    """One of the shell build's pages beside the desktop, under the shell's root path."""
+    page_path = get_state().static_directory / filename
+    if not page_path.exists():
+        return _frontend_not_built_response(page_path)
+    html_content = inject_base_path_meta_tag(page_path.read_text(), _root_path())
     return document_response(html_content, is_frontend_built=True)
+
+
+def _theme_gallery() -> Response:
+    """The theme gallery page (workspace-themes plan section 8.2)."""
+    return _built_page_response(THEME_GALLERY_FILENAME)
+
+
+def _keyboard_shortcuts_page() -> Response:
+    """The keyboard shortcuts page, which Imbue Studio's Workspace settings frames."""
+    return _built_page_response(KEYBOARD_SHORTCUTS_FILENAME)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -479,6 +490,7 @@ def _health_endpoint() -> Response:
 
 
 THEME_GALLERY_FILENAME: Final[str] = "theme-gallery.html"
+KEYBOARD_SHORTCUTS_FILENAME: Final[str] = "keyboard-shortcuts.html"
 
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
@@ -932,6 +944,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(THEME_GALLERY_ROUTE, view_func=_theme_gallery, methods=["GET"])
+    application.add_url_rule(KEYBOARD_SHORTCUTS_ROUTE, view_func=_keyboard_shortcuts_page, methods=["GET"])
     register_api_schema_route(
         application,
         DEFAULT_API_SCHEMA_PATH,

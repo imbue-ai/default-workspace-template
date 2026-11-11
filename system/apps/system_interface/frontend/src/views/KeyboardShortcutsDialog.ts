@@ -1,20 +1,27 @@
 /**
  * The keyboard shortcuts dialog (user-profile-state spec, section 10.3): the Keyboard settings
  * section in a modal of its own, opened from "Keyboard shortcuts..." on the backdrop's context
- * menu. Shortcuts are the viewer's, not a desktop's, so the dialog names no desktop and stays
- * available while viewing somebody else's.
+ * menu or the Show the keyboard shortcuts action when the embedder does not show them itself.
+ * Imbue Studio's Workspace settings shows the same section on the `/keyboard-shortcuts` page, and
+ * opens there instead when it says it can (`opensKeyboardShortcuts`); this is the entry from inside
+ * the workspace, which a visitor or a share link has too. Shortcuts
+ * are the viewer's, not a desktop's, so the dialog names no desktop and stays available while
+ * viewing somebody else's.
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
+import type { ChordContext } from "@imbue/workspace-ui/src/keybindings";
 import { KeyboardSettingsSection } from "./KeyboardSettingsSection";
 
 export interface KeyboardShortcutsDialogAttrs {
   readonly onClose: () => void;
+  /** Where the shortcuts are read: the dialog's host is the desktop app only when it can pull windows out. */
+  readonly context: ChordContext;
 }
 
-export const KEYBOARD_SHORTCUTS_DIALOG_WIDTH = 560;
+export const KEYBOARD_SHORTCUTS_DIALOG_WIDTH = 640;
 
 export function KeyboardShortcutsDialog(): m.Component<KeyboardShortcutsDialogAttrs> {
   return {
@@ -30,7 +37,13 @@ export function KeyboardShortcutsDialog(): m.Component<KeyboardShortcutsDialogAt
           card: { "data-keyboard-shortcuts-dialog": true },
           actions: [m(Button, { extra: "keyboard-shortcuts-close", onclick: attrs.onClose }, "Close")],
         },
-        [m(KeyboardSettingsSection)],
+        [
+          m(
+            "div",
+            { class: "keyboard-shortcuts-body -mr-2 mb-4 max-h-[65vh] overflow-y-auto pr-2" },
+            m(KeyboardSettingsSection, { context: attrs.context }),
+          ),
+        ],
       );
     },
   };

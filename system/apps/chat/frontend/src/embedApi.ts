@@ -24,6 +24,8 @@ export interface ChatPageEmbedApi {
   /** Take the keyboard, as a page does when it first loads: its composer, else the page itself. The root
    *  calls it when it switches to a page it already held, so the chat the user picked counts as focused. */
   focus(): void;
+  /** Press this page's Stop button, as the Stop the agent shortcut pressed in the chat root does. */
+  stopAgent(): void;
 }
 
 declare global {
