@@ -47,7 +47,7 @@ crystallized skill path. The standard switch is:
 If a consumer has explicit fallback logic (e.g. "use the skill if
 installed, else use the runtime path"), that fallback can stay until
 the next refactor pass -- it's defensive code, not a bug. Note in the
-PR description that the fallback is now dead code.
+migration commit's message (section 6) that the fallback is now dead code.
 
 ## 2. Decide whether to delete the runtime directory
 
@@ -116,7 +116,7 @@ it so the new path takes effect:
   killing the process bounces it onto the new code. If a program needs
   config changes first, edit the program's `system/supervisord.conf.d/<name>.conf` then
   `supervisorctl reread && supervisorctl update`.
-- Subagents you started this session: send them a note via
+- Workers you started this session: send them a note via
   `create_worker.py reply --task-file <their task file> -m "..."` if they
   need to pick up the change, or restart them.
 
@@ -134,9 +134,8 @@ fi
 ```
 
 If the file is missing (you deleted the runtime dir before
-closing the ticket, or `tk` was unavailable at launch), `tk` does not
-have a list command in this build -- look for the ticket in
-`data/.tickets/` by slug and close it by ID.
+closing the ticket, or `tk` was unavailable at launch), find the ticket
+with `tk ls` (its title is `crystallize <name>`) and close it by ID.
 
 ## 6. Commit the migration changes
 

@@ -3,16 +3,53 @@ name: update-creation
 description: "Change an existing skill, app, service, or shared script/reference -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but extra repeatable work had to be done by hand, or when a change to it was discussed with the user and applied live."
 metadata:
   author: imbue
-  exempt-checks: size contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Updating an existing creation
 
-This is the **change** lead of the generic creation lifecycle. The creation
-already exists; you dispatch a generic worker to harden the change in the
-background, proxy its gates, merge, and go live. There is one flow with a
-**design-gate toggle** keyed on whether the change is already committed.
+This is the **change** lead of the creation lifecycle. The creation already
+exists; you dispatch a harden worker to harden the change in the background,
+proxy its gates, merge, and go live. There is one flow with a **design-gate
+toggle** keyed on whether the change is already committed.
+
+Standing instructions:
+
+- **Update at turn-end.** The user's original request is already delivered;
+  the update worker produces a quieter follow-up commit.
+- **One change, one pass, one worker** ("One change, one pass" below).
+- **Never harden inline.** Hardening always runs in the background worker.
+  Commit pending changes, never stash them, then dispatch.
+- **A change that touches a critical app never starts here.** A critical app
+  (the shell, the chat, the terminal, or an app whose manifest says `critical =
+  true`) is an `app:` creation too, but the **whole change** takes
+  `update-app`'s careful flow
+  (`.agents/skills/update-app/references/critical-app.md`): every other
+  creation it touched is edited on the same branch, rides the same pass, and
+  lands through the same apply. That flow calls into Steps 1-3 here and owns
+  the go-live. When it sent you here, read
+  `references/critical-app-handoff.md` before Step 1 for what differs.
+- **After a compaction**, re-read the shared references below before you handle
+  the worker's next report.
+
+Three shared references carry the detail, and each step names the section it
+needs:
+
+- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
+  shares with `heal-creation` and `crystallize-creation`.
+- `.agents/shared/references/harden-contention.md`: one pass per creation, and
+  the checks before a merge.
+- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
+  on the worker's terminal status.
+
+## Steps
+
+- Before Step 1, settle the pass's scope (One change, one pass), its origin
+  (The two origins) and its Names
+- Step 1: Open a tracking ticket, after the single-flight check
+- Step 2: Capture the change and write the task file
+- Step 3: Launch the worker and poll (end your turn each time the poll is
+  armed)
+- Step 4: Merge and go live, on `done`
 
 ## One change, one pass
 
@@ -23,9 +60,9 @@ so are an app and the skill that drives it, or two unrelated tweaks made in
 the same turn. Never dispatch a pass per creation. Every worker pays its own
 environment setup before it does any work, and two passes over one change
 would each verify half of something that only works whole. When a change holds
-parts that are separate jobs, the worker splits them across its own sub-workers
-(`.agents/skills/harden-worker/references/harden-creation.md`, "Splitting the pass
-across sub-workers"); that is its call, not yours.
+parts that are separate jobs, the worker splits them across workers of its own
+(the harden worker's contract, "Splitting the pass across workers of your
+own"); that is its call, not yours.
 
 ## The two origins
 
@@ -58,51 +95,28 @@ format), model-judgement extensions (an additional judgement step with a stable
 recipe, scripted as `[ai-script]`), and executor meta-work. One-off creative or
 exploratory work is NOT an update candidate.
 
-## The type parameter
+## Names
 
-Each creation in the pass has a type: `skill`, `app`, `service`, or `shared` (a
-shared script or reference, handled as a skill). It drives where the worker
-looks (`type-<TYPE>.md`) and that creation's **go-live** (Step 4): skill or
-shared → cross-reference sweep is part of the edit, nothing else; app → refresh
-the window (a background service has no window -- restart it instead). A
-critical app (the shell, the chat, the terminal, or an app whose manifest says
-`critical = true`) is an `app:` creation too, but it reaches this flow only from
-`update-app`'s careful flow (`references/critical-app.md`), which calls into
-Steps 1-3 for the orchestration core, creates the worker at approval on the
-branch the lead already built up, and owns the go-live through the atomic update
-apply. When a change touches a critical app, the **whole change** takes that
-flow: every other creation it touched is edited on the same branch, rides the
-same pass, and lands through the same apply.
+`$CREATIONS` lists every creation the pass covers as `<type>:<name>`, and
+`$SLUG` names the pass: the creation's own name when there is one, otherwise a
+short kebab-case name for the change (`roadmap-sync`). `harden-lead.md`
+("Names and paths") has the format and every path that follows from them:
 
-## Conventions
-
-Use `$CREATIONS` for every creation the pass covers, each as `<type>:<name>`,
-space-separated: `app:<registered name>`, `skill:<directory>`,
-`service:<package>`, or `shared:<path under .agents/shared>` for a shared
-script or reference (e.g. `skill:migrate-config`, or `app:roadmap
-skill:sync-roadmap` for an app and the skill that drives it). Use `$SLUG` for
-the pass: the creation's own name when there is one, otherwise a short
-kebab-case name for the change (`roadmap-sync`). Then:
-
-- Worker agent name and branch: `update-$SLUG` / `mngr/update-$SLUG`
-- Runtime dir / task file: `data/.tasks/harden/update-$SLUG/` /
+- Worker and branch: `update-$SLUG` / `mngr/update-$SLUG`
+- Runtime dir and task file: `data/.tasks/harden/update-$SLUG/` and
   `data/.tasks/harden/update-$SLUG/task.md`
 
 ## Step 1: Open a tracking ticket
 
-**Single-flight check first.** At most one harden pass per creation may be in
-flight (counting `heal` passes on the same target). Run the pre-dispatch check
-in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md)
-for every creation in `$CREATIONS`; if another agent's pass is live on any of
-them, leave the note it describes on their ticket and stop -- the catch-up
-forced at their merge time covers your change. If a pass's holder is gone but
-its worker is not, take it over as its lead there instead of dispatching. Only
-dispatch if no pass is in flight on any of them, or that reference had you
-supersede the ones that were.
+Run the single-flight check first, for every creation in `$CREATIONS`: the
+command is in `.agents/shared/references/harden-contention.md` ("Before
+dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
+("Single-flight check") says what each outcome means for you. Dispatch only if
+no pass is in flight on any of them, or that reference had you supersede the
+ones that were.
 
-The ticket's title lists the creations, which is what that check matches on,
-and its description names the worker, which is what the check's lookup of its
-holder and worker needs:
+Then open the ticket. Its title and description are read by other chats'
+single-flight checks (`harden-lead.md`, "The tracking ticket"):
 
 ```bash
 mkdir -p data/.tasks/harden/update-$SLUG
@@ -130,16 +144,12 @@ is your current commit:
 DIFF_BASE_REF=HEAD
 ```
 
-Write the task file. Frontmatter carries `operation: update`, `creations`
-(`$CREATIONS`), `finish_report_path` (the report destination the lead polls;
-see `.agents/shared/references/worker-reporting.md`), `scope_file` (where the
-worker writes the pass's computed footprint at the start of its run -- you name
-the path, the worker creates the file), and `diff_base` (the commit before the
-work being hardened: for the committed origin, the start of `$COMMIT_RANGE`, so
-the scope file's diff covers the committed change; for the emergent origin,
-your `HEAD` at dispatch). The worker's test gate also selects its suites from
-what changed since `diff_base`. The body carries the `## Change origin` marker
-the worker dispatches on, plus origin-specific content:
+Write the task file. `harden-lead.md` ("The task file") explains the
+frontmatter fields and the rules for the body. For an update, `diff_base` is
+the commit before the work being hardened: for the committed origin, the start
+of `$COMMIT_RANGE`, so the scope file's diff covers the committed change; for
+the emergent origin, your `HEAD` at dispatch. The body carries the `## Change
+origin` marker the worker dispatches on, plus origin-specific content:
 
 ```bash
 cat > data/.tasks/harden/update-$SLUG/task.md << TASK_EOF
@@ -177,7 +187,7 @@ captured above.>
 Invoke the \`harden-worker\` skill. On a harness that cannot invoke skills, read
 and follow \`.agents/skills/harden-worker/SKILL.md\` from your own checkout. It
 reads \`operation\`, \`creations\`, and the \`## Change origin\` marker, then
-follows the matching references. Push reports to the lead per its reporting protocol.
+follows the matching references. Report to the lead per its reporting protocol.
 
 ## Success criteria
 - The change is hardened, tested, and passes the review gates on your branch.
@@ -187,29 +197,16 @@ TASK_EOF
 ```
 
 Set `ORIGIN: committed` as appropriate. Fill in the real content; do not leave
-placeholders. The `## Change origin` marker is required --
-the worker fails loudly if it is missing.
-
-**One exception, and it lives here so you meet it where the format is defined:**
-a harden task dispatched from the careful flow for a critical app
-(`update-app/references/critical-app.md`) carries **no `## Change origin` marker
-and no worker gate** (see the critical-app handoff in
-`.agents/skills/harden-worker/references/op-update.md`). That flow already got the
-user's approval through its live preview loop, so re-arming the gate would ask
-them to approve the same thing twice -- and writing the marker anyway, or
-telling the worker in the task body to follow it, puts the gate back. Every
-other task file needs it.
+placeholders. The `## Change origin` marker is required -- the worker fails
+loudly if it is missing. The one task file that carries no marker is the
+careful flow's handoff for a critical app
+(`references/critical-app-handoff.md`).
 
 ## Step 3: Launch the worker and poll
 
-**Commit any pending changes before you launch, and never harden inline.** The
-worker is created from your committed HEAD, so uncommitted changes never reach
-it -- and `create_worker.py launch` refuses a dirty tree outright. Commit your
-work first (the change being hardened is exactly what belongs on the branch);
-**commit, never stash** -- stashed work gets lost during multi-agent
-coordination. A dirty tree (even unrelated changes) is never a reason to do the
-hardening inline: commit, then dispatch. Hardening always runs in the background
-worker.
+Commit any pending changes first (the change being hardened is exactly what
+belongs on the branch); a dirty tree, even from unrelated changes, is never a
+reason to do the hardening inline (`harden-lead.md`, "Launching the worker").
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -219,69 +216,49 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/update-$SLUG/task.md
 ```
 
-Then background-poll (`create_worker.py await --name update-$SLUG --task-file
-... --timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py --waiter`) and
-follow `.agents/shared/references/lead-proxy.md`.
-Flow-specific substitutions:
-
-- Worker name: `update-$SLUG`; branch: `mngr/update-$SLUG`
-- Poll path: `data/.tasks/harden/update-$SLUG/reports/report.md`; reports dir
-  `data/.tasks/harden/update-$SLUG/reports/`; `await` archives each report it
-  prints under `data/.tasks/harden/update-$SLUG/reports/consumed/`
-- Gates: `outline-approval` (emergent only -- the design gate) and
-  `final-creation` (both).
-- Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
-  close the ticket, destroy the worker per `lead-proxy.md`, no merge); `stuck`
-  (failure flow per `.agents/skills/launch-task/references/worker-failure.md`,
-  which stops the worker).
-
-## Step 4: Merge and go live
-
-On `done`, first run the merge-time checks in
-[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
-wait out any foreground editing lease on an app or service in the pass,
-confirm the branch is still fresh (no creation's footprint has changed since
-the worker branched), and never resolve a conflicted merge yourself -- a stale
-or conflicted pass goes back to its worker to catch up to your `HEAD`, and its
-next `done` comes back through these same checks.
-
-Then merge `mngr/update-$SLUG`, destroy the worker per `lead-proxy.md`
-(`create_worker.py destroy --name update-$SLUG`), and go live for each creation
-in the pass, by its type:
-
-- **skill** or **shared**: nothing beyond the merge (the worker's
-  cross-reference sweep is part of the change), except `uv sync --all-packages
-  --frozen` when it has a `python/` project, so the workspace venv carries any
-  dependency the merge added. If it is a built-in upstream skill, note the local
-  drift to reconcile later via `update-self` / `submit-upstream-changes`.
-- **app**: refresh its window (`uv run --no-sync workspace-layout refresh
-  --app <app-name>`; for an app `build-app` made, `uv run --no-sync
-  .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which reloads its mock frame while one is
-  up and its own windows otherwise).
-- **service**: it has no window -- restart its programs (`supervisorctl restart
-  <program>`): the one named after the package (`host_backup` runs as
-  `host-backup`) and any `<program>-<role>` ones. `oom_priority`'s programs
-  are named otherwise (`earlyoom`, `publish_cgroup_meminfo`,
-  `resource_sampler`, and the `oom-tag-backstop` event listener): restart the
-  ones the change reaches. A service with no
-  program of its own (the Caretaker's check, which a routine runs) has nothing
-  to restart: its next run reads the merged code.
-- **a critical app**: do **not** merge or go live here -- the careful flow
-  (`update-app/references/critical-app.md`) drives the live preview loop and
-  the go-live through the atomic update apply. (It uses this flow for Steps 1-3
-  only, and launches the worker with a `--branch` passthrough onto the branch
-  the lead already built up.)
-
-Then close the ticket:
+Arm the poll, then end your turn:
 
 ```bash
-tk close "$TICKET_ID" "Updated $CREATIONS -- worker branch merged."
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
+    --name update-$SLUG \
+    --task-file data/.tasks/harden/update-$SLUG/task.md \
+    --timeout 90m
 ```
 
-## Gotchas
+Handle each report as `.agents/shared/references/lead-proxy.md` says, and
+re-arm this poll after every gate. For an update:
 
-- Update is non-blocking -- the user's original request is already delivered;
-  the update worker produces a quieter follow-up commit.
+- Gates: `outline-approval` (emergent only -- the design gate) and
+  `final-creation` (both). A `question` gate can arrive at any point.
+- Terminal statuses: `done` (Step 4); `no-update-needed` (no change -- destroy
+  the worker per `lead-proxy.md` and close the ticket, with no merge); `stuck`
+  (the failure flow in
+  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  worker).
 - The committed origin's worker may produce no new commits of its own if
   verification is clean. That is expected -- the substantive change is already
   on the branch from the live commit.
+
+## Step 4: Merge and go live
+
+A pass the careful flow dispatched for a critical app does not take this step
+(`references/critical-app-handoff.md`). Otherwise, on `done`:
+
+1. Run the checks before a merge, in
+   `.agents/shared/references/harden-contention.md` ("Before merge: lease,
+   freshness, conflicts"): wait out any foreground editing lease on an app or
+   service in the pass, confirm the branch is still fresh, and never resolve a
+   conflicted merge yourself. A stale or conflicted pass goes back to its
+   worker to catch up to your `HEAD`, and its next `done` comes back through
+   these same checks.
+2. Merge `mngr/update-$SLUG` and destroy the worker (`create_worker.py destroy
+   --name update-$SLUG`), as `lead-proxy.md` says for `done` ("Terminal status:
+   act and stop polling").
+3. Go live for each creation in the pass by its type: `harden-lead.md`,
+   "Merge, then go live by type".
+4. Close the ticket:
+
+   ```bash
+   tk close "$TICKET_ID" "Updated $CREATIONS -- worker branch merged."
+   ```

@@ -7,29 +7,44 @@ metadata:
 
 # Healing a broken creation
 
-This is the **heal** lead of the generic creation lifecycle. An existing
-creation should have delivered the correct result but did not; you dispatch a
-generic worker to reproduce the incident, find the root cause, apply a minimal
-fix, re-run scenarios, and present a single approval gate. Heal is a turn-end
-action -- do not interrupt in-flight work to invoke it; the user's original
-request is already delivered.
+This is the **heal** lead of the creation lifecycle. An existing creation
+should have delivered the correct result but did not; you dispatch a harden
+worker to reproduce the incident, find the root cause, apply a minimal fix,
+re-run scenarios, and present a single approval gate.
 
-**One incident, one pass.** A heal pass covers every creation the failure
-spans, with one worker: when an app broke because of how it calls a skill, or
-two apps disagree about what they exchange, heal them together rather than
-dispatching a pass per creation. The fix often has to change both sides, and
-two workers would each see only half of the failure.
+Standing instructions:
 
-## The type parameter
+- **Heal at turn-end.** Do not interrupt in-flight work to invoke it: the
+  user's original request is already delivered, with the failure worked
+  around, and the heal worker produces a quieter follow-up commit.
+- **One incident, one pass.** A heal pass covers every creation the failure
+  spans, with one worker: when an app broke because of how it calls a skill, or
+  two apps disagree about what they exchange, heal them together rather than
+  dispatching a pass per creation. The fix often has to change both sides, and
+  two workers would each see only half of the failure.
+- **Never fix inline.** Healing always runs in the background worker. Commit
+  pending changes, never stash them, then dispatch.
+- **After a compaction**, re-read the shared references below before you handle
+  the worker's next report.
 
-Each creation in the pass has a type: `skill`, `app`, `service`, or `shared` (a
-shared script or reference, handled as a skill). The worker reads it and loads
-`type-<TYPE>.md`. A heal of a critical app (the shell, the chat, the terminal,
-or an app whose manifest says `critical = true`) is a live edit of the served
-tree at your own risk: there is no preview, no kept rollback point, and no
-notice behind it, so a wrong fix takes the user's surface down with nothing to
-undo it but your next edit. The safe path is `update-app`'s careful flow
-(`references/critical-app.md`); take it whenever the fix can wait for a preview.
+Three shared references carry the detail, and each step names the section it
+needs:
+
+- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
+  shares with `update-creation` and `crystallize-creation`.
+- `.agents/shared/references/harden-contention.md`: one pass per creation, and
+  the checks before a merge.
+- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
+  on the worker's terminal status.
+
+## Steps
+
+- When NOT to heal; Names, and a critical app: settle these first
+- Step 1: Open a tracking ticket, after the single-flight check
+- Step 2: Write the task file
+- Step 3: Launch the worker and poll (end your turn each time the poll is
+  armed)
+- Step 4: Merge and go live, on `done`
 
 ## When NOT to heal
 
@@ -39,35 +54,36 @@ undo it but your next edit. The safe path is `update-app`'s careful flow
 - You are unsure why it failed. Finish the user's request, gather evidence, then
   decide if heal applies.
 
-## Conventions
+## Names, and a critical app
 
-Use `$CREATIONS` for every creation the pass heals, each as `<type>:<name>`,
-space-separated: `app:<registered name>`, `skill:<directory>`,
-`service:<package>`, or `shared:<path under .agents/shared>` for a shared
-script or reference (e.g. `skill:migrate-config`, or `app:roadmap
-skill:sync-roadmap`). Use `$SLUG` for the pass: the creation's own name when
-there is one, otherwise a short kebab-case name for the failure
-(`roadmap-sync`). Then:
+`$CREATIONS` lists every creation the pass heals as `<type>:<name>`, and
+`$SLUG` names the pass: the creation's own name when there is one, otherwise a
+short kebab-case name for the failure (`roadmap-sync`). `harden-lead.md`
+("Names and paths") has the format and every path that follows from them:
 
-- Worker agent name and branch: `heal-$SLUG` / `mngr/heal-$SLUG`
-- Runtime dir / task file: `data/.tasks/harden/heal-$SLUG/` /
+- Worker and branch: `heal-$SLUG` / `mngr/heal-$SLUG`
+- Runtime dir and task file: `data/.tasks/harden/heal-$SLUG/` and
   `data/.tasks/harden/heal-$SLUG/task.md`
+
+A heal of a critical app (the shell, the chat, the terminal, or an app whose
+manifest says `critical = true`) is a live edit of the served tree at your own
+risk: there is no preview, no kept rollback point, and no notice behind it, so
+a wrong fix takes the user's surface down with nothing to undo it but your next
+edit. The safe path is `update-app`'s careful flow
+(`.agents/skills/update-app/references/critical-app.md`); take it whenever the
+fix can wait for a preview.
 
 ## Step 1: Open a tracking ticket
 
-**Single-flight check first.** At most one harden pass per creation may be in
-flight (counting `update` passes on the same target). Run the pre-dispatch
-check in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md)
-for every creation in `$CREATIONS`; if another agent's pass is live on any of
-them, leave the note it describes on their ticket and stop -- the catch-up
-forced at their merge time covers your fix. If a pass's holder is gone but
-its worker is not, take it over as its lead there instead of dispatching. Only
-dispatch if no pass is in flight on any of them, or that reference had you
-supersede the ones that were.
+Run the single-flight check first, for every creation in `$CREATIONS`: the
+command is in `.agents/shared/references/harden-contention.md` ("Before
+dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
+("Single-flight check") says what each outcome means for you. Dispatch only if
+no pass is in flight on any of them, or that reference had you supersede the
+ones that were.
 
-The ticket's title lists the creations, which is what that check matches on,
-and its description names the worker, which is what the check's lookup of its
-holder and worker needs:
+Then open the ticket. Its title and description are read by other chats'
+single-flight checks (`harden-lead.md`, "The tracking ticket"):
 
 ```bash
 mkdir -p data/.tasks/harden/heal-$SLUG
@@ -78,16 +94,12 @@ tk start "$TICKET_ID"
 
 ## Step 2: Write the task file
 
-Frontmatter carries `operation: heal`, `creations` (`$CREATIONS`), the worker
-reporting fields (per `.agents/shared/references/worker-reporting.md`),
-`scope_file` (where the worker writes the pass's computed footprint at the start
-of its run -- you name the path, the worker creates the file), and `diff_base`
-(your `HEAD` at dispatch: the fix does not exist yet, so the worker's own
-commits are the whole diff). The worker's test gate also selects its suites from
-what changed since `diff_base`. The body describes the failure and anchors the
-worker's search with verbatim quotes (the user's request, the failing command or
-error, any tool output that exposed the misbehavior). Without anchors the worker
-scans the wrong region of your transcript.
+`harden-lead.md` ("The task file") explains the frontmatter fields and the
+rules for the body. For a heal, `diff_base` is your `HEAD` at dispatch: the fix
+does not exist yet, so the worker's own commits are the whole diff. The body
+describes the failure and anchors the worker's search with verbatim quotes (the
+user's request, the failing command or error, any tool output that exposed the
+misbehavior).
 
 ```bash
 cat > data/.tasks/harden/heal-$SLUG/task.md << TASK_EOF
@@ -121,14 +133,14 @@ Invoke the \`harden-worker\` skill. On a harness that cannot invoke skills, read
 and follow \`.agents/skills/harden-worker/SKILL.md\` from your own checkout. It
 reads \`operation\` and \`creations\` from this frontmatter and follows the
 matching references: reproduce the failure, find the root cause, apply a minimal fix,
-re-run 2-3 fresh scenarios, and push through the single final-creation gate.
-Push reports to the lead per its reporting protocol.
+re-run 2-3 fresh scenarios, and present the single final-creation gate.
+Report to the lead per its reporting protocol.
 
 ## Success criteria
 - The incident reproduces against the current creations before the fix.
 - The fix addresses the root cause, not a symptom.
 - The fresh scenarios pass after the fix.
-- The user approved the final creation (via a pushed final-creation gate report).
+- The user approved the final creation (via a delivered final-creation gate report).
 TASK_EOF
 ```
 
@@ -136,13 +148,8 @@ Fill in the real content; do not leave placeholders.
 
 ## Step 3: Launch the worker and poll
 
-**Commit any pending changes before you launch, and never harden inline.** The
-worker is created from your committed HEAD, so uncommitted changes never reach
-it -- and `create_worker.py launch` refuses a dirty tree outright. Commit your
-work first; **commit, never stash** -- stashed work gets lost during
-multi-agent coordination. A dirty tree (even unrelated changes) is never a
-reason to do the fix inline: commit, then dispatch. Healing always runs in the
-background worker.
+Commit any pending changes first; a dirty tree, even from unrelated changes, is
+never a reason to do the fix inline (`harden-lead.md`, "Launching the worker").
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -152,55 +159,43 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/heal-$SLUG/task.md
 ```
 
-Then background-poll (`create_worker.py await --name heal-$SLUG --task-file ...
---timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py --waiter`) and follow
-`.agents/shared/references/lead-proxy.md`.
-Flow-specific substitutions:
+Arm the poll, then end your turn:
 
-- Worker name: `heal-$SLUG`; branch: `mngr/heal-$SLUG`
-- Poll path: `data/.tasks/harden/heal-$SLUG/reports/report.md`; reports dir
-  `data/.tasks/harden/heal-$SLUG/reports/`; `await` archives each report it
-  prints under `data/.tasks/harden/heal-$SLUG/reports/consumed/`
-- The only user-approval gate is `final-creation` -- a heal has no outline gate.
-- Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
+```bash
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
+    --name heal-$SLUG \
+    --task-file data/.tasks/harden/heal-$SLUG/task.md \
+    --timeout 90m
+```
+
+Handle each report as `.agents/shared/references/lead-proxy.md` says, and
+re-arm this poll after every gate. For a heal:
+
+- The only user-approval gate is `final-creation` -- a heal has no outline
+  gate. A `question` gate can arrive at any point.
+- Terminal statuses: `done` (Step 4); `stuck` (the failure flow in
   `.agents/skills/launch-task/references/worker-failure.md`, which stops the
   worker).
 
 ## Step 4: Merge and go live
 
-On `done`, first run the merge-time checks in
-[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
-wait out any foreground editing lease on an app or service in the pass,
-confirm the branch is still fresh (no creation's footprint has changed since
-the worker branched), and never resolve a conflicted merge yourself -- a stale
-or conflicted pass goes back to its worker to catch up to your `HEAD`, and its
-next `done` comes back through these same checks.
+On `done`:
 
-Then merge `mngr/heal-$SLUG`, destroy the worker per `lead-proxy.md`
-(`create_worker.py destroy --name heal-$SLUG`), and go live for each creation in
-the pass, by its type: a **skill** or **shared** creation needs nothing beyond
-the merge, except `uv sync --all-packages --frozen` when it has a `python/`
-project (the workspace venv then carries any dependency the merge added); an
-**app** wants a window refresh (`uv run --no-sync
-workspace-layout refresh --app <app-name>`; for an app `build-app` made, `uv run
---no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which reloads its mock frame while
-one is up and its own windows otherwise); a background **service** has no
-window -- restart its programs (`supervisorctl restart <program>`) instead: the
-one named after the package (`host_backup` runs as `host-backup`) and any
-`<program>-<role>` ones (`oom_priority`'s are named otherwise: restart those of
-`earlyoom`, `publish_cgroup_meminfo`, `resource_sampler`, and the
-`oom-tag-backstop` event listener the fix reaches);
-one with no program of its own (the Caretaker's check, which a routine runs)
-has nothing to restart, since its next run reads the merged code. Then close
-the ticket:
+1. Run the checks before a merge, in
+   `.agents/shared/references/harden-contention.md` ("Before merge: lease,
+   freshness, conflicts"): wait out any foreground editing lease on an app or
+   service in the pass, confirm the branch is still fresh, and never resolve a
+   conflicted merge yourself. A stale or conflicted pass goes back to its
+   worker to catch up to your `HEAD`, and its next `done` comes back through
+   these same checks.
+2. Merge `mngr/heal-$SLUG` and destroy the worker (`create_worker.py destroy
+   --name heal-$SLUG`), as `lead-proxy.md` says for `done` ("Terminal status:
+   act and stop polling").
+3. Go live for each creation in the pass by its type: `harden-lead.md`,
+   "Merge, then go live by type".
+4. Close the ticket:
 
-```bash
-tk close "$TICKET_ID" "Healed $CREATIONS -- worker branch merged."
-```
-
-## Gotchas
-
-- If a creation in the pass is a built-in upstream skill, healing it causes local drift to
-  reconcile later via `update-self` (pull) or `submit-upstream-changes` (push).
-- Heal is non-blocking -- the user's original request is already delivered; the
-  heal worker produces a quieter follow-up commit.
+   ```bash
+   tk close "$TICKET_ID" "Healed $CREATIONS -- worker branch merged."
+   ```

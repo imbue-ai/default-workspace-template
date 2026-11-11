@@ -3,38 +3,70 @@ name: crystallize-creation
 description: "Promote the just-finished work into a new, reusable, committed, tested skill. Use when that process would recur with new inputs -- especially something figured out through research or debugging -- or when the user says 'crystallize this'."
 metadata:
   author: imbue
-  exempt-checks: contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Crystallizing a creation into existence
 
-This is the **create** lead of the generic creation lifecycle. The user has
-signed off on a shape -- a process from the just-finished turn, a confirmed data
-sample, a confirmed app mock -- and you put in the thorough, expensive
-pass that turns it into a hardened, committed, reviewed creation, in the
-background. You dispatch the build to a generic worker; your role is to package
-context, launch, proxy gates, merge, and go live.
+This is the **create** lead of the creation lifecycle. The user has signed off
+on a shape -- a process from the just-finished turn, a confirmed data sample,
+an app confirmed live -- and you put in the thorough, expensive pass that turns
+it into a hardened, committed, reviewed creation, in the background. You dispatch the
+build to a harden worker; your role is to package context, launch, proxy gates,
+merge, and go live.
 
-## The type parameter
+Standing instructions:
 
-Crystallize creates one of:
+- **Never crystallize without explicit user go-ahead**: a yes to Step 1, the
+  user's explicit invocation, or a confirmed handoff from `build-app` or
+  `fetch-process-show`.
+- **Never crystallize a turn whose process would not repeat recognizably on a
+  re-run.** Model-judgement steps within a stable process do NOT disqualify it.
+- **Never harden inline.** Hardening always runs in the background worker.
+  Commit pending changes, never stash them, then dispatch.
+- **The worker owns outline and implementation decisions**; do not second-guess
+  its structure unless something is clearly wrong.
+- **You own the poll** from launch until the worker's terminal status, even
+  when another skill invoked you and you moved on to other work.
+- **After a compaction**, re-read the shared references below before you handle
+  the worker's next report.
 
-- **skill** (the default when invoked standalone post-turn): a reusable skill
-  reconstructed from the transcript. This is the common case.
-- **app**: a scaffolded app `build-app` already built and
-  the user confirmed live. `build-app` invokes this lead with
-  `type=app`.
-- A **skill from a confirmed data sample**: `fetch-process-show` invokes this
-  lead with `type=skill` and a `source_artifacts_dir` of staged scripts +
-  `sample.json`.
+Three shared references carry the detail, and each step names the section it
+needs:
+
+- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
+  shares with `update-creation` and `heal-creation`.
+- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
+  on the worker's terminal status.
+- `.agents/shared/references/harden-contention.md`: the checks before any merge
+  from the worker's branch.
+
+## Steps
+
+How you got here decides where you start:
+
+| You were invoked | Creation | Start at |
+|---|---|---|
+| on your own, after a turn | a **skill** reconstructed from the transcript (the common case) | "When to invoke", then Step 1 |
+| by the user ("crystallize this", `/crystallize-creation`) | the same | Step 2 |
+| by `build-app`, with `type=app` | an **app** `build-app` already built and the user confirmed live | Step 2 |
+| by `fetch-process-show`, with `type=skill` and a `source_artifacts_dir` of staged scripts and `sample.json` | a **skill** from a confirmed data sample | Step 2 |
+
+- When to invoke (skill, standalone): whether to propose crystallizing at all
+- Step 1: Confirm (skill, standalone only)
+- Names
+- Step 2: Open a tracking ticket
+- Step 3: Write the task file
+- Step 4: Launch the worker
+- Step 5: Background-poll for worker reports (end your turn each time the poll
+  is armed)
+- Step 6: Go live, on `done`
 
 The type drives two things: which **gates** the worker emits (skill →
-`outline-approval` then `final-creation`; app → none, since the user
-confirmed the live site already) and the **go-live** step after merge (skill →
-post-crystallize migration; app → refresh the window). The worker reads the
-type from the task file's `creations` and loads `type-<TYPE>.md`; you
-proxy whatever gates it emits.
+`outline-approval` then `final-creation`; app → none, since the user confirmed
+the live app already) and the **go-live** after merge (skill → post-crystallize
+migration; app → refresh the window). The worker reads the type from the task
+file's `creations` and loads the matching type reference; you proxy whatever
+gates it emits.
 
 ## When to invoke (skill, standalone)
 
@@ -50,8 +82,9 @@ any plausible skill shape, propose it and let them decide.
 
 **Skip this when the user explicitly invoked crystallize** (typed
 `/crystallize-creation`, said "crystallize this / make a skill out of this" in
-the prior turn) **or when a live-half wrapper invoked this lead** after the user
-approved a sample/mock. In those cases go straight to Step 2.
+the prior turn) **or when `build-app` or `fetch-process-show` invoked this
+skill** after the user approved a sample or a working app. In those cases go
+straight to Step 2.
 
 Otherwise send a one-line pre-gate question to the user:
 
@@ -59,14 +92,15 @@ Otherwise send a one-line pre-gate question to the user:
 
 Wait for the reply. If no, stop.
 
-## Conventions
+## Names
 
 Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
-If a wrapper handed you a slug (and a `source_artifacts_dir`), reuse it. Then:
+If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
+reuse it. `harden-lead.md` ("Names and paths") has every path that follows:
 
-- Worker agent name and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
-- Runtime dir: `data/.tasks/harden/crystallize-$NAME/`
-- Task file: `data/.tasks/harden/crystallize-$NAME/task.md`
+- Worker and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
+- Runtime dir and task file: `data/.tasks/harden/crystallize-$NAME/` and
+  `data/.tasks/harden/crystallize-$NAME/task.md`
 
 ## Step 2: Open a tracking ticket
 
@@ -82,26 +116,27 @@ echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
 
 ## Step 3: Write the task file
 
-The frontmatter carries `operation: crystallize`, `creations` (the one
-creation as `<type>:<name>`: `skill:$NAME`, `app:<app name>`, or
-`service:<package>`), `finish_report_path` (the report destination the lead
-polls; see `.agents/shared/references/worker-reporting.md`), `scope_file`
-(where the worker writes the creation's computed footprint -- you name the
-path, the worker creates the file), `diff_base` (the commit before the work
-being hardened began: your `HEAD` at dispatch for a skill reconstructed from
-the transcript; for an app, the parent of the commit that added the app's
-manifest, `$(git rev-parse "$(git log --diff-filter=A --format=%H -1 --
-system/apps/<package>/app.toml)^")`, so the scope file's diff covers the
-scaffold and everything built on it; for a service, the parent of the commit
-that added its `system/supervisord.conf.d/<name>.conf`, the same way), and an
-optional `source_artifacts_dir`. The worker's test gate also selects its suites
-from what changed since `diff_base`. The body *describes* the
-work and -- for a skill reconstructed from the transcript -- anchors the
-worker's search with verbatim quotes (the user's original ask, key decisions,
-tool outputs that defined the recipe). Without anchors the worker scans the
-wrong region of your transcript.
-Describe invariants and state constraints; do **not** enumerate subcommands,
-flow steps, or argparse surfaces -- those are the worker's decisions.
+`harden-lead.md` ("The task file") explains the frontmatter fields and the
+rules for the body. For a crystallize pass:
+
+- `creations` is the one creation, as `<type>:<name>`: `skill:$NAME`,
+  `app:<app name>`, or `service:<package>`.
+- `diff_base` is the commit before the work being hardened began:
+  - a skill reconstructed from the transcript: your `HEAD` at dispatch;
+  - an app: the parent of the commit that added the app's manifest, `$(git
+    rev-parse "$(git log --diff-filter=A --format=%H -1 --
+    system/apps/<package>/app.toml)^")`, so the scope file's diff covers the
+    scaffold and everything built on it;
+  - a service: the parent of the commit that added its
+    `system/supervisord.conf.d/<name>.conf`, the same way.
+- `source_artifacts_dir` is optional: the directory of staged input files a
+  skill that invoked you handed over. Step 4's launch copies it to the worker.
+
+The body *describes* the work and -- for a skill reconstructed from the
+transcript -- anchors the worker's search with verbatim quotes (the user's
+original ask, key decisions, tool outputs that defined the recipe). Describe
+invariants and state constraints; do **not** enumerate subcommands, flow steps,
+or argparse surfaces -- those are the worker's decisions.
 
 ```bash
 {
@@ -113,7 +148,7 @@ diff_base: $(git rev-parse HEAD)
 operation: crystallize
 creations: skill:$NAME
 FRONTMATTER_EOF
-# If a wrapper staged input files, add this line inside the frontmatter:
+# If the skill that invoked you staged input files, add this line inside the frontmatter:
 #   source_artifacts_dir: data/.tasks/<calling-skill>/$NAME/
 cat << FRONTMATTER_CLOSE
 ---
@@ -141,10 +176,10 @@ after. Describe the contract; do not prescribe subcommands or surfaces.>
 Invoke the `harden-worker` skill. On a harness that cannot invoke skills, read
 and follow `.agents/skills/harden-worker/SKILL.md` from your own checkout. It
 reads `operation` and `creations` from this frontmatter and follows the
-matching references. When you reach a gate or terminal status, push a report to the lead
+matching references. When you reach a gate or terminal status, deliver a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
-Whether to split this pass across sibling sub-workers is your own call, per the
-harden contract's "Splitting the pass across sub-workers".
+Whether to split this pass across workers of your own is your own call, per the
+harden contract's "Splitting the pass across workers of your own".
 
 ## Milestones
 Do not save everything for the end. As soon as the creation is genuinely usable
@@ -163,22 +198,15 @@ BODY_EOF
 } > data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-Set `creations: app:<app name>` (and adjust the body to point at the
-already-built lib) when invoked by `build-app`. Fill in the real
-`## What was done` and `## Anchors` -- do not leave the placeholders. If
-frontmatter sets `source_artifacts_dir`, Step 4 pushes that directory to the
-worker too.
+Set `creations: app:<app name>` and the app's `diff_base` (and adjust the body
+to point at the already-built lib) when invoked by `build-app`. Fill in the
+real `## What was done` and `## Anchors` -- do not leave the placeholders.
 
 ## Step 4: Launch the worker
 
-**Commit any pending changes before you launch, and never harden inline.** The
-worker is created from your committed HEAD, so uncommitted changes never reach
-it -- and `create_worker.py launch` refuses a dirty tree outright. Commit your
-work first (the just-finished change is exactly what belongs on the branch);
-**commit, never stash** -- stashed work gets lost during multi-agent
-coordination. A dirty tree (even unrelated changes) is never a reason to do the
-hardening inline: commit, then dispatch. Hardening always runs in the background
-worker.
+Commit any pending changes first (the just-finished change is exactly what
+belongs on the branch); a dirty tree, even from unrelated changes, is never a
+reason to do the hardening inline (`harden-lead.md`, "Launching the worker").
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -188,15 +216,15 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-If the frontmatter sets `source_artifacts_dir`, `launch` pushes it too -- no
-extra flag.
+If the frontmatter sets `source_artifacts_dir`, `launch` copies it to the
+worker too -- no extra flag.
 
 ## Step 5: Background-poll for worker reports
 
-Start the poll through `system/scripts/workspace_bare_scripts/run_in_background.py`, which returns at
-once, then continue with other work (subsequent skill steps, interface design,
-other user requests). Each report arrives in your chat as a message that starts
-your next turn; handle it then.
+Arm the poll, which returns at once, then end your turn or continue with other
+work (later steps of the skill that invoked you, interface design, other user
+requests). Each report arrives in your chat as a message that starts your next
+turn; handle it then.
 
 ```bash
 python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
@@ -206,61 +234,47 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --timeout 90m
 ```
 
-You own this poll even if you reached this step from a wrapper and moved on to
-other work -- without it, gate reports never reach the user and the worker
-deadlocks. Follow `.agents/shared/references/lead-proxy.md` for gate decisions,
-the "do not interrupt more recent user work" rule, and terminal-status handling.
-Flow-specific substitutions:
+You own this poll even if another skill invoked you and you moved on to other
+work -- without it, gate reports never reach the user and the worker
+deadlocks. Handle each report as `.agents/shared/references/lead-proxy.md`
+says (gate decisions, the "do not interrupt more recent user work" rule,
+terminal statuses), and re-arm this poll after every gate and every milestone.
+For a crystallize pass:
 
-- Worker name: `crystallize-$NAME`; branch: `mngr/crystallize-$NAME`
-- Task file / poll path: `data/.tasks/harden/crystallize-$NAME/task.md` /
-  `data/.tasks/harden/crystallize-$NAME/reports/report.md`
-- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`; `await`
-  archives each report it prints under
-  `data/.tasks/harden/crystallize-$NAME/reports/consumed/` (a milestone keeps
-  its own file name there, so a deferred one can still be merged later)
-- Milestones dir: `data/.tasks/harden/crystallize-$NAME/reports/milestones/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
-  **app** → none (the worker merges straight to `done`).
-- Milestones: any name, non-blocking → provisional merge per `lead-proxy.md`'s
-  "Milestone reports: provisional merge". Provisional go-live is the minimum
-  that makes the creation usable: **skill** → it is on disk at
-  `.agents/skills/$NAME/` and invocable; **app** → refresh the window. Step 6
-  still runs only on `done`.
-- Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
-  then Step 6); `stuck` (failure flow per
-  `launch-task/references/worker-failure.md`, which stops the worker).
+  **app** → none (the worker goes straight to `done`). A `question` gate can
+  arrive at any point.
+- Milestones: any name, non-blocking → provisional merge per
+  `.agents/shared/references/lead-proxy-milestones.md`, after the checks before
+  a merge in `.agents/shared/references/harden-contention.md` ("Before merge:
+  lease, freshness, conflicts"). Provisional go-live is the minimum that makes
+  the creation usable: **skill** → it is on disk at `.agents/skills/$NAME/` and
+  invocable; **app** → refresh the window. Step 6 still runs only on `done`.
+- Terminal statuses: `done` (Step 6); `stuck` (the failure flow in
+  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  worker).
 
 ## Step 6: Go live
 
 A provisional milestone merge does not change this step: it runs only on `done`,
 and the `done` merge brings the remainder of the branch.
 
-On `done`, after merging the worker's branch and destroying the worker (the
-sub-workers it split its pass across are already gone with it):
+On `done`, run the checks before a merge (`harden-contention.md`, "Before
+merge: lease, freshness, conflicts"), then merge `mngr/crystallize-$NAME` and
+destroy the worker (`create_worker.py destroy --name crystallize-$NAME`; any
+workers it split its pass across go with it), as `lead-proxy.md` says for
+`done` ("Terminal status: act and stop polling"). Then go live by the
+creation's type, as `harden-lead.md` ("Merge, then go live by type") says, with
+what a new creation adds:
 
-- **skill**: if it has a `python/` project, run `uv sync --all-packages --frozen`
-  first, so the workspace venv carries its package and any dependency the merge
-  added. Then read and follow `references/post-crystallize-migration.md` before
-  declaring crystallize done -- point consumers at the installed skill path,
-  delete the stale runtime dir, pick up any breaking renames the worker
-  introduced, restart any caching service, and close the ticket recorded in
-  `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
-  separate commit.
-- **app**: refresh its window so the user sees the merged build
-  (`uv run --no-sync workspace-layout refresh --app <app-name>`; for an app
-  `build-app` made, `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which
-  reloads its mock frame while one is up and its own windows otherwise), then
-  close the ticket.
-- **service**: it has no window -- restart its programs (`supervisorctl
-  restart <program>`): the one named after the package (`host_backup` runs as
-  `host-backup`) and any `<program>-<role>` ones. Then close the ticket.
-
-## Guidelines
-
-- Never crystallize without explicit user go-ahead (a yes to Step 1, the
-  explicit invocation, or a wrapper's confirmed handoff).
-- Never crystallize a turn whose process would not repeat recognizably on a
-  re-run. Model-judgement steps within a stable process do NOT disqualify it.
-- The worker owns outline and implementation decisions; do not second-guess its
-  structure unless something is clearly wrong.
+- **skill**: after the `uv sync --all-packages --frozen` a skill with a
+  `python/` project needs, read and follow
+  `references/post-crystallize-migration.md` before declaring crystallize
+  done -- point consumers at the installed skill path, delete the stale runtime
+  dir, pick up any breaking renames the worker introduced, restart any caching
+  service, and close the ticket recorded in
+  `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes
+  as a separate commit.
+- **app**: refresh its window so the user sees the merged build, then close
+  the ticket.
+- **service**: restart its programs, then close the ticket.
