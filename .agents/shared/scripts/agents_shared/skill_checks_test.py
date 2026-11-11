@@ -102,6 +102,21 @@ def test_a_three_link_chain_is_too_deep_until_skill_md_links_its_end(
     assert _failed(skill) == set()
 
 
+def test_a_path_into_a_copy_of_the_tree_links_the_file_it_copies(
+    tmp_path: Path,
+) -> None:
+    copy = "data/.tasks/update-self/skill-at-target"
+    skill = _skill(
+        tmp_path, "staged", f"Read `{copy}/.agents/shared/references/one.md`.\n"
+    )
+    _write(tmp_path, ".agents/shared/references/one.md", "Read `two.md`.\n")
+    _write(tmp_path, ".agents/shared/references/two.md", "Read `three.md`.\n")
+    _write(tmp_path, ".agents/shared/references/three.md", "The end.\n")
+    failures = check_failures(skill)
+    assert [failure.check for failure in failures] == [Check.DEPTH]
+    assert "three.md is 3 links away" in failures[0].detail
+
+
 def test_another_skills_file_ends_a_link_instead_of_being_read_on_from(
     tmp_path: Path,
 ) -> None:

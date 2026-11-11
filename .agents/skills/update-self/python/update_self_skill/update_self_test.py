@@ -1504,6 +1504,104 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
 
 
+def _commit_prose_paths(root: Path, marker: str) -> None:
+    """Write one file under each staged prose path, plus one outside them, and commit."""
+    for path in update_self.STAGED_PROSE_PATHS:
+        (root / path).mkdir(parents=True, exist_ok=True)
+        (root / path / "note.md").write_text(f"{marker} {path}\n", encoding="utf-8")
+    other = root / ".agents" / "skills" / "launch-task" / "SKILL.md"
+    other.write_text(f"{marker} not staged\n", encoding="utf-8")
+    for args in (["add", "-A"], ["commit", "-q", "-m", f"prose {marker}"]):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _stage_shared_prose(repo: Path, dest: Path, ref: str) -> int:
+    return update_self.main(
+        ["stage-shared-prose", "--ref", ref, "--dest", str(dest), "--repo-root", str(repo)]
+    )
+
+
+def test_stage_shared_prose_stages_the_refs_copies_beside_the_staged_skill(
+    tmp_path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo_with_skill(repo, skill_body="FLOW\n")
+    _commit_prose_paths(repo, "TARGET")
+    subprocess.run(["git", "tag", "minds-v2.0.0"], cwd=repo, check=True)
+    # The workspace's own tree is on something else: an edit the target does not have.
+    for path in update_self.STAGED_PROSE_PATHS:
+        (repo / path / "note.md").write_text("WORKSPACE\n", encoding="utf-8")
+        (repo / path / "workspace-only.md").write_text("WORKSPACE\n", encoding="utf-8")
+
+    dest = tmp_path / "staging"
+    bootstrap = ["bootstrap-skill", "--ref", "minds-v2.0.0", "--dest", str(dest)]
+    assert update_self.main([*bootstrap, "--repo-root", str(repo)]) == 0
+    # A file an earlier staging left behind must not survive the next one.
+    stale = dest / update_self.STAGED_PROSE_PATHS[0] / "from-an-earlier-staging.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("STALE\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert _stage_shared_prose(repo, dest, "minds-v2.0.0") == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source"] == "ref"
+    assert payload["paths"] == list(update_self.STAGED_PROSE_PATHS)
+    for path in update_self.STAGED_PROSE_PATHS:
+        assert (dest / path / "note.md").read_text() == f"TARGET {path}\n"
+        assert not (dest / path / "workspace-only.md").exists()
+    assert not stale.exists()
+    assert not (dest / ".agents" / "skills" / "launch-task" / "SKILL.md").exists()
+    assert (dest / update_self.SKILL_DIR_REL / "SKILL.md").read_text() == "FLOW\n"
+
+
+def test_stage_shared_prose_stages_local_copies_when_the_ref_predates_the_skill(
+    tmp_path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "test@example.com"],
+        ["config", "user.name", "test"],
+        ["commit", "--allow-empty", "-q", "-m", "root"],
+        ["tag", "minds-v0.0.1"],
+    ):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / update_self.SKILL_DIR_REL).mkdir(parents=True)
+    _commit_prose_paths(repo, "LOCAL")
+    cache = repo / update_self.STAGED_PROSE_PATHS[0] / "__pycache__"
+    cache.mkdir()
+    (cache / "stale.pyc").write_bytes(b"")
+
+    dest = tmp_path / "staging"
+    assert _stage_shared_prose(repo, dest, "minds-v0.0.1") == 0
+
+    assert json.loads(capsys.readouterr().out)["source"] == "local"
+    for path in update_self.STAGED_PROSE_PATHS:
+        assert (dest / path / "note.md").read_text() == f"LOCAL {path}\n"
+    assert not (dest / update_self.STAGED_PROSE_PATHS[0] / "__pycache__").exists()
+
+
+def test_stage_shared_prose_refuses_a_ref_missing_a_path_and_stages_nothing(
+    tmp_path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo_with_skill(repo, skill_body="FLOW\n")
+    _commit_prose_paths(repo, "LOCAL")
+    dest = tmp_path / "staging"
+
+    # minds-v1.0.0 has the skill but none of the prose paths.
+    assert _stage_shared_prose(repo, dest, "minds-v1.0.0") == 1
+
+    error = capsys.readouterr().err
+    assert "minds-v1.0.0 has no" in error
+    assert update_self.STAGED_PROSE_PATHS[0] in error
+    assert not dest.exists()
+    assert _stage_shared_prose(repo, dest, "no-such-ref") == 1
+    assert "does not name a commit" in capsys.readouterr().err
+
+
 def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -> None:
     # Staging the local copy here would report ``differs: false`` and the lead
     # would follow its own, older flow for a target it never looked at.
