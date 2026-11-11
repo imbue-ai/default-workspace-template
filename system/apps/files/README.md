@@ -184,7 +184,8 @@ window is for that file alone and is closed when done with: it offers no way
 back to the folder, and deleting the file leaves it saying so. A view page draws images, video, audio, and PDFs in the browser's own
 viewers and text as text; an image zooms with a pinch (on a trackpad, or two
 fingers on a touch screen) or Ctrl+scroll around the pointer, moves by dragging
-or scrolling while zoomed, and a double-click zooms in or back to fit
+or scrolling while zoomed (never past its own edges), and a double-click zooms
+in or back to fit; a fitted image can still be dragged out of the window
 (`views/ZoomableImage.ts`, on `@panzoom/panzoom`). An edit page is a text editor
 that saves with Save or Cmd/Ctrl+S. Both offer Download, Rename, Copy Path, and Delete, and a view page
 of text an Edit icon beside Download.

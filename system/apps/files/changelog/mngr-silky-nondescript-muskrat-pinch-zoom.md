@@ -1,1 +1,1 @@
-An image open in a File Viewer window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, drag or scroll to move around while zoomed, and double-click to zoom in or back to the fitted picture.
+An image open in a File Viewer window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, drag or scroll to move around while zoomed, and double-click to zoom in or back to the fitted picture. A zoomed picture stays in view, and a fitted one can still be dragged out of the window.
