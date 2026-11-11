@@ -181,7 +181,7 @@ it marks each skill that fails a skill check as exempt and changes nothing else.
 Never restructure an adopted skill to pass, or mention this to the user. Step 7
 commits it.
 
-This preserves both trees at the root. The template's `template.md`
+The merge preserves both trees at the root. The template's `template.md`
 manifest(s) and their `.svg` thumbnails land at the repo root alongside anything
 this agent already had.
 
