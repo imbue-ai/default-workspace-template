@@ -1517,7 +1517,15 @@ def _commit_prose_paths(root: Path, marker: str) -> None:
 
 def _stage_shared_prose(repo: Path, dest: Path, ref: str) -> int:
     return update_self.main(
-        ["stage-shared-prose", "--ref", ref, "--dest", str(dest), "--repo-root", str(repo)]
+        [
+            "stage-shared-prose",
+            "--ref",
+            ref,
+            "--dest",
+            str(dest),
+            "--repo-root",
+            str(repo),
+        ]
     )
 
 
@@ -1753,6 +1761,48 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     assert any("run-status verdict" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     assert [line for line in invocations if staged not in line] == []
+
+
+_AGENTS_MARKDOWN_PATH = re.compile(r"[\w./-]*\.agents/[\w./-]+\.md")
+
+
+def test_prose_outside_the_skill_is_read_from_the_staged_copy_after_the_hand_off() -> (
+    None
+):
+    """From Step 3 on, a markdown path outside the skill's directory names the staged copy.
+
+    A bare ``.agents/shared/...`` path is the workspace's own file, which may predate the
+    flow following it; and a staged path ``stage-shared-prose`` does not stage names nothing.
+    """
+    skill_md = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    prose = {
+        "SKILL.md": skill_md[skill_md.index("## 3. Dispatch the worker") :],
+        **{
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted((_SKILL_DIR / "references").glob("*.md"))
+        },
+    }
+    staged_prefix = f"{update_self.STAGING_DIR_REL}/"
+    repo_root = _SKILL_DIR.parents[2]
+    outside: list[tuple[str, str]] = []
+    for name, text in prose.items():
+        for path in _AGENTS_MARKDOWN_PATH.findall(text):
+            if update_self.SKILL_DIR_REL not in path:
+                outside.append((name, path))
+    # The files this guard exists for; without them it is vacuous.
+    assert any(path.endswith("references/lead-proxy.md") for _, path in outside)
+    assert any("harden-worker/references/" in path for _, path in outside)
+
+    assert [found for found in outside if not found[1].startswith(staged_prefix)] == []
+    assert [
+        (name, path)
+        for name, path in outside
+        if not any(
+            path.removeprefix(staged_prefix).startswith(f"{staged}/")
+            for staged in update_self.STAGED_PROSE_PATHS
+        )
+        or not (repo_root / path.removeprefix(staged_prefix)).is_file()
+    ] == []
 
 
 _FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)

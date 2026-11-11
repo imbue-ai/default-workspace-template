@@ -1,7 +1,7 @@
 # Resuming after `stuck`
 
 When the user overrides a `stuck` verdict, resume the same pass with the same
-worker as `.agents/shared/references/lead-proxy.md` ("Resuming after the user
+worker as `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md` ("Resuming after the user
 overrides a failure") says. This flow's preconditions, re-taken before the
 `reply`, each `tk` call as its own command:
 
