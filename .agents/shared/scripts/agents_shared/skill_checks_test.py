@@ -14,7 +14,7 @@ from agents_shared.skill_checks import (
     check_failures,
     unreached_shared_files,
 )
-from agents_shared.skill_exemptions import ExemptionReason
+from agents_shared.skill_exemptions import Exemption, ExemptionReason, with_exemption
 
 _LONG_FILLER = "\n".join(f"filler line {index}" for index in range(120))
 
@@ -280,6 +280,24 @@ def test_no_exemptions_mode_refuses_a_valid_exemption(tmp_path: Path) -> None:
     failing_error = validate_skill.validate(failing, allow_exemptions=False)
     assert passing_error is not None and "passes every check" in passing_error
     assert failing_error is not None and "[paths]" in failing_error
+
+
+def test_writing_an_exemption_changes_only_the_metadata_block() -> None:
+    after_metadata = "\ndescription: Does the thing.\n---\n\nBody.\n\n---\n\nMore.\n"
+    before = "---\nname: kept\nmetadata:\n  author: me\n" + after_metadata
+    exemption = Exemption(
+        checks=frozenset({Check.PATHS, Check.SIZE}),
+        reason=ExemptionReason.PREDATES_CHECKS,
+    )
+
+    stamped = with_exemption(before, exemption)
+
+    assert stamped == (
+        "---\nname: kept\nmetadata:\n  author: me\n"
+        "  exempt-checks: size paths\n  exempt-reason: predates-checks\n"
+        + after_metadata
+    )
+    assert with_exemption(stamped, None) == before
 
 
 def test_stamping_adds_missing_exemptions_drops_stale_ones_and_skips_third_parties(
