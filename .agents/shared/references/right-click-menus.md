@@ -57,7 +57,8 @@ A Mithril page hands the installer `open: createContextMenuOpener().open` so the
 and `redraw: () => m.redraw()`: a row picked in the native menu runs outside the page's event handlers, so without it
 a row that only changes the page's state shows nothing until something else redraws. The chat rail
 (`railContextMenuRoutes` in `system/apps/chat/frontend/src/root/ChatRail.ts`, installed in `root/index.ts`) is a
-working example of both.
+working example of both. Its `extraRows` and `open` go further than a page that only adds rows needs: they keep the
+rail's own row menu where the desktop app draws none, so its `extraRows` returns rows only for the native menu.
 
 ## When a page has to keep the right-click
 
