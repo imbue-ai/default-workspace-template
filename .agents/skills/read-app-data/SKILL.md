@@ -123,14 +123,15 @@ The welcome asks "Do you have any ideas?" and says nothing about app data. Make 
 
 1. Check `data/.skills/read-app-data/first_chat_offer.json`. If it exists, the offer was made or skipped already: do nothing.
 2. Skip it, and record the skip, when the workspace already holds app-data grants (see "When to ask"), or when the first message carries a `[from: <name>]` prefix. (A shared workspace cannot ask: Imbue Studio refuses its request as `REFUSED_SHARED`; record that as the skip.)
-3. If the user's first message is urgent (an error, a `/assist`, something broken), wait: make the offer after your first calm reply in this chat instead.
-4. In the turn `personalized-ideas` names, file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
+3. If the user's first message itself asks for app ideas, `personalized-ideas` leads, and the app-data request it files is the offer: file only that one, with `"origin": "first-chat-offer"` in its payload, and do not file a second; record it as in step 6.
+4. If the user's first message is urgent (an error, a `/assist`, something broken), wait: make the offer after your first calm reply in this chat instead.
+5. In the turn `personalized-ideas` names, file one `app-data` request with `"origin": "first-chat-offer"` in the payload:
    - `installed-apps` and `browser-history`, always;
    - `notes`, `reminders`, and `calendar` too, when the Full Disk Access status (see "Asking for Full Disk Access") is `ON` or `is_asking_allowed` is true;
    - never `messages`, `shell-history`, or `code-projects`.
 
    Wait a moment for an answer, as in "Asking". If none has come, end the reply with one plain line, for example "I can also suggest apps that fit how you use your Mac: approve what I can look at, or skip it." If it was refused at once (`REFUSED_SHARED`), leave the line out and record the skip, as in step 2.
-5. Write `{"offered_at": "<ISO time>", "request_id": "<id>"}` (or `{"skipped_at": ..., "reason": ...}`) to `data/.skills/read-app-data/first_chat_offer.json`, so no later chat repeats it.
+6. Write `{"offered_at": "<ISO time>", "request_id": "<id>"}` (or `{"skipped_at": ..., "reason": ...}`) to `data/.skills/read-app-data/first_chat_offer.json`, so no later chat repeats it.
 
 In the dialog only the sources the user approved in their other workspaces start ticked; the rest are theirs to tick. When the answer comes, follow the `suggest-apps` skill from its step 3 if anything was granted; if nothing was, say nothing more about it.
 
