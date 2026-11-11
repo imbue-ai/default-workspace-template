@@ -2,10 +2,11 @@
 
 Every app has a manifest at `system/apps/<package>/app.toml`. Read this when
 you write or edit one: to decide `stop_when_no_windows`, to register something
-you built for the app outside its directory, or to rename the app.
+you built for the app outside its directory, to pin a window, or to rename the
+app.
 
-`forward_port.py --manifest` reads the file on every start, so a restart is
-what applies an edit. After editing it, check it:
+The app's program registers the manifest at every start, so a restart is what
+applies an edit. After editing it, check it:
 
 ```bash
 uv run --no-sync app-manifest validate-manifest system/apps/<package>/app.toml
@@ -15,8 +16,7 @@ uv run --no-sync app-manifest validate-manifest system/apps/<package>/app.toml
 
 - `name`: the app's registered name.
 - `display_name`: what users see for the app.
-- `description`: the one-liner. It is what an agent reads to know what the app
-  is for, and the app's API document carries it.
+- `description`: the one-liner passed as `--description`.
 - `api_schema_path`: `/api/schema`, where the app describes its own API
   (`api-schema.md`).
 - `icon`: the icon file beside the manifest.
@@ -60,6 +60,15 @@ travels with the app through hardening, testing and publishing.
 A credential the app needs is declared under `[[secrets]]`; `scaffold-output.md`,
 "An app that needs a credential", has the block and the program command that
 goes with it.
+
+## A pinned window (`[pin]`)
+
+A `[pin]` table (`path`, and optionally `style = "plain" | "avatar"`,
+`scope = "linked" | "independent"`, `default_mode = "bar" | "floating"`) gives
+the app one window at that path on every desktop that is never closed, and
+whose taskbar entry each client may draw in the bar or floating above the
+windows. Almost no app wants one (the chat's root window is the case it exists
+for), so leave it out unless the user asked for an always-present window.
 
 ## Renaming an app
 

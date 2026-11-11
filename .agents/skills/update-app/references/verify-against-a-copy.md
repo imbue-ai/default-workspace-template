@@ -24,13 +24,13 @@ store. The sections run cheapest first.
 ## Read-only verification needs no ceremony
 
 Most changes (UI, copy, a backend read path) can be exercised with `curl` or
-Playwright against the live app without writing anything. Reading the live
-store is fine, including to *render* a preview. The danger is only writes.
+Playwright against the live app without writing anything, and a preview may
+read the live store to *render*. The danger is only writes.
 
-That settles the *data* question, not the timing one. A browser drive still
-belongs where only you are looking: once a window is open, a read-only
-Playwright pass writes nothing but still lands in the user's view, and the live
-app is yours only for a `curl` or a health probe.
+That settles the *data* question, not the timing one. SKILL.md's "verify
+before the user can see it" still decides where a browser drive may run: a
+read-only Playwright pass writes nothing, but with a window open it lands in
+the user's view.
 
 ## A throwaway instance over a copy of the data
 
@@ -69,10 +69,9 @@ uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py
   copy only what the test needs (`--copy` a subdirectory, or seed a small store
   for the test) or verify read-only.
 - **To pick up a further edit, refresh in place. Do not tear down and `up`
-  again.** A `down` and `up` cycle picks a new port, so a window already open
-  on the instance would point at a dead one. `refresh` re-boots just the
-  instance's own process on its existing port, leaving the port, the
-  registration and any window untouched:
+  again.** A `down` and `up` cycle picks a new port, so the URL you hold would
+  point at a dead one. `refresh` re-boots just the instance's own process on
+  its existing port:
 
   ```bash
   uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
@@ -80,6 +79,9 @@ uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py
 
   A change that only alters files the running process reads from disk on each
   request needs no refresh at all. Reserve `down` for when you are finished.
+
+The instance registers nothing with the workspace and has no window: it is
+for your own checks, driven on its port.
 
 This is the point of the `DATA_DIR` and `<PACKAGE_UPPER>_PORT` overrides: the
 isolation you need is **data isolation, not code isolation**, and it is one
@@ -89,9 +91,9 @@ lived.
 
 ## A preview from a worktree
 
-This is the preview that shows the changed app itself: booted beside the live
-one as the labeled `<name>-preview` app, for the user to see a change before it
-lands. The worktree is the app's code isolation. An app with an `app.toml`
+This is the second form of preview SKILL.md's step 1 names: the changed app
+itself, shown to the user before the change lands. The worktree is the app's
+code isolation. An app with an `app.toml`
 needs nothing spelled out: its manifest's `[preview]` table (the scaffold
 writes one; absent, the scaffold convention applies) says how a throwaway
 instance boots, and one script boots it from a worktree, on free ports, over a
@@ -117,16 +119,13 @@ uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.p
   user-built app's fails its `--locked` sync.
 - If the app has a frontend, build it in the worktree too.
 - `--with <sibling>` boots a sibling app's preview from the same worktree
-  first and points the app's copied registry at it. A shell preview frames the
-  previewed chat that way, and a terminal preview needs `--with terminal-pty`,
-  since its pages frame the pty the registry names.
+  first and points the app's copied registry at it.
 - `--instance-key <key>` names the instance the window opens on, for an app
   whose `open_path` takes one (a chat opens on a conversation).
 
 For a contained change exercised against a data copy, the throwaway instance
 above, run from the live tree, is the cheaper shape, and it is the only shape
-for a service with no manifest. Either way the window is the same labeled
-frame.
+for a service with no manifest.
 
 ## Never clean up by deleting from the live store
 

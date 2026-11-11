@@ -1,9 +1,9 @@
 # Verifying an app
 
 Verify against `http://127.0.0.1:<port>/`, the port registered with
-`forward_port.py`. The browser-facing origin (`http://<name>.<workspace-host>/`)
-is served by the host-side forwarder and is **not reachable from inside the
-container**, so a check from inside targets the local port directly.
+`forward_port.py`. The browser-facing origin (`public-url.md`) is served by the
+host-side forwarder and is **not reachable from inside the container**, so a
+check from inside targets the local port directly.
 
 ## Contents
 

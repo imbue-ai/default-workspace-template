@@ -10,23 +10,21 @@ Read this when a round needs more than SKILL.md's two step-4 calls: the note
 changed, the frame's window is closed, the app has become real, or you are
 changing a framed app from another skill.
 
-## The rule
-
-Never open or refresh the app itself (`verify_app.py --open` or `--refresh`,
-`workspace-layout open <name>`) while the frame is up. The window the user has
-is the frame's. Every restart of the app registers it as an ordinary app again,
-so every call that restarts it ends with one of the `mock_frame.py` commands
-below, which puts the frame back.
-
 ## The commands
+
+The window the user has is the frame's, so the app itself is never opened and
+never refreshed (`verify_app.py --refresh`, `workspace-layout refresh --app
+<name>`) while the frame is up. Every restart of the app registers it as an
+ordinary app again, so every call that restarts it ends with one of the
+commands below, which puts the frame back.
 
 `MOCK_FRAME` stands for
 `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py`.
-Chain each after the restart with `&&`, in the same tool call:
+Chain each after the restart with `&&`, in the same tool call. The first
+framing is SKILL.md's step 4 call.
 
 | When | Command |
 |---|---|
-| First time: frame the app and open the frame beside the chat | `MOCK_FRAME up --app <name> --note "<what is not real yet>" --open` |
 | A round that changes nothing real | `MOCK_FRAME refresh --app <name>` |
 | What is real has changed | `MOCK_FRAME up --app <name> --note "<the new note>" --refresh` |
 | The frame has no window open | `MOCK_FRAME up --app <name> --open` |

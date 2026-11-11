@@ -1,12 +1,8 @@
 # The careful flow: changing a critical app
 
-You are here because the app's `app.toml` says `critical = true` (the shell,
-the chat, the terminal, and any user app that declares it), or because the
-change is under `system/libs/workspace_ui/`, which rebuilds both the shell's and
-the chat's bundles, or under `system/libs/workspace_layout/`, the wire contract
-of the shell's layout routes that the shell, the chat, and the terminal all run,
-or under `system/libs/workspace_themes/`, the theme catalog and theme route the
-same three run.
+You are here because SKILL.md's "Route the change first" sent the change here:
+it touches a critical app, or one of the three libraries the critical apps
+share.
 A broken build of one of these is served straight to the user as their
 workspace, or as the surface they would use to fix it. That forces three
 adjustments to SKILL.md's ordinary steps, and nothing else changes: the
@@ -133,17 +129,18 @@ so.
 How rough the first previewed pass should be scales with shape-uncertainty, not
 with whether it changes what the user sees: an obvious contained change (font,
 color, copy) you implement directly; a redesign or a non-obvious layout starts
-as a deliberately rough pass for fast signal. Either way a critical app's
-preview is the real edit in the worktree, however rough, shown through the real
-preview (the "janky real edit" of
-`.agents/shared/references/interactive-delivery.md`), never a detached mock.
+as a deliberately rough pass for fast signal. A critical app's preview
+defaults to the real edit in the worktree, however rough, shown through the
+real preview (the "janky real edit" of
+`.agents/shared/references/interactive-delivery.md`).
 
 ## Step 2: The live loop, in the worktree and its preview
 
-Work entirely inside the worktree. What the change owes (SKILL.md's step 3) and
-the `frontend-design` and `use-ai-integration` rules for what you write hold
-here too. The build and test mechanics for a critical app are the worker's job
-at harden time. In the live loop you need a clean build, not the full gate.
+Work entirely inside the worktree. What the change owes (SKILL.md's step 3)
+holds here too, as do the rules for what you write: the `use-ai-integration`
+skill, and a `frontend-design` skill where your harness provides one. The build
+and test mechanics for a critical app are the worker's job at harden time. In
+the live loop you need a clean build, not the full gate.
 
 SKILL.md's standing instruction, *verify before the user can see it*, holds
 per round, not just for the first: the preview's window is closed while you
@@ -197,11 +194,10 @@ Only once it is up, open its window:
 uv run --no-sync workspace-layout open <name>-preview
 ```
 
-**That `open` is the hand-off, not setup.** It puts the window on the user's
-screen the moment it returns, so from here the pass is interactive: every round
-ends by telling the user what changed and waiting. Do not drive the preview
-yourself while the window is open, and never tell the user to open a window you
-already opened.
+**That `open` is the hand-off, not setup** (SKILL.md's standing instruction on
+`workspace-layout open`). From here the pass is interactive: every round ends
+by telling the user what changed and waiting. Do not drive the preview yourself
+while the window is open.
 
 What to point the user at: for the chat, the conversation the preview opened on
 (the one that motivated the change, when one did; sends from the preview are
@@ -439,8 +435,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    *settle* healthy, refreshes every open view, and **auto-rolls-back the entire
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
-   back; any later apply replaces them. Interpret the exit code and report it
-   (the codes are the apply's own, the same ones an `update-self` run reads):
+   back; any later apply replaces them. Interpret the exit code and report it,
+   per `.agents/skills/update-self/references/apply-outcomes.md`, which says
+   what each exit leaves behind and what else it can mean:
 
    - `0`: applied; the live app is updated and healthy.
    - `2`: the change was bad and was **automatically rolled back**; the live

@@ -20,17 +20,17 @@ The script is standard-library only and runs under a plain `python3`.
   names (validated like `--icon-file`), and its static fields (`display_name`,
   `critical`, `priority`, `program`, `internal`, `launcher_rank`,
   `default_shortcut`, `launch_paths`, `pin`) are copied onto the registry row
-  on every call, so a changed manifest updates the row on the next start.
-  `--name` may accompany it and must then equal the manifest's name.
+  on every call. `--name` may accompany it and must then equal the manifest's
+  name.
   `--icon-file`, `--program`, `--internal` and `--no-icon` are for
   registrations with no app directory (previews, isolated test servers) and
   cannot be combined with it.
-- `--name`: the app's name. It becomes the hostname label of the app's origin
-  (the window renders at `http://<name>.<workspace-host>/`), so it is
-  validated, and registration fails loudly on an invalid name. The rule is
-  step 2's naming rule in SKILL.md, except that underscores are also accepted
-  (for built-in names such as `system_interface`), `localhost` is refused, and
-  a name another program already uses is not checked.
+- `--name`: the app's name. It seeds the hostname label of the app's origin
+  (`public-url.md`), so it is validated, and registration fails loudly on an
+  invalid name. The rule is step 2's naming rule in SKILL.md, loosened in three
+  ways: underscores are accepted (for built-in names such as
+  `system_interface`), a name may start with a digit, and a name another
+  program already uses is not checked.
 - `--url`: the full URL where the app is reachable from inside the container
   (`http://localhost:8090`).
 - `--icon-file`: the path to the app's `.svg` icon (SVG only, no rasters),
@@ -58,13 +58,3 @@ The script is standard-library only and runs under a plain `python3`.
   teardown and must not offer a Stop that supervisord cannot honor.
 - `--remove`: remove the named entry from `data/.state/apps.toml`. Use it when
   tearing an app down (`cleanup.md`).
-
-## A pinned window (`[pin]`)
-
-A `[pin]` table in the manifest (`path`, and optionally
-`style = "plain" | "avatar"`, `scope = "linked" | "independent"`,
-`default_mode = "bar" | "floating"`) gives the app one window at that path on
-every desktop that is never closed, and whose taskbar entry each client may
-draw in the bar or floating above the windows. Almost no app wants one (the
-chat's root window is the case it exists for), so leave it out unless the user
-asked for an always-present window.

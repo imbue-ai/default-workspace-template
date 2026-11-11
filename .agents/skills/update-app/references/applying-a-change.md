@@ -8,25 +8,28 @@ A scaffolded app runs with `use_reloader=False`, and a service does not watch
 its own source, so a change to Python code is **not** live until the process
 restarts.
 
+"Step 4's call" below is the `verify_app.py` call in SKILL.md's step 4, with
+whatever SKILL.md says takes the place of its `--refresh`: `--open` when no
+window is open, a `mock_frame.py` command for an app still framed as a mock.
+
 ## A dependency or entry-point change to an app
 
 An app's venv is an editable install of `system/apps/<package>/`. It picks up
 source edits on its own, but not a new dependency or console script.
 
 - **A user-built app** is a standalone project with its own lock and venv.
-  Change its dependencies in its own directory, then restart; its program
-  syncs its venv from its lock at start:
+  Change its dependencies in its own directory, then run step 4's call: its
+  program syncs its venv from its lock at each start.
 
   ```bash
   (cd system/apps/<package> && uv add <dependency>)   # or `uv lock` after a hand edit
-  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
   Nothing shared moves: the rules for a user-built package's dependencies are
   in `.agents/shared/references/running-python.md`, "User packages are
   standalone projects".
 - **A built-in app** runs from the root venv: `uv lock` and
-  `uv sync --all-packages` at the repo root, then restart.
+  `uv sync --all-packages` at the repo root, then step 4's call.
 - **A user-built service** under `system/services/` works like a user-built
   app: `uv add` in its directory, then `supervisorctl restart <name>`.
 
@@ -42,8 +45,7 @@ supervisorctl status <name>   # confirm it came back RUNNING
 ```
 
 Then verify it by watching its log (`supervisorctl tail -f <name> stderr`) and
-confirming the new behaviour actually fires. A service has no window, so there
-is nothing to refresh.
+confirming the new behaviour actually fires.
 
 ## A change to the program's definition
 
@@ -56,8 +58,8 @@ supervisorctl reread && supervisorctl update
 ```
 
 The full program schema, the add, remove and inspect mechanics, and the
-`forward_port.py` wiring are in the shared service-process reference that
-SKILL.md's step 4 names.
+`forward_port.py` wiring are in
+`.agents/shared/references/service-processes.md`.
 
 This surgical reload is for iterating on a single program. It is *not* the
 path for landing an `update-self` merge: that restarts the whole services

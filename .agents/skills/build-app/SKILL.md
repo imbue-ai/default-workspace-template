@@ -12,9 +12,9 @@ metadata:
 
 An app is something the user opens as a window on the desktop: a supervisord
 program with a manifest (`app.toml`) under `system/apps/`, rendered at its own
-browser origin, `http://<name>.<workspace-host>/`. The forwarder routes that
-origin straight to the port the app registers; nothing proxies or rewrites its
-traffic. To change or remove an existing app, use the `update-app` skill.
+browser origin. The forwarder routes that origin straight to the port the app
+registers; nothing proxies or rewrites its traffic. To change or remove an
+existing app, use the `update-app` skill.
 
 ## Standing instructions
 
@@ -61,8 +61,7 @@ traffic. To change or remove an existing app, use the `update-app` skill.
   is right.
 - **Step 7: Hand off to the harden pass**, only on the user's explicit
   confirmation of the working app.
-- **Other tasks**, at the end: renaming or removing an app, its public URL,
-  `forward_port.py`'s flags.
+- **Other tasks** are listed at the end.
 
 ## Step 1: Clarify and plan
 
@@ -87,15 +86,15 @@ approval.
   step 6. Never scaffold a Flask app whose only job is to shell out to such a
   tool: the forwarder already routes the app's origin to whatever URL is
   registered.
-- **Name.** Kebab-case: lowercase letters and digits with single hyphens. It
-  becomes the hostname label of the app's origin, so it must not start with
-  `host-` or `agent-` (workspace hostname coordinates), and must not be the
-  first label of a standalone service (`share`, `app`, `owner`, `vm`, `host`,
-  `env`, `agent`, and `github` once GitHub sync is on), which would claim that
-  service as the app's sidecar. Nor may it be a name an existing program uses
-  (`system_interface`, `browser`, any `system/supervisord.conf.d/*.conf`); the
-  scaffolder refuses those. Short and descriptive (`news`, `docs-viewer`) beats
-  clever.
+- **Name.** Kebab-case: lowercase letters and digits with single hyphens,
+  starting with a letter, at most 32 characters. It seeds the hostname label of
+  the app's origin, so it must not start with `host-` or `agent-` (workspace
+  hostname coordinates) or be `localhost` or `auth`. It must not be the first
+  label of a standalone service (`share`, `app`, `owner`, `vm`, `host`, `env`,
+  `agent`, `github`), which would claim that service as the app's sidecar. Nor
+  may it be a name the template uses (`system-interface`, `terminal`,
+  `bootstrap` and the like) or one a `system/supervisord.conf.d/*.conf`
+  already declares. The scaffolder refuses all of these.
 - **Icon.** Draw one specific to what this app does, to the rules in
   `docs/system/app-icons.md`: a 216 by 216 two-layer SVG tile with one
   fill-only glyph, coloured from that doc's palette. A brand-new registration
@@ -117,7 +116,7 @@ for, in the user's terms: it is what an agent reads to decide whether the app
 does what it needs. Pass `--display-name` (at most 64 characters) when the
 description is too long to be the app's name. `--start` registers the app and
 waits until it answers healthy. The port is picked for you, so do not check
-ports by hand. A failure exits non-zero with a clear message.
+ports by hand.
 
 `references/scaffold-output.md` has the other flags, what each generated file
 is for, the program block, how the app starts, adding a dependency, and an app
@@ -160,10 +159,9 @@ refresh and archive don't work yet.").
 Then loop: take feedback, change the mock so the change is *visible*, show it
 again. Never accept feedback and move on having only said you will apply it.
 Each later round is the same call without `--screenshot`, ending in
-`mock_frame.py refresh --app <name>` in place of `mock_frame.py up ... --open`:
-every restart needs it, since a restart registers the app as an ordinary app
-again. The frame's other commands (a new note, a closed window, taking it down)
-are in `references/mock-frame.md`.
+`mock_frame.py refresh --app <name>` in place of `mock_frame.py up ... --open`.
+Why every restart needs it, and the frame's other commands (a new note, a
+closed window, taking it down), are in `references/mock-frame.md`.
 
 **Hard gate.** Loop until the user **explicitly confirms** the look and feel;
 no real routes, data or state before that. The confirmed mock is the source of
@@ -178,7 +176,8 @@ one.
 
 - Read `references/api-schema.md` before adding a route: each owes the app's
   API document a docstring and a route-table entry ("The app describes its own
-  API").
+  API"). A visiting agent (`.agents/shared/references/visiting-agents.md`)
+  learns the app from that document.
 - `references/app-code.md` has the other rules: state under `DATA_DIR`, the
   content-security policy, a "view raw" control on derived data, calling
   Claude.
@@ -205,13 +204,11 @@ beside the chat:
 uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
-- Already on the user's screen: `--refresh` in place of `--open`, and no
-  `--screenshot`. Always refresh after a change, so the user sees it.
-- Still framed: neither flag; end with a `mock_frame.py` command instead.
-- The recipe's other forms and the manual checks are in `references/verify.md`.
-  For anything unexpected (connection refused, a window stuck on the loading
-  page, broken WebSockets), read `references/cross-flow-gotchas.md`, which is
-  indexed by symptom.
+- `references/verify.md` has the call's other forms (an app already on screen
+  is refreshed, not opened; a framed app takes neither flag) and the manual
+  checks. Always refresh after a change, so the user sees it.
+- For a symptom in the window (stuck on the loading page, broken WebSockets),
+  read `references/cross-flow-gotchas.md`, which is indexed by symptom.
 
 Skip the window only for an app with no UI (a JSON API, a webhook receiver).
 When the check was done another way, the window commands are
@@ -251,9 +248,9 @@ calling the work done.
 
 ## Other tasks
 
-- **Renaming an app**: `references/app-manifest.md`, "Renaming an app".
-- **Removing an app**: the `update-app` skill, whose teardown steps for an app
-  are `references/cleanup.md`.
+- **Renaming an app, or pinning a window of it**: `references/app-manifest.md`.
+- **Removing an app**: the `update-app` skill's "Removing an app or service".
+  This skill's `references/cleanup.md` has the teardown steps it sends you to.
 - **The shared (public) URL** of an app: `references/public-url.md`.
 - **`forward_port.py`'s flags**, for a registration written by hand:
   `references/forward-port-cli.md`.

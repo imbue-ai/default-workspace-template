@@ -17,14 +17,11 @@ name and the icon are step 2's; steps 6 and 7 apply unchanged.
 
 ## Pick a port and bind loopback
 
-- **Port.** Pick one at or above 8080 that `ss -tln` shows free and that
-  neither a `system/supervisord.conf.d/*.conf` file nor `data/.state/apps.toml`
-  names, and not `8083` (the Screen's CDP proxy, which is written in neither).
-  That is the scaffolder's own check, done by hand, and it keeps the port clear
-  of every built-in app. Two things show up nowhere: the `agent-observer`
-  program binds no port at all, and a preview of any app (`update-app`'s
-  `preview_app.py`) takes free ports at boot, so there is nothing to avoid for
-  either.
+- **Port.** Pick one by the scaffolder's own check, done by hand:
+  `scaffold-output.md` states it under `--port`, and `ss -tln` shows what is
+  bound. Two things show up nowhere: the `agent-observer` program binds no
+  port at all, and a preview of any app (`update-app`'s `preview_app.py`)
+  takes free ports at boot, so there is nothing to avoid for either.
 - **Bind host.** Bind `127.0.0.1`, not `0.0.0.0`. The forwarder reaches the
   app from inside the same container, so binding all interfaces is noise. The
   scaffolder's starter does this already. A wrapped tool may not: many Node
@@ -68,11 +65,8 @@ For Jupyter, `<existing_start_command>` is
 - **The `forward_port.py` call MUST come first in the command.** The port must
   be registered before the app starts listening; otherwise the shell's
   announcement of the registration races with the backend coming up.
-- supervisord runs a command directly, with no shell, so a command that chains
-  with `&&` is wrapped in `bash -c "..."`.
-- The `python3 system/services/oom_priority/bin/oom_tag_service.py user`
-  prefix tags this user-created app, so it is shed before any built-in service
-  under memory pressure (`system/services/oom_priority/README.md`).
+- Keep the `oom_tag_service.py user` prefix and the `bash -c "..."` wrapper.
+  `scaffold-output.md`, "The supervisord program", says what each is for.
 
 When the start takes several steps or env exports, put them in a wrapper script
 and run that instead. Only the `command` line of the block changes:

@@ -31,11 +31,9 @@ uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_
 Required:
 
 - `--name`: the app's name, to step 2's naming rule in SKILL.md.
-- `--description`: the manifest's `description`, one line of at most 200
-  characters saying what the app is for, in the user's terms. It is what an
-  agent reads to decide whether the app does what it needs (the visiting-agent
-  primer shows it, and the app's API document carries it), so write it for
-  them. It also becomes the `pyproject.toml` description.
+- `--description`: the manifest's `description`; SKILL.md's step 3 says what
+  to write. The visiting-agent primer shows it, the app's API document carries
+  it, and it becomes the `pyproject.toml` description.
 - `--icon-file`: the icon drawn in step 2 (`.svg` only). It is copied to
   `system/apps/<package>/icon.svg`, named by the manifest, and registered on
   every start.
@@ -45,13 +43,14 @@ Optional:
 - `--start`: registers the app with supervisord (`reread` and `update`) and
   waits for it to answer healthy on `http://127.0.0.1:<port>/health`. Pass it:
   it saves the supervisor commands below.
-- `--display-name`: what users see for the app (the manifest's `display_name`,
-  at most 64 characters). It defaults to the description, so pass it when the
-  description is long.
-- `--port`: an explicit port. Omitted, the scaffolder picks the lowest free
-  port at or above 8080, by parsing `system/supervisord.conf`, every
-  `system/supervisord.conf.d/*.conf` and `data/.state/apps.toml`, so a manual
-  port check (`ss -tln`) is unnecessary.
+- `--display-name`: the manifest's `display_name` (step 3). It defaults to
+  the description.
+- `--port`: an explicit port. Omitted, the scaffolder picks the lowest port at
+  or above 8080 that passes its check: nothing is bound to it, neither
+  `system/supervisord.conf` nor a `system/supervisord.conf.d/*.conf` file nor
+  `data/.state/apps.toml` names it, and it is not `8083` (the Screen's CDP
+  proxy, which is written in none of them). An explicit port is held to the
+  same check. So a manual port check (`ss -tln`) is unnecessary.
 - `--extra-dep`: repeatable. A library beyond `flask` and `flask-sock`
   (`--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
 - `--secrets-file <name>`: see "An app that needs a credential".
@@ -107,9 +106,8 @@ packages), so the app's dependencies never move the chat's or another app's.
 - `.venv` -- the app's own venv, a link to a directory beside the uv cache
   (`system/scripts/workspace_bare_scripts/venv_links.py`).
 - `src/<package>/__init__.py` -- empty.
-- `src/<package>/runner.py` -- the app: a synchronous Flask starter with
-  `GET /` (a placeholder page) and `GET /health` (returns `{"status": "ok"}`).
-  What it sets up and the rules its code follows are in `app-code.md`.
+- `src/<package>/runner.py` -- the app, a synchronous Flask starter. What it
+  sets up and the rules its code follows are in `app-code.md`.
 - `src/<package>/runner_test.py` -- the one test every app starts with: its API
   document at `/api/schema` says what its manifest says and covers every route
   (`api-schema.md`).
@@ -152,8 +150,7 @@ Each start runs the command's four parts in order:
    and uv refuses a dangling link.
 2. Sync the venv from the app's own lock with `--locked` (about 30 ms when it
    is current, and no network).
-3. Register the app with `forward_port.py --manifest`, which reads `app.toml`
-   on every start.
+3. Register the app from its manifest with `forward_port.py --manifest`.
 4. `exec` the entry point from the app's own `.venv/bin`, not the name under
    `uv run`, so the app is the process supervisord tagged and not a child of a
    wrapper.

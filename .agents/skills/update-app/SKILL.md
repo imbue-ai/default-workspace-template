@@ -12,8 +12,8 @@ metadata:
 Apps and services both run as a `[program:<name>]` under supervisord, one
 program per file under `system/supervisord.conf.d/`:
 
-- **App**: the user opens it as a window, rendered at its own origin
-  `http://<name>.<workspace-host>/`. Its code is under `system/apps/<package>/`.
+- **App**: the user opens it as a window, rendered at its own browser origin.
+  Its code is under `system/apps/<package>/`.
 - **Service**: a program with no window (`host-backup`, `share-gateway`,
   forwarders), standalone under `system/services/` or co-owned by an app
   (named `<app>-<role>`, code in the app's folder).
@@ -29,8 +29,10 @@ window keeps showing the old page until it is refreshed. The live change loop
 `app.toml` of the app that owns it** (`system/apps/<package>/app.toml`).
 
 - **A critical app, or a library the critical apps share: follow the careful
-  flow, `references/critical-app.md`, for the whole change, and none of the
-  steps below.** That is an app whose manifest says `critical = true` (the shell
+  flow, `references/critical-app.md`, for the whole change, in place of the
+  steps below.** It sends you back here only for what it shares: the standing
+  instructions, step 2's lease and step 3's list of what a change owes. That
+  is an app whose manifest says `critical = true` (the shell
   `system_interface`, the chat, the terminal, and any user app that declares
   it), or a change under `system/libs/workspace_ui/` (the library both critical
   bundles are built from), `system/libs/workspace_layout/` (the layout wire
@@ -62,10 +64,11 @@ window keeps showing the old page until it is refreshed. The live change loop
   follow it by telling them to open the window.
 - **The store is the user's real data.** Reading `data/.apps/<name>/` is fine.
   Never let a check or a preview write to it, and never "clean up" by deleting
-  from it. A check that must write runs against a copy:
-  `references/verify-against-a-copy.md`.
+  from it. A check that must write runs against a copy, and a change that must
+  itself rewrite the store (a data migration) takes a snapshot first: both are
+  in `references/verify-against-a-copy.md`.
 - **Never restart an app with `supervisorctl restart`.** It waits out the
-  program's 30 s start window; step 4's call does not.
+  program's start window (30 s for a scaffolded app); step 4's call does not.
 - **The harden pass comes after the user's feedback, in the background.** Never
   dispatch it in the turn you made the change, and never run the thorough
   tests or the review gates yourself.
@@ -84,23 +87,23 @@ window keeps showing the old page until it is refreshed. The live change loop
 
 ## Step 1: Size the change
 
-- **Contained**: a bug fix, a copy tweak, a new field, a backend logic fix, a
-  config or `command` change, a restart. Go straight to step 2.
-- **Larger scope**: a redesign, a new page, a meaningful shift in look and
-  feel, a new user-facing capability. Read
+- **Larger scope**: a change that is costly to redo if its shape is wrong. A
+  redesign, a new page, a meaningful shift in look and feel, a new user-facing
+  capability, a change that touches the user's data. Read
   `.agents/shared/references/interactive-delivery.md` and run the mock-confirm
   flow `build-app` used to create the app: put a cheap, throwaway **preview**
   of the proposed change in front of the user, loop until they **explicitly
   confirm** the shape, and only then build it for real. Never build heavy
   against an unconfirmed shape.
+- **Contained**: everything else, which for an ordinary app is most changes. A
+  bug fix, a copy tweak, a new field, a backend logic fix, a config or
+  `command` change, a restart. No preview: if the change *works*, a taste
+  mismatch is cheap to fix next round, so it goes live and iterates. Go
+  straight to step 2.
 
-For an ordinary app a preview is the exception: if the change *works*, a taste
-mismatch is cheap to fix next round, so most changes go live and iterate.
-Reserve a preview for a change that is costly to redo (a redesign, a change
-that touches data, a substantial visual shift). A routine tweak, a copy change,
-or a behaviour-only change behind an unchanged surface needs none. When in
-doubt, a change that alters what the user *sees or perceives* is larger scope,
-and one that only alters behaviour behind an unchanged surface is contained.
+When in doubt, a change that alters what the user *sees or perceives* is larger
+scope, and one that only alters behaviour behind an unchanged surface is
+contained.
 
 The preview takes whichever form is cheaper and still convincing (the two
 demonstrative-prototype types of `interactive-delivery.md`):
@@ -191,16 +194,14 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
   call.
 - A frontend-only change (templates, static files served fresh on each
   request) needs no restart: drop `--restart`.
-- The recipe is `.agents/skills/build-app/references/verify.md`. Symptoms
-  (connection refused, a window stuck on the loading page, broken WebSockets)
-  are in `.agents/skills/build-app/references/cross-flow-gotchas.md`.
+- The recipe, and the manual checks for a call that fails (connection
+  refused), are `.agents/skills/build-app/references/verify.md`. Symptoms in
+  the window (stuck on the loading page, broken WebSockets) are in
+  `.agents/skills/build-app/references/cross-flow-gotchas.md`.
 
 **Anything else** is in `references/applying-a-change.md`: a dependency or
-entry-point change, a service with no port (`supervisorctl restart <name>`,
-then its log), a change to the program's definition
-(`supervisorctl reread && supervisorctl update`; the schema is
-`.agents/shared/references/service-processes.md`), and a restart of the whole
-services agent.
+entry-point change, a service with no port, a change to the program's
+definition, and a restart of the whole services agent.
 
 **What you may check depends on who is looking.** With no window open, check
 freely, as a user would and not just "the process is up". With the app already
@@ -247,8 +248,7 @@ up at merge time to cover both changes
 
 ## Removing an app or service
 
-Remove its `system/supervisord.conf.d/<name>.conf` and run
-`supervisorctl reread && supervisorctl update`; the mechanics are in
+For a service, follow "Removing a service" in
 `.agents/shared/references/service-processes.md`. For an app, follow
 `.agents/skills/build-app/references/cleanup.md`, which also drops its
 registration and its package.
