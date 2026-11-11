@@ -26,7 +26,7 @@ Standing instructions, for the whole pass:
   would have asked for.
 - **`question` is always available.** Any worker may stop mid-pass and ask its
   lead with a `type: gate`, `name: question` report, whatever the operation.
-- **After a compaction, re-read** the references Step 2's table selects for
+- **After a compaction, re-read** the references Step 2's tables select for
   your pass before you go on. This file keeps only the routing.
 
 ## Steps
