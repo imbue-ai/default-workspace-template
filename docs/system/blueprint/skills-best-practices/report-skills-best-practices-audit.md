@@ -33,7 +33,7 @@ What the sources agree on, with the thresholds verbatim:
 | Skills | 41 (40 built here, `imbue-studio` vendored from the mngr repo) |
 | SKILL.md lines in total | 9,671 |
 | SKILL.md bodies over 500 lines | 5 (`update-self` 971, `build-app` 868, `update-published-template` 552, `migrate-workspace` 543, `update-app` 534) |
-| SKILL.md bodies over ~5,000 tokens | the same 5 (`update-self` ~10,000, `build-app` ~9,500, `update-published-template` ~6,200, `update-app` ~6,200, `migrate-workspace` ~5,300) |
+| SKILL.md files over 5,000 tokens | 13: the 5 over 500 lines (`build-app` 18,689, `update-self` 18,247, `update-published-template` 12,366, `update-app` 10,944, `migrate-workspace` 10,599) and 8 under it (`manage-desktop` 7,789, `publish-template` 7,587, `use-template` 6,592, `agentic-browser-fleet` 6,365, `caretaker` 6,073, `imbue-studio` 5,595, `data-pipeline-builder` 5,398, `update-creation` 5,281) |
 | Skills with no `references/` at all | 25 of 41, including eleven over 150 lines (`manage-desktop` 327, `agentic-browser-fleet` 303, `update-creation` 282, `caretaker` 274, `fetch-process-show` 254, `update-installed-template` 252, `github-sync` 238, `data-pipeline-builder` 237, `imbue-studio` 217, `datalib` 216, `heal-creation` 203) |
 | Reference files over 100 lines | 28 (13 in skills, 15 in shared); 1 has a table of contents |
 | Reference files that are themselves over the 500-line SKILL.md budget | 2 (`update-self/references/update-self-worker.md` 649, `.agents/shared/worker/references/harden-creation.md` 552) |
@@ -44,11 +44,11 @@ What the sources agree on, with the thresholds verbatim:
 | Descriptions in second person | 16 of 41 |
 | Descriptions with no when-clause | 4 (`blueprint`, `devices`, `notify-user`, `submit-upstream-changes`) |
 | Descriptions over 500 chars | 7 (`update-app` 833, `caretaker` 717, `make-theme-icon` 566, `do-something-new` 552, `migrate-workspace` 551, `fetch-process-show` 526, `create-theme` 473 is just under) |
-| Catalog cost, all 41 descriptions | 14,871 chars, about 3,700 tokens, in every chat's context |
+| Catalog cost, all 41 descriptions | 14,871 chars, ~5,300 tokens, in every chat's context |
 | Byte-identical files in two skills | 2 (`blueprint` and `blueprint-generate` share `references/refine-prompt.md` and `references/templates.json`) |
 | Verbatim lines (40+ chars) shared between sibling SKILL.md files | `use-template` and `update-installed-template` 32; `heal-creation` and `update-creation` 24 |
 | Skills that depend on files outside their own directory | 19 of 41 (plus 30 skill reference files) |
-| Enforcement | `validate_skill.py` encodes the 500-line limit and rejects the 5 oversize skills, but no test or CI job runs it against the built-in skills; it only runs when a worker crystallizes a new one |
+| Enforcement | `validate_skill.py` encodes the 500-line limit and rejects the 5 skills over it, but has no size check in tokens, and no test or CI job runs it against the built-in skills; it only runs when a worker crystallizes a new one |
 
 How we got here, measured at release tags:
 
@@ -65,18 +65,18 @@ The one skill that shrank, `publish-template`, did so in commit `8e327598e` ("Re
 
 The 500-line rule is about what gets loaded when a skill triggers. Several skills say "read X first" or "follow X" unconditionally, so the real load is larger than the SKILL.md:
 
-| Flow | Unconditional reads | Lines | ~Tokens |
+| Flow | Unconditional reads | Lines | Tokens |
 |---|---|---|---|
-| `update-self`, lead, ordinary pass | SKILL.md + `version-ceiling`, `handoff-contract`, `lead-proxy`, `apply-outcomes`, `results-message`, `freeing-memory-for-an-update` | ~2,090 | ~25,000 |
-| `update-self`, worker | `update-self-worker` + `worker-reporting`, `worker-review-gates`, `worker-provisioning-changes`, `harden-creation` | ~1,640 | ~19,000 |
-| `build-app`, canonical path | SKILL.md + `interactive-delivery.md` ("read first") + `frontend-choices.md` | ~1,045 | ~12,000 |
-| `update-app`, critical app | SKILL.md (already loaded before the routing line says "stop reading here") + `critical-app.md` + `interactive-delivery.md` + `harden-contention.md` | ~1,580 | ~18,000 |
-| `migrate-workspace`, worker | told to follow "Step 7" of the 550-line lead SKILL.md + `agent-recreation` + `pre-declutter-layout` + `worker-reporting` | ~1,240 | ~13,000 |
-| `heal-creation` / `update-creation` / `crystallize-creation`, lead | SKILL.md + `harden-contention` (twice) + `lead-proxy` + `worker-reporting` | ~1,250 to 1,330 | ~13,000 |
-| harden worker, crystallize a skill | `worker/SKILL.md` + `harden-creation` + `op-crystallize` + `type-skill` + `worker-reporting` + `transcript-exploration` + `spec-summary` + `skill-outline-fields` | ~1,515 | ~17,000 (about 2,900 lines with the named follow-ons) |
-| `launch-task`, lead | SKILL.md + `lead-proxy` ("follow") | ~615 | ~8,000 |
+| `update-self`, lead, ordinary pass | SKILL.md + `version-ceiling`, `handoff-contract`, `lead-proxy`, `apply-outcomes`, `results-message`, `freeing-memory-for-an-update` | ~2,090 | 39,751 |
+| `update-self`, worker | `update-self-worker` + `worker-reporting`, `worker-review-gates`, `worker-provisioning-changes`, `harden-creation` | ~1,640 | 32,713 |
+| `build-app`, canonical path | SKILL.md + `interactive-delivery.md` ("read first") + `frontend-choices.md` | ~1,045 | 22,245 |
+| `update-app`, critical app | SKILL.md (already loaded before the routing line says "stop reading here") + `critical-app.md` + `interactive-delivery.md` + `harden-contention.md` | ~1,580 | 31,703 |
+| `migrate-workspace`, worker | told to follow "Step 7" of the 550-line lead SKILL.md + `agent-recreation` + `pre-declutter-layout` + `worker-reporting` | ~1,240 | 23,721 |
+| `heal-creation` / `update-creation` / `crystallize-creation`, lead | SKILL.md + `harden-contention` (twice) + `lead-proxy` + `worker-reporting` | ~1,250 to 1,330 | 23,200 to 24,735 |
+| harden worker, crystallize a skill | `worker/SKILL.md` + `harden-creation` + `op-crystallize` + `type-skill` + `worker-reporting` + `transcript-exploration` + `spec-summary` + `skill-outline-fields` | ~1,515 | 28,036 (about 2,900 lines with the named follow-ons) |
+| `launch-task`, lead | SKILL.md + `lead-proxy` ("follow") | ~615 | 11,699 |
 
-Two of these matter beyond token cost. Claude Code keeps only the first 5,000 tokens of an invoked skill across compaction, so for `update-self` and `build-app` roughly half the SKILL.md, including the teardown and finalize steps at the bottom, disappears mid-task. And none of the files over 100 lines has a table of contents, so an agent that wants one section of `harden-contention.md` or `critical-app.md` has no way to find it short of reading the whole file.
+Two of these matter beyond token cost. Claude Code keeps only the first 5,000 tokens of an invoked skill across compaction, so `update-self` and `build-app` keep roughly the first quarter of their SKILL.md and lose the rest, including the teardown and finalize steps at the bottom, mid-task; the other eleven files over 5,000 tokens lose their tails the same way. And none of the files over 100 lines has a table of contents, so an agent that wants one section of `harden-contention.md` or `critical-app.md` has no way to find it short of reading the whole file.
 
 ## 3. The offenses, by kind
 
@@ -84,7 +84,7 @@ Each item names the rule, the offenders, and where the evidence is. Line-level c
 
 ### 3.1 Oversize SKILL.md (high)
 
-Five skills break the 500-line and 5,000-token limits and fail the repo's own validator: `update-self`, `build-app`, `update-published-template`, `migrate-workspace`, `update-app`. A sixth, `update-self/references/update-self-worker.md`, is a second over-limit SKILL.md by any other name: a 649-line guide the worker is told to follow "end to end".
+Five skills break the 500-line limit and fail the repo's own validator: `update-self`, `build-app`, `update-published-template`, `migrate-workspace`, `update-app`. Thirteen SKILL.md files are over 5,000 tokens, the amount Claude Code keeps of an invoked skill after a compaction: those five (`build-app` 18,689, `update-self` 18,247, `update-published-template` 12,366, `update-app` 10,944, `migrate-workspace` 10,599) and eight that pass the line check (`manage-desktop` 7,789, `publish-template` 7,587, `use-template` 6,592, `agentic-browser-fleet` 6,365, `caretaker` 6,073, `imbue-studio` 5,595, `data-pipeline-builder` 5,398, `update-creation` 5,281). `update-self/references/update-self-worker.md` is a further over-limit SKILL.md by any other name: a 649-line, 13,892-token guide the worker is told to follow "end to end".
 
 ### 3.2 SKILL.md as the full manual rather than an overview (high)
 
@@ -128,7 +128,7 @@ The rule is that every reference links directly from SKILL.md and nothing links 
 
 ### 3.8 Time-bound, stale and dead content (high where dead, medium elsewhere)
 
-Dead: `dealing-with-the-unexpected` tells the agent to inspect `data/.state/wait_counter` and "the wait script", which exist nowhere else in the tree; `use-template` twice defers to a `welcome` skill that does not exist in this template; `submit-upstream-changes` prescribes "the standard Co-Authored-By trailer used in this repo" (there is none, and it contradicts the repo owner's rule) and refers to "CLAUDE.md scaffolding" when the instructions file is `AGENTS.md`; `launch-task/references/dead-worker-recovery.md` sends finished workers to `submit-upstream-changes`, contradicting launch-task's own done-means-merge flow; `fetch-process-show` cites a principle "(CLAUDE.md)" that now lives in AGENTS.md.
+Dead: `dealing-with-the-unexpected` tells the agent to inspect `data/.state/wait_counter` and "the wait script", which exist nowhere else in the tree; `submit-upstream-changes` prescribes "the standard Co-Authored-By trailer used in this repo" (there is none, and it contradicts the repo owner's rule) and refers to "CLAUDE.md scaffolding" when the instructions file is `AGENTS.md`; `launch-task/references/dead-worker-recovery.md` sends finished workers to `submit-upstream-changes`, contradicting launch-task's own done-means-merge flow; `fetch-process-show` cites a principle "(CLAUDE.md)" that now lives in AGENTS.md.
 
 Version-bound text interleaved with the live path rather than quarantined: `update-self` carries at least a dozen "an older workspace's launcher may not", "may predate", "the template's history was rewritten once" branches plus `minds-v0.3.6` and a one-time `stop_when_no_windows` back-fill; `migrate-workspace` opens with a changelog (`minds-v0.3.9`, Debian 12 to 13); legacy v1 manifest handling is spread through four template skills; `datalib` pins `v0.49.0` in prose three times; `find-transcripts` branches on the retired pre-ATIF transcript format inline; `manage-desktop` says "just `arcs` today", "no rename route yet" and lists the old tabbed-shell verbs; `use-from-phone` hard-codes iOS and Android menu labels; `latchkey.md` hard-codes about 27 service names and then says the real list comes from a command; the shared layer has "older launchers stamped", "a ticket opened before titles carried types", and measured millisecond constants justifying rules. None of it carries a `CLEANUP:` marker or an "old patterns" section.
 
@@ -150,38 +150,39 @@ The same concept under several names, within one file: the delegated agent is "w
 
 ### 3.13 Enforcement gap (high)
 
-`validate_skill.py` (`_MAX_BODY_LINES = 500`, name rules, description length) is the right check and already exists, but `system/` tests import only its helper functions. Nothing runs `validate()` over `.agents/skills/*`, so five built-in skills fail a check every crystallized user skill must pass. There is likewise no check for orphaned references, reference depth, descriptions' voice or length budget, or dead paths in prose (the `wait_counter` lines have survived since the skill was written).
+`validate_skill.py` (`_MAX_BODY_LINES = 500`, name rules, description length) is the right check and already exists, but `system/` tests import only its helper functions. Nothing runs `validate()` over `.agents/skills/*`, so five built-in skills fail a check every crystallized user skill must pass. There is likewise no check for size in tokens (the validator counts lines, so the eight further skills over 5,000 tokens pass it), orphaned references, reference depth, descriptions' voice or length budget, or dead paths in prose (the `wait_counter` lines have survived since the skill was written).
 
 ## 4. Offenders, ranked
 
-| Skill | Body lines | ~Tokens | Refs | Worst offenses |
+| Skill | Body lines | Tokens | Refs | Worst offenses |
 |---|---|---|---|---|
-| update-self | 971 | 10,000 | 14 (1,924 lines) | 2x the limit; full manual; 649-line worker guide; 3-deep chains; orphan ref; a dozen version-bound shims inline; duplicated procedures; 2nd-person description |
-| build-app | 868 | 9,500 | 5 | ~450 lines of reference material inline (CLI reference, escape hatch, scaffold walkthrough); eager read-first; 7 facts stated 2-4 times; six names for one noun |
-| update-app | 534 | 6,200 | 1 (492 lines, no TOC) | 150-line data-copy guide inline; 833-char 2nd-person description with a file path; critical-app.md chains to 7 files; step numbering contradicts itself |
-| update-published-template | 552 | 6,200 | 2 | worker recipe inlined; destructive 10-step git sequence as prose; 46 lines of all-caps callouts; invariants stated three times |
-| migrate-workspace | 543 | 5,300 | 2 (173, 277, no TOC) | lead and worker in one file; opens with a changelog; legacy layout handling inline; 1st-person quotes in description |
-| heal-creation / update-creation / crystallize-creation | 197 / 276 / 255 | 1,800 / 2,700 / 2,300 | 0 / 0 / 2 | three copies of one flow; ~1,250-1,330 lines of shared refs per run; 2-level chains into 400-line files with no TOC |
-| launch-task | 206 | 2,000 | 2 | core workflow lives in a 409-line shared file; refs chain 2-3 deep; stale pointer to submit-upstream-changes |
-| use-template / update-installed-template | 356 / 246 | 3,800 / 2,650 | 0 / 0 | 32 verbatim lines shared; inline Python heredoc copied; v1 handling in five places; nonexistent `welcome` skill |
-| manage-desktop | 320 | 4,800 | 0 | 40% lookup tables inline; "today"/"yet" statements; legacy verbs listed inline |
-| agentic-browser-fleet | 297 | 3,800 | 0 | ~100 lines of conditional recovery inline; instruction-laden 2nd-person description; name no longer true |
-| caretaker | 268 | 3,700 | 0 | 717-char description is the procedure; assets as prose; checks spelled out twice |
-| connect-external-service | 71 | 1,450 | 3 (293, 184, 92) | good routing table, but two refs over 100 lines without TOC; secret-card procedure three times; 27 hard-coded service names |
-| blueprint / blueprint-generate | 83 / 38 | 1,000 / 220 | 3 / 5 | identical duplicated refs; orphan + nested ref; no when-clause; non-ASCII progress glyphs |
-| dealing-with-the-unexpected | 34 | 300 | 0 | dead `wait_counter` content; teaches nothing the model lacks; overlaps `assist` and `check-app-errors` |
-| submit-upstream-changes | 112 | 960 | 1 | no when-clause; Co-Authored-By instruction; config-vs-hardcoded contradiction; snippet pasted three times |
-| file-sharing | 149 | 2,000 | 0 | description promises Notes/Photos import the body lacks; workflow hidden in an "Examples" appendix |
-| use-ai-integration | 229 | 2,200 | 1 | "copy this file" instead of import; 52 lines of credential setup before the decision; model ids and a dated cost table |
-| data-pipeline-builder | 231 | 3,400 | 0 | rule prose with no example; nine unexplained constants; test layout contradicts `type-skill.md` |
-| imbue-studio (vendored) | 211 | 2,900 | 0 | full manual inline; permission boilerplate duplicated; description is a table of contents (fix upstream in mngr) |
-| `.agents/shared/` (27 files) | 3,973 total | ~34,000 | | 4-8 hop chains and cycles; 15 files over 100 lines with no TOC; orphan `verification.md`; `name` does not match directory; op-* scaffolding and report tail repeated nine times |
+| update-self | 971 | 18,247 | 14 (1,924 lines) | 2x the limit; full manual; 649-line worker guide; 3-deep chains; orphan ref; a dozen version-bound shims inline; duplicated procedures; 2nd-person description |
+| build-app | 868 | 18,689 | 5 | ~450 lines of reference material inline (CLI reference, escape hatch, scaffold walkthrough); eager read-first; 7 facts stated 2-4 times; six names for one noun |
+| update-app | 534 | 10,944 | 1 (492 lines, no TOC) | 150-line data-copy guide inline; 833-char 2nd-person description with a file path; critical-app.md chains to 7 files; step numbering contradicts itself |
+| update-published-template | 552 | 12,366 | 2 | worker recipe inlined; destructive 10-step git sequence as prose; 46 lines of all-caps callouts; invariants stated three times |
+| migrate-workspace | 543 | 10,599 | 2 (173, 277, no TOC) | lead and worker in one file; opens with a changelog; legacy layout handling inline; 1st-person quotes in description |
+| heal-creation / update-creation / crystallize-creation | 197 / 276 / 255 | 3,746 / 5,281 / 4,848 | 0 / 0 / 2 | three copies of one flow; ~1,250-1,330 lines of shared refs per run; 2-level chains into 400-line files with no TOC |
+| launch-task | 206 | 4,058 | 2 | core workflow lives in a 409-line shared file; refs chain 2-3 deep; stale pointer to submit-upstream-changes |
+| use-template / update-installed-template | 356 / 246 | 6,592 / 4,776 | 0 / 0 | 32 verbatim lines shared; inline Python heredoc copied; v1 handling in five places |
+| publish-template | 409 | 7,587 | 3 | the model shape, but still over 5,000 tokens; names one of its five `scripts/` files, the primary script two hops away; the worker reads ~520 lines before step 1 |
+| manage-desktop | 320 | 7,789 | 0 | 40% lookup tables inline; "today"/"yet" statements; legacy verbs listed inline |
+| agentic-browser-fleet | 297 | 6,365 | 0 | ~100 lines of conditional recovery inline; instruction-laden 2nd-person description; name no longer true |
+| caretaker | 268 | 6,073 | 0 | 717-char description is the procedure; assets as prose; checks spelled out twice |
+| connect-external-service | 71 | 2,601 | 3 (293, 184, 92) | good routing table, but two refs over 100 lines without TOC; secret-card procedure three times; 27 hard-coded service names |
+| blueprint / blueprint-generate | 83 / 38 | 1,546 / 521 | 3 / 5 | identical duplicated refs; orphan + nested ref; no when-clause; non-ASCII progress glyphs |
+| dealing-with-the-unexpected | 34 | 644 | 0 | dead `wait_counter` content; teaches nothing the model lacks; overlaps `assist` and `check-app-errors` |
+| submit-upstream-changes | 112 | 2,203 | 1 | no when-clause; Co-Authored-By instruction; config-vs-hardcoded contradiction; snippet pasted three times |
+| file-sharing | 149 | 3,571 | 0 | description promises Notes/Photos import the body lacks; workflow hidden in an "Examples" appendix |
+| use-ai-integration | 229 | 4,233 | 1 | "copy this file" instead of import; 52 lines of credential setup before the decision; model ids and a dated cost table |
+| data-pipeline-builder | 231 | 5,398 | 0 | rule prose with no example; nine unexplained constants; test layout contradicts `type-skill.md` |
+| imbue-studio (vendored) | 211 | 5,595 | 0 | full manual inline; permission boilerplate duplicated; description is a table of contents (fix upstream in mngr) |
+| `.agents/shared/` (27 files) | 3,973 total | 76,950 | | 4-8 hop chains and cycles; 15 files over 100 lines with no TOC; orphan `verification.md`; `name` does not match directory; op-* scaffolding and report tail repeated nine times |
 
-Skills with only low-severity findings: `notify-user`, `handoff-summary`, `show-files-in-chat`, `launch-custom-agent`, `manage-routines`, `devices` (thin and API-shaped, but short), `use-from-phone`, `check-app-errors`, `make-theme-icon`, `use-screen`, `assist`, `create-theme`, `find-transcripts`, `datalib`, `github-sync`, `fetch-process-show`, `publish-template`.
+Skills with only low-severity findings: `notify-user`, `handoff-summary`, `show-files-in-chat`, `launch-custom-agent`, `manage-routines`, `devices` (thin and API-shaped, but short), `use-from-phone`, `check-app-errors`, `make-theme-icon`, `use-screen`, `assist`, `create-theme`, `find-transcripts`, `datalib`, `github-sync`, `fetch-process-show`.
 
 ## 5. What is already right
 
-- `publish-template` after `8e327598e`: a copyable ten-step checklist with the two "end turn, wait" gates marked, worker instructions in a reference with a table of contents, failures as an exit-code table in their own file. The shape every lead skill should have.
+- `publish-template` after `8e327598e`: a copyable ten-step checklist with the two "end turn, wait" gates marked, worker instructions in a reference with a table of contents, failures as an exit-code table in their own file. The shape every lead skill should have, though not yet the size: at 7,587 tokens it is still over 5,000.
 - `connect-external-service`: SKILL.md is a routing table whose last column names exactly which reference and section to read per row.
 - `.agents/shared/worker/SKILL.md`: a "Load when / Reference / What it gives you" table with precise conditions, the pattern the sources recommend and most SKILL.md files lack.
 - `crystallize-creation` and `migrate-workspace` quarantine their rare paths behind an explicit condition ("Load this only when `detect-layout` reported `pre-declutter`").
@@ -191,9 +192,10 @@ Skills with only low-severity findings: `notify-user`, `handoff-summary`, `show-
 
 ## 6. Caveats
 
-- Token figures are estimates (words x 1.35); line counts are exact.
+- Token figures are measured: `count_tokens` on the current tokenizer over the 111 markdown files under `.agents/skills` and `.agents/shared`, taken on 2026-11-09. They count the whole file, frontmatter included. Bytes per token average 2.82 with a 5% spread over the 96 files of at least 500 tokens, so tokens = bytes / 2.8; the few figures marked `~` are converted at that rate because nothing measured them directly. The usual rule of thumb, words x 1.35, is low by about 1.8x for this prose. Claude Code's docs do not say which count its 5,000 uses; on the older tokenizer (3.73 bytes per token) the same budget is about 18.7 KB rather than 14 KB.
+- Line counts are exact and are from the 2026-11-04 tree. Most files changed by a few lines in the five days before the token measurement and two grew materially (`build-app/SKILL.md` from 875 lines to 928, `running-python.md` from 201 to 272), so a token figure can be slightly higher than the line count beside it suggests.
 - `imbue-studio` is vendored from the mngr repo by `system/scripts/vendor_mngr_skill.py` and CI checks it matches the pinned commit; its findings belong upstream.
-- The appendices were written by seven parallel readers. The claims in sections 2 to 4 that carry the most weight (the oversize list and validator failures, the orphans, the dead `wait_counter` and `welcome` references, the Co-Authored-By line, the Notes/Photos description, the identical blueprint files, the verbatim-line counts, the worker SKILL.md name, the eager `interactive-delivery.md` reads) were re-checked by hand against the tree. Line numbers in the appendices were not individually re-verified.
+- The appendices were written by seven parallel readers. The claims in sections 2 to 4 that carry the most weight (the oversize list and validator failures, the orphans, the dead `wait_counter` reference, the Co-Authored-By line, the Notes/Photos description, the identical blueprint files, the verbatim-line counts, the worker SKILL.md name, the eager `interactive-delivery.md` reads) were re-checked by hand against the tree. Line numbers in the appendices were not individually re-verified.
 - This report deliberately proposes no plan. The remedies named inline (move sections to references, add tables of contents, script the fixed sequences, run `validate_skill.py` over built-ins in CI) are the obvious ones; ordering and scope are for the follow-up.
 
 ## Appendices: per-skill catalogs
@@ -211,12 +213,12 @@ Paths are relative to `.agents/skills/update-self/`. Sources cited: **A** = Anth
 | Measure | Value | Limit | Source |
 |---|---|---|---|
 | SKILL.md body lines (after frontmatter) | 970 | 500 | A, C, S, R (`validate_skill.py` `_MAX_BODY_LINES`) |
-| SKILL.md body words / est. tokens (x1.35) | 7,406 / ~10,000 | 5,000 tokens | S |
+| SKILL.md body words / whole-file tokens | 7,406 / 18,247 | 5,000 tokens | S |
 | Reference files | 14 files, 1,924 lines, ~19,200 words | | |
-| Largest reference (`update-self-worker.md`) | 649 lines, 5,680 words (~7,700 tokens) | >100 lines wants a TOC (A); >500 lines is itself over the SKILL.md ceiling it is meant to relieve | A, S |
-| Whole skill, prose only | 2,901 lines, ~26,600 words (~36k tokens) | | |
+| Largest reference (`update-self-worker.md`) | 649 lines, 5,680 words (13,892 tokens) | >100 lines wants a TOC (A); >500 lines is itself over the SKILL.md ceiling it is meant to relieve | A, S |
+| Whole skill, prose only | 2,901 lines, ~26,600 words (59,100 tokens) | | |
 
-- **HIGH -- body is 194% of the 500-line limit and ~2x the 5,000-token guidance.** `validate_skill.py` (the repo's own validator, which the `type-skill.md` worker reference says must print `ok` for every skill) fails this skill statically: `SKILL.md body is 970 lines; spec recommends <= 500`. Remedy: move Step 5b/5c/6 mechanics and the Step 3b launch recipe into references.
+- **HIGH -- body is 194% of the 500-line limit and the file is 3.6x the 5,000-token guidance.** `validate_skill.py` (the repo's own validator, which the `type-skill.md` worker reference says must print `ok` for every skill) fails this skill statically: `SKILL.md body is 970 lines; spec recommends <= 500`. Remedy: move Step 5b/5c/6 mechanics and the Step 3b launch recipe into references.
 
 ##### Progressive disclosure
 
@@ -240,7 +242,7 @@ Paths are relative to `.agents/skills/update-self/`. Sources cited: **A** = Anth
 - Of 970 body lines, roughly 650 (Steps 3b, 4, 5a-5c, 6) are procedure detail that A/S say to push into references and link conditionally; the overview + core workflow (Steps 1-2, 2a, the skeleton of 3-6) would fit in ~250 lines.
 - **MEDIUM -- no navigation layer.** There is no step list / table of contents at the top and no "when to read which reference" index until line 863 ("Outside the main flow"), after 850 lines. A: "SKILL.md ... points Claude to detailed materials"; S: "tell the agent when to load each file".
 
-**Eager loads / effective context.** SKILL.md has no "read X in full first" instruction, which is good. But the body itself is ~10k tokens, and the first step already points at three more files as governing rules (`freeing-memory-for-an-update.md` 97, `results-message.md` 142, `harden-contention.md` 405), and Step 4 at `lead-proxy.md` (409). Effective load for a lead that follows the cited rules on an ordinary pass: SKILL.md 977 + `version-ceiling.md` 75 + `handoff-contract.md` 113 + `lead-proxy.md` 409 + `apply-outcomes.md` 280 + `results-message.md` 142 + `freeing-memory-for-an-update.md` 97 = **~2,090 lines (~25k tokens)** before any gate or failure path. A worker following `update-self-worker.md` loads 649 + `worker-reporting.md` 236 + `worker-review-gates.md` 98 + `worker-provisioning-changes.md` 108 + `harden-creation.md` 552 (cited twice) = **~1,640 lines**. Severity MEDIUM: the volume is partly inherent to the task, but the SKILL.md half is avoidable.
+**Eager loads / effective context.** SKILL.md has no "read X in full first" instruction, which is good. But the file itself is 18,247 tokens, and the first step already points at three more files as governing rules (`freeing-memory-for-an-update.md` 97, `results-message.md` 142, `harden-contention.md` 405), and Step 4 at `lead-proxy.md` (409). Effective load for a lead that follows the cited rules on an ordinary pass: SKILL.md 977 + `version-ceiling.md` 75 + `handoff-contract.md` 113 + `lead-proxy.md` 409 + `apply-outcomes.md` 280 + `results-message.md` 142 + `freeing-memory-for-an-update.md` 97 = **~2,090 lines (39,751 tokens)** before any gate or failure path. A worker following `update-self-worker.md` loads 649 + `worker-reporting.md` 236 + `worker-review-gates.md` 98 + `worker-provisioning-changes.md` 108 + `harden-creation.md` 552 (cited twice) = **~1,640 lines (32,713 tokens)**. Severity MEDIUM: the volume is partly inherent to the task, but the SKILL.md half is avoidable.
 
 ##### References
 
@@ -260,7 +262,7 @@ Every reference except `heal-shallow-history.md` and `resuming-after-a-restart.m
 
 **MEDIUM -- long reference files with no table of contents (A: "for reference files longer than 100 lines, include a table of contents at the top").** None of the 14 has one. Over 100 lines: `update-self-worker.md` (649), `apply-outcomes.md` (280), `python-packaging-migration.md` (225; it has a symptom table at 41-51 that acts as one, the closest thing to compliance), `results-message.md` (142), `handoff-contract.md` (113), `worker-provisioning-changes.md` (108).
 
-**MEDIUM -- `update-self-worker.md` is a second over-limit SKILL.md.** 649 lines / ~7,700 tokens, eight numbered sections, 15 code blocks, and its own sub-references. It is the worker's primary instruction set, handed over as a task file pointer (SKILL.md 353-355), so it is loaded whole, not progressively. Remedy: give the worker its own skill directory (as `.agents/shared/worker/SKILL.md` does for the harden worker) with references under it.
+**MEDIUM -- `update-self-worker.md` is a second over-limit SKILL.md.** 649 lines / 13,892 tokens, eight numbered sections, 15 code blocks, and its own sub-references. It is the worker's primary instruction set, handed over as a task file pointer (SKILL.md 353-355), so it is loaded whole, not progressively. Remedy: give the worker its own skill directory (as `.agents/shared/worker/SKILL.md` does for the harden worker) with references under it.
 
 **MEDIUM -- duplicated text between SKILL.md and references, and between references.**
 
@@ -340,7 +342,7 @@ None of these carries a `CLEANUP:`-style marker saying when it can go (repo styl
 
 | Sev | Offense |
 |---|---|
-| HIGH | Body 970 lines / ~10k tokens; fails the repo's own validator |
+| HIGH | Body 970 lines / 18,247 tokens; fails the repo's own validator |
 | HIGH | SKILL.md is the full manual; ~650 lines of Step 3b/4/5/6 procedure belong in references |
 | HIGH | Reference chains 2-3 deep, incl. a 649-line worker guide and the 552-line `harden-creation.md` |
 | HIGH | Version-bound compatibility shims interleaved with the main path, no "old patterns" quarantine or removal markers |
@@ -362,16 +364,16 @@ Scope: `.agents/skills/build-app/` (SKILL.md + 5 references) and `.agents/skills
 
 ##### Headline numbers
 
-| File | Lines | Words | ~Tokens (words x 1.35) |
+| File | Lines | Words | Tokens |
 |---|---|---|---|
-| build-app/SKILL.md (body 868) | 875 | 7161 | ~9,670 |
-| update-app/SKILL.md (body 534) | 540 | 4721 | ~6,370 |
-| update-app/references/critical-app.md | 492 | 4189 | ~5,650 |
-| build-app/references/cross-flow-gotchas.md | 100 | 626 | |
-| build-app/references/verify.md | 93 | 458 | |
-| build-app/references/frontend-choices.md | 27 | 371 | |
-| build-app/references/cleanup.md | 20 | 109 | |
-| build-app/references/public-url.md | 18 | 104 | |
+| build-app/SKILL.md (body 868) | 875 | 7161 | 18,689 |
+| update-app/SKILL.md (body 534) | 540 | 4721 | 10,944 |
+| update-app/references/critical-app.md | 492 | 4189 | 9,741 |
+| build-app/references/cross-flow-gotchas.md | 100 | 626 | 1,683 |
+| build-app/references/verify.md | 93 | 458 | 1,669 |
+| build-app/references/frontend-choices.md | 27 | 371 | 698 |
+| build-app/references/cleanup.md | 20 | 109 | 421 |
+| build-app/references/public-url.md | 18 | 104 | 240 |
 
 Both SKILL.md bodies fail the repo's own `validate_skill.py` static check (`_MAX_BODY_LINES = 500`): build-app 868, update-app 534.
 
@@ -388,7 +390,7 @@ Both SKILL.md bodies fail the repo's own `validate_skill.py` static check (`_MAX
 
 ###### Offenses
 
-**B1. Body size: 868 lines, ~9.7k tokens (HIGH).** Rule: BP/Academy/Spec "keep SKILL.md under 500 lines", Spec "< 5000 tokens", Repo `validate_skill.py` 500-line cap. Evidence: `build-app/SKILL.md:9-875`. Nearly 2x the line limit and ~2x the token guidance. Remedy: move the reference-grade sections listed in B2 to `references/`.
+**B1. Body size: 868 lines, 18,689 tokens (HIGH).** Rule: BP/Academy/Spec "keep SKILL.md under 500 lines", Spec "< 5000 tokens", Repo `validate_skill.py` 500-line cap. Evidence: `build-app/SKILL.md:9-875`. Nearly 2x the line limit and 3.7x the token guidance. Remedy: move the reference-grade sections listed in B2 to `references/`.
 
 **B2. SKILL.md is the full manual, not an overview + core workflow (HIGH).** Rule: BP "SKILL.md is a table of contents... move API reference, long examples, domain schemas to separate files"; Spec "concise, stepwise guidance with a working example outperforms exhaustive documentation". Sections that are reference material inlined into the main flow:
 - "What gets generated" file-by-file manifest walkthrough, `build-app/SKILL.md:182-268` (~87 lines). One bullet (`app.toml`, 186-211) is a 26-line paragraph covering `stop_when_no_windows` semantics, routines, manifest validation and `[[references]]`; the `runner.py` bullet (230-264) is 35 lines on the shell page script, CSP modules and element-reference markup.
@@ -446,7 +448,7 @@ Remedy: keep one statement, link the rest.
 
 ###### Offenses
 
-**U1. Body size: 534 lines, ~6.4k tokens (HIGH).** Rule: BP/Academy/Spec 500 lines, Spec < 5000 tokens, Repo `validate_skill.py`. Evidence: `update-app/SKILL.md:8-540`. Fails the repo's own validator. Remedy: see U2.
+**U1. Body size: 534 lines, 10,944 tokens (HIGH).** Rule: BP/Academy/Spec 500 lines, Spec < 5000 tokens, Repo `validate_skill.py`. Evidence: `update-app/SKILL.md:8-540`. Fails the repo's own validator. Remedy: see U2.
 
 **U2. Reference-grade material inlined (HIGH).** Rule: BP "move advanced features / long workflows to separate files". Evidence:
 - "Protect the user's data while you verify", `update-app/SKILL.md:332-481` (~150 lines, 28% of the body): the `serve_isolated_instance.py` invocation and flags (353-383), the `/tmp` RAM-disk warning (385-391), refresh-vs-down semantics (393-404), the full `preview_app.py` up/open/refresh/down block with venv-sync caveats and `--with`/`--instance-key` semantics (412-450), the snapshot procedure (461-473), retrofit instructions (475-481). This is a self-contained "verifying against a data copy" guide and belongs in `references/`.
@@ -455,7 +457,7 @@ Remedy: `references/verify-against-a-copy.md`; replace with a 6-line rule list a
 
 **U3. Eager cross-skill reads (MEDIUM).** Rule: Spec "resources loaded only when instructions reference them"; BP "one level deep". Evidence: `update-app/SKILL.md:57-59` "**read `.agents/shared/references/interactive-delivery.md`**" for every larger-scope change (143 lines); `:65-66` and `:85` cite its "phase 5 / Type 1 / Type 2 / phase 8" taxonomy, so the paragraph cannot be followed without that file. Effective load for a larger-scope change: 540 + 143 = 683 lines. For a critical app: the whole 540-line SKILL.md is already in context when line 50 says "stop reading here", plus `critical-app.md` 492 + `interactive-delivery.md` 143 + `harden-contention.md` 405 (cited at 142-144 and critical-app.md:395) = ~1,580 lines, none with a TOC. Remedy: summarize the two prototype types in one sentence each; make the critical-app routing happen from a 20-line top section so the ordinary flow is never loaded for a critical change.
 
-**U4. Reference file > 100 lines without a table of contents (MEDIUM).** Rule: BP "for reference files longer than 100 lines, include a table of contents at the top". Evidence: `update-app/references/critical-app.md` is 492 lines / ~5.6k tokens (itself larger than the SKILL.md budget) with no TOC; its step 2 alone is 146 lines (124-269) and step 4 is 135 lines (351-485). Remedy: add a TOC; consider splitting go-live (351-485) into its own file since it is read once per pass.
+**U4. Reference file > 100 lines without a table of contents (MEDIUM).** Rule: BP "for reference files longer than 100 lines, include a table of contents at the top". Evidence: `update-app/references/critical-app.md` is 492 lines / 9,741 tokens (itself nearly twice the SKILL.md budget) with no TOC; its step 2 alone is 146 lines (124-269) and step 4 is 135 lines (351-485). Remedy: add a TOC; consider splitting go-live (351-485) into its own file since it is read once per pass.
 
 **U5. Reference -> reference chains (MEDIUM).** Rule: BP "keep references one level deep". Evidence from `critical-app.md`: -> `interactive-delivery.md` (119-122), -> `type-app.md` "Critical apps" (129, 322), -> `op-update.md` (317), -> `update-creation` steps 1-3 (293-296, another skill's SKILL.md), -> `launch-task`'s `worker-failure.md` (331), -> `harden-contention.md` "Catching up a stale pass" (395), -> `update-self`'s `apply-outcomes.md` (426). A reader of the careful flow is sent to seven other files across four skills and the shared tree, several of which are 200-650 lines. From `update-app/SKILL.md`: -> `build-app/references/verify.md` and `cross-flow-gotchas.md` (303-307), another skill's second tier. Remedy: inline the 3-5 lines actually needed from each (the exit-code list at 414-433 already does this well) and link only for the rare path.
 
@@ -491,7 +493,7 @@ Remedy: one owner per fact (manifest semantics in a manifest reference; the wind
 | Offense | build-app | update-app |
 |---|---|---|
 | Over 500 lines (BP/Academy/Spec/Repo validator) | 868 | 534 |
-| Over ~5k tokens (Spec) | ~9.7k | ~6.4k (+5.6k critical-app.md) |
+| Over 5,000 tokens (Spec) | 18,689 | 10,944 (+9,741 critical-app.md) |
 | Full manual instead of overview | ~450 lines of reference material inline | ~150 lines (data-copy guide) + manifest/API restatements |
 | Unconditional "read X first" | interactive-delivery.md (143) + frontend-choices.md | interactive-delivery.md for larger-scope changes |
 | Effective load, common path | ~1,045 lines | ~683 lines; ~1,580 for a critical app |
@@ -510,7 +512,7 @@ Out-of-scope note: the shared files both skills lean on (`interactive-delivery.m
 
 Skills: `update-published-template`, `migrate-workspace`, `publish-template`, `use-template`, `update-installed-template`.
 Rules cited: **[A]** platform.claude.com best-practices page, **[S]** agentskills.io spec / best-practices, **[C]** Academy course, **[R]** the repo's own `spec-summary.md` + `validate_skill.py`.
-Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.35.
+Body lines/words are the SKILL.md body after frontmatter; tokens are measured over the whole file (section 6).
 
 ##### Cross-cutting offenses (all five)
 
@@ -526,7 +528,7 @@ Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.3
 
 ##### 1. update-published-template
 
-**Size.** Body 552 lines, 4625 words, ~6240 tokens. Over the 500-line limit [A][S][C][R] (fails `validate_skill.py`) and over the 5000-token guidance [S]. References: `invariants.md` (22), `v1-to-v2-migration.md` (63). Effective eager load: SKILL.md (558) + `references/invariants.md` ("read it before the push", L558) = 580 lines; the lead also follows `lead-proxy.md` (409) and `worker-reporting.md` (236) by reference.
+**Size.** Body 552 lines, 4625 words, 12,366 tokens. Over the 500-line limit [A][S][C][R] (fails `validate_skill.py`) and 2.5x the 5000-token guidance [S]. References: `invariants.md` (22), `v1-to-v2-migration.md` (63). Effective eager load: SKILL.md (558) + `references/invariants.md` ("read it before the push", L558) = 580 lines; the lead also follows `lead-proxy.md` (409) and `worker-reporting.md` (236) by reference.
 
 | # | Offense | Rule | Evidence | Sev |
 |---|---|---|---|---|
@@ -545,7 +547,7 @@ Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.3
 
 ##### 2. migrate-workspace
 
-**Size.** Body 541 lines, 3889 words, ~5250 tokens. Over 500 lines (fails `validate_skill.py`); slightly over 5000 tokens. References: `agent-recreation.md` (173, no TOC), `pre-declutter-layout.md` (277, no TOC). Effective load, lead on a pre-declutter source: 550 + 277 ("keep it open for the rest of the pass", L188-192) = 827 lines, plus `harden-contention.md` (405) and `lead-proxy.md` (409) followed by reference. Worker: told to follow "SKILL.md Step 7" (L304), so it loads the whole 550-line lead file plus `agent-recreation.md` (173) + `pre-declutter-layout.md` (277, "read it first") + `worker-reporting.md` (236) = ~1236 lines.
+**Size.** Body 541 lines, 3889 words, 10,599 tokens. Over 500 lines (fails `validate_skill.py`); more than twice the 5000-token guidance [S]. References: `agent-recreation.md` (173, no TOC), `pre-declutter-layout.md` (277, no TOC). Effective load, lead on a pre-declutter source: 550 + 277 ("keep it open for the rest of the pass", L188-192) = 827 lines, plus `harden-contention.md` (405) and `lead-proxy.md` (409) followed by reference. Worker: told to follow "SKILL.md Step 7" (L304), so it loads the whole 550-line lead file plus `agent-recreation.md` (173) + `pre-declutter-layout.md` (277, "read it first") + `worker-reporting.md` (236) = ~1236 lines.
 
 | # | Offense | Rule | Evidence | Sev |
 |---|---|---|---|---|
@@ -563,7 +565,7 @@ Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.3
 
 ##### 3. publish-template
 
-**Size.** Body 409 lines, 2990 words, ~4040 tokens. Under both limits but within 91 lines of the cap. References: `assembly-worker.md` (191, has a TOC), `failures.md` (75), `readme-recipe.md` (96). Effective load, lead: 417 + `lead-proxy.md` (409) + `failures.md` on demand. Worker: `assembly-worker.md` "Before anything else, read ... in your checkout and follow it" (`SKILL.md:200-202`) + `readme-recipe.md` "read it now, before step 1 removes it" (`assembly-worker.md:147-148`) + `worker-reporting.md` (236) = ~523 lines before the worker starts.
+**Size.** Body 409 lines, 2990 words, 7,587 tokens. Within 91 lines of the 500-line cap and over the 5000-token guidance [S]. References: `assembly-worker.md` (191, has a TOC), `failures.md` (75), `readme-recipe.md` (96). Effective load, lead: 417 + `lead-proxy.md` (409) + `failures.md` on demand. Worker: `assembly-worker.md` "Before anything else, read ... in your checkout and follow it" (`SKILL.md:200-202`) + `readme-recipe.md` "read it now, before step 1 removes it" (`assembly-worker.md:147-148`) + `worker-reporting.md` (236) = ~523 lines before the worker starts.
 
 | # | Offense | Rule | Evidence | Sev |
 |---|---|---|---|---|
@@ -579,23 +581,22 @@ Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.3
 
 ##### 4. use-template
 
-**Size.** Body 356 lines, 2837 words, ~3830 tokens. Under both limits. No `references/` directory at all: every branch is inline.
+**Size.** Body 356 lines, 2837 words, 6,592 tokens. Under the 500-line limit; over the 5000-token guidance [S]. No `references/` directory at all: every branch is inline.
 
 | # | Offense | Rule | Evidence | Sev |
 |---|---|---|---|---|
 | 1 | No progressive disclosure: the merge mechanics (§1, 86 lines including a 16-line Python heredoc), the manifest format taxonomy (§2, 54 lines), the environment-install recipe (§3.2, 33 lines) and the override/lineage rules (§6) are all inline though each applies to only one path. | [A] move advanced features / long workflows to separate files; [S] resources on demand | `SKILL.md:78-171,173-225,246-277,329-354` | medium |
 | 2 | v1 handling interleaved throughout the live flow (5 separate places) rather than a single "older manifests" reference. | [A] old patterns in their own section | `SKILL.md:13-20,45-50,124-130,186-199,218-219,291-293` | medium |
 | 3 | Shares ~45 lines verbatim with `update-installed-template` (trust gate, worktree merge, boot smoke-check heredoc, "An app from an older template", ff-only landing, resolve-requirements, append-entry, commit). | [A] duplication; [R] shared references exist for this | `SKILL.md:57-76` ~ `update-installed-template:29-44`; `SKILL.md:108-163` ~ `update-installed-template:96-162`; `SKILL.md:124-130` = `update-installed-template:123-129` word for word | high |
-| 4 | References a `welcome` skill (`.agents/skills/welcome/SKILL.md`) that does not exist in this template; the text means "the template repo's", which a reader cannot tell. | [A] consistent terminology; name files descriptively | `SKILL.md:48,189`; `ls .agents/skills/welcome` fails | low |
-| 5 | Description lacks the trigger keywords users actually type: the published README's copy line is ` /use-template <url>` and the manifest is called `template.md` / "inspiration", none of which appear. 241 chars, with room. | [A] include key terms; [C] add keywords matching how people phrase requests | frontmatter L3; cf. `publish-template/references/readme-recipe.md:91` | low |
-| 6 | Mixed dash conventions (em-dash `—` in §A/§B/§3, `--` elsewhere) and "adopt"/"adapt" used interchangeably in headings and body. | [A] consistent terminology | `SKILL.md:27-28,37,53,230-231` vs 83, 96 | low |
-| 7 | Inline Python heredoc for the supervisord boot check is a script embedded in prose, copied into a sibling; the same check is described a third time in prose in `update-published-template:391-397`. | [A] bundle utility scripts; one source of truth | `SKILL.md:135-148` | medium |
+| 4 | Description lacks the trigger keywords users actually type: the published README's copy line is ` /use-template <url>` and the manifest is called `template.md` / "inspiration", none of which appear. 241 chars, with room. | [A] include key terms; [C] add keywords matching how people phrase requests | frontmatter L3; cf. `publish-template/references/readme-recipe.md:91` | low |
+| 5 | Mixed dash conventions (em-dash `—` in §A/§B/§3, `--` elsewhere) and "adopt"/"adapt" used interchangeably in headings and body. | [A] consistent terminology | `SKILL.md:27-28,37,53,230-231` vs 83, 96 | low |
+| 6 | Inline Python heredoc for the supervisord boot check is a script embedded in prose, copied into a sibling; the same check is described a third time in prose in `update-published-template:391-397`. | [A] bundle utility scripts; one source of truth | `SKILL.md:135-148` | medium |
 
 **Does well.** The two entry points are disambiguated before any work; the trust gate is an explicit, well-reasoned stop; activation-vs-adaptation is defined once and reused; "definition of done" for a data-backed app is concrete.
 
 ##### 5. update-installed-template
 
-**Size.** Body 246 lines, 1962 words, ~2650 tokens. Under both limits. No `references/`.
+**Size.** Body 246 lines, 1962 words, 4,776 tokens. Under both limits. No `references/`.
 
 | # | Offense | Rule | Evidence | Sev |
 |---|---|---|---|---|
@@ -611,7 +612,7 @@ Body lines/words are the SKILL.md body after frontmatter; tokens are words x 1.3
 
 - **High (6):** update-published-template over 500 lines with the worker recipe inlined and a destructive 10-step git procedure left as prose; migrate-workspace over 500 lines with lead and worker in one file so the worker loads everything; use-template / update-installed-template duplicate ~45 lines of merge-and-verify procedure verbatim.
 - **Medium (14):** no TOC on 173- and 277-line references; legacy v1 content scattered through live flows in four skills; triple-stated invariants; 46-line all-caps callout block; inline boot-check script copied three ways; publish-template's primary script reachable only two hops from SKILL.md; prose ledger contract; no `references/` dir in use-template despite single-path sections.
-- **Low (20):** description voice (second/first person in two skills), routing sentences in descriptions, three step-numbering styles in one family, cross-skill reference chains into other skills' `references/`, incident history, repeated long paths, a `welcome` skill that does not exist here.
+- **Low (19):** description voice (second/first person in two skills), routing sentences in descriptions, three step-numbering styles in one family, cross-skill reference chains into other skills' `references/`, incident history, repeated long paths.
 
 Out of scope note: `.agents/shared/references/lead-proxy.md` (409 lines) and `harden-contention.md` (405) are pulled in by three of these skills and have no TOC either; Appendix G covers them.
 
@@ -619,7 +620,7 @@ Out of scope note: `.agents/shared/references/lead-proxy.md` (409 lines) and `ha
 
 #### Audit: medium-size dwt skills (batch of 10)
 
-Scope: `manage-desktop`, `agentic-browser-fleet`, `update-creation`, `caretaker`, `crystallize-creation`, `fetch-process-show`, `github-sync`, `data-pipeline-builder`, `use-ai-integration`, `heal-creation`. SKILL.md plus `references/*.md`; `python/` not reviewed. Line numbers are SKILL.md lines unless a path is given. Token estimates are body words x 1.35.
+Scope: `manage-desktop`, `agentic-browser-fleet`, `update-creation`, `caretaker`, `crystallize-creation`, `fetch-process-show`, `github-sync`, `data-pipeline-builder`, `use-ai-integration`, `heal-creation`. SKILL.md plus `references/*.md`; `python/` not reviewed. Line numbers are SKILL.md lines unless a path is given. Token figures are measured over the whole file (section 6).
 
 Sources cited: [AN] platform.claude.com best-practices; [AC] academy course; [AS] agentskills.io spec / best-practices; [REPO] `.agents/shared/references/spec-summary.md`, `type-skill.md`, `validate_skill.py`.
 
@@ -634,7 +635,7 @@ Shared-reference sizes that matter for "effective load" (wc -l): `lead-proxy.md`
 
 ---
 
-##### manage-desktop (SKILL.md 327 lines, ~4,800 tokens, no references)
+##### manage-desktop (SKILL.md 327 lines, 7,789 tokens, no references)
 
 What it does well: one command surface (`workspace-layout`), a "95% verbs" table (136-150), exit codes (311-321), a "when NOT to use" section, and a clear live-effect warning (152-158).
 
@@ -647,7 +648,7 @@ What it does well: one command surface (`workspace-layout`), a "95% verbs" table
 | 5 | Inconsistent terminology [AN] | "op" / "verb" / "command" / "subcommand" used interchangeably (45, 136, 104, 249); "client" vs "screen" vs "browser" for the same thing (35, 3, 223). | low |
 | 6 | Workflow structure [AN] | No numbered procedure or checklist; the skill is a table-plus-prose reference, so the common flow ("find the requester, open beside, verify") must be assembled by the reader. | low |
 
-##### agentic-browser-fleet (SKILL.md 303 lines, ~3,800 tokens, no references)
+##### agentic-browser-fleet (SKILL.md 303 lines, 6,365 tokens, no references)
 
 What it does well: explicitly declines to restate `playwright-cli --help` (25-28), a 4-step loop (62-67), fleet exit-code table with actions (253-266), quick recipes (268-288), a "Don'ts" list, and strong gotchas (virtualized lists 150-175, scroll target 177-182).
 
@@ -660,7 +661,7 @@ What it does well: explicitly declines to restate `playwright-cli --help` (25-28
 | 5 | Voodoo constants / magic numbers [AN] | "~60s" idle lease (100), "30s" timeout (122), "20 rows per 800px" (174), "5-15k tokens" (187) stated without a source; fine as heuristics but unsourced. | low |
 | 6 | Name no longer matches behavior [AN naming] | Skill and command are `agentic-browser-fleet`; body says the fleet is capped at one Chromium and `new <name>` must not be used (50-52). | low |
 
-##### update-creation (SKILL.md 282 lines, ~2,700 tokens, no references of its own)
+##### update-creation (SKILL.md 282 lines, 5,281 tokens, no references of its own)
 
 What it does well: numbered Steps 1-4 (89-274), a worked task-file template (143-183), explicit "Flow-specific substitutions" (222-233), an explicit "commit before launch" guard.
 
@@ -674,13 +675,13 @@ What it does well: numbered Steps 1-4 (89-274), a worked task-file template (143
 | 6 | Terminology [AN] | "pass" / "change" / "update" / "harden pass" for the same unit (15-26); "origin" here vs "path" in `op-update.md` (71, 105); "ticket" via `tk` vs "task file". | low |
 | 7 | Workflow validation loop [AN] | No verification step after merge ("confirm the window refreshed / the service restarted cleanly"); go-live ends at `tk close`. | low |
 
-##### caretaker (SKILL.md 274 lines, ~3,700 tokens, no references)
+##### caretaker (SKILL.md 274 lines, 6,073 tokens, no references)
 
 What it does well: an explicit first-run/later-run branch (27-40), numbered run procedure (176-261), the welcome message is given verbatim (99-123), permissions file template inline (137-147).
 
 | # | Rule | Evidence | Sev |
 |---|---|---|---|
-| 1 | Description is 717 chars of spec; second half is the whole procedure [AN "specific and concise", AS "a few sentences"] | line 3 enumerates first-run behavior, every weekly check, "all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms". It also hardcodes a script path (`system/services/caretaker/caretaker_check.sh`). Second-longest description in the repo; ~180 tokens in every agent's catalog. | medium |
+| 1 | Description is 717 chars of spec; second half is the whole procedure [AN "specific and concise", AS "a few sentences"] | line 3 enumerates first-run behavior, every weekly check, "all with permission; reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms". It also hardcodes a script path (`system/services/caretaker/caretaker_check.sh`). Second-longest description in the repo; ~260 tokens in every agent's catalog. | medium |
 | 2 | Progressive disclosure [AN] | Material that should be separate files: the verbatim welcome message 99-123 (an asset / template), the permissions-file template 137-147 (asset), "Recording the user's choices" 149-174 (branch taken only when the user answers). Core run (176-261) plus the branch rule would be ~120 lines. | medium |
 | 3 | Duplication within the file | The three checks are spelled out twice: first-run 77-85 and the run 210-231; the identical `workspace-layout show chat ...` invocation at 127 and 182; "how you talk to the user" 42-65 restated in step 1 (178-196) and step 5 (251-258). | medium |
 | 4 | "(read this first)" on an in-file section | 42: an eager-read marker on a section of the file already being read. | low |
@@ -688,7 +689,7 @@ What it does well: an explicit first-run/later-run branch (27-40), numbered run 
 | 6 | Voodoo constants [AN] | 218 "disk above ~85 percent", 260 "30 most recent logs", no rationale. | low |
 | 7 | Implementation-bound wording | 199 "it sends `/clear`" is a runner implementation detail the skill cannot observe; drift risk. | low |
 
-##### crystallize-creation (SKILL.md 261 lines, ~2,330 tokens; refs: `when-to-crystallize.md` 96, `post-crystallize-migration.md` 148)
+##### crystallize-creation (SKILL.md 261 lines, 4,848 tokens; refs: `when-to-crystallize.md` 96, `post-crystallize-migration.md` 148)
 
 What it does well: references are conditionally loaded ("Read `references/when-to-crystallize.md` if you haven't" 39; migration checklist loaded only on `done` 241); numbered Steps 1-6; the migration reference is itself a numbered checklist and says "stop reading once the items don't apply".
 
@@ -703,7 +704,7 @@ What it does well: references are conditionally loaded ("Read `references/when-t
 | 7 | Stale / hedged content in a reference | `post-crystallize-migration.md` 38-41 "fallback can stay until the next refactor pass ... Note in the PR description" (there is no PR in this flow); 127-130 "`tk` does not have a list command in this build" (version-bound). | low |
 | 8 | Reference duplicates SKILL.md and spec-summary | `when-to-crystallize.md` 41-52 restates the `[script]/[ai-script]/[prose]` model from `spec-summary.md`; SKILL.md 37-45 restates the reference's own summary. | low |
 
-##### fetch-process-show (SKILL.md 254 lines, ~2,800 tokens, no references of its own)
+##### fetch-process-show (SKILL.md 254 lines, 4,863 tokens, no references of its own)
 
 What it does well: concrete gating rules (sample must demonstrate every shape 111-131; hard gate 167-170), a plan template (64-73), the cost gate (150-163), explicit handoffs to `connect-external-service`, `crystallize-creation`, `build-app`.
 
@@ -717,7 +718,7 @@ What it does well: concrete gating rules (sample must demonstrate every shape 11
 | 6 | Principle cited by file name that has moved (144, 213 "per the preserve-and-surface principle (CLAUDE.md)") | The principle text lives in AGENTS.md / `harden-creation.md` 236. | low |
 | 7 | Hard gates are prose, not a checklist [AN] | The present -> feedback -> updated-sample loop (133-138) and the two "explicit confirmation" gates have no `- [ ]` checklist form. | low |
 
-##### github-sync (SKILL.md 238 lines, ~2,100 tokens, no references)
+##### github-sync (SKILL.md 238 lines, 4,577 tokens, no references)
 
 What it does well: numbered Enable 1-11 with exact commands, explicit hard rules (27-36), a precise permission list with per-scope rationale (72-84), the "rejected call is not a missing grant" gotcha (90-103), Repair and Disable sections.
 
@@ -730,20 +731,20 @@ What it does well: numbered Enable 1-11 with exact commands, explicit hard rules
 | 5 | No validation step after the service is added [AN feedback loops] | Step 9 writes the block and runs `supervisorctl update`; nothing says to check `supervisorctl status github-sync` or run `check-app-errors` before step 10's commit, although AGENTS.md requires that after any service edit. | medium |
 | 6 | `compatibility` used as a prose pointer | line 4. The spec reserves it for environment requirements; `spec-summary.md` says omit unless needed. | low |
 
-##### data-pipeline-builder (SKILL.md 237 lines, ~3,400 tokens, no references)
+##### data-pipeline-builder (SKILL.md 237 lines, 5,398 tokens, no references)
 
 What it does well: numbered steps with time budgets, explicit anti-patterns ("NEVER run a full-data inspection" 20-26), one storage default per access pattern (85-99), a merge rule that makes idempotency fall out (101-124), a test-first contract.
 
 | # | Rule | Evidence | Sev |
 |---|---|---|---|
-| 1 | Concision: rule-heavy prose that over-specifies [AN "Claude is already very smart"; AS "concise, stepwise guidance with a working example outperforms exhaustive documentation"] | 11 `##` sections, zero code blocks, no worked example. Paragraphs of 15-20 lines carrying 6-10 rules each (41-58, 113-124, 170-190). ~3,400 tokens for a skill whose core is five rules (identity / version / merge / ledger / single writer). | medium |
+| 1 | Concision: rule-heavy prose that over-specifies [AN "Claude is already very smart"; AS "concise, stepwise guidance with a working example outperforms exhaustive documentation"] | 11 `##` sections, zero code blocks, no worked example. Paragraphs of 15-20 lines carrying 6-10 rules each (41-58, 113-124, 170-190). 5,398 tokens for a skill whose core is five rules (identity / version / merge / ledger / single writer). | medium |
 | 2 | Progressive disclosure [AN] | Nothing split out: the step-1 profiling script spec (41-58), the 7b error contract (170-190), 7c retention (192-210), environment hygiene (232-237) are reference material. | medium |
 | 3 | Conflicts with the repo's own skill packaging [REPO type-skill.md] | 69, 205, 217 put tests at `tests/test_parse.py`, `tests/test_pipeline.py`; `type-skill.md` 28-31 has to override this in prose. 146 "stdlib only" conflicts with the `python/pyproject.toml` dependency model. | medium |
 | 4 | Voodoo constants [AN] | "at most 60 lines" (41), "at most eight rows" (73), "under ~2k records" (131), "`min(8, cpu_count)`" (133), "600 ... never more than ~800 ... `verify/` under ~150" (146-148), "more than 20%" (185), "20 random records" (222), "README at most 50 lines" (226), "~10% more" (14). None justified. | low |
 | 5 | Step numbering 1-8 plus "7b", "7c" (170, 192) | Breaks "follow the steps in order" (12) and the three-write budget (15-16) that references steps by number. | low |
 | 6 | Description | Third person, what+when, keywords. No offense. | - |
 
-##### use-ai-integration (SKILL.md 235 lines, ~2,200 tokens; ref `billing-and-credentialing.md` 99)
+##### use-ai-integration (SKILL.md 235 lines, 4,233 tokens; ref `billing-and-credentialing.md` 99)
 
 What it does well: "the weakest scenario that does the job" with one default per scenario (69-84), code sketches per scenario, a measured-cost rule (225-230), a reference linked with a clear "when" (232-235).
 
@@ -757,7 +758,7 @@ What it does well: "the weakest scenario that does the job" with one default per
 | 6 | Description second person ("Use when writing or reasoning about code that calls Claude") | line 3; otherwise what+when with keywords. | low |
 | 7 | Package install info [AN "list required packages"] | 96-97 says litellm is in the root `pyproject.toml`; nothing says how a consumer app with its own venv (per `post-crystallize-migration.md` 36) gets `litellm` or `use-ai-integration-skill`. | low |
 
-##### heal-creation (SKILL.md 203 lines, ~1,840 tokens, no references of its own)
+##### heal-creation (SKILL.md 203 lines, 3,746 tokens, no references of its own)
 
 What it does well: a "When NOT to heal" section (34-40), numbered Steps 1-4, the same explicit substitutions pattern as update-creation, shortest of the trio.
 
@@ -772,18 +773,18 @@ What it does well: a "When NOT to heal" section (34-40), numbered Steps 1-4, the
 
 ##### Summary table
 
-| Skill | Lines | ~Tokens | Refs | Top offenses |
+| Skill | Lines | Tokens | Refs | Top offenses |
 |---|---|---|---|---|
-| manage-desktop | 327 | 4,800 | 0 | full manual inline (40% lookup tables), drift-prone "today"/"yet" statements, 2nd-person desc |
-| agentic-browser-fleet | 303 | 3,800 | 0 | ~100 lines of conditional recovery/gotcha content inline, instruction-laden desc, internal repetition |
-| update-creation | 282 | 2,700 | 0 (+1,330 shared) | 40 lines verbatim-shared with heal, 2-level ref chains, no TOCs, critical-app carve-outs inline |
-| caretaker | 274 | 3,700 | 0 | 717-char desc, verbatim message/template assets inline, checks spelled out twice |
-| crystallize-creation | 261 | 2,330 | 2 (96, 148) | lead-proxy/worker chains, 56-line heredoc inline, three entry modes braided without a branch map |
-| fetch-process-show | 254 | 2,800 | 0 (+143 shared) | unreadable without `interactive-delivery.md`, two-level chain to the poll command, 526-char desc |
-| github-sync | 238 | 2,100 | 0 | supervisord block and latchkey mechanics duplicated from README / latchkey.md, 60s and paths baked in, no post-install check |
-| data-pipeline-builder | 237 | 3,400 | 0 | exhaustive rule prose with no example, test layout contradicts `type-skill.md`, nine unexplained constants |
-| use-ai-integration | 235 | 2,200 | 1 (99) | "copy this file" instead of import/run, setup detail before the decision, history and cost tables in the ref |
-| heal-creation | 203 | 1,840 | 0 (+1,250 shared) | 40 lines verbatim-shared with update, same chains/TOC gaps, 15-line go-live sentence |
+| manage-desktop | 327 | 7,789 | 0 | full manual inline (40% lookup tables), drift-prone "today"/"yet" statements, 2nd-person desc |
+| agentic-browser-fleet | 303 | 6,365 | 0 | ~100 lines of conditional recovery/gotcha content inline, instruction-laden desc, internal repetition |
+| update-creation | 282 | 5,281 | 0 (+1,330 shared) | 40 lines verbatim-shared with heal, 2-level ref chains, no TOCs, critical-app carve-outs inline |
+| caretaker | 274 | 6,073 | 0 | 717-char desc, verbatim message/template assets inline, checks spelled out twice |
+| crystallize-creation | 261 | 4,848 | 2 (96, 148) | lead-proxy/worker chains, 56-line heredoc inline, three entry modes braided without a branch map |
+| fetch-process-show | 254 | 4,863 | 0 (+143 shared) | unreadable without `interactive-delivery.md`, two-level chain to the poll command, 526-char desc |
+| github-sync | 238 | 4,577 | 0 | supervisord block and latchkey mechanics duplicated from README / latchkey.md, 60s and paths baked in, no post-install check |
+| data-pipeline-builder | 237 | 5,398 | 0 | exhaustive rule prose with no example, test layout contradicts `type-skill.md`, nine unexplained constants |
+| use-ai-integration | 235 | 4,233 | 1 (99) | "copy this file" instead of import/run, setup detail before the decision, history and cost tables in the ref |
+| heal-creation | 203 | 3,746 | 0 (+1,250 shared) | 40 lines verbatim-shared with update, same chains/TOC gaps, 15-line go-live sentence |
 
 Out of scope but noticed: the shared references these skills lean on (`lead-proxy.md` 409, `harden-contention.md` 405, `harden-creation.md` 552, `worker-reporting.md` 236) are the real progressive-disclosure problem for the lifecycle family; all four exceed the 100-line TOC threshold with no TOC and link onward to each other.
 
@@ -791,22 +792,22 @@ Out of scope but noticed: the shared references these skills lean on (`lead-prox
 
 #### dwt skills audit: small/medium batch (12 skills)
 
-Scope: `imbue-studio`, `datalib`, `launch-task`, `manage-routines`, `create-theme`, `file-sharing`, `find-transcripts`, `check-app-errors`, `submit-upstream-changes`, `make-theme-icon`, `use-screen`, `assist`. All paths relative to `.agents/skills/`. Sizes are SKILL.md body (after frontmatter); tokens estimated as words x 1.35. None of these breach the 500-line / 5,000-token limits, so the offenses here are about disclosure, duplication, content hygiene, and description quality rather than raw size.
+Scope: `imbue-studio`, `datalib`, `launch-task`, `manage-routines`, `create-theme`, `file-sharing`, `find-transcripts`, `check-app-errors`, `submit-upstream-changes`, `make-theme-icon`, `use-screen`, `assist`. All paths relative to `.agents/skills/`. Line counts are the SKILL.md body (after frontmatter); tokens are measured over the whole file (section 6). None breaches the 500-line limit and only `imbue-studio` (5,595) is over 5,000 tokens, so the offenses here are mostly about disclosure, duplication, content hygiene, and description quality rather than raw size.
 
-| skill | body lines | ~tokens | desc chars | refs | severity summary |
+| skill | body lines | tokens | desc chars | refs | severity summary |
 |---|---|---|---|---|---|
-| imbue-studio (upstream-owned) | 211 | 2.9k | 466 | 0 | medium: full manual inline, permission boilerplate duplicated |
-| datalib | 209 | 2.3k | 357 | 0 (+1 script) | medium: version pin in prose, reference material inside numbered steps |
-| launch-task | 206 | 2.0k | 162 | 2 (+shared) | high: core workflow lives in 409-line shared ref; 2-3 level chains |
-| manage-routines | 154 | 1.6k | 449 | 0 | low: internals inline, tz repair in prose |
-| create-theme | 154 | 2.0k | 473 | 0 | medium: eager read of blueprint plan; contract detail inline |
-| file-sharing | 149 | 2.0k | 161 | 0 | medium: description promises Notes/Photos the body lacks; workflow split into "Examples" |
-| find-transcripts | 127 | 1.2k | 384 | 0 | medium: legacy-format handling inline; 15-line jq in prose |
-| check-app-errors | 117 | 1.1k | 343 | 0 | low-medium: deterministic greps not scripted; incident anecdote |
-| submit-upstream-changes | 112 | 1.0k | 445 | 1 | medium: no when-clause; contradictory config-vs-hardcoded; 3x repeated snippet |
-| make-theme-icon | 112 | 1.2k | 566 | 0 | low-medium: longest description in batch, body text in description |
-| use-screen | 98 | 1.4k | 449 | 0 | low-medium: lease semantics triplicated across skills |
-| assist | 95 | 1.8k | 273 | 0 | low-medium: dense paragraphs, deterministic classification unscripted |
+| imbue-studio (upstream-owned) | 211 | 5,595 | 466 | 0 | medium: full manual inline, permission boilerplate duplicated |
+| datalib | 209 | 4,226 | 357 | 0 (+1 script) | medium: version pin in prose, reference material inside numbered steps |
+| launch-task | 206 | 4,058 | 162 | 2 (+shared) | high: core workflow lives in 409-line shared ref; 2-3 level chains |
+| manage-routines | 154 | 2,971 | 449 | 0 | low: internals inline, tz repair in prose |
+| create-theme | 154 | 3,385 | 473 | 0 | medium: eager read of blueprint plan; contract detail inline |
+| file-sharing | 149 | 3,571 | 161 | 0 | medium: description promises Notes/Photos the body lacks; workflow split into "Examples" |
+| find-transcripts | 127 | 2,516 | 384 | 0 | medium: legacy-format handling inline; 15-line jq in prose |
+| check-app-errors | 117 | 1,891 | 343 | 0 | low-medium: deterministic greps not scripted; incident anecdote |
+| submit-upstream-changes | 112 | 2,203 | 445 | 1 | medium: no when-clause; contradictory config-vs-hardcoded; 3x repeated snippet |
+| make-theme-icon | 112 | 2,323 | 566 | 0 | low-medium: longest description in batch, body text in description |
+| use-screen | 98 | 2,239 | 449 | 0 | low-medium: lease semantics triplicated across skills |
+| assist | 95 | 2,958 | 273 | 0 | low-medium: dense paragraphs, deterministic classification unscripted |
 
 Shared targets these skills load (outside `.agents/skills/`), measured with `wc -l`:
 
@@ -855,7 +856,7 @@ Does well: numbered steps 1-4, scripts are run (never read), failure/recovery sp
 
 | # | offense | rule | evidence | sev |
 |---|---|---|---|---|
-| 1 | The core workflow (parse report, decide gate vs escalate, merge, timeout handling) is not in SKILL.md: step 4 is "Follow `.agents/shared/references/lead-proxy.md`" (409 lines, no TOC) and step 1's task template sends the worker to `worker-reporting.md` (236 lines, no TOC). Effective lead-side load = 206 + 409 = 615 lines; a worker reading its brief adds 236. SKILL.md then carries a 19-line "substitutions" table (L167-185) to parametrize that generic reference, which is a symptom of the reference being too abstract for this caller | A "SKILL.md keeps the core workflow"; A "TOC for reference files longer than 100 lines"; S "<5000 tokens on activation" (effective load ~8k) | `launch-task/SKILL.md:61-67,157-185`; `.agents/shared/references/lead-proxy.md` (409), `worker-reporting.md` (236) | high |
+| 1 | The core workflow (parse report, decide gate vs escalate, merge, timeout handling) is not in SKILL.md: step 4 is "Follow `.agents/shared/references/lead-proxy.md`" (409 lines, no TOC) and step 1's task template sends the worker to `worker-reporting.md` (236 lines, no TOC). Effective lead-side load = 206 + 409 = 615 lines; a worker reading its brief adds 236. SKILL.md then carries a 19-line "substitutions" table (L167-185) to parametrize that generic reference, which is a symptom of the reference being too abstract for this caller | A "SKILL.md keeps the core workflow"; A "TOC for reference files longer than 100 lines"; S "<5000 tokens on activation" (effective load 11,699) | `launch-task/SKILL.md:61-67,157-185`; `.agents/shared/references/lead-proxy.md` (409), `worker-reporting.md` (236) | high |
 | 2 | Reference chains 2-3 deep: SKILL.md -> `references/worker-failure.md` -> `lead-proxy.md`, `harden-contention.md` (405 lines); SKILL.md -> `references/dead-worker-recovery.md` -> `.agents/shared/references/freeing-memory.md`; `worker-failure.md` -> `dead-worker-recovery.md` | A "all reference files should link directly from SKILL.md; avoid nested chains"; S same | `launch-task/references/worker-failure.md:12,26,51,53`; `dead-worker-recovery.md:18` | medium |
 | 3 | Duplicated content: `source_artifacts_dir` explained twice (L114-116, L208-210); dead-worker restart rules in Guidelines (L199-204) restate `dead-worker-recovery.md:3-5,25-37`; `worker-failure.md:11-13,22-29` restate SKILL.md L195-198; `tk` step etiquette (L15-31, 17 lines) restates AGENTS.md L68 | A concision / single source | `launch-task/SKILL.md:15-31,114-116,199-210` | medium |
 | 4 | Stale/contradictory instruction inside a reference: "finalize via `submit-upstream-changes` when done" and "push to `submit/<name>` per the submit-upstream-changes skill" conflict with SKILL.md's terminal flow (`done` -> merge the worker's branch, L183-185) and with submit-upstream-changes' own purpose (template PRs) | A consistent terminology/flow; S refine with real execution | `launch-task/references/dead-worker-recovery.md:37,73` | medium |
@@ -1191,35 +1192,35 @@ Rules cited: **[A]** Anthropic best-practices page, **[C]** Academy course, **[S
 
 ##### 0. Facts about the layer
 
-| File | Lines | Words | ~Tokens | Direct SKILL.md inbound | Other inbound |
+| File | Lines | Words | Tokens | Direct SKILL.md inbound | Other inbound |
 |---|---|---|---|---|---|
-| references/lead-proxy.md | 409 | 3285 | 4.4k | 9 skills | 2 skill refs, 3 shared |
-| references/harden-contention.md | 405 | 3542 | 4.8k | 5 skills | 2 skill refs, 2 shared |
-| references/spec-summary.md | 277 | 2024 | 2.7k | 0 | 1 skill ref, 4 shared, app_manifest code |
-| references/worker-reporting.md | 236 | 1532 | 2.1k | 7 skills | 2 skill refs, 6 shared |
-| references/running-python.md | 201 | 1696 | 2.3k | 0 | 1 skill ref, 4 shared, AGENTS.md |
-| references/service-processes.md | 197 | 1428 | 1.9k | 2 skills | 1 skill ref, 1 shared |
-| references/interactive-delivery.md | 143 | 1369 | 1.8k | 4 skills | 1 skill ref |
-| references/user-facing-language.md | 117 | 1052 | 1.4k | 1 skill | AGENTS.md, visiting-agents.md |
-| references/visiting-agents.md | 66 | 770 | 1.0k | 1 skill (build-app) | share_gateway code (string template) |
-| references/freeing-memory.md | 56 | 523 | 0.7k | 1 skill | 2 skill refs, lead-proxy, AGENTS.md |
-| references/element-references.md | 45 | 558 | 0.8k | 1 skill | AGENTS.md |
-| references/report-built-in-issues.md | 44 | 443 | 0.6k | 2 skills | 1 skill ref, lead-proxy, AGENTS.md |
-| references/visiting-agents-invite.md | 27 | 368 | 0.5k | 0 | share_gateway code (string template) |
-| references/continue-chat.md | 16 | 140 | 0.2k | 0 | chat app code (string template) |
-| worker/SKILL.md | 112 | 1007 | 1.4k | 7 skills | 12 skill refs, 10 shared |
-| worker/references/harden-creation.md | 552 | 5228 | 7.1k | 2 skills | 3 skill refs, 12 shared, AGENTS.md |
-| worker/references/op-update.md | 201 | 1464 | 2.0k | 1 | 1 skill ref, type-app.md, worker table (`op-<OPERATION>`) |
-| worker/references/op-crystallize.md | 151 | 1239 | 1.7k | 1 (build-app) | worker table |
-| worker/references/verification.md | 133 | 1019 | 1.4k | **0** | **0 (orphan)** |
-| worker/references/op-heal.md | 125 | 890 | 1.2k | 0 | worker table |
-| worker/references/type-skill.md | 118 | 870 | 1.2k | 0 | 1 skill ref, worker table |
-| worker/references/type-app.md | 103 | 839 | 1.1k | 1 (build-app) | 2 skill refs, 5 shared |
-| worker/references/type-service.md | 72 | 575 | 0.8k | 0 | 1 skill ref, worker table |
-| worker/references/web-frontend-testing.md | 54 | 494 | 0.7k | 0 | 1 skill ref, 3 shared |
-| worker/references/skill-outline-fields.md | 43 | 401 | 0.5k | 0 | 3 shared |
-| worker/references/update-vs-create-new.md | 38 | 304 | 0.4k | 0 | 3 shared |
-| worker/references/transcript-exploration.md | 26 | 192 | 0.3k | 0 | 4 shared |
+| references/lead-proxy.md | 409 | 3285 | 7,641 | 9 skills | 2 skill refs, 3 shared |
+| references/harden-contention.md | 405 | 3542 | 8,160 | 5 skills | 2 skill refs, 2 shared |
+| references/spec-summary.md | 277 | 2024 | 4,813 | 0 | 1 skill ref, 4 shared, app_manifest code |
+| references/worker-reporting.md | 236 | 1532 | 3,653 | 7 skills | 2 skill refs, 6 shared |
+| references/running-python.md | 201 | 1696 | 5,148 | 0 | 1 skill ref, 4 shared, AGENTS.md |
+| references/service-processes.md | 197 | 1428 | 4,055 | 2 skills | 1 skill ref, 1 shared |
+| references/interactive-delivery.md | 143 | 1369 | 2,858 | 4 skills | 1 skill ref |
+| references/user-facing-language.md | 117 | 1052 | 2,083 | 1 skill | AGENTS.md, visiting-agents.md |
+| references/visiting-agents.md | 66 | 770 | 1,684 | 1 skill (build-app) | share_gateway code (string template) |
+| references/freeing-memory.md | 56 | 523 | 1,048 | 1 skill | 2 skill refs, lead-proxy, AGENTS.md |
+| references/element-references.md | 45 | 558 | 1,214 | 1 skill | AGENTS.md |
+| references/report-built-in-issues.md | 44 | 443 | 1,017 | 2 skills | 1 skill ref, lead-proxy, AGENTS.md |
+| references/visiting-agents-invite.md | 27 | 368 | 874 | 0 | share_gateway code (string template) |
+| references/continue-chat.md | 16 | 140 | 342 | 0 | chat app code (string template) |
+| worker/SKILL.md | 112 | 1007 | 2,305 | 7 skills | 12 skill refs, 10 shared |
+| worker/references/harden-creation.md | 552 | 5228 | 10,794 | 2 skills | 3 skill refs, 12 shared, AGENTS.md |
+| worker/references/op-update.md | 201 | 1464 | 3,174 | 1 | 1 skill ref, type-app.md, worker table (`op-<OPERATION>`) |
+| worker/references/op-crystallize.md | 151 | 1239 | 2,798 | 1 (build-app) | worker table |
+| worker/references/verification.md | 133 | 1019 | 2,385 | **0** | **0 (orphan)** |
+| worker/references/op-heal.md | 125 | 890 | 1,984 | 0 | worker table |
+| worker/references/type-skill.md | 118 | 870 | 2,348 | 0 | 1 skill ref, worker table |
+| worker/references/type-app.md | 103 | 839 | 2,038 | 1 (build-app) | 2 skill refs, 5 shared |
+| worker/references/type-service.md | 72 | 575 | 1,461 | 0 | 1 skill ref, worker table |
+| worker/references/web-frontend-testing.md | 54 | 494 | 1,081 | 0 | 1 skill ref, 3 shared |
+| worker/references/skill-outline-fields.md | 43 | 401 | 908 | 0 | 3 shared |
+| worker/references/update-vs-create-new.md | 38 | 304 | 667 | 0 | 3 shared |
+| worker/references/transcript-exploration.md | 26 | 192 | 417 | 0 | 4 shared |
 
 Every file path a shared file names exists on disk (checked all `.py`/`.sh`/`.md` paths; none missing).
 
@@ -1245,14 +1246,14 @@ Every file path a shared file names exists on disk (checked all `.py`/`.sh`/`.md
 
 **2.2 (high) Effective load of one worker run.** `worker/SKILL.md:52` says "Read these top to bottom, then follow them." Summing only the rows the table marks unconditional:
 
-| Run | Files read unconditionally | Lines | ~Tokens |
+| Run | Files read unconditionally | Lines | Tokens |
 |---|---|---|---|
-| crystallize a skill | worker/SKILL.md, harden-creation, op-crystallize, type-skill, worker-reporting, transcript-exploration, spec-summary, skill-outline-fields | 1,515 | ~16.9k |
-| committed update of an app | worker/SKILL.md, harden-creation, op-update, type-app, web-frontend-testing, worker-reporting | 1,258 | ~14.3k |
+| crystallize a skill | worker/SKILL.md, harden-creation, op-crystallize, type-skill, worker-reporting, transcript-exploration, spec-summary, skill-outline-fields | 1,515 | 28,036 |
+| committed update of an app | worker/SKILL.md, harden-creation, op-update, type-app, web-frontend-testing, worker-reporting | 1,258 | 23,045 |
 
-Plus what those name as required reading before the work starts: `spec-summary.md` sends an `[ai-script]` skill to `use-ai-integration/SKILL.md` (235 lines) and to `running-python.md` (201); `harden-creation.md:350` sends the test gate to `system/libs/app_manifest/README.md` (413); a split pass adds `launch-task/SKILL.md` (212) and `lead-proxy.md` (409). A skill crystallize that touches all of these reads ~2,900 lines (~35k tokens) of instructions before writing a line of code. [S] recommends the activated instruction tier stay under 5,000 tokens.
+Plus what those name as required reading before the work starts: `spec-summary.md` sends an `[ai-script]` skill to `use-ai-integration/SKILL.md` (235 lines) and to `running-python.md` (201); `harden-creation.md:350` sends the test gate to `system/libs/app_manifest/README.md` (413); a split pass adds `launch-task/SKILL.md` (212) and `lead-proxy.md` (409). A skill crystallize that touches all of these reads ~2,900 lines (~59,000 tokens; the app-manifest README, which was not measured, is converted from its bytes) of instructions before writing a line of code. [S] recommends the activated instruction tier stay under 5,000 tokens.
 
-**2.3 (high) Effective load of the lead side is the same order.** `heal-creation/SKILL.md` (203 lines) requires the single-flight check in `harden-contention.md` before dispatch (:60), `worker-reporting.md` for the task-file fields (:82), and `lead-proxy.md` to drive the worker (:156): 1,253 lines, ~13.1k tokens, for a flow whose SKILL.md is itself comfortably small. The same holds for `update-creation` (:93, :133, :221) and `crystallize-creation` (:86, :208).
+**2.3 (high) Effective load of the lead side is the same order.** `heal-creation/SKILL.md` (203 lines) requires the single-flight check in `harden-contention.md` before dispatch (:60), `worker-reporting.md` for the task-file fields (:82), and `lead-proxy.md` to drive the worker (:156): 1,253 lines, 23,200 tokens, for a flow whose SKILL.md is itself comfortably small. The same holds for `update-creation` (:93, :133, :221) and `crystallize-creation` (:86, :208).
 
 **2.4 (medium) Always-read files carry debugging-only and rarely-needed material.** `lead-proxy.md:380-409` "`mngr rsync` rationale" opens with "The launcher makes this transfer itself... Read this when you are debugging one" yet sits in the file every lead reads. `harden-contention.md:247-406` (160 lines: taking over an orphaned pass, superseding a gone worker, the two reverted-milestone wrinkles) is the rare path, in the same file as the three pre-merge checks every merge needs. `lead-proxy.md:354-378` "When you are a worker yourself" applies only to intermediate leads. Remedy: split the rare paths into their own files and leave one-line conditional pointers ([A] "conditional details" pattern).
 
@@ -1319,7 +1320,7 @@ Plus what those name as required reading before the work starts: `spec-summary.m
 | 1.1 | high | Reference chains of 4-8 hops from SKILL.md | update-self, heal-creation, crystallize-creation chains above |
 | 1.2 | high | Cyclic reference graph | harden-creation <-> harden-contention <-> lead-proxy <-> worker-reporting |
 | 2.1 | high | 16 files over 100 lines, none with a TOC; two over 400 lines | harden-creation (552), lead-proxy (409), harden-contention (405) |
-| 2.2 | high | One worker run reads 1,258-1,515 lines unconditionally (14-17k tokens), up to ~2,900 with named follow-ons | worker/SKILL.md table + spec-summary/harden-creation pointers |
+| 2.2 | high | One worker run reads 1,258-1,515 lines unconditionally (23,045 to 28,036 tokens), up to ~2,900 with named follow-ons | worker/SKILL.md table + spec-summary/harden-creation pointers |
 | 2.3 | high | Lead side reads ~1,250 lines before dispatch | heal-/update-/crystallize-creation + harden-contention + lead-proxy + worker-reporting |
 | 1.3 | medium | Section pointers target bold run-in labels, not headings | op-heal.md:54, type-app.md:83, harden-contention.md:338 |
 | 1.4 | medium | Second tier reached by filename template, invisible to link checks | worker/SKILL.md:60-61 |
