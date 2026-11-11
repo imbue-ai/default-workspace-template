@@ -79,9 +79,8 @@ When the user takes the OAuth option:
    data/.secrets/example-token.json`, or the SDK's cache-directory setting), so
    the refreshed tokens live where the guard protects them.
 4. The consent screen needs a browser whose `localhost` callback resolves inside
-   this workspace: open the consent URL in a fleet browser (`agentic-browser-fleet
-   new`, then `playwright-cli` to navigate) and `handoff` it to the user to
-   approve.
+   this workspace: open the consent URL in a fleet browser (`use-browser new`,
+   then `playwright-cli` to navigate) and `handoff` it to the user to approve.
 5. Every later call runs under the wrapper; the SDK refreshes its own tokens from
    the cache.
 

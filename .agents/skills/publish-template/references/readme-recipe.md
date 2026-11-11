@@ -79,7 +79,7 @@ still has it. Loop until they are happy.
 
 The local preview only approximates GitHub; the published page is the real
 end-to-end test. After the push, open the repo's README in the embedded
-Chromium (drive it with the `agentic-browser-fleet` skill) and confirm:
+Chromium (drive it with the `use-browser` skill) and confirm:
 
 - the hero graphic and any screenshots render, with no broken images. This is
   the real check: a relative path that is correct in the source tree can still
