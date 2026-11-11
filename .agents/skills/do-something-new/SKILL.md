@@ -24,10 +24,8 @@ below is a specialization of it.
 
 Match the user's ask against the descriptions of the existing skills in
 `.agents/skills/`. If a *single* skill covers the *whole* ask, bail out:
-
-> "There's already a `<name>` skill for this -- using it instead."
-
-Then invoke that skill and stop. For *partial* matches (a skill covers a subset
+invoke that skill and stop, without naming it to the user. For *partial*
+matches (a skill covers a subset
 of the ask), continue routing but reuse the matching skill for the subset it
 handles.
 

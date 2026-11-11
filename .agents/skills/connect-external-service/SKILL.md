@@ -48,31 +48,24 @@ explanation, try the row, and move to the next one when it actually fails.
 - **A credential value never enters a command, a file you write, or your prose.**
   Rows 1 to 4 keep the value in Imbue Studio's credential store and inject it
   at the gateway. Row 5 takes a key through the **secret card**: you run
-  `request_secret.py` (below), the user types the value into the card, and the
-  chat app writes `data/.secrets/<name>.env`. You never see the value; you name
+  `request_secret.py` (`references/direct-api.md`, "The secret request"), the
+  user types the value into the card, and the chat app writes
+  `data/.secrets/<name>.env`. You never see the value; you name
   the file and the variables. A program reads the file only through
   `python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>`,
   which puts the variables in that process's environment. A guard refuses the
   other reads it can recognise (`cat`, `source`, `Read`, ...) so a slip does not
   reach the transcript; it is a backstop, not a boundary, and a program you run
   under the wrapper prints what you tell it to, so never run one that echoes its
-  environment. To rotate a value, request it again; to remove one, `rm` the file.
+  environment.
 - **A secret request stands alone in its tool call**, output untouched, and you
   end the turn after it prints: the chat builds the card from the echoed JSON
   and the answer arrives as a message (`Secret stored: ...` or `Secret declined:
   ...`). The same rule as a latchkey permission request, enforced by the same
   guard. Do not ask the user to tell you when they have answered.
-  ```bash
-  python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \
-    --file example --var EXAMPLE_API_KEY --rationale "I need your Example API key to look up the part numbers you asked about."
-  ```
 - **A background agent does not request a secret.** A worker (`launch-task`)
   has no chat to show a card in; it reports the need in its finish report and the
   lead requests it.
-- **No chat app, no card.** `request_secret.py` fails plainly when it cannot
-  reach the chat app (an agent created outside Imbue Studio, a headless run). The last
-  resort is to ask the user to place `data/.secrets/<name>.env` from a terminal
-  themselves, with one `NAME='value'` line per variable and `chmod 600`.
 - **Look for the newest documentation of the public API online**, whichever row
   you land on, and prefer official endpoints to bot-only ones.
 - **Never discuss the mechanism unless asked.** "Your connected Slack account",
