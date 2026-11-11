@@ -84,19 +84,19 @@ and service task.
 1. Read the task file: the `## Incident summary` and the `## Anchors` verbatim
    quotes are your primary guide.
 2. Locate the incident and the manual follow-up in the lead's transcript, per
-   `.agents/shared/worker/references/transcript-exploration.md`.
+   `.agents/skills/harden-worker/references/transcript-exploration.md`.
 3. Read the creation's current state on disk per your creation reference.
 
 ### Stage 2: Design and Gate 1
 
 For a **skill** creation, first decide update-in-place vs. split-a-new-sibling
-per `.agents/shared/worker/references/update-vs-create-new.md` (default to in-place;
+per `.agents/skills/harden-worker/references/update-vs-create-new.md` (default to in-place;
 only split when the gap has a concrete standalone use case). Other creations
 update in place.
 
 Propose one outline covering every creation in the pass. For a **skill**, the
 outline contents are defined in
-`.agents/shared/worker/references/skill-outline-fields.md`; add the update decision
+`.agents/skills/harden-worker/references/skill-outline-fields.md`; add the update decision
 (update-in-place vs. new sibling). For an **app** (or a service), the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
 `type: gate`, `name: outline-approval` report with the outline plus "Approve this

@@ -5,7 +5,7 @@ its own `system/supervisord.conf.d/<name>.conf`, served at its own browser origi
 (`http://<name>.<workspace-host>/`, routed straight to the app's registered
 port). This reference describes what an app *is*; for how to
 run and test a web frontend in isolation, see
-`.agents/shared/worker/references/web-frontend-testing.md`.
+`.agents/skills/harden-worker/references/web-frontend-testing.md`.
 
 ## Contents
 
