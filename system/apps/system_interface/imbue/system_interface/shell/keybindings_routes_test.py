@@ -653,3 +653,60 @@ def test_a_save_made_while_a_delivery_is_out_is_left_to_deliver(
             ("launcher-secondary-send", ["ctrl+enter"])
         ]
         assert _launcher_send(client)["chords"] == ["ctrl+enter"]
+
+
+def _me_launcher_send(client: FlaskClient) -> list[str]:
+    return client.get("/api/keybindings/me").get_json()["chords_by_action"]["launcher-secondary-send"]
+
+
+def test_a_snapshot_carrying_the_delivered_chords_settles_it_whatever_its_clock_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        _save_everywhere(client, ["alt+enter"])
+
+        # A desktop clock running behind this machine's stamps the rewrite before the delivery.
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}}, "2026-10-28T00:00:03Z"
+        )
+        _settle(tmp_path)
+
+        assert load_unsent_change_values(_repo_root(tmp_path)) == {}
+
+
+def test_the_snapshot_a_delivery_was_built_on_never_settles_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        # The snapshot already carries the chords saved: a pass already under way may still land another value.
+        _write_snapshot(tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}})
+        _save_everywhere(client, ["alt+enter"])
+        assert load_unsent_change_values(_repo_root(tmp_path)) != {}
+
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter"]}}, "2026-10-28T00:00:05Z"
+        )
+        _settle(tmp_path)
+
+        assert _me_launcher_send(client) == ["alt+enter"]
+
+
+def test_a_snapshot_built_while_the_delivery_was_on_its_way_does_not_settle_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        # The desktop works a snapshot out (without the save) before it answers the delivery.
+        record["during_put"] = lambda: _write_snapshot(tmp_path, {}, datetime.now(timezone.utc).isoformat())
+
+        _save_everywhere(client, ["alt+enter"])
+
+        assert _me_launcher_send(client) == ["alt+enter"]
+        assert load_unsent_change_values(_repo_root(tmp_path)) != {}
