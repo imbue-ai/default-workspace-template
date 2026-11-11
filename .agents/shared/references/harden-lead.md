@@ -63,6 +63,9 @@ harden-contention reference ("Before dispatch: one pass per creation
 finds:
 
 - **No pass in flight on any of them**: dispatch.
+- **Your own pass is live on any of them**: do not dispatch a second one. Note
+  your new commits on your own ticket, as that reference says: the catch-up
+  your own merge-time freshness check forces covers them.
 - **Another agent's pass is live on any of them**: leave the note that
   reference describes on their ticket and stop. The catch-up forced at their
   merge time covers your change, so your turn-end obligation is met.
