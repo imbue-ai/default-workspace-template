@@ -328,6 +328,31 @@ def test_stamping_drops_a_size_exemption_that_only_its_own_lines_keep_true(
     assert validate_skill.validate(skill) is None
 
 
+def test_stamping_replaces_an_exemption_it_cannot_read_whether_or_not_the_skill_fails(
+    tmp_path: Path,
+) -> None:
+    half_written = _skill(
+        tmp_path, "half-written", metadata="metadata:\n  exempt-checks: paths\n"
+    )
+    unknown_check = _skill(tmp_path, "unknown-check", metadata=_exemption("tidiness"))
+    unknown_reason = _skill(
+        tmp_path,
+        "unknown-reason",
+        "Read `system/gone.py`.\n",
+        _exemption("paths", "because"),
+    )
+
+    changes = validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+
+    assert changes == [
+        "half-written: exempt-checks unreadable -> none",
+        "unknown-check: exempt-checks unreadable -> none",
+        "unknown-reason: exempt-checks unreadable -> paths (predates-checks)",
+    ]
+    for skill in (half_written, unknown_check, unknown_reason):
+        assert validate_skill.validate(skill) is None
+
+
 def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_reported_otherwise(
     tmp_path: Path,
 ) -> None:
