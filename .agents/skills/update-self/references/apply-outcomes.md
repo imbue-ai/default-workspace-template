@@ -2,6 +2,20 @@
 
 What `update_self.py apply` leaves behind on each exit, what to tell the user,
 and how to act on the records it writes under `data/.state/update-apply/`.
+This is the one home of the apply's exit codes: `applying-the-update.md` runs
+the command and sends you here with the code.
+
+## Contents
+
+- Exit 0 -- applied
+- Exit 2 -- automatically rolled back
+- Exit 3 -- emergency
+- Exit 1 -- precondition; nothing changed
+- Needs a decision -- nothing applied
+- An interrupted apply
+- Rolling back on request
+- Migration-required updates
+- Which verdict ends the pass
 
 ## Exit 0 -- applied
 
@@ -50,10 +64,10 @@ as "it hung", with the timings line saying where.
 stderr and the `apply phase timings:` line, then:
 
 - **A local resource cause** (a step shed for memory, a full disk, a step that
-  outlived its budget on a loaded workspace): lessen the load first, using
-  SKILL.md Step 1's licence (pause more chats with `run-status stop-chats
-  --agent <name>`, stop the browser and windowless apps, prune caches,
-  worktrees and old snapshots), then retry.
+  outlived its budget on a loaded workspace): lessen the load first, under
+  the licence in `freeing-memory-for-an-update.md` (pause more chats with
+  `run-status stop-chats --agent <name>`, stop the browser and windowless
+  apps, prune caches, worktrees and old snapshots), then retry.
 - **A network cause** (a download, `npm ci` or `uv sync` that could not reach
   its registry): retry once.
 - **Anything else**, or a retry that fails again: no retry. That includes a
@@ -61,14 +75,17 @@ stderr and the `apply phase timings:` line, then:
   the results message says so.
 
 A retry goes back to the worker, which still holds its branch and its
-validation; it is never a re-run of the same apply (below). Consume the `done`
-you applied, as SKILL.md 5b does before a catch-up, then send it the cause and
-the retry through 5b's catch-up sender with `$RETRY` in place of `$CATCH_UP`,
-re-arm the poll, and audit the `done` it sends back (5a) before 5b applies
-again:
+validation; it is never a re-run of the same apply (below). If the `done` you
+applied is still in place, consume it (`older-workspaces.md`, "Consuming a
+report by hand"). Then send the worker the cause and the retry
+(`applying-the-update.md`, "Messaging the worker", reads the exit code),
+re-arm the poll, and audit the `done` it sends back (Step 5a) before Step 5b
+applies again:
 
 ```bash
-RETRY="The apply rolled back: <the cause, one plain line>. Retry per §8 of your worker guide, catching up to $(git rev-parse HEAD), then report done again."
+MESSAGE="The apply rolled back: <the cause, one plain line>. Retry per Step 8 of your worker guide, catching up to $(git rev-parse HEAD), then report done again."
+WORKER_ID=$(sed -n 's/^worker_agent_id: *//p' data/.tasks/update-self/task.md)
+python3 system/scripts/message_chat.py "$WORKER_ID" -m "$MESSAGE"
 ```
 
 Only a worker that is gone takes a fresh pass (SKILL.md Step 3b, with the same
@@ -88,14 +105,16 @@ frontend was already broken beforehand, report that alongside.
 Because the rollback is a forward revert, the merge stays in history while its
 content does not, and re-running the apply of that same merge is refused. The
 worker's retry -- like any later pass, to this release or a newer one -- reverts
-the rollback commit on its branch (the worker reference says how): git counts
+the rollback commit on its branch (the worker guide's Step 1): git counts
 the reverted content as already merged, so a plain merge lands only what the
 target changed since. The apply refuses a merge ref that leaves the rollback in
 place (exit 1, nothing changed), naming the commits to revert.
 
 ## Exit 3 -- emergency
 
-Even the rollback could not restore a healthy workspace. Escalate immediately.
+Even the rollback could not restore a healthy workspace. Escalate immediately,
+and record `run-status verdict STUCK --detail "<what failed, one plain
+line>"`.
 The pre-apply copies are kept under `data/.state/update-apply/snapshots/`, and
 when the apply touched the frontend the stderr names the bundle copy --
 putting that one back is a plain file copy needing neither npm nor a registry,
@@ -127,23 +146,32 @@ apply in flight; an interrupted apply of a *different* merge that needs
 
 With the other chats paused, a dirty tree or a refused fast-forward means
 something wrote after the pause (the user, or a chat they woke). Neither makes
-the worker's validation worthless: release the `editing critical app` leases
-you took for the apply (5b takes them again right before the next one), save
-the new changes as 5b saves the paused chats' work, then run 5b's
-fast-forward check again. If `HEAD` moved, catch the worker up to it as 5b
-does and apply its new `done`; if not, apply the branch as it is. Never destroy the worker to re-dispatch,
-and never build the catch-up merge yourself: the worker's merge is the one its
-validation covers. Another apply in flight is the same once it finishes, and
-so is an interrupted apply of a different merge once `recover` has rolled it
-back, as the refusal says: either has likely moved `HEAD`, so come back
-through 5b's fast-forward check. A merge already landed and rolled back, or
-one that leaves an earlier update's rollback in place, goes back to the worker
-as a retry does (exit 2).
+the worker's validation worthless. The chats stay paused while you release
+the `editing critical app` leases you took for the apply (Step 5b takes them
+again right before the next one), save the new changes as Step 5b saves the
+paused chats' work, then run Step 5b's fast-forward check again. If `HEAD`
+moved, catch the worker up to it as Step 5b does and apply its new `done`; if
+not, apply the branch as it is. Never destroy the worker to re-dispatch, and
+never build the catch-up merge yourself: the worker's merge is the one its
+validation covers.
+
+Anything else makes you wait far longer than an apply takes, so bring the
+chats back first (`run-status resume-chats`, without `--landed`, and with
+`--wip-commit <sha>` when Step 5b's save made a commit) and let the next pass
+through Step 5b pause them again:
+
+- Another apply in flight, once it finishes, and an interrupted apply of a
+  different merge, once `recover` has rolled it back as the refusal says.
+  Either has likely moved `HEAD`, so come back through Step 5b's fast-forward
+  check.
+- A merge already landed and rolled back, or one that leaves an earlier
+  update's rollback in place: it goes back to the worker as a retry does
+  (exit 2).
 
 ## Needs a decision -- nothing applied
 
 The worker found something the user built that the update cannot keep (its
-§4b verdict), so the pass ended before any apply: the workspace is exactly as
+Step 4b verdict), so the pass ended before any apply: the workspace is exactly as
 it was, and the `NEEDS_DECISION` verdict's detail is what the app shows. What
 the pass keeps for the decision is the stopped worker -- its branch
 `mngr/update-self` with the validated merge, its worktree and its conversation
@@ -170,11 +198,9 @@ within minutes for a kill without a restart. Both leave the tree matching the
 pre-update revision with the worker branch intact; as above, that is a forward
 revert, so a retry goes back to the worker as after exit 2.
 
-One carve-out, exactly once per workspace: both unattended triggers live in the
-*running* container, not in the merge being applied. On the very first apply
-that lands this machinery into a workspace, neither exists yet, and an
-interruption before it restarts is only recoverable by re-running the apply
-by hand. Say so to the user if that is the update you are running.
+Both unattended triggers live in the *running* container, not in the merge
+being applied. A workspace that does not have them yet is the one carve-out:
+`older-workspaces.md` ("The first apply that lands the recovery machinery").
 
 ## Rolling back on request
 

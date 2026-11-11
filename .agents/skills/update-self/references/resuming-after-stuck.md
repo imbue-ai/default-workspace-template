@@ -18,4 +18,4 @@ overrides a failure") says. This flow's preconditions, re-taken before the
    then `bridge-history --ref "$REF"`).
 
 After the `reply`, `run-status delegate update-self` before the `await` poll,
-as SKILL.md Step 3b does.
+as `launching-the-worker.md` (section 5) does.

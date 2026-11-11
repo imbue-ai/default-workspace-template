@@ -1,13 +1,23 @@
 # Composing the user-facing messages
 
-These rules govern every user-facing message the update-self flow produces:
-the results message after the apply, the decision message a Step 4 hold ends
-on, a `stuck` result, and the note each paused chat gets when it resumes. Whenever the update cannot simply proceed, the message names
-the blocker in plain terms and **proposes a way forward, or invites the user to
-resolve it with you** -- it never dead-ends. What varies is how much mechanism
-to keep: the results message drops technical detail the user cannot act on; a
-`stuck` message deliberately preserves it, verbatim, in a marked block, so it
+These rules govern every user-facing message an update pass produces: the
+results message after the apply, the decision message a Step 4 hold ends on,
+a `stuck` result, and the note each paused chat gets when it resumes.
+Whenever the update cannot simply proceed, the message names the blocker in
+plain terms and **proposes a way forward, or invites the user to resolve it
+with you** -- it never dead-ends. What varies is how much mechanism to keep:
+the results message drops technical detail the user cannot act on; a `stuck`
+message deliberately preserves it, verbatim, in a marked block, so it
 survives being pasted into a bug report.
+
+## Contents
+
+- The results message
+- What the pass did on the user's behalf
+- The resume note
+- Language rules
+- The `stuck` message
+- The decision message
 
 ## The results message
 
@@ -42,15 +52,15 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
 6. **What I did to make room** -- only if any: every action the pass took on
-   the user's behalf under Step 1's licence, each with its undo still on
-   offer (below).
+   the user's behalf under its licence, each with its undo still on offer
+   (below).
 7. **Caveats** -- only if any: rebuild-only items the running workspace still
    lacks until a recreate (never one the report marks covered live: a
    recreate would land in the same state), incomplete provisioning, a
    missing backup, unfinished work from an earlier update attempt that Step 3b
    set aside, a deviation the worker disclosed that could not be closed.
 8. **Pre-existing issues** -- only if any, and only after verifying
-   attribution (worker guide §4a): whether each lives in **built-in** code
+   attribution (the worker guide's Step 4a): whether each lives in **built-in** code
    (present at the target ref -> report upstream) or the **user's own** code.
    Never call built-in code "workspace-added".
 9. **The offer** -- see the language rules.
@@ -62,8 +72,9 @@ since the unattended pass stands up no previews.
 
 ## What the pass did on the user's behalf
 
-The licence in SKILL.md Step 1 lets the pass act without asking; the results
-message is where the user learns of every such action, and how to undo it.
+The licence (`freeing-memory-for-an-update.md`, "The licence") lets the pass
+act without asking; the results message is where the user learns of every
+such action, and how to undo it.
 List each, in plain terms:
 
 - **Each chat and background agent it paused** (the lines `run-status
@@ -101,6 +112,9 @@ its that were started again and need a message to carry on.
 
 ## Language rules
 
+The vocabulary for everything the user reads is
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/user-facing-language.md`.
+
 Include only what the user is likely to care about or have an opinion on. A
 deferred item with no consequence they can see (a pending-recreate item whose
 difference they would not notice) is one line at most, or nothing; a change to
@@ -119,6 +133,12 @@ command *you* will run; describe it ("I'll refresh it automatically if it comes
 up"). Show a literal command only when the user must run it themselves.
 
 ## The `stuck` message
+
+Nothing is merged or applied. Surface the failure as
+`data/.tasks/update-self/skill-at-target/.agents/skills/launch-task/references/worker-failure.md`
+says; if the user then overrides it, `resuming-after-stuck.md` resumes the
+pass. This is the one message where detail is preserved, because it gets
+pasted into bug reports.
 
 Two parts: a plain-language lead for the user (what happened, what it means --
 "I couldn't complete this update cleanly; your workspace is untouched and
