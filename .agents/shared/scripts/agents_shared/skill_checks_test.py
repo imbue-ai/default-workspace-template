@@ -387,6 +387,25 @@ def test_stamping_replaces_an_exemption_it_cannot_read_whether_or_not_the_skill_
         assert validate_skill.validate(skill) is None
 
 
+def test_stamping_leaves_a_skill_as_it_was_when_a_check_cannot_be_run(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(
+        tmp_path,
+        "unreadable",
+        "Read `references/latin.md` and `system/gone.py`.\n",
+        _exemption("paths", "awaiting-restructure"),
+    )
+    (skill / "references").mkdir()
+    (skill / "references" / "latin.md").write_bytes(b"caf\xe9\n")
+    before = (skill / "SKILL.md").read_bytes()
+
+    with pytest.raises(UnicodeDecodeError):
+        validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+
+    assert (skill / "SKILL.md").read_bytes() == before
+
+
 def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_reported_otherwise(
     tmp_path: Path,
 ) -> None:
