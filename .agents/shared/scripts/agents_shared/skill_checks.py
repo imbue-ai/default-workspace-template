@@ -451,7 +451,11 @@ def _plain(markdown: str) -> str:
 
 
 def _anchor(heading: str) -> str:
-    slug = re.sub(r"[^\w\s-]", "", _plain(heading))
+    """The anchor a markdown renderer gives the heading. An underscore inside a word is part
+    of it (`update_self.py`); one beside a word is emphasis and is not."""
+    text = _MARKDOWN_LINK.sub(r"\1", heading)
+    text = re.sub(r"[`*]|(?<![^\W_])_|_(?![^\W_])", "", text)
+    slug = re.sub(r"[^\w\s-]", "", " ".join(text.lower().split()))
     return "#" + re.sub(r"\s+", "-", slug)
 
 

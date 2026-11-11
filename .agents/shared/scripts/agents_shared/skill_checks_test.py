@@ -197,6 +197,20 @@ def test_a_numbered_step_list_names_sections_whose_headings_carry_the_step_numbe
     assert _failed(skill) == expected
 
 
+def test_an_anchor_keeps_an_underscore_inside_a_word_and_drops_emphasis(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(tmp_path, "anchored", "Read `references/anchored.md`.\n")
+    contents = (
+        "- [the entry point](#the-run_allpy-entry)\n- [afterwards](#next-steps)\n"
+    )
+    sections = (
+        f"## The `run_all.py` entry\n\n{_LONG_FILLER}\n\n## _Next_ steps\n\nText.\n"
+    )
+    _write(skill, "references/anchored.md", f"# Anchored\n\n{contents}\n{sections}")
+    assert _failed(skill) == set()
+
+
 def test_a_contents_list_past_the_opening_does_not_count(tmp_path: Path) -> None:
     skill = _skill(tmp_path, "late", "Read `references/late.md`.\n")
     _write(
