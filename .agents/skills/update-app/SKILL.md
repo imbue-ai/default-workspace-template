@@ -120,7 +120,7 @@ bring the worker's result in when it lands.
 
 While you build something yourself, the user's next messages wait until you
 reach a break, so keep what you build yourself to work you can finish in a
-couple of minutes, and when you're unsure, hand it off.
+couple of minutes.
 
 To hand work off:
 
