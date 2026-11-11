@@ -13,3 +13,5 @@ A workspace's first chat ends its first reply with a one-time offer to suggest a
 `read-app-data` reads the `READABLE_AGAIN` notice Imbue Studio sends when Full Disk Access comes back on: protected sources can be read again, and their syncs stay stopped.
 
 The app-data skills tell the agent to wait for Imbue Studio's answer before telling the user a request is on their screen, since a shared workspace's request is refused at once without one.
+
+When the first message itself asks for app ideas, `read-app-data` makes the `suggest-apps` request the first-chat offer, so the same sources are not asked for twice.
