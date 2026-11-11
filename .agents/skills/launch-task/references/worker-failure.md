@@ -48,7 +48,7 @@ failure below only once that recovery has not brought it back.
    processes go, and the `archived_at` label the stop leaves marks it as
    stopped on purpose (so nobody restarts it as a crash). A stopped failure
    is destroyed only when a later pass supersedes it
-   (`.agents/shared/references/harden-contention.md`) or the user asks. When
+   (`.agents/shared/references/harden-contention-supersede.md`) or the user asks. When
    the user overrides the failure, `create_worker.py reply` brings it back
    (`.agents/shared/references/lead-proxy.md`, "Resuming after the user
    overrides a failure").

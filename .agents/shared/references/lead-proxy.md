@@ -1,31 +1,42 @@
 # Lead-side proxy flow
 
-Generic mechanics for driving a worker to completion and surfacing gate/status
-reports to the user. The caller supplies flow-specific substitutions (worker
-name, branch, runtime path, which gate names and terminal statuses apply).
+How a lead drives its worker to completion and brings the worker's gate and
+status reports to the user. The skill that sent you here supplies the
+substitutions: the worker's name, its branch, the task file, the reports
+directory, and which gate names and terminal statuses apply.
 
 **None of this machinery reaches the user.** Leases, polls, `await`, milestones,
 merges, review gates and worker names are how the work gets done, not what got
 done, so they belong in no chat message and no progress step -- "Fresh, no lease.
 Merging the milestone" names plumbing nobody can see. Say what changed, or nothing.
 
+You follow this file for as long as the worker runs: after a compaction,
+re-read it before you handle the next report.
+
+## Contents
+
+Every lead reads the sections marked "every pass". The others open with the
+condition that sends you to them, and four of them hand off to a file of their
+own in this directory.
+
+- Polling for the next report (every pass)
+- Diagnose worker liveness before invoking failure flow (a poll that timed out
+  or exited 76; detail in `.agents/shared/references/lead-proxy-liveness.md`)
+- Do not interrupt more recent user work (every pass)
+- Parsing the report (every pass)
+- Deciding: answer gate yourself vs. escalate (on `type: gate`)
+- Milestone reports: provisional merge (on `type: milestone`; detail in
+  `.agents/shared/references/lead-proxy-milestones.md`)
+- Terminal status: act and stop polling (on `type: status`)
+- When you are a worker yourself (a worker that launched its own worker; detail
+  in `.agents/shared/references/lead-proxy-intermediate-lead.md`)
+- `mngr rsync` rationale (debugging the launcher's transfer; detail in
+  `.agents/shared/references/lead-proxy-rsync.md`)
+
 ## Polling for the next report
 
 Poll for the report file with `create_worker.py await`, started through
-`system/scripts/workspace_bare_scripts/run_in_background.py`. `await` reads `finish_report_path` from
-the task file's frontmatter, blocks until that file appears, prints its
-contents, and exits 0; on timeout it exits non-zero (code 124).
-`run_in_background.py` returns at once and runs it detached; when `await`
-exits, its exit code and everything it printed arrive in your chat as a
-message, and that message starts your next turn. Use it whatever your harness:
-most harnesses' own background tools do not wake you, and this works on every
-one. `--name <WORKER_NAME>` is required (the same name you passed to
-`launch`) so the poll also watches the OOM shed ledger.
-
-`await` is a generic poll-until-file primitive; the gate cycle below is this
-flow's *use* of it. Non-interactive callers that launch a tightly-scoped agent
-and wait for one finish report use the same `await` (or the synchronous
-`create_worker.py launch-sync` wrapper) with no gate handling.
+`system/scripts/workspace_bare_scripts/run_in_background.py`:
 
 ```bash
 python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
@@ -34,13 +45,45 @@ python3 system/scripts/workspace_bare_scripts/run_in_background.py --description
     --task-file <TASK_FILE>
 ```
 
-`--timeout` defaults to `30m`; pass e.g. `--timeout 60m` to re-arm with a longer
-wait. The message is a `<background-task-report>`: its `Exit code:` line is
+`await` reads `finish_report_path` from the task file's frontmatter, blocks
+until that file appears, prints its contents, and exits 0.
+`run_in_background.py` returns at once and runs it detached; when `await`
+exits, its exit code and everything it printed arrive in your chat as a
+message, and that message starts your next turn. Use it whatever your harness:
+most harnesses' own background tools do not wake you, and this works on every
+one. `--name <WORKER_NAME>` is required (the same name you passed to
+`launch`) so the poll also watches the OOM shed ledger. `--timeout` defaults to
+`30m`; pass e.g. `--timeout 60m` to re-arm with a longer wait.
+
+The message is a `<background-task-report>`: its `Exit code:` line is
 `await`'s, and its `<output>` is what `await` printed -- the report contents,
 YAML frontmatter (`type`, `name`) plus a body. The chat shows the user only its
-one-line summary. If await exits non-zero (timeout) without printing a report,
-do *not* immediately treat it as a terminal failure -- see "Diagnose worker
-liveness" below.
+one-line summary. Read the exit code first:
+
+- **0** -- a report was printed and archived. Go to "Parsing the report". A
+  milestone file under `<REPORTS_DIR>/milestones/` comes back the same way
+  ("Milestone reports: provisional merge").
+- **124** -- the timeout tripped with no report. Do *not* treat it as a
+  terminal failure yet: see "Diagnose worker liveness before invoking failure
+  flow".
+- **76** -- `await` watched the worker end its turn with no report and nothing
+  pending. Diagnose it the same way, at once rather than after the timeout.
+- **75** -- the worker's own agent was **shed by the OOM daemon** to relieve
+  memory pressure: it will not report until revived. This is not a worker bug.
+  Free memory with the user per `.agents/shared/references/freeing-memory.md`
+  first, since a revival into the same pressure is shed again, then revive the
+  worker by nudging it to continue with `create_worker.py reply --task-file
+  <TASK_FILE> -m continue`, whose send relaunches a shed agent. You do not need
+  to resend the task: it survives in the worker's conversation history, and a
+  SessionStart hook already tells the revived worker it was paused, so it
+  re-checks state before continuing. Free memory the same way whenever a
+  worker's `question` gate reports that a test command was shed: a rerun into
+  the same pressure is shed again.
+
+`await` is a generic poll-until-file primitive; the gate cycle below is this
+flow's *use* of it. A caller that launches one tightly scoped agent and waits
+for one finish report, with no gate handling, uses the same `await`, or the
+synchronous `create_worker.py launch-sync` wrapper.
 
 ### Never sleep on a worker
 
@@ -49,76 +92,27 @@ report in seconds, while a `sleep N` is a guess at someone else's finishing time
 and every second between the report landing and the sleep expiring is dead time
 on the critical path. Ending your turn is safe -- while the poll runs, your
 chat is busy (the chat shows it waiting on a background task, not done), and a
-worker that is busy, or has a live sub-worker of its own, never counts as idle,
-so the liveness check below will not mistake you for a wedged one.
+worker that is busy, or has a live worker of its own, never counts as idle,
+so the liveness check will not mistake you for a wedged one.
 
 **A worker's report is never polled.** Sleeping on a `find` over its reports
 directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
 same guess in a different command; an armed `await` plus ending the turn is the
-only sanctioned wait on a sibling.
+only sanctioned wait on a worker.
 
 With several workers out, arm one poll per worker before ending the turn. Each
 poll's message wakes you separately, so you act on whichever reports first and
 merge it while the others are still running.
 
-`await` also returns **milestone** reports: any file under
-`<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
-It prints the file like `report.md`, exits 0, archives it under its own name in
-`consumed/` (the short sha in that name is what keys a deferred merge, and what
-makes the worker's re-delivery of the same file inert), and names both paths on
-stderr. `report.md` wins when both are waiting; the milestone comes back on the
-next poll.
-
-If await exits with code 75, the worker's own agent was **shed by the OOM
-daemon** to relieve memory pressure: it will not report until revived. This is
-not a worker bug -- revive it by nudging it to continue with
-`create_worker.py reply --task-file <TASK_FILE> -m continue`, whose send
-relaunches a shed agent. You do not need to resend the task: it survives in
-the worker's conversation history, and a SessionStart hook already tells the
-revived worker it was paused, so it re-checks state before continuing. Before
-reviving it, and whenever a worker's `question` gate reports that a test
-command was shed, free memory with the user per
-`.agents/shared/references/freeing-memory.md`: a revival or rerun into the
-same pressure is shed again.
-
 ## Diagnose worker liveness before invoking failure flow
 
-If the timeout trips without a report appearing, the worker may still be
-alive and working. Long-running stages (the test gate, large
-implementations) can legitimately exceed 30 minutes on a healthy worker.
-Before invoking the failure flow, check the worker session:
-
-```bash
-tmux capture-pane -t minds-<WORKER_NAME>:claude -p -S -100 | tail -40
-```
-
-If the output shows ongoing tool use, an active spinner / "Running…" line,
-or recent timestamps within the last few minutes, the worker is alive --
-re-arm the poll with a longer timeout (e.g. `60m`) and continue. A session
-that is dead is a crash: recover the worker
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`) and re-arm
-the poll. Only invoke the failure flow
-(`.agents/skills/launch-task/references/worker-failure.md`) if that recovery
-does not bring it back, the agent is wedged on the same operation for an
-extended period, or output has been static.
-
-`await` makes the same call for you in the clearest case: exit code **76** means
-it watched the worker's agent end its turn (or stop) on several consecutive
-polls with no report and no longer busy -- finished, dead or wedged without
-reporting, worth acting on immediately rather than waiting out the timeout, by
-the diagnosis above: a dead worker is recovered before anything is surfaced.
-That check never fires while the worker is waiting on something that will wake
-it:
-
-- **A live sub-worker of its own.** An agent labelled `lead_agent=<worker>` in
-  state RUNNING or WAITING with no pending shed counts as the worker being
-  busy, so an intermediate lead waiting on its own child is never mistaken for
-  a dead one.
-- **A background command of its own.** A command the worker started through
-  `run_in_background.py`, or a background task of Claude's own, marks the
-  worker's chat busy until its report reaches the worker, so a worker that
-  ended its turn to wait on its tests is not idle. A worker needs no `sleep` to
-  stay clear of the check.
+A poll that timed out (exit 124) or exited 76 has not shown a failure. Long
+stages (the test gate, a large implementation) can legitimately exceed 30
+minutes on a healthy worker, and a worker whose session died is a crash to
+recover, not a failure to surface. Before invoking the failure flow, read
+`.agents/shared/references/lead-proxy-liveness.md` and follow it: it has the
+check of the worker's session, what counts as alive, the recovery of a dead
+worker, and what exit 76 does and does not mean.
 
 ## Do not interrupt more recent user work
 
@@ -135,14 +129,19 @@ report also carries `commit:` and `branch:`.
 If the file does not parse (no frontmatter, unknown type, truncated), treat it
 as a terminal failure.
 
+You never move a report by hand: the `await` that printed it already archived
+it into `<REPORTS_DIR>/consumed/` (timestamped, named by its `type` and `name`;
+a milestone keeps its own file name), so `finish_report_path` is clear for the
+worker's next report and the reports directory is clean for the next pass.
+
 ## Deciding: answer gate yourself vs. escalate
 
 On `type: gate`:
 
 - **Answer yourself** for implementation details: script structure, naming
   conventions, which utility to reuse, file layout, agentskills.io compliance,
-  or anything you can determine from reading files or applying the calling
-  skill's own guidelines.
+  or anything you can determine from reading files or applying your skill's own
+  guidelines.
 - **Escalate to the user** for user intent, scope, subjective preference, or
   domain knowledge you do not have. `final-creation` gates always escalate.
   `outline-approval` gates default to answer-yourself; only escalate if the
@@ -173,91 +172,18 @@ mngr name.
 To escalate, ask the user, wait for the user's reply, then forward it the same
 way.
 
-You never move a report by hand: the `await` that printed it already archived
-it into `<REPORTS_DIR>/consumed/` (timestamped, named by its `type` and `name`),
-so `finish_report_path` is clear for the worker's next report. After forwarding,
-re-arm the background poll.
+After forwarding, re-arm the background poll and end your turn.
 
 ## Milestone reports: provisional merge
 
 On `type: milestone` the worker is not asking for anything: it committed
-something usable and carried on. The frontmatter pins the commit; the body says
-what is usable, what `## Tested` covers at that commit, and what is
-`## Still pending`.
-
-**Default to merging** -- earlier use is the point. Do not merge when:
-
-- the body says the creation is not yet runnable (a design-only milestone),
-- one of the pre-merge checks below fails, or
-- the user's more recent request is still in progress (the "do not interrupt
-  more recent user work" rule above applies -- handle the milestone once their
-  request is finished).
-
-Before merging, run the three pre-merge checks in
-`.agents/shared/references/harden-contention.md` ("Before merge: lease,
-freshness, conflicts"), exactly as for `done`. Do not re-run a check
-`## Tested` names as passing at this commit; you may run ones it does not name.
-
-Merge the **pinned sha, never the branch tip** (the tip keeps moving):
-
-```bash
-git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <name>"
-```
-
-If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
-project, a dependency added to a skill or an app), bring the venv up to date
-before running anything from it; `uv run --no-sync` never installs:
-
-```bash
-git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
-```
-
-Then the **provisional go-live**, the minimum needed to use the thing: a skill
-is on disk at `.agents/skills/<name>/` and invocable (one with a `python/`
-project only after `uv sync --all-packages --frozen`, which installs its package
-and any dependency the merge added into the workspace venv); an app or service gets
-its tab refreshed. You do that refresh -- never hand it to the user. The calling
-skill's end-of-pass work (post-crystallize migration, closing the ticket) still
-waits for `done`.
-
-Tell the user in one line and in non-technical language what's been updated. The
-report body you just read is written for you, not them -- say what they can now
-do, never what was tested, found or fixed:
-  "Added a reusable skill."
-  "Created an MVP app, using it now while it continues to be improved."
-
-Whether or not you merged, the file is already in `<REPORTS_DIR>/consumed/`
-under its own name -- the `await` that printed it archived it, as with every
-report -- and the sha stays in that name, so a deferred milestone can be merged
-later from the archive. Re-arm the poll; the worker's gates and terminal status
-are still coming.
-
-### Rolling back a provisional merge
-
-```bash
-git revert -m 1 <provisional-merge-commit>
-git rev-parse HEAD
-```
-
-A revert is a **rejection of that milestone**: message the worker with why, as a
-de facto "no with notes" (the merge commit's subject names the worker and
-milestone, so the target is easy to find), and hand it the revert, the commit
-the second command printed:
-
-```bash
-uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice> I reverted it as <the revert commit>: bring it back on your branch per 'A milestone the lead reverted' in worker-reporting.md, then fix it."
-```
-
-The reverted commits remain ancestors of your `HEAD`, so a later merge from
-that branch would **silently omit** them. The worker brings them back on its
-own branch, as a revert of your revert, so they reach yours again only with
-its next merged report, fixed. Never reinstate them on your branch yourself:
-that puts the work the user rejected back in front of them.
-
-A pass is superseded instead only once its worker is gone, and its new task
-then names the revert (`.agents/shared/references/harden-contention.md`,
-"Superseding a pass whose worker is gone").
+something usable and carried on. The default is to merge the commit the report
+pins, make it usable, tell the user in one line, and re-arm the poll; the
+worker's gates and terminal status are still coming. Read
+`.agents/shared/references/lead-proxy-milestones.md` when a milestone report
+arrives: it has when not to merge, the checks before the merge, the merge
+itself, and the provisional go-live. Its "Rolling back a provisional merge" is
+what you follow when the user rejects a milestone you merged.
 
 ## Terminal status: act and stop polling
 
@@ -297,28 +223,28 @@ On `type: status`:
   ```bash
   git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
   ```
-  On a clean merge, close any tracking ticket and destroy the worker before
-  the calling skill's go-live:
+  On a clean merge, destroy the worker before your skill's go-live, and close
+  any tracking ticket where your skill says to (at once, when it defines no
+  go-live):
   ```bash
   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
   ```
-  Destroy takes the worker's sub-workers with it and keeps what you may
+  Destroy takes the worker's own workers with it and keeps what you may
   still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
-  `$MNGR_HOST_DIR/preserved/`), and every sub-worker's runtime dir,
-  relocated into your tree at the same paths. It prints one outcome line
-  per agent and exits non-zero if any could not be destroyed; report that
+  `$MNGR_HOST_DIR/preserved/`), and the runtime dir of every worker it
+  launched, relocated into your tree at the same paths. It prints one outcome
+  line per agent and exits non-zero if any could not be destroyed; report that
   rather than retrying blindly.
-  On a conflict, recovery depends on the calling skill: if it defines
-  a staleness rule (the harden flows do -- see
-  `.agents/shared/references/harden-contention.md`), abort the merge and
-  follow that rule -- the worker catches its branch up and resolves the
-  conflict there -- rather than resolving it yourself; otherwise resolve the
-  conflict manually.
+  On a conflict, recovery depends on your skill: if it defines a staleness rule
+  (the harden skills do, in the harden-contention reference beside this file),
+  abort the merge and follow that rule -- the worker catches its branch up and
+  resolves the conflict there -- rather than resolving it yourself; otherwise
+  resolve the conflict manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
   body (or its absence) to the user, point at the branch and worker agent, then
-  stop the worker (and its sub-workers) so no process stays behind:
+  stop the worker (and its own workers) so no process stays behind:
   ```bash
   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
@@ -332,16 +258,15 @@ On `type: status`:
   invoke the failure flow. Optionally surface the one-sentence reason to the
   user.
 
-In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
-`await` that printed it archived it there -- so the reports dir is clean for the
-next run with nothing for you to move.
+In every status case the report is already in `<REPORTS_DIR>/consumed/`, with
+nothing for you to move.
 
 ### Resuming after the user overrides a failure
 
 When the user answers a `stuck` report with a decision (apply it anyway, an
 answer to what blocked the worker), resume the same worker rather than
-finishing its task yourself. Re-take whatever preconditions the calling skill
-holds for a pass (a lease, a run record), then send it the decision:
+finishing its task yourself. Re-take whatever preconditions your skill holds
+for a pass (a lease, a run record), then send it the decision:
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
@@ -357,56 +282,14 @@ the `await` poll and end your turn.
 ## When you are a worker yourself
 
 Everything above holds unchanged when you are an intermediate lead: a worker
-that launched its own worker. Four rules are yours alone.
-
-- **A sub-worker's `question` is yours to answer first.** Answer it yourself
-  whenever your own task file and the repo settle it -- that is most of them.
-  Only when the answer is genuinely not available to you do you re-raise it as
-  your *own* `question` gate to your lead (`create_worker.py report --type gate
-  --name question`, per `.agents/shared/references/worker-reporting.md`), and
-  when the reply comes back you forward it to the sub-worker **verbatim** with
-  `mngr message`. Do not paraphrase a decision you did not make.
-- **Merge exactly one level.** A sub-worker's branch `mngr/<sub-worker-name>`
-  merges into *your* branch, with `--no-ff` and the sub-worker named in the
-  merge commit message. Your own lead then sees one merged branch and never
-  needs to know sub-workers existed.
-- **Destroy after merge, stop on failure.** Once a sub-worker's branch is
-  merged, destroy it (`create_worker.py destroy --name <sub-worker-name>`);
-  a stuck one is stopped (`create_worker.py stop --name <sub-worker-name>`)
-  after the failure flow. Never destroy yourself: your own lead does that
-  once it has merged you. This matters for your own lead too: a merged
-  sub-worker left in WAITING still reads as a live child, which keeps you
-  counted as busy after you have finished, while a STOPPED one does not.
-- **Await sub-workers with `--timeout 60m`**, which fits inside the window your
-  own lead is waiting out (90m for the harden flows).
+that launched its own worker. Four rules are yours alone, about answering your
+worker's `question`, merging one level, destroying or stopping it, and how long
+you await it. Read `.agents/shared/references/lead-proxy-intermediate-lead.md`
+before you launch a worker from a worker.
 
 ## `mngr rsync` rationale
 
-The launcher makes this transfer itself at `launch`, at whatever level of the
-dispatch is launching. Read this when you are debugging one, or writing a sync
-of your own:
-
-```bash
-mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
-    --uncommitted-changes=clobber
-```
-
-- `mngr rsync` takes `SOURCE DESTINATION` (positional): the local source dir
-  first, then the `<WORKER>:<PATH>` agent endpoint. Exactly one side must
-  reference an agent or remote host.
-- Path resolution: mngr treats an argument as a *local path* only when it
-  starts with `/`, `./`, `../`, or `~/` -- a bare `data/foo` is read as an
-  *agent name* (hence the `./` on the source above). On an agent endpoint, a
-  relative `<WORKER>:PATH` resolves against the worker's workdir; an absolute
-  `<WORKER>:/PATH` is used verbatim.
-- Use the directory form (trailing slash on both sides). mngr passes the paths
-  through to rsync verbatim, so the trailing slash is load-bearing: it makes
-  rsync copy directory *contents* into the destination instead of nesting the
-  dir under it. Syncing a single file fails -- rsync wants a directory.
-- `--uncommitted-changes=clobber` is required. Both endpoints routinely carry
-  uncommitted local state, so the default `fail` mode would refuse the sync.
-  `clobber` is safe here because every destination sits under gitignored
-  `data/`: nothing tracked is overwritten, and nothing is pushed onto the git
-  stash that every worktree of the repo shares.
-- There is no `mngr file put` subcommand -- `mngr rsync` is the correct
-  mechanism.
+The launcher copies the runtime directory to the worker itself at `launch`, at
+whatever level of the dispatch is launching, so no lead runs `mngr rsync` by
+hand. Read `.agents/shared/references/lead-proxy-rsync.md` when you are
+debugging that transfer, or writing a sync of your own.

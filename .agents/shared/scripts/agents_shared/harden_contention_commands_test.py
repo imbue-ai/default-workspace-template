@@ -1,4 +1,5 @@
-"""The commands harden-contention.md gives a lead, run as written against a real ticket."""
+"""The commands harden-contention.md and its takeover file give a lead, run as written
+against a real ticket."""
 
 from __future__ import annotations
 
@@ -13,16 +14,18 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_DOC = _REPO_ROOT / ".agents" / "shared" / "references" / "harden-contention.md"
+_REFERENCES = _REPO_ROOT / ".agents" / "shared" / "references"
+_DOC = _REFERENCES / "harden-contention.md"
+_TAKEOVER_DOC = _REFERENCES / "harden-contention-takeover.md"
 _TK = _REPO_ROOT / "system" / "vendor" / "tk" / "ticket"
 _BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.DOTALL)
 
 
-def _bash_block_containing(marker: str) -> str:
+def _bash_block_containing(marker: str, doc: Path = _DOC) -> str:
     blocks = [
-        block for block in _BASH_BLOCK.findall(_DOC.read_text()) if marker in block
+        block for block in _BASH_BLOCK.findall(doc.read_text()) if marker in block
     ]
-    assert len(blocks) == 1, f"expected one bash block holding {marker!r} in {_DOC}"
+    assert len(blocks) == 1, f"expected one bash block holding {marker!r} in {doc}"
     return blocks[0]
 
 
@@ -105,7 +108,7 @@ def _run_takeover_lookup(
         fake_mngr.write_text(f"#!/bin/sh\ncat '{listing_file}'\n")
     fake_mngr.chmod(0o755)
     lookup = (
-        _bash_block_containing("-newermt")
+        _bash_block_containing("-newermt", _TAKEOVER_DOC)
         .replace("<worker-name>", "harden-notes")
         .replace("<finish_report_path>", str(tmp_path / "reports" / "report.md"))
         .replace("/tmp/harden-agents.jsonl", str(tmp_path / "agents.jsonl"))

@@ -3,8 +3,6 @@ name: do-something-new
 description: Use immediately when the user asks for something net-new -- a task not done before, where no existing skill or app applies and getting it right will require nontrivial research, exploration, or experimentation. Routes the request to the right interactive flow. Skip when an applicable skill or app already exists or for pure dev/code-writing work.
 metadata:
   author: imbue
-  exempt-checks: contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Doing something new

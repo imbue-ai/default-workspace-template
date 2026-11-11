@@ -1,29 +1,30 @@
 # The interactive-delivery shape
 
 The shared skeleton for any task where you build something *for the user to
-react to* -- a fetched-and-processed dataset, a web view, a report. It is the
-**live half** of "live first, ratify at turn-end": keep the conversation
-interactive, get the basic shape confirmed *fast and cheap*, and only then spend
-the expensive, thorough effort -- in the background.
+react to*: a fetched-and-processed dataset, an app, a report. It is the
+**live half** of "live first, ratify at turn-end": put a cheap, real, throwaway
+version in front of the user first, loop until they confirm its shape, and only
+then spend the expensive, thorough effort, in a background worker.
+
+## Contents
+
+- Why this shape exists
+- The skeleton: the eight phases, in order
+- Cross-cutting principles
 
 ## Why this shape exists
 
-Users don't want to sit and wait for a while as you scaffold, test, and harden the
-code for something where you haven't yet confirmed the basic shape looks right.
-This pattern almost always ends with having to throw away the result of that work
-based on the feedback from the user. If the user is actively sitting and talking
-with you and waiting on the result of your work, they expect to receive check-ins and
-frequent signals about the state of things on which they want to give their feedback.
-
-The fix: put a cheap, real, throwaway creation in
-front of the user *first*, loop until they confirm the shape, and defer everything
-expensive (thorough tests, review gates, polish) to a background worker so the
-user is never blocked.
+A user who is talking with you and waiting on the result expects check-ins and
+frequent chances to react. Scaffolding, testing and hardening something whose
+basic shape is not yet confirmed makes them wait for work that their first
+reaction almost always throws away. So everything expensive (thorough tests,
+review gates, polish) is deferred to a background worker, and the user is never
+blocked on it.
 
 ## The skeleton
 
 Phases are sequential; do not skip ahead of an unconfirmed gate. Each
-specialization (data, web view, ...) fills these phases in with its own
+specialization (data, an app, ...) fills these phases in with its own
 specifics, but the shape below holds for all of them.
 
 1. **Clarify what blocks.** Ask the questions whose answers change what
@@ -101,12 +102,12 @@ specifics, but the shape below holds for all of them.
    creation (or a usable build of it) to work with while the slow checks run
    behind them. Notably, this means that at the time of backgrounding there must
    be a reasonably representative sample creation; it can't just be a basic mock.
-   This background pass is the **harden pass** -- its universal contract lives in
-   `.agents/skills/harden-worker/references/harden-creation.md`, and the create operation that
-   produces a brand-new creation from a confirmed prototype is the
-   `crystallize-creation` lead. Each specialization (`build-app`,
-   `fetch-process-show`, ...) hands its confirmed creation to that lead, which
-   dispatches the generic worker; this skeleton stays mechanism-agnostic.
+   This background pass is the **harden pass**, which a worker runs under the
+   harden worker's own contract. The `crystallize-creation` skill leads the
+   operation that produces a brand-new creation from a confirmed prototype:
+   each specialization (`build-app`, `fetch-process-show`, ...) hands its
+   confirmed creation to that skill, which dispatches the worker; this skeleton
+   stays mechanism-agnostic.
 
 8. **Deliver further capabilities one at a time.** A confirmation on the first
    creation approves *that* creation, not everything downstream of it. Every
