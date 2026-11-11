@@ -94,9 +94,13 @@ window keeps showing the old page until it is refreshed. The live change loop
   confirm** the shape, and only then build it for real. Never build heavy
   against an unconfirmed shape.
 
-When in doubt, a change that alters what the user *sees or perceives* is larger
-scope, and one that only alters behaviour behind an unchanged surface is
-contained.
+For an ordinary app a preview is the exception: if the change *works*, a taste
+mismatch is cheap to fix next round, so most changes go live and iterate.
+Reserve a preview for a change that is costly to redo (a redesign, a change
+that touches data, a substantial visual shift). A routine tweak, a copy change,
+or a behaviour-only change behind an unchanged surface needs none. When in
+doubt, a change that alters what the user *sees or perceives* is larger scope,
+and one that only alters behaviour behind an unchanged surface is contained.
 
 The preview takes whichever form is cheaper and still convincing (the two
 demonstrative-prototype types of `interactive-delivery.md`):
@@ -106,11 +110,6 @@ demonstrative-prototype types of `interactive-delivery.md`):
   `<name>-preview` app, when a mock page will not convince (a redesign, a
   change that touches data). `references/verify-against-a-copy.md`, "A preview
   from a worktree", has the commands.
-
-For an ordinary app a preview is the exception: if the change *works*, a taste
-mismatch is cheap to fix next round, so most changes go live and iterate.
-Reserve a preview for a change that is costly to redo. A routine tweak, a copy
-change, or a behaviour-only change behind an unchanged surface needs none.
 
 A new page or capability added to an existing app is its own delivery with its
 own feedback gate: confirm and ship it on its own, not bundled with unrelated
@@ -131,8 +130,8 @@ ticket, which every agent can see.
    ```
 
    If a lease exists and `tk show <id>` says it is not yours, do **not** go
-   ahead silently. Tell the user another chat is changing this app and let
-   them decide: wait, or override. If the holder looks abandoned (its agent is
+   ahead silently. Tell the user another chat is changing it and let them
+   decide: wait, or override. If the holder looks abandoned (its agent is
    no longer running, or the lease is hours old with no notes), say so and
    offer to break it. A lease is broken on the user's call, never silently.
 
@@ -211,11 +210,12 @@ The thorough pass is the harden worker's, on its own instance.
 
 ## Step 5: Show it, and end the turn
 
-Step 4's call has already refreshed or opened the window. By hand, that is
-`uv run --no-sync workspace-layout refresh --app <name>`, which reloads every
-page of the app on every client, or `uv run --no-sync workspace-layout open
-<name>` when no window is open. Anything else about windows is the
-`manage-desktop` skill.
+For an app, step 4's call has already refreshed or opened the window. By hand,
+that is `uv run --no-sync workspace-layout refresh --app <name>`, which reloads
+every page of the app on every client, or
+`uv run --no-sync workspace-layout open <name>` when no window is open.
+Anything else about windows is the `manage-desktop` skill. A service has no
+window.
 
 Tell the user what changed, release the lease, and end the turn.
 

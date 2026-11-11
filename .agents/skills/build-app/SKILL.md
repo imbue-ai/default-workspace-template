@@ -41,8 +41,8 @@ traffic. To change or remove an existing app, use the `update-app` skill.
   or `workspace-layout open` returns. Do your own checks before that call, and
   never tell the user to open a window you opened.
 - **The harden pass is never yours to run.** New test files, the full suite and
-  the review gates are step 7's background worker's.
-- **Never extend `system/apps/system_interface/`** for a new view: it is the
+  the review gates are step 7's harden worker's.
+- **Never extend `system/apps/system_interface/`** to add an app: it is the
   shell. A new app is its own package under `system/apps/<package>/`, with its
   own window and origin.
 - **Ask in the user's terms**, who may not be technical: "should everyone see
