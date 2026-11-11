@@ -94,13 +94,6 @@ export function modifyPromptOf(referenceId: string): string {
 /** Why Explain and Modify are greyed on a page no shell frames. */
 export const NO_SHELL_DRAFT_REASON = "Open this page in the workspace to draft into a chat";
 
-/** The element a ``contextmenu`` event fired on: its target when that is an element, else the element it was
- *  bound to. */
-export function targetElementOf(event: MouseEvent): Element {
-  if (event.target instanceof Element) return event.target;
-  return event.currentTarget as Element;
-}
-
 /** The target of a ``contextmenu`` event: its element, the selection at that moment, and the click. */
 export function targetOfEvent(event: MouseEvent, ownerDocument: Document): ContextMenuTarget {
   return {
