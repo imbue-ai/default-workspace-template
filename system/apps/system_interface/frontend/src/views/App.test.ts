@@ -767,6 +767,19 @@ describe("the element menu", () => {
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
+  it("leads the tray agent's menu with its own rows, then the reference rows, and floats the avatar from it", async () => {
+    pinnedEntry();
+    const agent = document.querySelector("[data-tray-agent]") as HTMLElement;
+    agent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys.slice(0, 2)).toEqual(["change-avatar", "float"]);
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    (document.querySelector('[data-menu-row="float"]') as HTMLElement).click();
+    await settle();
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
+  });
+
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
     pinnedEntry();
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
