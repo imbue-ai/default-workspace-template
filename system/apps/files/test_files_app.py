@@ -723,6 +723,15 @@ def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
     )
 
 
+def _wait_for_stage_scale(page: Page, scale: float) -> None:
+    """Wait until the stage is drawn at ``scale``, within a hundredth of it: every event of a gesture has landed."""
+    page.wait_for_function(
+        "scale => Math.abs(new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform).a"
+        " - scale) < scale / 100",
+        arg=scale,
+    )
+
+
 def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
@@ -738,7 +747,7 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
     for _ in range(10):
         page.mouse.wheel(0, -10)
     page.keyboard.up("Control")
-    _wait_for_stage_transform(page, is_fitted=False)
+    _wait_for_stage_scale(page, math.e)
 
     zoomed = _image_box(page)
     assert zoomed["width"] / fitted["width"] == pytest.approx(math.e, rel=0.01)
@@ -840,6 +849,7 @@ def test_a_touch_pinch_out_past_the_fit_after_moving_leaves_the_image_fitted(
         fingers("touchStart", 195, 30)
         for spread in range(35, 160, 5):
             fingers("touchMove", 195, spread)
+        _wait_for_stage_transform(page, is_fitted=False)
         for centre_x in range(195, 60, -5):
             fingers("touchMove", centre_x, 160)
         for spread in range(160, 5, -5):
