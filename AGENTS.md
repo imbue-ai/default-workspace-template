@@ -153,7 +153,7 @@ checking first. Use the `find-transcripts` skill to find and read them.
 You can (and should) modify your own configuration to improve yourself:
 
 - **CLAUDE.md** or **AGENTS.md**: (this file) update these instructions if you discover better ways to operate.
-- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.) Whenever you edit a skill, run `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --edited` (`--no-exemptions` in its place for a skill you just created) and change the skill until it prints `ok`; `docs/system/skill_authoring_guide.md` has the rules. A built-in skill may carry an `awaiting-restructure` exemption, which an update clears: leave it, and do not restructure that skill yourself.
+- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.) Whenever you edit a skill, run `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --edited` (`--no-exemptions` in its place for a skill you just created) and change the skill until it prints `ok`; `docs/system/skill_authoring_guide.md` has the rules, and `.agents/shared/references/glossary.md` the terms to use for this workspace's own things. A built-in skill may carry an `awaiting-restructure` exemption, which an update clears: leave it, and do not restructure that skill yourself.
 - **system/supervisord.conf.d/**: Add, modify, or remove background services -- one file per program. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
