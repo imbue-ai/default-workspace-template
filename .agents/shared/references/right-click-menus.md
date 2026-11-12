@@ -54,7 +54,7 @@ installElementContextMenu({
   `system/libs/workspace_ui/src/components/icons.ts`, `trash` and `edit` among them), or is
   `{ markup: "<svg ...>" }` for a glyph of the app's own.
 - Doing something else on the right-click, without the menu, is fine: a handler that only selects the row under
-  the pointer (and calls no `preventDefault`) leaves the menu to the element menu.
+  the pointer (and neither calls `preventDefault` nor returns `false`) leaves the menu to the element menu.
 
 These are the rows every built-in app's right-click menu is made of too, so whatever a built-in menu shows, yours
 can. A Mithril page hands the installer `open: createContextMenuOpener().open` so the menu it draws is the shared
@@ -79,6 +79,7 @@ canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 The reason is one of `forwards` (the right-click is input to something on the page), `dismisses` (it only closes or
 raises something already open), `touch` (it stops a long press from opening the browser's menu), `custom-content`
 (the menu holds what the element menu's rows cannot, as above), or `element-menu` (the element menu itself).
-`system/test_context_menu_rules.py` fails on an unmarked handler that calls `preventDefault` on a right-click, in
-the template's apps and in yours alike. Name every marker you add in your report; before adding one, check whether
-the menu's rows fit the element menu after all, and move them there if they do.
+`system/test_context_menu_rules.py` fails on an unmarked handler that prevents a right-click's default (it calls
+`preventDefault`, or it is an `oncontextmenu` handler that returns `false`), in the template's apps and in yours
+alike. Name every marker you add in your report; before adding one, check whether the menu's rows fit the element
+menu after all, and move them there if they do.

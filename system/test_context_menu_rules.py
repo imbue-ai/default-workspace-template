@@ -9,7 +9,8 @@ prevents the default, in the template's apps and the user's alike, fails here un
 lines directly above it names why it has to, ``// own-context-menu: <reason> -- <why>``.
 
 The scan reads source text, a page kept as a string in a Python file (a scaffolded app's ``runner.py``) included:
-an inline handler, or one named by an identifier defined in the same file, is read for a ``preventDefault`` call; a
+an inline handler, or one named by an identifier defined in the same file, is read for a ``preventDefault`` call,
+and one bound as a property or an attribute also for a returned ``false``, which prevents the default there; a
 handler reached any other way (a property of an object, an import) is not followed.
 """
 
@@ -50,6 +51,7 @@ _HANDLER_START_RE = re.compile(
     r"""|\baddEventListener\(\s*["'`]contextmenu["'`]\s*,\s*"""
 )
 _DECLARATION_BEFORE_RE = re.compile(r"\b(?:const|let|var|function)\s+$")
+_RETURNS_FALSE_RE = re.compile(r"\breturn\s+false\b|=>\s*false\b")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_$][\w$]*$")
 _OPENERS = {"(": ")", "[": "]", "{": "}"}
 _CLOSERS = frozenset(_OPENERS.values())
@@ -184,7 +186,15 @@ def _sites_in(relative: str, source: str) -> list[_Site]:
         # A variable of that name (``const onContextMenu = ...``) is a handler only where something listens with it.
         if _DECLARATION_BEFORE_RE.search(source, 0, match.start()):
             continue
-        if "preventDefault" not in _handler_text(source, match.end(), is_html):
+        handler = _handler_text(source, match.end(), is_html)
+        # False returned from a handler bound as a property or an attribute prevents the default too (Mithril does
+        # the same for its attrs); a listener's return value and a JSX handler's are ignored.
+        is_bound_as_property = match.group().startswith("oncontextmenu") or (
+            is_html and not match.group().startswith("addEventListener")
+        )
+        if "preventDefault" not in handler and not (
+            is_bound_as_property and _RETURNS_FALSE_RE.search(handler)
+        ):
             continue
         line = source.count("\n", 0, match.start()) + 1
         sites.append(
@@ -304,6 +314,13 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             "  event.preventDefault();\n"
             "}\n"
             "row.addEventListener('contextmenu', onPress);\n"
+            "m('li', { oncontextmenu: () => false });\n"
+            "m('li', {\n"
+            "  oncontextmenu: () => {\n"
+            "    select(row);\n"
+            "    return false;\n"
+            "  },\n"
+            "});\n"
         ),
         "app/listeners.js": (
             "stage.addEventListener('contextmenu', (event) => event.preventDefault());\n"
@@ -319,15 +336,18 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             "const onContextMenu = (event) => event.preventDefault();\n"
             "element.oncontextmenu = function (event) { event.preventDefault(); };\n"
             "card.addEventListener('contextmenu', onContextMenu);\n"
+            "stage.addEventListener('contextmenu', () => false);\n"
         ),
         "app/page.html": (
             '<div oncontextmenu="event.preventDefault(); openMenu()">x</div>\n'
             '<div oncontextmenu="highlight()">y</div>\n'
+            '<canvas oncontextmenu="return false"></canvas>\n'
         ),
         "app/view.tsx": (
             "<li onContextMenu={(e) => { e.preventDefault(); show(e); }}>z</li>\n"
             "const onRow = (e) => { e.preventDefault(); };\n"
             "<li onContextMenu={onRow}>w</li>\n"
+            "<li onContextMenu={() => false}>v</li>\n"
         ),
         "app/wrapped.ts": (
             'stage.addEventListener("contextmenu", (event) =>\n'
@@ -383,11 +403,14 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
     assert found == {
         ("app/mithril.ts", 2, False),
         ("app/mithril.ts", 13, False),
+        ("app/mithril.ts", 14, False),
+        ("app/mithril.ts", 16, False),
         ("app/listeners.js", 1, False),
         ("app/listeners.js", 6, False),
         ("app/listeners.js", 12, False),
         ("app/listeners.js", 13, False),
         ("app/page.html", 1, False),
+        ("app/page.html", 3, False),
         ("app/view.tsx", 1, False),
         ("app/view.tsx", 3, False),
         ("app/wrapped.ts", 1, False),
