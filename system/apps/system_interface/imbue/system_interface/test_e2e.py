@@ -331,9 +331,11 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
 # its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
 # told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
-# drafts through the shell.
+# drafts through the shell. Its ``#pic`` is a 3 by 2 image of the page's own, drawn larger in a corner.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
+<img id="pic" alt="" style="position: fixed; right: 4px; bottom: 4px; width: 24px; height: 24px"
+  src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAEUlEQVR4nGM4ISf3H4YZkDkAmxUME7OZWHkAAAAASUVORK5CYII=" />
 <script type="module">
 import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
 import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
@@ -1041,6 +1043,38 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         expect(shell_menu.locator('[data-menu-row="explain-element"]')).to_be_visible()
         page.keyboard.press("Escape")
         expect(shell_menu).to_be_hidden()
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_pages_element_menu_copies_an_image_to_the_clipboard(tmp_path: Path, page: Page) -> None:
+    """A right-click on an image in a framed page offers "Copy image", which puts the image itself on the clipboard
+    as a PNG of the image's own size, not the size it is drawn at (the element-reference-menu plan section 3.3). The
+    page reads the pixels through a canvas and writes them under the clipboard grant the shell gives its frames."""
+    with _running_e2e_server(tmp_path) as server:
+        page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        _land(page, server)
+        frame = _page_frame(page, _open_via_shortcut(page, server))
+
+        frame.locator("#pic").click(button="right")
+        card = frame.locator("[data-context-menu]")
+        expect(card).to_be_visible()
+        card.locator('[data-context-menu-row="copy-image"]').click()
+        expect(card).to_be_hidden()
+
+        def _copied_image_size() -> list[int] | None:
+            return frame.evaluate(
+                """async () => {
+                    const items = await navigator.clipboard.read();
+                    const item = items.find((each) => each.types.includes("image/png"));
+                    if (item === undefined) return null;
+                    const bitmap = await createImageBitmap(await item.getType("image/png"));
+                    return [bitmap.width, bitmap.height];
+                }"""
+            )
+
+        assert poll_until(lambda: _copied_image_size() == [3, 2], timeout=10.0, poll_interval=0.1), (
+            f"the clipboard holds {_copied_image_size()}, not the 3 by 2 image"
+        )
 
 
 @pytest.mark.timeout(60, func_only=False)
