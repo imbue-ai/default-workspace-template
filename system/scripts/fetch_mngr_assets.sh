@@ -17,12 +17,6 @@
 #                                                   the workspace profile snapshot's
 #                                                   format and keys, which
 #                                                   workspace_profile is tested against
-#   apps/minds/electron/page-menu-bridge.json
-#                                                   the name, sections, and bounds of
-#                                                   the bridge the desktop app reads a
-#                                                   page's menu rows through, which
-#                                                   workspace_ui's element menu is
-#                                                   tested against
 #
 # A sparse, blob-filtered fetch pulls only those paths and the result carries a
 # .commit marker naming the pin and the asset list, so re-running with both
@@ -41,7 +35,6 @@ ASSET_PATHS=(
     apps/minds/electron/link-externality-vectors.json
     style_guide.md
     apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
-    apps/minds/electron/page-menu-bridge.json
 )
 
 read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")

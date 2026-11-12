@@ -94,6 +94,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     viewing: null,
     tray: trayAttrs(),
     onEntryClick: vi.fn(),
+    onEntryContextMenu: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(Taskbar, attrs));
@@ -191,16 +192,22 @@ describe("Taskbar", () => {
     expect(floating.querySelector("[data-tray-agent]")).toBeNull();
   });
 
-  it("leaves an entry's right click and the agent entry's to the shell's element menu, the agent's card making way", () => {
+  it("asks for an entry's menu on a right click", () => {
+    const onEntryContextMenu = vi.fn();
+    const taskbar = render({ onEntryContextMenu });
+    (taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }),
+    );
+    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
+  });
+
+  it("asks for the agent entry's menu on a right click, keeping the browser's own menu away", () => {
     const onAgentContextMenu = vi.fn();
     const taskbar = render({ tray: trayAttrs({ onAgentContextMenu }) });
-    const onEntry = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    (taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(onEntry);
-    expect(onEntry.defaultPrevented).toBe(false);
-    const onAgent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    (taskbar.querySelector("[data-tray-agent]") as HTMLElement).dispatchEvent(onAgent);
-    expect(onAgentContextMenu).toHaveBeenCalledTimes(1);
-    expect(onAgent.defaultPrevented).toBe(false);
+    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 60 });
+    (taskbar.querySelector("[data-tray-agent]") as HTMLElement).dispatchEvent(rightClick);
+    expect(onAgentContextMenu).toHaveBeenCalledWith(50, 60);
+    expect(rightClick.defaultPrevented).toBe(true);
   });
 
   it("carries the launcher field, the overview button before the entries, and the tray with the agent and nobody else while the roster is empty", () => {

@@ -119,7 +119,6 @@ export class InputRelay implements KeySink {
     stage.addEventListener("mousemove", (event) => this.onMove(event));
     stage.addEventListener("mousedown", (event) => this.onButton(event, true));
     stage.addEventListener("mouseup", (event) => this.onButton(event, false));
-    // own-context-menu: forwards -- the remote desktop takes the right-click, which the stage sends it as a button press
     stage.addEventListener("contextmenu", (event) => {
       if (this.isEnabled) event.preventDefault();
     });

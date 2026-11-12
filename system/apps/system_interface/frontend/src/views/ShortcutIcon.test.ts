@@ -70,6 +70,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     isRunOnClick: false,
     onSelect: vi.fn(),
     onRun: vi.fn(),
+    onContextMenu: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(ShortcutIcon, attrs));
@@ -86,10 +87,11 @@ describe("ShortcutIcon", () => {
     expect(icon.querySelector(".shortcut-label")?.textContent).toBe("Docs");
   });
 
-  it("selects on a click or a right click, and runs on a double click, Enter, or Space", () => {
+  it("selects on a click, runs on a double click, Enter, or Space, and asks for its menu on a right click", () => {
     const onSelect = vi.fn();
     const onRun = vi.fn();
-    const icon = render({ onSelect, onRun });
+    const onContextMenu = vi.fn();
+    const icon = render({ onSelect, onRun, onContextMenu });
     icon.click();
     expect(onSelect).toHaveBeenCalledTimes(1);
     icon.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
@@ -97,11 +99,8 @@ describe("ShortcutIcon", () => {
     icon.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     icon.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(onRun).toHaveBeenCalledTimes(3);
-    // The right click selects the icon its menu is about, and leaves the menu to the shell's element menu.
-    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    icon.dispatchEvent(rightClick);
-    expect(onSelect).toHaveBeenCalledTimes(2);
-    expect(rightClick.defaultPrevented).toBe(false);
+    icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 5, clientY: 6 }));
+    expect(onContextMenu).toHaveBeenCalledWith(5, 6, expect.any(Element));
   });
 
   it("runs on a click when a click is a run (touch), and the double click a double tap adds runs nothing more", () => {

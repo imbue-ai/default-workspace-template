@@ -16,13 +16,8 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
-import {
-  HOST_MENU_GLOBAL,
-  installElementContextMenu,
-  type HostMenuBridge,
-} from "@imbue/workspace-ui/src/context_menu";
 import { setParticipantsForTesting } from "../models/Participants";
-import { ChatRail, railContextMenuRoutes, rowMenuRows } from "./ChatRail";
+import { ChatRail, rowMenuRows } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
@@ -227,99 +222,5 @@ describe("ChatRail rooms", () => {
     // A room's reader is stopped and restarted from the menu like any chat's agent, and never made the main chat.
     expect(labelsOf(lounge)).toEqual(["Rename", "Stop room", "-", "Delete room"]);
     expect(labelsOf(stopped)).toEqual(["Rename", "Restart room", "-", "Delete room"]);
-  });
-});
-
-describe("ChatRail right-click", () => {
-  let uninstall: (() => void) | null = null;
-  afterEach(() => {
-    uninstall?.();
-    uninstall = null;
-  });
-
-  /** The rail over two chats, under the root's element menu wired as the root wires it. */
-  function mountUnderElementMenu(isDrawnByHost: boolean): { openElsewhere: ReturnType<typeof vi.fn> } {
-    const attrs = chatRailAttrsFixture({ rows: [chatRowFixture("agent-1"), chatRowFixture("agent-2")] });
-    const mounted = document.createElement("div");
-    document.body.appendChild(mounted);
-    root = mounted;
-    m.mount(mounted, { view: () => m(ChatRail, attrs) });
-    const openElsewhere = vi.fn();
-    uninstall = installElementContextMenu({
-      draft: () => undefined,
-      isDraftAvailable: () => true,
-      openLink: () => undefined,
-      redraw: () => m.redraw(),
-      ...railContextMenuRoutes(
-        () => attrs,
-        () => isDrawnByHost,
-        openElsewhere,
-      ),
-    });
-    return { openElsewhere };
-  }
-
-  function rightClick(element: Element): MouseEvent {
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 30 });
-    element.dispatchEvent(event);
-    m.redraw.sync();
-    return event;
-  }
-
-  it("opens the row's own menu, its verbs then the element menu's rows, and leaves the rest of the rail elsewhere", () => {
-    const { openElsewhere } = mountUnderElementMenu(false);
-    expect(rightClick(root!.querySelector('[data-chat-id="agent-2"]')!).defaultPrevented).toBe(true);
-    const keys = [...document.querySelectorAll(".chat-rail-menu [data-menu-row]")].map((row) =>
-      row.getAttribute("data-menu-row"),
-    );
-    expect(keys.slice(0, 2)).toEqual(["rename", "make-main"]);
-    expect(keys).toContain("delete");
-    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
-    expect(openElsewhere).not.toHaveBeenCalled();
-    rightClick(root!.querySelector(".chat-rail")!);
-    expect(openElsewhere).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves a right-click in a row's rename field to the field, without the row's verbs", () => {
-    const { openElsewhere } = mountUnderElementMenu(false);
-    root!.querySelector('[data-chat-id="agent-2"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    m.redraw.sync();
-    const field = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input')!;
-    rightClick(field);
-    expect(document.querySelector(".chat-rail-menu")).toBeNull();
-    expect(openElsewhere).toHaveBeenCalledTimes(1);
-    const [rows] = openElsewhere.mock.calls[0] as [{ key?: string }[]];
-    expect(rows.map((row) => row.key)).not.toContain("rename");
-    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  });
-
-  it("where the desktop app draws the menu, hands it the row's verbs and runs the one it picks", async () => {
-    mountUnderElementMenu(true);
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    expect(rightClick(root!.querySelector('[data-chat-id="agent-2"]')!).defaultPrevented).toBe(false);
-    expect(document.querySelector(".chat-rail-menu")).toBeNull();
-    const bridge = Reflect.get(window, HOST_MENU_GLOBAL) as HostMenuBridge;
-    const page = bridge.sections()!.page;
-    expect(page.map((item) => (item.kind === "action" ? item.key : item.kind))).toEqual([
-      "rename",
-      "make-main",
-      "stop",
-      "divider",
-      "delete",
-    ]);
-    expect(page[page.length - 1]).toMatchObject({ symbol: "trash" });
-    await bridge.select("make-main");
-    expect(verbs.makeMainChat).toHaveBeenCalledWith("agent-2");
-    // Rename only opens the row's field: the pick shows it, though no handler of the rail ran it. The redraws
-    // already asked for land first, so only the pick's own can draw the field.
-    rightClick(root!.querySelector('[data-chat-id="agent-2"]')!);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await bridge.select("rename");
-    const field = await vi.waitFor(() => {
-      const found = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 });

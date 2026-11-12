@@ -28,8 +28,7 @@ export interface SystemTrayAttrs {
   readonly isAvatarFloating: boolean;
   readonly onPersonClick: (entry: RosterParticipant) => void;
   readonly onAgentClick: () => void;
-  /** A right-click on the agent's entry, whose menu the shell's element menu opens. */
-  readonly onAgentContextMenu: () => void;
+  readonly onAgentContextMenu: (x: number, y: number) => void;
   readonly onPersonHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
   readonly onAgentHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;

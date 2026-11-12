@@ -20,9 +20,8 @@ Every app draws its own menu.
 The shell cannot see a click inside a page (a page is a cross-origin frame), and an app will want its own rows beside the reference rows, so the menu is the page's, built from a shared library that gives it the standard rows and the reference rows.
 The shell's part is one message: a page hands it text to draft, and the shell drafts it into the chat the way "Design your own..." already does, naming no app.
 
-The menu replaces the browser's, except in the Imbue Studio desktop app on macOS and under Shift.
+The menu replaces the browser's.
 A page that opens its own menu on `contextmenu` loses the native one, so the library's menu carries the rows the native one would have given (Cut, Copy, Paste, Select All, the link and image rows) beside the reference rows.
-The desktop app on macOS draws the native menu itself, with the items no page can reach, and takes a page's rows into it (section 11); a right-click with Shift held is left to the browser's own menu everywhere.
 The reference rows show for every element, editable fields, selections, and images included; an agent can make sense of any of them.
 
 The five principles of the workspace app model hold: one owner per fact; the shell is generic and names no app; truth is shared while arrangement is scoped; minimal shell state; no two-phase commits.
@@ -123,9 +122,6 @@ The reference rows, always present:
 | Explain... | Drafts `Explain what I attached in <reference_id>`, a blank line, the reference block |
 | Modify... | Drafts `Change <reference_id> to ` (a space to type after), a blank line, the reference block |
 
-A row may name an SF Symbol (`symbol`) that the desktop app's native menu shows beside it on macOS; a menu the page draws itself ignores it.
-The reference rows name `doc.on.doc`, `questionmark.bubble`, and `pencil`.
-
 "Editable" means an `input` (but not one of the button-like types), a `textarea`, or an element inside a `contenteditable` region.
 A row that fails at run time (the clipboard refused) reports the failure to the console; nothing else changes.
 
@@ -171,7 +167,6 @@ Two references drafted before a send are two chips and two prompt lines, each na
 
 The library's installer listens for `contextmenu` on the document.
 An event that is already `defaultPrevented` is left alone (section 4.4 says how a page's own menus join in instead).
-So is one with Shift held, which the browser's own menu takes; and where the desktop app draws the menu (section 11), the installer keeps the rows for it rather than preventing the default and opening its own.
 Otherwise the installer prevents the default, reads the target (the event's target element; a text node's parent), the selection (`getSelection().toString()`), and the click position, builds the reference (section 3.1) from those and the page's last handshake, and opens the menu at the pointer.
 The menu closes on a press outside it, on Escape, and after a row runs; the shared Menu component's rules for the built-ins, the same rules in the framework-free renderer for agent-built apps.
 
@@ -190,9 +185,9 @@ Explain and Modify hand the draft text of section 3.3 to the surface's draft rou
 
 ### 4.4 A page's own menus
 
-A page whose elements have rows of their own (the taskbar's entries, the shortcuts, the backdrop, the overview's thumbnails, the chat rail's rows) gives them to the generic listener through `extraRows(target)`, found from the clicked element, and never prevents the right-click's default itself, so where the desktop app draws the menu (section 11) those rows reach its native menu.
-Where the page draws the menu it leads with them, then the standard rows and the reference rows; the shell and the chat rail draw it as that element's own menu (its marker class, and rows read afresh while it is open), through `open(rows, point, target)`.
-A handler that has to keep the right-click (it forwards it, as the Screen app's stage does; it only dismisses something open; it holds what a native menu cannot show) says why in an `own-context-menu:` marker above it, which `system/test_context_menu_rules.py` requires of every app, the user's included (`.agents/shared/references/right-click-menus.md`).
+A page that already opens a menu on `contextmenu` for some element (the taskbar's entries, the shortcuts, the desktops widget, the chat rail's rows) keeps that menu and appends the reference rows to it after a divider, through the library's `elementReferenceRows`.
+It prevents the default as it does today, so the generic listener does nothing for that click; the standard rows are not added to such a menu (an entry or a rail row is not editable and holds no link).
+Those menus therefore capture their target: the element the event fired on rides beside the click position into the menu's rows.
 
 ### 4.5 Nested frames
 
@@ -228,10 +223,10 @@ The shell accepts `shell:draft-text` only from a frame it created, as it accepts
 
 - `pages/livePages.ts`: the handshake carries `app` (the page's window's app); a `shell:draft-text` handler, `takeDraftText`, mirrors `takeStartWithText` and calls `store.draftText`.
 - `store/DesktopStore.ts`: `draftText(text)`: when `draftTargetOf` names a pinned window on the active desktop that takes a draft, `draftIntoPinnedWindow(text)` runs there (a launch the shell refuses ends the draft; it is not retried elsewhere); with no such window, the first free-text row whose launch path declares a `draft_param` runs with the text through `runFreeText`; with none, the user is told `NO_DRAFT_APP_REASON`, "No app on this machine can take a draft".
-- `views/App.ts`: the generic listener of section 4.1 on the shell's own document, opening a kind of the desktop's one menu, `element`, whose rows are the standard rows and the reference rows for the captured target; a right-click on a subject with rows of its own (an entry, a shortcut, the launcher's row of an app shortcut, the bare backdrop, an overview thumbnail, the tray's agent) opens that subject's menu instead, its own rows read afresh and followed by the element menu's (section 4.4).
+- `views/App.ts`: the generic listener of section 4.1 on the shell's own document, opening a sixth kind of the desktop's one menu, `element`, whose rows are the standard rows and the reference rows for the captured target; the entry, shortcut, and desktop menus append the reference rows after a divider (section 4.4).
   The window and desktops menus open from a button, not a right-click, and are unchanged.
   The shell's draft route is `store.draftText`.
-- `TaskbarEntry`, `FloatingEntries`, `ShortcutIcon`, `Overview`, `LauncherMenu`, and the tray's `AgentEntry` leave the right-click alone; a shortcut's still selects it, and the agent entry's closes its card.
+- The context menu callbacks of `TaskbarEntry`, `FloatingEntries`, `ShortcutIcon`, `DesktopsWidget`, and the views that thread them gain the event's target element beside the click position.
 - `server.py` serves `/_static/context_menu.js` beside `/_static/app_contract.js`, with the same permissive CORS header, for the e2e stub pages.
 
 The shell's reference for its own chrome has `app` `"system_interface"` and `window_id` the id of the window whose chrome was clicked when the target sits inside a `[data-window-id]`, else `null`.
@@ -254,7 +249,7 @@ A reference's chip wears the pointer glyph and says what it points at (`referenc
 ### 7.3 Pages
 
 - The chat page installs the generic listener with the library's Mithril menu, drafting into its own composer; a sub-agent view installs it with `connection.draftText`.
-- The chat root installs it for the rail and the space around the frame, drafting into the selected chat through `draftInto`, else `connection.draftText`; a rail row's verbs lead its menu (`railContextMenuRoutes`), which the rail draws as its own row menu.
+- The chat root installs it for the rail and the space around the frame, drafting into the selected chat through `draftInto`, else `connection.draftText`; the rail's row menu appends the reference rows.
 - The root's relay forwards `shell:draft-text`.
 
 ## 8. The Getting Started page
@@ -268,10 +263,10 @@ In `system/libs/workspace_ui/src/`:
 - `element_reference.ts`: `ElementReference`, `describeElement(target, click, scope)`, `uniqueSelectorFor(element)`, `mintReferenceId()`, `referenceFileNameOf(id)`, `referenceBlock(reference)`, `referenceFileText(envelope)`, `referenceSummaryOf(reference)`, and `referenceEnvelopeOf(json)`.
   Pure over the DOM: no framework, no message primitive.
 - `context_menu_rows.ts`: `ContextMenuTarget` (the element, the selection text, the click), `standardContextMenuRows(target, openLink)` ("Open link" hands the link element to `openLink`), `elementReferenceRows(reference, draft, isDraftAvailable)` (Explain and Modify grey with the section 4.7 tooltip when the last is false), the prompts (`explainPromptOf(id)`, `modifyPromptOf(id)`), and the clipboard helpers.
-  Its row type is structurally a row of the shared Menu (an `ActionRow`, a `CheckRow`, a `DividerRow`, or a `SubmenuRow` of those, one level deep), so the built-ins pass the rows straight to `createMenu` and the framework-free renderer draws the same objects.
-- `context_menu.ts`: `installElementContextMenu({connection, handshake, scope?, draft?, isDraftAvailable?, openLink?, extraRows?, open?, isDrawnByHost?, redraw?, document?})`, the one implementation of section 4.1: the document listener, the target and selection capture, the reference, and the rows.
-  `handshake` is a getter for the page's last handshake, `null` before one; `scope(target)` replaces the scope the handshake gives, for a page that knows more than its handshake says (the shell, section 6); `draft` defaults to `connection.draftText` and `isDraftAvailable` to `connection.hasShell()`, and "Open link" clicks the link, which the app contract's link rule follows; a page that gives `draft`, `isDraftAvailable`, and `openLink` (the shell, whose route is its store and which no shell frames) gives no `connection`; `extraRows(target)` puts a page's own rows first; `open(rows, point, target)` replaces the renderer; `isDrawnByHost()` says whether the desktop app draws the menu (section 11), the handshake's `drawsContextMenus` by default; `redraw()` runs after a row the desktop app picked has run, which no event handler of the page ran (`() => m.redraw()` on a Mithril page); `document` is the document to listen on, the page's own by default.
-  The default renderer is framework-free, for pages without Mithril: a fixed card of buttons with inline styles, closed by a press outside, Escape, or a pick; a submenu opens as a second card beside its row, after the pointer rests on the row or on a click, flipped to the menu's left where its right would leave the viewport, and closes once the pointer has sat on another row past a short grace.
+  Its row type is structurally an `ActionRow` or a `DividerRow` of the shared Menu, so the built-ins pass the rows straight to `createMenu` and the framework-free renderer draws the same objects.
+- `context_menu.ts`: `installElementContextMenu({connection, handshake, scope?, draft?, isDraftAvailable?, openLink?, extraRows?, open?, document?})`, the one implementation of section 4.1: the document listener, the target and selection capture, the reference, and the rows.
+  `handshake` is a getter for the page's last handshake, `null` before one; `scope(target)` replaces the scope the handshake gives, for a page that knows more than its handshake says (the shell, section 6); `draft` defaults to `connection.draftText` and `isDraftAvailable` to `connection.hasShell()`, and "Open link" clicks the link, which the app contract's link rule follows; a page that gives `draft`, `isDraftAvailable`, and `openLink` (the shell, whose route is its store and which no shell frames) gives no `connection`; `extraRows(target)` puts a page's own rows first; `open(rows, point)` replaces the renderer; `document` is the document to listen on, the page's own by default.
+  The default renderer is framework-free, for pages without Mithril: a fixed card of buttons with inline styles, closed by a press outside, Escape, or a pick.
   It returns an uninstaller, and a second install on a document already carrying its marker is a no-op that answers the first's uninstaller.
   Built as a second library entry of `vite.contract.config.ts` into `_static/context_menu.js`, bundling the two modules above and nothing else.
 - `components/contextMenuOpener.ts`: `createContextMenuOpener()` answers an `open` for the built-ins, backed by `createMenu` and rendered through a render root of its own under `<body>`, so every Mithril page draws the shared Menu without a slot for it and none repeats the capture logic.
@@ -307,16 +302,10 @@ Apps built before this change keep their beacon and get no menu until they adopt
 
 ## 11. The minds desktop app
 
-Electron's main process pops one native menu for every `context-menu` event of the window's web contents, the workspace's frames included (the mngr repository's `apps/minds/electron/context-menu.js`).
-It carries the items a page cannot offer (spelling suggestions, Look Up, Share, Speech, Services, and in a dev build Inspect Element) and the edit, link, and image items, so the page's menu would only duplicate them; on macOS, where those items are, the chrome says it draws the menu with `drawsContextMenus` on `minds:embedder-capabilities`, which the shell passes to every page in its handshake (desktop-interface contracts.md section 7) and follows for its own element menu.
-
-A page so told opens nothing on a right-click and does not `preventDefault` it.
-It keeps three sections of rows for the app instead: its own rows; "Open link" alone of the standard rows, since only the page can follow a link where its links go; and the reference rows.
-It exposes them on `globalThis.__studioContextMenu`: `sections()` answers the last right-click's rows as data (key, label, disabled or checked, tooltip, symbol; a submenu its rows, read at the right-click), or null when the right-click was left to the browser (handled by the page, or with Shift held); `select(key)` runs that right-click's row of that key, after waiting up to half a second for the page to take focus, because a right-click focuses neither the window nor the frame and the clipboard refuses a page without focus.
-Main reads the sections from the right-clicked frame, places them among its own items (the page's rows after the spelling suggestions, "Open link" with the link items, the reference rows last but for Inspect Element), and runs a pick back in the frame with the window raised.
-The bridge's global name, its sections, its row kinds, and the bounds past which main drops a row (rows per section and per submenu, label length, the shape of a symbol name) are pinned by the mngr repo's `apps/minds/electron/page-menu-bridge.json`, which the build fetches with the other mngr assets and `context_menu.contract.test.ts` holds the installer's answers to.
-
-A chrome that does not say so (the desktop app off macOS, an older one, plain-browser mode) leaves the page its own menu, as before.
+Electron's main process pops a native menu on every `context-menu` event of the window's web contents, which the workspace frame shares.
+It now pops one only for the main frame (the chrome page's own fields), so a right-click inside the workspace frame reaches the page's own menu alone.
+Plain-browser mode needs nothing: the native menu is what the page's `preventDefault` replaces.
+This is the one change outside the template, in the mngr repository's `apps/minds/electron/context-menu.js`.
 
 ## 12. Errors and edge cases
 
@@ -334,14 +323,12 @@ A chrome that does not say so (the desktop app off macOS, an older one, plain-br
 
 - `element_reference.test.ts`: the reference of an element with an id, with data attributes, of a repeated row (the `:nth-of-type` and the uniqueness check), of an editable field (`input_value`, and `null` for a password field), of a link and an image, of a text node target, and on a top-level visit; the reference id, the file name, the file text, the summary, and the block.
 - `context_menu_rows.test.ts`: which standard rows each kind of target admits; the draft texts of the reference rows; Paste absent without `readText`.
-- `context_menu.test.ts`: the installer opens on `contextmenu`, yields to a `defaultPrevented` event and to one with Shift held, closes on Escape and on a press outside, runs a row, and installs once; where the desktop app draws the menu it opens nothing, keeps the rows on `__studioContextMenu` (a submenu's read at the right-click), and runs a picked row, a submenu's or a check row's included, once the page has focus; the framework-free renderer opens a submenu as a flyout on a rest or a click, closes it past the grace, flips it at the viewport's edge, and toggles a check row.
-- `context_menu.contract.test.ts`: the bridge's global name, its sections, its row kinds, and its rows' bounds hold to the vendored `page-menu-bridge.json`.
-- `system/test_context_menu_rules.py`: no app's right-click handler prevents the default without an `own-context-menu:` marker naming why, and every marker keeps a handler.
-- `app_contract.test.ts`: `draftText` posts `shell:draft-text`; the handshake carries `app` and `drawsContextMenus`.
-- The shell: `livePages.test.ts` (the handshake's `app`, a page greeted again when `drawsContextMenus` changes, `shell:draft-text` reaching the store), `DesktopStore.test.ts` (`draftText` with a pinned draft target, with a draft row only, with neither), `App.test.ts` (a right-click on the backdrop opens the element menu with the reference rows; an entry menu ends with them; where the desktop app draws the menu, an entry's and the backdrop's rows reach it and a pick runs).
-- The chat: `ChatRail.test.ts` (a rail row's right-click opens its menu, verbs then the element menu's rows; where the desktop app draws the menu, the verbs reach it and a pick runs); `relay.test.ts` forwards `shell:draft-text`; `elementReferences.test.ts` attaches each reference block as a `REF-<id>.json` file with its summary and leaves other blocks alone; `ComposerAttachments.test.ts` persists ready attachments, restores them, and takes in a list another document wrote.
+- `context_menu.test.ts`: the installer opens on `contextmenu`, yields to a `defaultPrevented` event, closes on Escape and on a press outside, runs a row, and installs once.
+- `app_contract.test.ts`: `draftText` posts `shell:draft-text`; the handshake carries `app`.
+- The shell: `livePages.test.ts` (the handshake's `app`, `shell:draft-text` reaching the store), `DesktopStore.test.ts` (`draftText` with a pinned draft target, with a draft row only, with neither), `App.test.ts` (a right-click on the backdrop opens the element menu with the reference rows; an entry menu ends with them).
+- The chat: `relay.test.ts` forwards `shell:draft-text`; `elementReferences.test.ts` attaches each reference block as a `REF-<id>.json` file with its summary and leaves other blocks alone; `ComposerAttachments.test.ts` persists ready attachments, restores them, and takes in a list another document wrote.
 - The scaffold: the runner page imports both modules and installs the menu; the static route serves the two files and refuses others.
-- The minds app: `context-menu.test.js` places a frame's rows among the native items and runs a picked one back in that frame; `context-menu.spec.js` does the same for a real cross-origin frame.
+- The minds app: `context-menu.test.js` shows no menu for a subframe event.
 - Manual: in a workspace, right-click the desktop backdrop, a taskbar entry, a chat message, a chat rail row, a Getting Started tile, and a page of a freshly scaffolded app; Explain puts a `REF-<id>.json` chip and a prompt naming it into the chat on screen each time, the sent message names the file, and the agent opens it and finds the element.
 
 ## 14. Implementation order

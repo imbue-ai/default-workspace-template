@@ -1,1 +1,0 @@
-No change you would notice: the stage's right-click handlers carry `own-context-menu:` markers saying why they keep the right-click (the remote desktop takes it, and a long press is the stage's own gesture), as the new `system/test_context_menu_rules.py` requires.

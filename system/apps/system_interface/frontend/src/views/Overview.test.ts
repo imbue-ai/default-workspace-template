@@ -65,6 +65,7 @@ function render(overrides: Partial<OverviewAttrs> = {}): OverviewAttrs {
     }),
     onRename: vi.fn(),
     onReorder: vi.fn(),
+    onDesktopContextMenu: vi.fn(),
     onConfirmDelete: vi.fn(),
     onKeepDesktop: vi.fn(),
     onNewDesktop: vi.fn(),
@@ -244,8 +245,12 @@ describe("Overview", () => {
     expect(attrs.onReorder).toHaveBeenCalledTimes(1);
   });
 
-  it("confirms a deletion in place", () => {
+  it("asks for a thumbnail's menu on a right-click and confirms a deletion in place", () => {
     const attrs = render({ confirmingDeleteId: "work" });
+    query<HTMLElement>('[data-overview-desktop="work"]').dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    expect(attrs.onDesktopContextMenu).toHaveBeenCalledWith("work", 30, 40, expect.any(Element));
     const confirmation = query<HTMLElement>('[data-overview-delete-confirmation="work"]');
     expect(confirmation.textContent).toContain("Delete Work? Its windows close for everyone.");
     // Above the thumbnail: the desktops row sits against the bottom of the screen, so hanging below would clip.

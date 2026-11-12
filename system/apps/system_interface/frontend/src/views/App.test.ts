@@ -8,7 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
-import type { AppRecord, Desktop, DesktopShortcut } from "../model/records";
+import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -27,7 +27,6 @@ import {
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { THEME_DESIGN_PROMPT } from "./ThemeChooserDialog";
-import { HOST_MENU_GLOBAL, type HostMenuBridge, type HostMenuItem } from "@imbue/workspace-ui/src/context_menu";
 import { App } from "./App";
 import { enableThemingPrompt } from "./WindowMenu";
 
@@ -657,49 +656,6 @@ describe("the element menu", () => {
     );
   }
 
-  it("where the desktop app draws the menu, hands it an entry's rows and the bare backdrop's, and runs a pick", async () => {
-    store.setDrawsContextMenus(true);
-    m.redraw.sync();
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    const bridge = Reflect.get(window, HOST_MENU_GLOBAL) as HostMenuBridge;
-    const rightClickPage = (element: Element): HostMenuItem[] => {
-      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
-      element.dispatchEvent(event);
-      m.redraw.sync();
-      expect(event.defaultPrevented).toBe(false);
-      expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
-      return bridge.sections()?.page ?? [];
-    };
-    const keysOf = (items: HostMenuItem[]): string[] =>
-      items.map((item) => (item.kind === "divider" ? "|" : item.kind === "submenu" ? item.label : item.key));
-
-    const entryRows = rightClickPage(document.querySelector('[data-taskbar-entry="win-1"]') as Element);
-    expect(keysOf(entryRows).slice(0, 2)).toEqual(["minimize", "maximize"]);
-    expect(entryRows[entryRows.length - 1]).toMatchObject({ kind: "action", key: "close", symbol: "xmark" });
-    await bridge.select("close");
-    await settle();
-    expect(api.calls).toContain("closeWindow:home:win-1");
-
-    const backdropRows = rightClickPage(document.querySelector(".shortcut-grid") as Element);
-    expect(keysOf(backdropRows)).toEqual([
-      "new-desktop",
-      "show-all-desktops",
-      "|",
-      "change-wallpaper",
-      "change-theme",
-      "|",
-      "keyboard-shortcuts",
-    ]);
-    // A pick that only changes the shell's own state still shows, though no handler of the shell ran it: the
-    // redraws already asked for land first, so only the pick's own can draw the dialog.
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await bridge.select("keyboard-shortcuts");
-    await vi.waitFor(() => expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).not.toBeNull());
-    // The rest of the chrome has no rows of its own: only the reference rows reach the native menu.
-    expect(rightClickPage(document.querySelector("[data-backdrop-area]") as Element)).toEqual([]);
-    expect(keysOf(bridge.sections()!.reference)).toEqual(["copy-reference", "explain-element", "modify-element"]);
-  });
-
   it("opens over the shell's own chrome on a right-click the views leave alone, with the reference rows", () => {
     const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
@@ -765,19 +721,6 @@ describe("the element menu", () => {
     expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
     pressEscape();
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
-  });
-
-  it("leads the tray agent's menu with its own rows, then the reference rows, and floats the avatar from it", async () => {
-    pinnedEntry();
-    const agent = document.querySelector("[data-tray-agent]") as HTMLElement;
-    agent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
-    m.redraw.sync();
-    const keys = menuRowKeys();
-    expect(keys.slice(0, 2)).toEqual(["change-avatar", "float"]);
-    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
-    (document.querySelector('[data-menu-row="float"]') as HTMLElement).click();
-    await settle();
-    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
   });
 
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
@@ -1092,27 +1035,6 @@ describe("the desktop shortcut rows", () => {
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
       ["browse", "focus"],
     ]);
-  });
-
-  it("opens no shortcut menu over a free-text row, the third and later included, whose launch path is a shortcut", () => {
-    const asker = (name: string): AppRecord =>
-      appRecord(name, {
-        launch_paths: [launchPathRecord({ id: "ask", path: "/ask", params: ["q"], text_param: "q" })],
-        default_shortcuts: [{ launch: "ask", mode: "new" }],
-      });
-    socket.deliver().onAppsUpdated([appRecord("docs"), asker("first"), asker("second"), asker("third")]);
-    store.openLauncher();
-    m.redraw.sync();
-    const field = document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
-    field.value = "hello";
-    field.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    m.redraw.sync();
-
-    const third = document.querySelector('[data-launcher-overlay] [data-launch="third:ask"]') as HTMLElement;
-    expect(third.hasAttribute("data-text-action")).toBe(false);
-    rightClick(third);
-    expect(document.querySelector(".app-shortcut-menu")).toBeNull();
-    expect(document.querySelector(".element-menu")).not.toBeNull();
   });
 });
 

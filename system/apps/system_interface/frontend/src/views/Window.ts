@@ -246,7 +246,6 @@ export function Window(): m.Component<WindowAttrs> {
                         "data-window-shield": "",
                         class: "absolute inset-0 cursor-default",
                         onpointerdown: (event: PointerEvent) => event.preventDefault(),
-                        // own-context-menu: dismisses -- a right-click on the shield only raises the window under it
                         oncontextmenu: (event: MouseEvent) => event.preventDefault(),
                       })
                     : null,

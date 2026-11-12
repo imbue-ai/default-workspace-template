@@ -236,7 +236,6 @@ export class MobileControls {
     };
     this.stage.addEventListener("pointerup", end);
     this.stage.addEventListener("pointercancel", end);
-    // own-context-menu: touch -- a long press on the stage is the screen's own gesture, not the browser's menu
     this.stage.addEventListener("contextmenu", (event) => event.preventDefault());
   }
 

@@ -4,13 +4,11 @@
  * Paste, Select All, the link rows, the image row) and the reference rows that hand the
  * element to a chat (Copy reference, Explain, Modify).
  *
- * A row here is structurally a row of the shared Menu component (an action, a check row, a
- * divider, or a submenu of those), so a Mithril page passes the rows straight to ``createMenu``
- * and the framework-free renderer of ``context_menu.ts`` draws the same objects. This module
- * imports no framework: its one import from the Menu is of types alone.
+ * A row here is structurally an ``ActionRow`` or a ``DividerRow`` of the shared Menu component,
+ * so a Mithril page passes the rows straight to ``createMenu`` and the framework-free renderer
+ * of ``context_menu.ts`` draws the same objects. This module imports no framework.
  */
 
-import type { MenuRowIcon, MenuRowTone } from "./components/menu";
 import {
   contentEditableRegionOf,
   describeElement,
@@ -32,49 +30,14 @@ export interface ContextMenuActionRow {
   label: string;
   isDisabled?: boolean;
   tooltip?: string;
-  /** The SF Symbol (``doc.on.doc``) the desktop app's native menu shows beside the row on macOS; a menu the page
-   *  draws itself ignores it. */
-  symbol?: string;
-  /** How the shared Menu and the framework-free renderer style the row; the native menu has no tones. */
-  tone?: MenuRowTone;
-  /** The shared Menu's glyph for the row; the native menu shows ``symbol`` instead. */
-  icon?: MenuRowIcon;
   onSelect: () => void;
-}
-
-/** A row with a check mark that a pick toggles. Mirrors the shared Menu's ``CheckRow``; the native menu, unlike
- *  the shared one, closes on the toggle. */
-export interface ContextMenuCheckRow {
-  kind: "check";
-  key: string;
-  label: string;
-  isChecked: boolean;
-  tooltip?: string;
-  symbol?: string;
-  onToggle: () => void;
 }
 
 export interface ContextMenuDividerRow {
   kind: "divider";
 }
 
-/** What a submenu may hold: every row but another submenu. */
-export type ContextMenuSubmenuChildRow = ContextMenuActionRow | ContextMenuCheckRow | ContextMenuDividerRow;
-
-/** A row that opens a submenu of rows, one level deep. Mirrors the shared Menu's ``SubmenuRow``. The desktop app's
- *  native menu reads ``rows`` once, at the right-click; a menu the page draws reads it each time the submenu opens or
- *  redraws, so it should only read the current state. */
-export interface ContextMenuSubmenuRow {
-  kind: "submenu";
-  key: string;
-  label: string;
-  tooltip?: string;
-  symbol?: string;
-  rows: () => readonly ContextMenuSubmenuChildRow[];
-}
-
-/** A row of the element menu: what both the desktop app's native menu and a menu the page draws can show. */
-export type ContextMenuRow = ContextMenuSubmenuChildRow | ContextMenuSubmenuRow;
+export type ContextMenuRow = ContextMenuActionRow | ContextMenuDividerRow;
 
 /** What a right-click landed on, captured when it happened. */
 export interface ContextMenuTarget {
@@ -93,6 +56,13 @@ export function modifyPromptOf(referenceId: string): string {
 }
 /** Why Explain and Modify are greyed on a page no shell frames. */
 export const NO_SHELL_DRAFT_REASON = "Open this page in the workspace to draft into a chat";
+
+/** The element a ``contextmenu`` event fired on: its target when that is an element, else the element it was
+ *  bound to. */
+export function targetElementOf(event: MouseEvent): Element {
+  if (event.target instanceof Element) return event.target;
+  return event.currentTarget as Element;
+}
 
 /** The target of a ``contextmenu`` event: its element, the selection at that moment, and the click. */
 export function targetOfEvent(event: MouseEvent, ownerDocument: Document): ContextMenuTarget {
@@ -213,16 +183,6 @@ export function canReadClipboard(): boolean {
 /** Open a link the menu was opened on, as a click on it would. */
 export type OpenLink = (anchor: HTMLAnchorElement) => void;
 
-/** The link the target sits in, or null. */
-function anchorOf(element: Element): HTMLAnchorElement | null {
-  const anchor = element.closest("a[href]");
-  return anchor instanceof HTMLAnchorElement ? anchor : null;
-}
-
-function openLinkRow(anchor: HTMLAnchorElement, openLink: OpenLink): ContextMenuActionRow {
-  return { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) };
-}
-
 /** The standard rows the target admits (section 3.3), in the order the native menu lists them. */
 export function standardContextMenuRows(target: ContextMenuTarget, openLink: OpenLink): ContextMenuRow[] {
   const { element, selectionText } = target;
@@ -251,12 +211,12 @@ export function standardContextMenuRows(target: ContextMenuTarget, openLink: Ope
     editRows.push({ kind: "action", key: "select-all", label: "Select All", onSelect: () => selectAllIn(element) });
   }
   const mediaRows: ContextMenuRow[] = [];
-  const anchor = anchorOf(element);
-  if (anchor !== null) {
+  const anchor = element.closest("a[href]");
+  if (anchor instanceof HTMLAnchorElement) {
     const href = anchor.href;
     mediaRows.push(
       { kind: "action", key: "copy-link", label: "Copy link address", onSelect: () => void copyText(href) },
-      openLinkRow(anchor, openLink),
+      { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) },
     );
   }
   const src = imageSrcOf(element);
@@ -278,25 +238,18 @@ export function elementReferenceRows(
   isDraftAvailable: boolean,
 ): ContextMenuRow[] {
   const block = referenceBlock(reference);
-  const draftRow = (key: string, label: string, symbol: string, prompt: string): ContextMenuActionRow => ({
+  const draftRow = (key: string, label: string, prompt: string): ContextMenuActionRow => ({
     kind: "action",
     key,
     label,
     isDisabled: !isDraftAvailable,
     tooltip: isDraftAvailable ? undefined : NO_SHELL_DRAFT_REASON,
-    symbol,
     onSelect: () => draft(draftTextOf(prompt, block)),
   });
   return [
-    {
-      kind: "action",
-      key: "copy-reference",
-      label: "Copy reference",
-      symbol: "doc.on.doc",
-      onSelect: () => void copyText(block),
-    },
-    draftRow("explain-element", "Explain...", "questionmark.bubble", explainPromptOf(reference.reference_id)),
-    draftRow("modify-element", "Modify...", "pencil", modifyPromptOf(reference.reference_id)),
+    { kind: "action", key: "copy-reference", label: "Copy reference", onSelect: () => void copyText(block) },
+    draftRow("explain-element", "Explain...", explainPromptOf(reference.reference_id)),
+    draftRow("modify-element", "Modify...", modifyPromptOf(reference.reference_id)),
   ];
 }
 
@@ -309,31 +262,6 @@ export function joinRowGroups(groups: readonly (readonly ContextMenuRow[])[]): C
     rows.push(...group);
   }
   return rows;
-}
-
-/** The element menu as the desktop app draws it natively (section 11): the page's own rows; the link row only the
- *  page can follow (its "Open link" goes where the page's links go), the rest of the standard rows being the native
- *  menu's own; and the reference rows. The app places each section among its native items. */
-export interface HostMenuSections {
-  page: readonly ContextMenuRow[];
-  link: readonly ContextMenuRow[];
-  reference: readonly ContextMenuRow[];
-}
-
-export function hostMenuSections(
-  target: ContextMenuTarget,
-  scope: ReferenceScope,
-  draft: (text: string) => void,
-  isDraftAvailable: boolean,
-  ownRows: readonly ContextMenuRow[],
-  openLink: OpenLink,
-): HostMenuSections {
-  const anchor = anchorOf(target.element);
-  return {
-    page: ownRows,
-    link: anchor === null ? [] : [openLinkRow(anchor, openLink)],
-    reference: elementReferenceRows(describeElement(target.element, target.click, scope), draft, isDraftAvailable),
-  };
 }
 
 /** The whole element menu (section 3.3): the page's own rows, the standard rows, the reference rows. */

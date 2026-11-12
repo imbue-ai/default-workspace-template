@@ -12,6 +12,7 @@
 
 import m from "mithril";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
@@ -25,11 +26,12 @@ export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
+  readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, isMenuOpen, onClick } = vnode.attrs;
+    const { entry, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
@@ -68,6 +70,10 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         // The bubble carries the whole of a title the chip had to cut short.
         ...hoverTooltipAttrs(entry.title, "above"),
         onclick: onClick,
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+          onContextMenu(event.clientX, event.clientY, targetElementOf(event));
+        },
       },
       [
         m(

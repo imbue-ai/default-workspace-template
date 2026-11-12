@@ -59,7 +59,6 @@ export function longPressAttrs(handlers: LongPressHandlers): m.Attributes {
     onpointerup: (event: PointerEvent) => cancelTimer(event.currentTarget as Element),
     onpointercancel: (event: PointerEvent) => cancelTimer(event.currentTarget as Element),
     onpointerleave: (event: PointerEvent) => cancelTimer(event.currentTarget as Element),
-    // own-context-menu: touch -- a long press is this gesture's own, and the phone has no right-click menu
     oncontextmenu: (event: Event) => event.preventDefault(),
     onclick: (event: MouseEvent) => {
       // The click a press released into is that press's alone; a click with none before it (a keyboard's) taps.

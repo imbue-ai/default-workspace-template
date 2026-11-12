@@ -15,6 +15,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import {
   MENU_ROW_FOCUS,
@@ -22,6 +23,7 @@ import {
   menuCardClass,
   menuDividerClass,
 } from "@imbue/workspace-ui/src/components/menu";
+import { appShortcutsOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
@@ -51,6 +53,9 @@ export interface LauncherSectionsAttrs {
   readonly isSheet: boolean;
   readonly onRun: (row: LauncherRow) => void;
   readonly onHighlight: (index: number) => void;
+  /** Null in the phone's start sheet, which draws no desktop shortcuts to add or remove. */
+  readonly onAppShortcutContextMenu:
+    ((app: string, launch: string, x: number, y: number, target: Element) => void) | null;
 }
 
 export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"> {
@@ -132,6 +137,7 @@ function textRowCaption(row: TextRow): m.Children {
 
 function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs): m.Vnode {
   const keys = keyCaptions(row, index === attrs.highlightIndex, attrs);
+  const onAppShortcutContextMenu = attrs.onAppShortcutContextMenu;
   const appSize = attrs.isSheet ? SHEET_APP_GLYPH_SIZE : APP_GLYPH_SIZE;
   const markSize = attrs.isSheet ? SHEET_MARK_GLYPH_SIZE : MARK_GLYPH_SIZE;
   switch (row.kind) {
@@ -142,6 +148,20 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
           ...hoverTooltipAttrs(row.disabledReason),
+          oncontextmenu:
+            onAppShortcutContextMenu !== null &&
+            appShortcutsOf(row.app).some((shortcut) => shortcut.launch === row.launchPath.id)
+              ? (event: MouseEvent) => {
+                  event.preventDefault();
+                  onAppShortcutContextMenu(
+                    row.app.name,
+                    row.launchPath.id,
+                    event.clientX,
+                    event.clientY,
+                    targetElementOf(event),
+                  );
+                }
+              : undefined,
         },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),
