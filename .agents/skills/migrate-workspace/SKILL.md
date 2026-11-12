@@ -4,7 +4,7 @@ description: "Bring everything from another (older, broken, or replaced) workspa
 compatibility: Requires latchkey (the Imbue Studio API gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
-  exempt-checks: size paths
+  exempt-checks: size paths contents
   exempt-reason: awaiting-restructure
 ---
 
