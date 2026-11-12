@@ -35,7 +35,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
   a right-clicked element under a random `REF-<id>`, the menu's rows (the
   browser's own edit, link, and image rows, then "Copy reference",
-  "Explain...", and "Modify..."), and the installer every page runs, built into the
+  "Explain...", and "Modify..."), and the installer every page runs (it leaves
+  the Imbue Studio desktop app's native menu the right-clicks that menu answers
+  better, the plan's section 11), built into the
   module every app serves at `/_static/context_menu.js` with its framework-free
   renderer for pages without Mithril (`src/components/contextMenuOpener.ts` is
   the opener a Mithril page hands it, backed by the shared Menu); `src/embed.ts` and

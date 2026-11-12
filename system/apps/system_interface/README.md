@@ -63,7 +63,10 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   forwarder refuses it. The desktop's own chrome draws the element menu too: a
   right-click the views leave alone opens it, and the entry, shortcut,
   backdrop, and overview thumbnail menus end with its reference rows
-  (`docs/system/blueprint/element-reference-menu/`).
+  (`docs/system/blueprint/element-reference-menu/`). Where the Imbue Studio
+  desktop app draws a native menu, a right-click on text being edited, on the
+  selection, or on a plain link, and any with Shift held, is left to it
+  (the plan's section 11).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `/api/desktops/order`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
