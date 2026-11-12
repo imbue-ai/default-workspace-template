@@ -37,7 +37,7 @@ downloads, extracted archives, clones.
      empty `.nobackup` file in it when it creates the directory. The backup
      then keeps only that file. This is the fix to make in the app itself; see
      "Keep rebuildable data out of the backup" in
-     `.agents/shared/worker/references/harden-creation.md`. (`CACHEDIR.TAG` is
+     `.agents/skills/harden-worker/references/harden-creation.md`. (`CACHEDIR.TAG` is
      deliberately not honored: uv writes one into every virtualenv and tool
      environment, which a restore could not refill.)
    - Anything else, or until the app is changed: add a pattern to

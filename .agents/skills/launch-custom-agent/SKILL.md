@@ -1,6 +1,6 @@
 ---
 name: launch-custom-agent
-description: Launch a coding agent that works in the user's OWN repo or directory instead of this workspace's checkout. Use when a technical user wants an agent on their own codebase, with their own AGENTS.md, skills, and conventions -- the agent runs vanilla, free of this workspace's chat instructions, but still shows up as a chat in the Imbue Studio UI, bills through a signed-in provider account, and can notify the user.
+description: Launch a coding agent that works in the user's OWN repo or directory instead of this workspace's checkout. Use when a technical user wants an agent on their own codebase, with their own AGENTS.md, skills, and conventions, free of this workspace's chat instructions.
 metadata:
   author: imbue
 ---

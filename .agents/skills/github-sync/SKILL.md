@@ -1,6 +1,6 @@
 ---
 name: github-sync
-description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, and auto-pushes every commit from every checkout. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
+description: Enable, check, or disable GitHub sync for this workspace, which auto-pushes every commit to a dedicated private GitHub repo. Workspace data is not synced to GitHub (the host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
 compatibility: Requires latchkey (see the connect-external-service skill) and the user approving GitHub permissions in the Imbue Studio app.
 metadata:
   author: imbue

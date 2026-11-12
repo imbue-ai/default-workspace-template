@@ -1,9 +1,9 @@
 ---
 name: update-creation
-description: "Change an existing skill, app, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
+description: "Change an existing skill, app, service, or shared script/reference -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but extra repeatable work had to be done by hand, or when a change to it was discussed with the user and applied live."
 metadata:
   author: imbue
-  exempt-checks: size depth contents
+  exempt-checks: size contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -24,7 +24,7 @@ the same turn. Never dispatch a pass per creation. Every worker pays its own
 environment setup before it does any work, and two passes over one change
 would each verify half of something that only works whole. When a change holds
 parts that are separate jobs, the worker splits them across its own sub-workers
-(`.agents/shared/worker/references/harden-creation.md`, "Splitting the pass
+(`.agents/skills/harden-worker/references/harden-creation.md`, "Splitting the pass
 across sub-workers"); that is its call, not yours.
 
 ## The two origins
@@ -174,7 +174,8 @@ now exchange with each other. Describe the new contract; the incident is
 captured above.>
 
 ## What to do
-Read and follow \`.agents/shared/worker/SKILL.md\` from your own checkout. It
+Invoke the \`harden-worker\` skill. On a harness that cannot invoke skills, read
+and follow \`.agents/skills/harden-worker/SKILL.md\` from your own checkout. It
 reads \`operation\`, \`creations\`, and the \`## Change origin\` marker, then
 follows the matching references. Push reports to the lead per its reporting protocol.
 
@@ -193,7 +194,7 @@ the worker fails loudly if it is missing.
 a harden task dispatched from the careful flow for a critical app
 (`update-app/references/critical-app.md`) carries **no `## Change origin` marker
 and no worker gate** (see the critical-app handoff in
-`.agents/shared/worker/references/op-update.md`). That flow already got the
+`.agents/skills/harden-worker/references/op-update.md`). That flow already got the
 user's approval through its live preview loop, so re-arming the gate would ask
 them to approve the same thing twice -- and writing the marker anyway, or
 telling the worker in the task body to follow it, puts the gate back. Every

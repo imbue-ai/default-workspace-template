@@ -1,0 +1,1 @@
+Scope files name the harden worker's `type-app.md`, `type-skill.md` and `type-service.md` conventions at their new home, `.agents/skills/harden-worker/references/`, now that the worker is a skill under `.agents/skills/`.

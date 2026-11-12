@@ -1,6 +1,6 @@
 ---
 name: create-theme
-description: Use when the user wants a new look for their workspace -- a theme made from a description ("make it look like BeOS", "a dark solarized theme"), a picture, or an existing theme to start from. Lays out a theme folder, writes its colors, type, window chrome, and part styles against the theme contract, checks it, judges it in the theme gallery, lets the user try it in Desktop settings, and then asks whether to draw its icons for the apps there now and for apps built later.
+description: Use when the user wants a new look for their workspace -- a theme made from a description ("make it look like BeOS", "a dark solarized theme"), a picture, or an existing theme to start from. Makes the theme's colors, type, window chrome, and part styles. For its app icons, use make-theme-icon.
 metadata:
   author: imbue
 ---

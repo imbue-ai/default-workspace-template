@@ -84,7 +84,7 @@ same pressure is shed again.
 ## Diagnose worker liveness before invoking failure flow
 
 If the timeout trips without a report appearing, the worker may still be
-alive and working. Long-running stages (autofix, verify-architecture, large
+alive and working. Long-running stages (the test gate, large
 implementations) can legitimately exceed 30 minutes on a healthy worker.
 Before invoking the failure flow, check the worker session:
 

@@ -1,6 +1,6 @@
 ---
 name: find-transcripts
-description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Imbue Studio agents -- not other services (ChatGPT, claude.ai, etc.)."
+description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use any time a user asks about chat histories or they otherwise need to be read. Covers only Imbue Studio agents, not other services (ChatGPT, claude.ai, etc.)."
 compatibility: Covers agents that ran on this host (active, stopped, or destroyed). Uses find/jq/mngr.
 metadata:
   author: imbue

@@ -176,7 +176,7 @@ goes to stdout; with it, the parent directories are created.
   "wiring": [{"path": "system/supervisord.conf.d/slack-inbox.conf", "sections": ["program:slack-inbox"]}],
   "references": [{"path": ".agents/skills/slack-inbox-refresh", "note": "...", "kind": "skill"}],
   "context": [],
-  "conventions": ["system/apps/README.md", ".agents/shared/worker/references/type-app.md", "docs/system/style_guide.md"],
+  "conventions": ["system/apps/README.md", ".agents/skills/harden-worker/references/type-app.md", "docs/system/style_guide.md"],
   "exclude": ["system/vendor/**", "data/**", "**/node_modules/**", "**/dist/**", "**/.venv/**"],
   "diff": null
 }
