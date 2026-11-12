@@ -329,7 +329,7 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 
 ### 10.1 Manifest and program
 
-`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = false`, `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
+`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = true` (part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps), `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
 The program registers on port 8050 (no built-in uses it) and runs the `routines-app` entry point, like System Monitor.
 The app depends on the library and imports nothing from mngr.
 
