@@ -52,6 +52,13 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
+function rightClick(element: Element, init: MouseEventInit = {}): MouseEvent {
+  const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10, ...init });
+  element.dispatchEvent(event);
+  m.redraw.sync();
+  return event;
+}
+
 /** Right-click the bare backdrop and answer the menu row with the given key. */
 function backdropMenuRow(key: string): HTMLElement | null {
   (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
@@ -659,18 +666,6 @@ describe("the element menu", () => {
   it("where the desktop app draws a native menu, still opens an entry's own menu, and leaves a Shift right-click to the app", () => {
     store.setDrawsContextMenus(true);
     m.redraw.sync();
-    const rightClick = (element: Element, init: MouseEventInit = {}): MouseEvent => {
-      const event = new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 10,
-        clientY: 10,
-        ...init,
-      });
-      element.dispatchEvent(event);
-      m.redraw.sync();
-      return event;
-    };
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as Element;
     expect(rightClick(entry).defaultPrevented).toBe(true);
     expect(menuRowKeys().slice(0, 2)).toEqual(["minimize", "maximize"]);
@@ -750,8 +745,7 @@ describe("the element menu", () => {
   it("leads the tray agent's menu with its own rows, then the reference rows, and floats the avatar from it", async () => {
     pinnedEntry();
     const agent = document.querySelector("[data-tray-agent]") as HTMLElement;
-    agent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
-    m.redraw.sync();
+    rightClick(agent);
     const keys = menuRowKeys();
     expect(keys.slice(0, 2)).toEqual(["change-avatar", "float"]);
     expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
@@ -918,13 +912,6 @@ describe("the desktop shortcut rows", () => {
   beforeEach(() => {
     store.setBackdropSize({ width: 1000, height: 800 });
   });
-
-  function rightClick(element: Element): MouseEvent {
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
-    element.dispatchEvent(event);
-    m.redraw.sync();
-    return event;
-  }
 
   function openLaunchMenu(key: string): void {
     store.openLauncher();
