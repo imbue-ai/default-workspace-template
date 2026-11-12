@@ -68,8 +68,10 @@ const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-40 aria-disabled:c
 const BTN_READONLY = "cursor-default";
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
+  // The main action wears the workspace color: the primary role, the same color as the window around the
+  // workspace in Imbue Studio.
   primary:
-    "bg-accent-surface text-accent-content border-accent-surface not-disabled:not-aria-disabled:hover:bg-accent-surface-hover not-disabled:not-aria-disabled:hover:border-accent-surface-hover",
+    "bg-primary-surface text-primary-content border-primary-surface not-disabled:not-aria-disabled:hover:bg-primary-surface-hover not-disabled:not-aria-disabled:hover:border-primary-surface-hover",
   // The fill-tinted variants pair hover with the one-step-deeper pressed tint;
   // the solid variants keep their own hover colours and the shared translate-y
   // press cue instead.
