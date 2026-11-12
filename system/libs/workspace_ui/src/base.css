@@ -253,14 +253,13 @@
 /* The colour-utility layer: clean semantic names over the --c-* values,
  * grouped by role below. Utilities generate on demand. */
 @theme inline {
-  /* body: bg-body-surface / -secondary / -raised (each + -hover / -active), text-body-content / -secondary / -tertiary */
+  /* body: bg-body-surface / -secondary / -raised (each + -hover / -active, and -secondary-inactive for a background window's header), text-body-content / -secondary / -tertiary */
   --color-body-surface: var(--c-body-surface);
   --color-body-surface-hover: oklch(from var(--c-body-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
   --color-body-surface-active: oklch(from var(--c-body-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
   --color-body-surface-secondary: var(--c-body-surface-secondary);
   --color-body-surface-secondary-hover: oklch(from var(--c-body-surface-secondary) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
   --color-body-surface-secondary-active: oklch(from var(--c-body-surface-secondary) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  /* bg-body-surface-secondary-inactive: a background window's header */
   --color-body-surface-secondary-inactive: color-mix(in srgb, var(--c-body-surface-secondary), black var(--state-inactive));
   --color-body-surface-raised: var(--c-body-surface-raised);
   --color-body-surface-raised-hover: oklch(from var(--c-body-surface-raised) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);

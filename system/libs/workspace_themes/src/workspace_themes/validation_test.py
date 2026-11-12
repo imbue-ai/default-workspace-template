@@ -87,6 +87,14 @@ def test_contract_css_passes(tmp_path: Path) -> None:
             ":root { --si-pane-radius: 4px; }",
             "--si-pane-radius is not a contract token",
         ),
+        (
+            ":root { --c-accent: #000; }",
+            "--c-accent is a contract-1 token; contract 2 calls it --c-accent-surface",
+        ),
+        (
+            ":root { --c-accent-hover: #000; }",
+            "contract 2 computes hover and active from the surface they shade",
+        ),
         (":root { --desk-title-bar-height: 9px; }", "is 9px, outside 16px to 64px"),
         (":root { --desk-title-bar-height: 2em; }", "must be a length in px"),
         (":root { --desk-window-radius: 0; }", "must be a length in px"),
@@ -246,6 +254,14 @@ _ICONS = {
         ),
         (
             "paper",
+            {"contract": CONTRACT_VERSION - 1},
+            [
+                f"theme.toml: contract {CONTRACT_VERSION - 1} is not one this workspace reads (it reads "
+                f"{CONTRACT_VERSION}); `workspace-themes migrate paper` rewrites it"
+            ],
+        ),
+        (
+            "paper",
             {"contract": CONTRACT_VERSION + 1},
             [
                 f"theme.toml: contract {CONTRACT_VERSION + 1} is not one this workspace reads (it reads "
@@ -280,7 +296,7 @@ def test_a_manifest_with_an_unknown_key_or_a_bad_value_names_each(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "theme.toml").write_text(
-        'contract = 1\nid = "x"\nname = ""\ndescription = "d"\ncolour = "red"\n',
+        'contract = 2\nid = "x"\nname = ""\ndescription = "d"\ncolour = "red"\n',
         encoding="utf-8",
     )
 

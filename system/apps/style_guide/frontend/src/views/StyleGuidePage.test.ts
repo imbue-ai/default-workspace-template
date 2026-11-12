@@ -43,9 +43,9 @@ describe("StyleGuidePage", () => {
     const root = mountPage();
     const colors = tokens.colorGroups.flatMap((group) => group.colors);
     expect(root.querySelectorAll(".color-swatch")).toHaveLength(colors.length);
-    const accent = root.querySelector<HTMLElement>("#color-accent [data-color-sample]");
+    const accent = root.querySelector<HTMLElement>("#color-accent-surface [data-color-sample]");
     expect(accent?.style.backgroundColor).toBe("var(--c-accent-surface)");
-    expect(root.querySelector("#color-accent")?.textContent).toContain("bg-accent-surface");
+    expect(root.querySelector("#color-accent-surface")?.textContent).toContain("bg-accent-surface");
   });
 
   it("draws every icon of the shared set and every button variant and badge tone", () => {
@@ -129,9 +129,9 @@ describe("StyleGuidePage", () => {
     document.head.appendChild(theme);
     try {
       const root = mountPage();
-      const swatch = root.querySelector("#color-accent");
+      const swatch = root.querySelector("#color-accent-surface");
       expect(swatch?.textContent).toContain("#000080");
-      expect(swatch?.querySelector(".line-through")?.textContent).toBe("#2f6b4f");
+      expect(swatch?.querySelector(".line-through")?.textContent).toBe("var(--c-accent-key)");
       expect(root.querySelectorAll(".line-through")).toHaveLength(1);
     } finally {
       theme.remove();

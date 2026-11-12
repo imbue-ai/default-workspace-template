@@ -1243,6 +1243,7 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     # The bundled wallpapers beside the frontend bundle come first, then the wallpapers directory's files.
     assert client.get("/api/wallpapers").get_json() == {
         "wallpapers": [
+            {"kind": "bundled", "name": "studio", "url": "/wallpapers/bundled/studio"},
             {"kind": "bundled", "name": "dawn", "url": "/wallpapers/bundled/dawn"},
             {"kind": "file", "name": "mine", "url": "/wallpapers/file/mine"},
         ]
@@ -1319,7 +1320,10 @@ def test_file_wallpapers_are_served_from_a_relative_configured_directory(
     client = application.test_client()
 
     assert client.get("/api/wallpapers").get_json() == {
-        "wallpapers": [{"kind": "file", "name": "dusk", "url": "/wallpapers/file/dusk"}]
+        "wallpapers": [
+            {"kind": "bundled", "name": "studio", "url": "/wallpapers/bundled/studio"},
+            {"kind": "file", "name": "dusk", "url": "/wallpapers/file/dusk"},
+        ]
     }
     served = client.get("/wallpapers/file/dusk")
     assert served.status_code == 200 and served.data == b"png-bytes"

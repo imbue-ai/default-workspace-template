@@ -62,7 +62,7 @@ def _write_dark_paper(repo_root: Path, manifest_tables: str) -> Path:
     folder = repo_root / WORKSPACE_THEMES_DIRECTORY / "dark-paper"
     folder.mkdir(parents=True)
     (folder / THEME_MANIFEST_FILENAME).write_text(
-        'contract = 1\nid = "dark-paper"\nname = "Dark paper"\ndescription = "Paper at night."\n'
+        'contract = 2\nid = "dark-paper"\nname = "Dark paper"\ndescription = "Paper at night."\n'
         f'base = "paper"\n{manifest_tables}',
         encoding="utf-8",
     )
