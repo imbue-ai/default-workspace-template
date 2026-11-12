@@ -45,7 +45,9 @@
   --desk-taskbar-surface: var(--c-body-surface-raised);
   --desk-backdrop: var(--c-wallpaper-surface);
   /* The studio wordmark on the workspace color's wallpaper ramp, drawn by the shell (shell/wallpapers.py). */
-  --desk-default-wallpaper: url(/wallpapers/bundled/studio);
+  --desk-studio-wallpaper: url(/wallpapers/bundled/studio);
+  /* workspace_color.css names it at the workspace color's revision, so a new color redraws it at once. */
+  --desk-default-wallpaper: var(--desk-studio-wallpaper);
   --desk-icon-size: 48px;
   /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
      the same silhouette rather than growing a corner that is suddenly too tight or too round. */

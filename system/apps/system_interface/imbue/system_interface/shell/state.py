@@ -290,6 +290,8 @@ class ShellState(MutableModel):
         if self._theme_watch is not None:
             self._theme_watch.stop()
             self._theme_watch = None
+        if self._workspace_color is not None:
+            self._workspace_color.stop()
         if self._snapshot_watch is not None:
             stop_file_watch(self._snapshot_watch)
             self._snapshot_watch = None

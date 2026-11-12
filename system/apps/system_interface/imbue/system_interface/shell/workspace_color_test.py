@@ -52,3 +52,40 @@ def test_a_changed_label_is_kept_and_announced_once(tmp_path: Path) -> None:
     keeper.refresh()
     assert keeper.read() == WorkspaceColorRecord(hex=None)
     assert announced == ["changed", "changed"]
+
+
+def test_an_announced_pick_is_worn_at_once_and_kept_once_the_label_says_it(tmp_path: Path) -> None:
+    announced: list[str | None] = []
+    keeper = WorkspaceColorKeeper(
+        repo_root=tmp_path,
+        state_path=tmp_path / "workspace_color.json",
+        on_changed=lambda: announced.append(keeper.read().hex),
+        list_agents=_Listing(
+            {"agents": [{"labels": {"color": "#492222"}}]},
+            {"agents": [{"labels": {"color": "#9fbbd3"}}]},
+        ),
+        reread_interval_seconds=0.001,
+        reread_window_seconds=1.0,
+    )
+
+    keeper.refresh_until("#9FBBD3")
+
+    assert announced == ["#9fbbd3"]
+    assert keeper.read() == WorkspaceColorRecord(hex="#9fbbd3")
+
+
+def test_a_pick_the_label_never_comes_to_say_gives_way_to_the_label(tmp_path: Path) -> None:
+    announced: list[str | None] = []
+    keeper = WorkspaceColorKeeper(
+        repo_root=tmp_path,
+        state_path=tmp_path / "workspace_color.json",
+        on_changed=lambda: announced.append(keeper.read().hex),
+        list_agents=_Listing(*([{"agents": [{"labels": {"color": "#492222"}}]}] * 4)),
+        reread_interval_seconds=0.001,
+        reread_window_seconds=0.004,
+    )
+
+    keeper.refresh_until("#9fbbd3")
+
+    assert announced == ["#9fbbd3", "#492222"]
+    assert keeper.read() == WorkspaceColorRecord(hex="#492222")

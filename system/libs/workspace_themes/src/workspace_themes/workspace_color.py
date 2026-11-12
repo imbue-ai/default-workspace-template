@@ -12,11 +12,14 @@ import json
 import math
 import re
 from pathlib import Path
+from urllib.parse import quote
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from pydantic import Field, ValidationError
+
+from workspace_themes.contract import STUDIO_WALLPAPER_URL
 
 # Imbue's own primary, Courage (Red 11). A workspace wearing it gets the standard look's hand-picked keys rather
 # than ones derived from it.
@@ -331,11 +334,12 @@ def derive_workspace_keys(hex_color: str) -> WorkspaceKeys | None:
 
 
 @pure
-def render_workspace_color_css(keys: WorkspaceKeys | None) -> str:
-    """The stylesheet every app serves as /_static/workspace_color.css: the keys over the standard look's, or an
-    empty sheet for Imbue's own color. The wallpaper follows the primary."""
+def render_workspace_color_css(keys: WorkspaceKeys | None, revision: str) -> str:
+    """The stylesheet every app serves as /_static/workspace_color.css: the keys over the standard look's (none for
+    Imbue's own color), and the standard wallpaper at the color's revision. The wallpaper follows the primary."""
+    wallpaper = f'  --desk-studio-wallpaper: url("{STUDIO_WALLPAPER_URL}?v={quote(revision)}");\n'
     if keys is None:
-        return "/* The workspace wears Imbue's own color: the standard keys stand. */\n"
+        return f"/* The workspace wears Imbue's own color: the standard keys stand. */\n:root {{\n{wallpaper}}}\n"
     return (
         ":root {\n"
         f"  --c-neutral-key: {keys.neutral};\n"
@@ -346,6 +350,7 @@ def render_workspace_color_css(keys: WorkspaceKeys | None) -> str:
         f"  --c-danger-key: {keys.danger};\n"
         "  --c-wallpaper-key: var(--c-primary-key);\n"
         f"  --c-primary-content: {keys.primary_content};\n"
+        f"{wallpaper}"
         "}\n"
     )
 
@@ -388,6 +393,5 @@ def write_workspace_color(state_path: Path, record: WorkspaceColorRecord) -> Non
 
 @pure
 def workspace_color_css(record: WorkspaceColorRecord) -> str:
-    if record.hex is None:
-        return render_workspace_color_css(None)
-    return render_workspace_color_css(derive_workspace_keys(record.hex))
+    keys = None if record.hex is None else derive_workspace_keys(record.hex)
+    return render_workspace_color_css(keys, workspace_color_revision(record))

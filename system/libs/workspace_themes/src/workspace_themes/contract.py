@@ -22,6 +22,9 @@ WORKSPACE_THEMES_DIRECTORY: Final[str] = "themes"
 WORKSPACE_COLOR_STATE_PATH: Final[str] = "data/.state/workspace_color.json"
 # Where every app serves the keys that color stands for, beside the theme bundle.
 WORKSPACE_COLOR_ROUTE: Final[str] = "/_static/workspace_color.css"
+# The standard wallpaper the shell draws in the workspace color's wallpaper ramp. The workspace color's stylesheet
+# names it at the color's revision (--desk-studio-wallpaper), so a new color redraws it with everything else.
+STUDIO_WALLPAPER_URL: Final[str] = "/wallpapers/bundled/studio"
 # Where icons generated in a workspace for a built-in theme are kept, so the built-in folder stays as shipped.
 GENERATED_ICONS_DIRECTORY: Final[str] = "data/.themes"
 

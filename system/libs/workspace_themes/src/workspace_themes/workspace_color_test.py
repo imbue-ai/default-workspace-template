@@ -80,7 +80,12 @@ def test_a_status_hue_leans_toward_the_seed_by_at_most_fifteen_degrees() -> None
 
 def test_imbue_s_own_color_keeps_the_standard_keys() -> None:
     assert derive_workspace_keys(IMBUE_PRIMARY) is None
-    assert ":root" not in render_workspace_color_css(None)
+    imbue_css = render_workspace_color_css(None, "imbue")
+    assert "-key:" not in imbue_css
+    assert (
+        '--desk-studio-wallpaper: url("/wallpapers/bundled/studio?v=imbue");'
+        in imbue_css
+    )
     assert workspace_color_revision(WorkspaceColorRecord(hex=IMBUE_PRIMARY)) == "imbue"
     assert workspace_color_revision(WorkspaceColorRecord(hex=None)) == "imbue"
 
@@ -92,6 +97,9 @@ def test_another_color_sets_every_key_and_the_wallpaper_follows_the_primary() ->
         assert f"--c-{token}-key: " in css
     assert "--c-primary-key: #0b292b;" in css
     assert "--c-wallpaper-key: var(--c-primary-key);" in css
+    assert (
+        '--desk-studio-wallpaper: url("/wallpapers/bundled/studio?v=%230b292b");' in css
+    )
     assert workspace_color_revision(WorkspaceColorRecord(hex="#0b292b")) == "#0b292b"
 
 

@@ -62,6 +62,12 @@ def require_available_theme(catalog: ThemeCatalog, theme: ThemeId | None) -> The
     return theme
 
 
+class WorkspaceColorRefreshRequest(FrozenModel):
+    """The body of the workspace color reread: the color Imbue Studio announced, if it named one."""
+
+    hex: str | None = Field(default=None, description="The color to wait for the label to say, as #rrggbb")
+
+
 class WorkspaceColorRefreshResponse(FrozenModel):
     """What asking for the workspace color to be re-read answers."""
 
@@ -107,9 +113,10 @@ def set_app_theming(app_name: str) -> ResponseReturnValue:
 
 
 def refresh_workspace_color() -> ResponseReturnValue:
-    """Re-read the workspace color label, which Imbue Studio said changed; a change reaches every window as
-    ``themes_changed``. Answers at once: the read runs on a thread of its own."""
-    _shell().workspace_color.refresh_in_background()
+    """Re-read the workspace color label, which Imbue Studio said changed, until it says the color Studio named; a
+    change reaches every window as ``themes_changed``. Answers at once: the reads run on a thread of their own."""
+    body = parse_request_body(WorkspaceColorRefreshRequest)
+    _shell().workspace_color.refresh_in_background(body.hex)
     return model_response(WorkspaceColorRefreshResponse(is_started=True))
 
 

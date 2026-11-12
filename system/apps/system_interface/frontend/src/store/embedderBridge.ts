@@ -33,8 +33,8 @@ export function connectEmbedderToStore(store: DesktopStore): void {
     store.setCanImmerse(message.immersive === true);
     store.setEmbedderPresent(true);
   });
-  setEmbedderMessageHandler(WORKSPACE_COLOR, () => {
-    void refreshWorkspaceColor().catch((error: unknown) => {
+  setEmbedderMessageHandler(WORKSPACE_COLOR, (message) => {
+    void refreshWorkspaceColor(typeof message.hex === "string" ? message.hex : null).catch((error: unknown) => {
       console.warn("Could not refresh the workspace color", error);
     });
   });

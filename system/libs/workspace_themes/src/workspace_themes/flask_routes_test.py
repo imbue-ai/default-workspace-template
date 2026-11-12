@@ -142,7 +142,7 @@ def test_every_app_serves_the_kept_workspace_color_as_keys_revalidated_on_each_u
     )
 
     assert imbue.status_code == 200
-    assert ":root" not in imbue.get_data(as_text=True)
+    assert "--c-primary-key" not in imbue.get_data(as_text=True)
     assert "--c-primary-key: #0b292b;" in teal.get_data(as_text=True)
     assert teal.mimetype == "text/css"
     assert teal.headers["Cache-Control"] == "no-cache"
