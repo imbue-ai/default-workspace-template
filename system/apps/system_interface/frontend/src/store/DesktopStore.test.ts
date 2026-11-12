@@ -3241,7 +3241,8 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
   });
 
   it("raises no bubble for a message that does not mention the viewer, the agent's words included, but hops its speaker", async () => {
-    const store = await startedStore();
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
     setOwnIdentityForTesting({
       owner: true,
       user_id: "user-josh-0001",
@@ -3258,9 +3259,12 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
       kind: "message",
     };
 
+    const before = redraws;
     socket.deliver().onBubble(message);
     socket.deliver().onBubble({ ...message, speaker: "workspace-agent", text: "Looking into it.", mentions: [] });
 
+    // The hops are painted although no bubble rose.
+    expect(redraws).toBe(before + 2);
     expect(store.getBubbles()).toEqual([]);
     expect(store.getHopping()).toEqual(new Set(["user:user-bob-4471", "workspace-agent"]));
   });

@@ -1407,9 +1407,13 @@ export class DesktopStore {
   private takeBubble(bubble: BubbleWire): void {
     this.hop([bubble.speaker]);
     const viewer = getOwnParticipant();
-    if (!raisesBubble(bubble, viewer)) return;
-    if (!isMentionOf(bubble, viewer) && isChatOnScreen(this.state, bubble.chat_id)) return;
-    this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    const isRaised =
+      raisesBubble(bubble, viewer) && (isMentionOf(bubble, viewer) || !isChatOnScreen(this.state, bubble.chat_id));
+    if (isRaised) {
+      this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    } else {
+      this.deps.redraw();
+    }
   }
 
   /** Put a speaker's bubble away: it was dismissed, or clicked. */
