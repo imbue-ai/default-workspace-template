@@ -600,7 +600,7 @@ runs the primary text action with nothing to send, which opens the main chat;
 clicking your own picture does nothing. The shell names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
-somebody sends, every turn the agent closes with text, and every notification a chat
+somebody sends, every post the agent makes into a room, and every notification a chat
 sends the user (`{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions",
 "kind"}`, `kind` being `message` or `notification`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
@@ -614,7 +614,7 @@ connect once reported. Every `bubble` hops its speaker's entry, but only a
 bubble is a rounded card hanging above the tray with an arrow at the speaker's entry,
 holding what was said, a dismiss X, and a click that opens the chat it was said in; it
 lives five seconds after its last change, a person's new message replaces their bubble,
-the agent's new notification within its bubble's lifetime is appended (folding past three lines into "and N
+the agent's new bubble within its bubble's lifetime is appended (folding past three lines into "and N
 more"), bubbles of different speakers stack upward in arrival order, and a mention
 of the viewer wears an accent border and stays until dismissed or its chat is
 opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).

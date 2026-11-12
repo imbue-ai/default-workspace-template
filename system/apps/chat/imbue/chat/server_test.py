@@ -6445,31 +6445,37 @@ def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_no
     assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
 
 
-def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
-    """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
-    agent's entry; a retired agent's words raise none."""
+def test_only_the_agents_room_posts_reach_the_tray_naming_the_people_they_mention(tmp_path: Path) -> None:
+    """The agent's post into a room is posted to the tray with the people it mentions, whose clients raise it as a
+    bubble (the multiplayer spec, section 6.5); its turns in an agent chat and a retired agent's words post none."""
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     state = state_of(app)
     shell = _fake_shell_of(app)
-    turn = {
-        "type": "assistant_message",
-        "event_id": "e-1",
-        "agent_id": _MAIN_ID,
-        "text": "Done: the report is ready.\n\nIt covers three cases.",
-    }
+    turn = {"type": "assistant_message", "event_id": "e-1", "agent_id": _MAIN_ID, "text": "Looking into it."}
     room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+    mentioning = {**room_post, "event_id": "e-3", "content": "@Josh @Bob done, and @agent is me."}
 
-    state.bubble_agent_turns(ChatId(_MAIN_ID), _MAIN_ID, [turn, {**turn, "event_id": "e-3", "text": "  "}])
-    state.bubble_agent_turns(ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post])
-    state.bubble_agent_turns(ChatId(_MAIN_ID), "agent-00000000000000000000000000000099", [turn])
+    state.post_agents_room_posts(ChatId(_MAIN_ID), _MAIN_ID, [turn])
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), "agent-00000000000000000000000000000099", [room_post])
+    state.post_agents_room_posts(
+        ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post, {**room_post, "event_id": "e-4", "content": " "}]
+    )
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), _LOUNGE_ID, [mentioning])
 
-    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's bubbles to reach the shell")
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's room posts to reach the shell")
     assert [
-        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id)
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
         for bubble in shell.bubbles
     ] == [
-        ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
-        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2", ()),
+        (
+            "workspace-agent",
+            _LOUNGE_ID,
+            "Lounge",
+            "@Josh @Bob done, and @agent is me.",
+            "e-3",
+            (ParticipantKey("user:user-josh-0001"), ParticipantKey("user:user-bob-4471")),
+        ),
     ]
     assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
 

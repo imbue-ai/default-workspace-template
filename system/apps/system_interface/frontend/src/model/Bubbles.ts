@@ -1,11 +1,12 @@
 /**
  * Speech bubbles (the multiplayer spec, section 6.5, S11): what somebody just said, hanging over their tray entry.
  *
- * Only two things raise one: a chat's notification to the user (over the agent's entry), and a message that
- * mentions the viewer. Every other message only hops its speaker's entry.
+ * Only two things raise one: a chat's notification to the user (over the agent's entry), and a message (a
+ * person's, a visiting agent's, or the agent's post into a room) that mentions the viewer. Every other message only
+ * hops its speaker's entry.
  *
  * One bubble per speaker, debounced: a person's new message replaces their bubble and restarts its timer; the
- * agent's new notification within its bubble's lifetime is appended to it ("and 2 more" past three lines) and restarts
+ * agent's new bubble within its bubble's lifetime is appended to it ("and 2 more" past three lines) and restarts
  * the timer; bubbles of different speakers stack upward in arrival order. A bubble lives `BUBBLE_LIFETIME_MS` after
  * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened. A bubble
  * rises on every client but the speaker's own (the shell leaves those out) and the clients looking at the chat it was

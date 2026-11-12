@@ -20,7 +20,6 @@ from imbue.chat.tray_feed import activity_kind_of
 from imbue.chat.tray_feed import activity_status_of
 from imbue.chat.tray_feed import bubble_text
 from imbue.chat.tray_feed import chats_activity_report
-from imbue.chat.tray_feed import first_paragraph
 from imbue.imbue_common.model_update import to_update
 
 _BOB = ParticipantKey("user:user-bob-4471")
@@ -28,12 +27,9 @@ _JOSH = ParticipantKey("user:user-josh-0001")
 _CHAT = ChatId("agent-00000000000000000000000000000042")
 
 
-def test_a_bubble_shows_the_first_part_of_a_message_and_the_first_paragraph_of_a_turn() -> None:
+def test_a_bubble_shows_the_first_part_of_a_message() -> None:
     assert bubble_text("  hi all  ") == "hi all"
     assert len(bubble_text("x" * 500)) == BUBBLE_TEXT_LIMIT
-    assert first_paragraph("\n\nDone, see the file.\n\nIt holds the three cases.") == "Done, see the file."
-    assert first_paragraph("one\nline\n\nmore") == "one\nline"
-    assert first_paragraph("   \n\n  ") == ""
 
 
 def test_every_chat_status_and_kind_is_spelled_the_same_on_the_wire() -> None:
