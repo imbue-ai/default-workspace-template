@@ -105,7 +105,15 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
     # The update worker reads footprints and test selections with the app-manifest
     # library as the merge left it, so it syncs that package from the merged lock first.
     (
-        ".agents/skills/update-self/references/update-self-worker.md",
+        ".agents/skills/update-self/references/worker-impact-analysis.md",
+        "uv run --frozen --package app-manifest app-manifest",
+    ),
+    (
+        ".agents/skills/update-self/references/worker-validation.md",
+        "uv run --frozen --package app-manifest app-manifest",
+    ),
+    (
+        ".agents/skills/update-self/references/worker-catch-up.md",
         "uv run --frozen --package app-manifest app-manifest",
     ),
     # The migration reference quotes the forms an existing workspace's files still use.

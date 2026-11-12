@@ -4,6 +4,12 @@ Whether the review gates run on an update merge is decided by a rule, not by
 judgment. Apply it and record which branch applied, with its evidence, in the
 report.
 
+## Contents
+
+- Skip the gates only on a pure clean pull
+- Otherwise run the real gates, scoped to the locally-divergent content
+- The escape hatch
+
 ## Skip the gates only on a pure clean pull
 
 All three must hold:
@@ -27,10 +33,10 @@ All three must hold:
    history (whose merge adds no commit), that release's landed merge. Name the
    merge, each revert sha, and any revert conflict with how you resolved it
    in the report as this condition's evidence. A catch-up merge (the worker
-   guide's §7) is not an edit of yours: what it brings in is the workspace's
-   own work, so after one the diff runs to your tip before the *first*
-   catch-up merge (§7's `$PRE` names the newest round's, which already holds
-   the earlier rounds' incoming work). Only this pass's catch-ups count: a
+   guide's Step 7) is not an edit of yours: what it brings in is the
+   workspace's own work, so after one the diff runs to your tip before the
+   *first* catch-up merge (the catch-up's `$PRE` names the newest round's,
+   which already holds the earlier rounds' incoming work). Only this pass's catch-ups count: a
    retry's `<merge-sha>` is an earlier attempt's, whose own catch-ups landed
    after it, so the search starts at the workspace commit the newest catch-up
    merged:
@@ -45,6 +51,34 @@ All three must hold:
 
    A conflict you resolved in any catch-up, a lockfile you regenerated in one,
    and any commit you added after one are edits.
+
+   The skill-exemption commit of the worker guide's Step 4b is not an edit of
+   yours either, as the command made it: the one commit on your branch whose
+   subject is exactly `Record skill-check exemptions`, holding only what
+   `validate_skill.py --stamp` wrote. It changes nothing but the frontmatter
+   `metadata` block of `.agents/skills/<name>/SKILL.md` files. With one on the
+   branch, the empty-diff test leaves it out and tests each side of it:
+
+   ```bash
+   M=<merge-sha>
+   STAMP=$(git log -1 --format=%H --fixed-strings \
+       --grep "Record skill-check exemptions" "$M..HEAD")
+   if [ -n "$STAMP" ]; then
+       git diff --name-only "$STAMP^" "$STAMP"
+       git diff "$M" "$STAMP^"
+       git diff "$STAMP" HEAD
+   else
+       git diff "$M" HEAD
+   fi
+   ```
+
+   The first line must list only `.agents/skills/<name>/SKILL.md` files, and
+   every `git diff` after it must print nothing. After a catch-up, the last
+   diff runs from `$STAMP` to `"$FIRST^1"` in place of `HEAD`. Nothing else
+   is left out: a commit under that subject that touches any other file, a
+   second commit under it, and a SKILL.md you changed in any other commit are
+   edits, and the test above reads each as one. Name the stamp commit's sha
+   in the report with this condition's other evidence.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would
@@ -70,7 +104,9 @@ the `question` gate like any other.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own
-in-branch edits, and any lockfile you regenerated. A file byte-identical to
+in-branch edits, and any lockfile you regenerated. The skill-exemption commit
+adds nothing to it: the two lines it writes in a user's skill are not an edit
+of yours. A file byte-identical to
 the release arrived exactly as upstream tested it, and a fix to it would only
 manufacture local divergence. Over an 800-file release this is the difference
 between reviewing four reconciled files and reviewing upstream's code. Name
@@ -93,6 +129,6 @@ local breakage, not improving upstream's code.
 
 If you believe the gates should not run -- or should run at some other scope
 -- in a situation this rule does not cover, that is a `question` gate for the
-lead (Step 6), never a silent adaptation, however well-reasoned and however
+lead (the worker guide's Step 6), never a silent adaptation, however well-reasoned and however
 openly you would have disclosed it. The lead answers it by this rule; where
 the rule is genuinely silent, the fallback is more coverage, never less.

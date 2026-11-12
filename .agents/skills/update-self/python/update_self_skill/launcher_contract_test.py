@@ -12,7 +12,8 @@ So every ``create_worker.py`` invocation in the update-self prose is held to
 the launcher interface of the oldest release the Imbue Studio app offers an update
 from (``minds-v0.3.17``). Adding a flag here means checking that release's
 ``create_worker.py`` still accepts it, or doing the work with plain ``mngr``
-commands instead, as the predecessor cleanup in Step 3b does.
+commands instead, as the predecessor cleanup in ``references/launching-the-worker.md``
+does.
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ import shlex
 from pathlib import Path
 
 _SKILL_DIR = Path(__file__).resolve().parents[2]
+# SKILL.md is the lead's checklist; the commands each step runs are in its references.
 _PROSE_FILES = (
     _SKILL_DIR / "SKILL.md",
-    _SKILL_DIR / "references" / "update-self-worker.md",
+    *sorted((_SKILL_DIR / "references").glob("*.md")),
 )
 
 # The launcher's interface at minds-v0.3.17, per subcommand.

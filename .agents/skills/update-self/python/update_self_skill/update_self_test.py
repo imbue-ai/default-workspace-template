@@ -957,6 +957,107 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     assert json.loads(capsys.readouterr().out)["added"] == added
 
 
+def test_retired_names_lists_removed_commands_and_removed_or_renamed_skills(
+    tmp_path, capsys
+) -> None:
+    # A user's skill or routine calls the template by name, and nothing fails until it next
+    # runs. So the worker searches the user's creations for every name a release retires,
+    # and this is where it gets the names the tree itself declares.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def _scripts(**scripts: str) -> str:
+        lines = [
+            f'{name.replace("_", "-")} = "{target}"' for name, target in scripts.items()
+        ]
+        return '[project]\nname = "p"\n\n[project.scripts]\n' + "\n".join(lines) + "\n"
+
+    usage = "".join(f"usage line {index}\n" for index in range(40))
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write(
+        "system/apps/screen/pyproject.toml",
+        _scripts(
+            agentic_browser_fleet="screen.fleet:main", screen="screen.service:main"
+        ),
+    )
+    _write(
+        "system/libs/tools/pyproject.toml",
+        _scripts(old_tool="tools.old:main", moved_tool="tools.moved:main"),
+    )
+    _write("system/vendor/broken/pyproject.toml", "[project\n")
+    _write(".agents/skills/agentic-browser-fleet/SKILL.md", "drive a browser\n")
+    _write(".agents/skills/agentic-browser-fleet/references/usage.md", usage)
+    _write(".agents/skills/dealing-with-the-unexpected/SKILL.md", "what to do\n")
+    _write(".agents/skills/kept/SKILL.md", "kept\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("tag", "base")
+
+    # The command and its skill are renamed (the skill's SKILL.md rewritten on the way, so
+    # only its reference traces the move), one command and one skill are dropped, and one
+    # command moves to another project, which retires nothing.
+    _write(
+        "system/apps/screen/pyproject.toml",
+        _scripts(use_browser="screen.fleet:main", screen="screen.service:main"),
+    )
+    _write("system/libs/tools/pyproject.toml", '[project]\nname = "p"\n')
+    _write("system/libs/other/pyproject.toml", _scripts(moved_tool="other.moved:main"))
+    _git("rm", "-r", "-q", ".agents/skills/agentic-browser-fleet")
+    _git("rm", "-r", "-q", ".agents/skills/dealing-with-the-unexpected")
+    _write(".agents/skills/use-browser/SKILL.md", "a new document entirely\n" * 20)
+    _write(".agents/skills/use-browser/references/usage.md", usage)
+    _write(".agents/skills/brand-new/SKILL.md", "new\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "target")
+    _git("tag", "target")
+
+    expected = {
+        "removed_entry_points": [
+            {
+                "name": "agentic-browser-fleet",
+                "pyproject": "system/apps/screen/pyproject.toml",
+                "target": "screen.fleet:main",
+                "same_target": ["use-browser"],
+            },
+            {
+                "name": "old-tool",
+                "pyproject": "system/libs/tools/pyproject.toml",
+                "target": "tools.old:main",
+                "same_target": [],
+            },
+        ],
+        "removed_skills": ["dealing-with-the-unexpected"],
+        "renamed_skills": [{"from": "agentic-browser-fleet", "to": "use-browser"}],
+        "unreadable_pyprojects": ["system/vendor/broken/pyproject.toml"],
+    }
+    # From the root and from a subdirectory: a git path is otherwise relative to the cwd.
+    for repo_root in (tmp_path, tmp_path / "system" / "apps" / "screen"):
+        assert (
+            update_self.main(
+                [
+                    "retired-names",
+                    "--base",
+                    "base",
+                    "--target",
+                    "target",
+                    "--repo-root",
+                    str(repo_root),
+                ]
+            )
+            == 0
+        )
+        assert json.loads(capsys.readouterr().out) == expected
+    _git("diff", "--quiet")
+    _git("diff", "--cached", "--quiet")
+
+
 def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     tmp_path, capsys
 ) -> None:
@@ -1660,10 +1761,15 @@ def test_parse_version_orders_prereleases_semver_style() -> None:
 # SKILL.md task-file template cross-version contract
 
 
-def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
-    """The SKILL.md task-file heredoc must keep `lead_agent` and `finish_report_path`.
+def _reference(name: str) -> str:
+    """One of the skill's reference files, which each step of SKILL.md names."""
+    return (_SKILL_DIR / "references" / name).read_text(encoding="utf-8")
 
-    This SKILL.md is executed cross-version: an OLDER workspace's lead follows
+
+def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
+    """The task-file heredoc Step 3b writes must keep `lead_agent` and `finish_report_path`.
+
+    This prose is executed cross-version: an OLDER workspace's lead follows
     this (staged, target-version) prose but launches with its own, possibly
     pre-lead-agent-stamping `create_worker.py` -- so the template itself is the
     only thing that gives the worker a report address there. Removing either
@@ -1672,10 +1778,20 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     timeout in silence. The address is the lead's agent id, which a rename of
     its chat does not change; its name would.
     """
-    skill_md = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    start = skill_md.index("cat << FRONTMATTER_EOF")
-    end = skill_md.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
-    frontmatter_template = skill_md[start:end]
+    assert "references/launching-the-worker.md" in _skill_section("### 3b. Launch")
+    prose = [
+        path.read_text(encoding="utf-8")
+        for path in (
+            _SKILL_DIR / "SKILL.md",
+            *sorted((_SKILL_DIR / "references").glob("*.md")),
+        )
+    ]
+    # One template in the whole skill, and it is the one the launch step follows.
+    [launching] = [text for text in prose if "cat << FRONTMATTER_EOF" in text]
+    assert launching == _reference("launching-the-worker.md")
+    start = launching.index("cat << FRONTMATTER_EOF")
+    end = launching.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
+    frontmatter_template = launching[start:end]
     assert "lead_agent: $MNGR_AGENT_ID" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
 
@@ -1754,11 +1870,13 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
         line
         for text in prose
         for line in text.replace("\\\n", " ").splitlines()
-        if line.startswith("python3 ") and "update_self.py" in line
+        # A command inside a numbered step is indented with it.
+        if line.lstrip().startswith("python3 ") and "update_self.py" in line
     ]
     # The commands this guard exists for; without them it is vacuous.
     assert any("run-status delegate" in line for line in invocations)
     assert any("run-status verdict" in line for line in invocations)
+    assert any("update_self.py apply" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     assert [line for line in invocations if staged not in line] == []
 
@@ -1809,11 +1927,17 @@ _FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 
 def _skill_section(heading: str) -> str:
-    """One ``##``/``###`` section of SKILL.md, up to the next heading of the same or a higher level.
+    """One ``##``/``###`` section of SKILL.md."""
+    return _section((_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"), heading)
+
+
+def _section(text: str, heading: str) -> str:
+    """One ``##``/``###`` section of a markdown file, up to the next heading of the same or a
+    higher level.
 
     Lines inside fenced blocks are never headings: a bash comment starts with ``#`` too.
     """
-    lines = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").splitlines()
+    lines = text.splitlines()
     level = len(heading.split(" ", 1)[0])
     start = next(index for index, line in enumerate(lines) if line.startswith(heading))
     is_fenced = False
@@ -1984,7 +2108,10 @@ def test_step_2_resolves_a_pinned_target_without_asking_the_app(
 
 def test_step_5b_pauses_the_chats_saves_their_work_applies_then_resumes_them() -> None:
     """The apply-time order: chats paused, their uncommitted work saved, the apply, and the chats back."""
-    commands = _fenced_commands(_skill_section("### 5b. Apply the update"))
+    assert "references/applying-the-update.md" in _skill_section(
+        "### 5b. Apply the update"
+    )
+    commands = _fenced_commands(_reference("applying-the-update.md"))
     order = [
         _first_index(commands, "run-status stop-chats"),
         _first_index(commands, "git commit -F /tmp/update-self-wip-message.txt"),
@@ -2003,39 +2130,206 @@ def test_step_5b_pauses_the_chats_saves_their_work_applies_then_resumes_them() -
 def test_step_4_ends_a_hold_with_a_decision_keeping_the_worker() -> None:
     """A customization the update cannot keep ends the pass: the verdict, the worker stopped and kept,
     and the chats brought back by Step 6's opening, which runs on every terminal path."""
-    commands = _fenced_commands(_skill_section("## 4. Proxy the `question` gate"))
+    assert "references/question-gates.md" in _skill_section(
+        "## 4. Proxy the `question` gate"
+    )
+    gates = _reference("question-gates.md")
+    hold = _section(gates, "## A hold ends the pass with a decision")
+    commands = _fenced_commands(hold)
     verdict = _first_index(commands, "run-status verdict NEEDS_DECISION")
     stop = _first_index(commands, "mngr stop update-self")
     assert verdict < stop
-    # The hold's own report is consumed, so the re-land's re-armed poll waits for the reply.
-    assert stop < _first_index(commands, "reports/consumed/")
-    assert not any(
-        "mngr destroy" in command or "git branch" in command for command in commands
-    )
-    assert not any("run-status hold" in command for command in commands)
+    # The hold's own report is consumed, so the re-land's re-armed poll waits for the reply. A
+    # launcher that left it in place is an older workspace's, so the command is in that reference,
+    # and the hold sends the lead to it once the worker is stopped.
+    older = _reference("older-workspaces.md")
+    consuming = '"Consuming a report by hand"'
+    assert hold.index("mngr stop update-self") < hold.index(consuming)
     _first_index(
-        _fenced_commands(_skill_section("## 6. Teardown")), "run-status resume-chats"
+        _fenced_commands(_section(older, "## Consuming a report by hand")),
+        "reports/consumed/",
     )
+    # No gate destroys the worker, deletes its branch, or waits on the user holding the pass.
+    every_gate_command = _fenced_commands(gates)
+    assert not any(
+        "mngr destroy" in command or "git branch" in command
+        for command in every_gate_command
+    )
+    assert not any("run-status hold" in command for command in every_gate_command)
+    assert "references/teardown.md" in _skill_section("## 6. Teardown")
+    teardown_opening = _section(_reference("teardown.md"), "## Every ending")
+    assert '"Every ending"' in hold
+    _first_index(_fenced_commands(teardown_opening), "run-status resume-chats")
 
-    relanding = _fenced_commands(
-        (_SKILL_DIR / "references" / "resuming-after-a-decision.md").read_text(
-            encoding="utf-8"
-        )
-    )
+    relanding = _fenced_commands(_reference("resuming-after-a-decision.md"))
     order = [
         _first_index(relanding, "run-status start"),
         _first_index(relanding, "git merge-base --is-ancestor HEAD mngr/update-self"),
         _first_index(relanding, "worker_agent_id"),
-        _first_index(relanding, 'message_chat.py "$WORKER_ID"'),
+        _first_index(relanding, 'message_chat.py "$WORKER_ID" -m "$MESSAGE"'),
     ]
     assert order == sorted(order)
     # The stopped worker is reached the way 5b's catch-up reaches it: by its id, through a sender
-    # that starts it, never by its mngr name.
-    assert _first_index(relanding, '--start -m "$DECISION"') > order[-1]
+    # that starts it, never by its mngr name. A workspace with no message_chat.py takes the sender
+    # in the older-workspaces reference, which every sender reaches through the apply reference.
+    applying = _reference("applying-the-update.md")
+    assert "applying-the-update.md" in _reference("resuming-after-a-decision.md")
+    assert "older-workspaces.md" in _section(applying, "## Messaging the worker")
+    without_messenger = _fenced_commands(
+        _section(older, "## Sending the worker a message without `message_chat.py`")
+    )
+    _first_index(
+        without_messenger,
+        'mngr message "${WORKER_ID:-update-self}" --start -m "$MESSAGE"',
+    )
     assert not any(
         "mngr start update-self" in command or "mngr message update-self" in command
-        for command in relanding
+        for command in [*relanding, *without_messenger, *_fenced_commands(applying)]
     )
+
+
+def _run_prose(repo: Path, script: str) -> str:
+    """Run commands lifted from the skill's prose in ``repo``; their stdout."""
+    return subprocess.run(
+        ["bash", "-c", script], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
+
+
+_STAMPED_SKILL = (
+    "---\nname: mine\nmetadata:\n  exempt-checks: size\n"
+    "  exempt-reason: predates-checks\n---\nbody\n"
+)
+
+
+def _workspace_with_a_landed_update(tmp_path: Path) -> tuple[Path, str]:
+    """A workspace holding a skill and an app of the user's, with a release merged into it under
+    the update's subject. Returns the repo and the merge."""
+    repo = tmp_path / "workspace"
+    skill_md = repo / ".agents" / "skills" / "mine" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: mine\n---\nbody\n")
+    (repo / "app.py").write_text("base\n")
+    _git_in(tmp_path, "init", "-q", "-b", "main", str(repo))
+    _git_in(repo, "config", "user.email", "t@example.com")
+    _git_in(repo, "config", "user.name", "t")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "base")
+    _git_in(repo, "checkout", "-q", "-b", "release")
+    (repo / "release.txt").write_text("release\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "release")
+    _git_in(repo, "checkout", "-q", "main")
+    _git_in(
+        repo,
+        "merge",
+        "-q",
+        "--no-ff",
+        "release",
+        "-m",
+        "update-self: merge upstream template (release)",
+    )
+    return repo, _git_in(repo, "rev-parse", "HEAD")
+
+
+def _own_edits(repo: Path, merge: str) -> list[str]:
+    """What the suites recipe lists as the worker's own edits: its lookup of the skill-exemption
+    commit, and the lines that close the group gathering the paths, run as written."""
+    [recipe] = [
+        block
+        for block in _FENCED_BLOCK.findall(_reference("worker-validation.md"))
+        if "validate-paths.txt" in block
+    ]
+    group = recipe.replace("\\\n", " ").partition("; } |")[0].splitlines()
+    last_other_source = next(
+        index for index, line in enumerate(group) if "impacted-paths.txt" in line
+    )
+    lines = [
+        f'MERGE="{merge}"',
+        *(line for line in group if line.startswith("STAMP=")),
+        *group[last_other_source + 1 :],
+    ]
+    return sorted(set(_run_prose(repo, "\n".join(lines)).split()))
+
+
+def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
+    tmp_path: Path,
+) -> None:
+    """The stamp writes two frontmatter lines into a user's failing skill, and the worker commits
+    them. That commit must not select a suite, and must not end the clean-pull skip, or the first
+    update into the release with the checks runs the review gates over every such workspace. The
+    prose says so by rule; this runs its own commands to hold it to that, and to hold that
+    nothing else rides out under the same exception."""
+    guide = _reference("update-self-worker.md")
+    [stamp_block] = [
+        block for block in _FENCED_BLOCK.findall(guide) if "--stamp" in block
+    ]
+    stamp_lines = stamp_block.splitlines()
+    stamp_at = next(i for i, line in enumerate(stamp_lines) if "--stamp" in line)
+    # The stamp runs on a clean tree, so its commit holds only what it wrote.
+    assert any("git status --porcelain" in line for line in stamp_lines[:stamp_at])
+    commit_the_stamp = "\n".join(stamp_lines[stamp_at + 1 :])
+    [gate_block] = [
+        block
+        for block in _FENCED_BLOCK.findall(_reference("worker-review-gates.md"))
+        if "M=<merge-sha>" in block
+    ]
+
+    repo, merge = _workspace_with_a_landed_update(tmp_path)
+
+    def _gate() -> str:
+        return _run_prose(repo, gate_block.replace("<merge-sha>", merge))
+
+    # With no stamp commit both rules read the plain diff, and it is empty.
+    assert _own_edits(repo, merge) == []
+    assert _gate() == ""
+
+    # What the stamp writes into a user's failing skill, committed by the guide's own lines.
+    (repo / ".agents" / "skills" / "mine" / "SKILL.md").write_text(_STAMPED_SKILL)
+    _run_prose(repo, commit_the_stamp)
+    assert _git_in(repo, "status", "--porcelain") == ""
+    assert _git_in(repo, "rev-list", "--count", f"{merge}..HEAD") == "1"
+
+    # It selects nothing, and the gate's test prints the stamped file's name and no diff.
+    assert _own_edits(repo, merge) == []
+    assert _gate().split() == [".agents/skills/mine/SKILL.md"]
+
+    # A real edit on top is still an edit, for both rules.
+    (repo / "app.py").write_text("fixed\n")
+    _git_in(repo, "commit", "-q", "-am", "Re-fit the app")
+    assert _own_edits(repo, merge) == ["app.py"]
+    assert "diff --git a/app.py b/app.py" in _gate()
+
+    # So is a second commit that borrows the stamp's subject: the gate's test reads the newest as
+    # the stamp and shows the file it must not touch, with the real edit before it.
+    (repo / "app.py").write_text("slipped in\n")
+    _git_in(repo, "commit", "-q", "-am", "Record skill-check exemptions")
+    names, _, diffs = _gate().partition("diff --git")
+    assert names.split() == ["app.py"]
+    assert "a/app.py b/app.py" in diffs
+
+
+def test_a_retry_of_a_rolled_back_release_does_not_read_the_release_as_the_workers_edits(
+    tmp_path: Path,
+) -> None:
+    """A fresh pass that retries a release whose apply rolled back has nothing to merge, so the
+    merge the suites recipe finds is the landed attempt's, and the rollback and the worker's revert
+    of it both come after it. Each touches every file of the release and together they change
+    nothing, so they select nothing: only what the workspace committed in between is listed."""
+    repo, merge = _workspace_with_a_landed_update(tmp_path)
+    (repo / ".agents" / "skills" / "mine" / "SKILL.md").write_text(_STAMPED_SKILL)
+    _git_in(repo, "commit", "-q", "-am", "Record skill-check exemptions")
+    # The apply's rollback is a forward commit that puts the tree from before the merge back.
+    _git_in(repo, "read-tree", "-u", "--reset", f"{merge}^1")
+    _git_in(repo, "commit", "-q", "-m", "Roll back update apply (restore to base)")
+    rollback = _git_in(repo, "rev-parse", "HEAD")
+    assert not (repo / "release.txt").exists()
+    (repo / "notes.py").write_text("the workspace's own work\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "Work done after the rollback")
+    _git_in(repo, "revert", "--no-edit", rollback)
+    assert (repo / "release.txt").exists()
+
+    assert _own_edits(repo, merge) == ["notes.py"]
 
 
 # The atomic apply

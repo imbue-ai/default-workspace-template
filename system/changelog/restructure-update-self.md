@@ -1,0 +1,1 @@
+`system/test_python_launch_rules.py`: the deliberate plain `uv run` exception for the update worker's `app-manifest` calls is keyed to the three references those commands moved into (`worker-impact-analysis.md`, `worker-validation.md`, `worker-catch-up.md`) when `update-self`'s worker guide was split.

@@ -8,6 +8,17 @@ update's checks fail on them. The rules themselves are in
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md` and
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/spec-summary.md` ("Packaging").
 
+## Contents
+
+- A skill that came from elsewhere
+- What fails, and where to fix it
+- A user skill with scripts
+- A user app, service or lib
+- A user service
+- Commands in the user's docs
+- Launches and import-path edits in the user's code
+- Type errors in the user's skills and apps
+
 ## A skill that came from elsewhere
 
 The checks cover every skill in `.agents/skills/` except the ones
@@ -207,8 +218,9 @@ check sees it; after editing one, re-install it live with
   `preview_wrapper_server.py` are bare and run under `python3`, the rest under
   `uv run --no-sync`), a
   shared one is under `.agents/shared/scripts/agents_shared/`, and
-  `system/scripts/run_in_background.py`, `tool_env.py` and
-  `list_mngr_plugins.py` are under `system/scripts/workspace_bare_scripts/`;
+  `run_in_background.py`, `tool_env.py` and `list_mngr_plugins.py`, once
+  directly under `system/scripts/`, are under
+  `system/scripts/workspace_bare_scripts/`;
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).

@@ -1,10 +1,19 @@
 # The cross-version handoff contract
 
-Maintainer notes for editing the update-self skill. The pass runs across two
-versions of this skill at once: Steps 1-2 from the workspace's *local* copy,
-and Step 3 onward from the copy staged at
-`data/.tasks/update-self/skill-at-target/.agents/skills/update-self` -- the
+Maintainer notes: read this before editing the update-self skill, not while
+running a pass. A pass runs across two versions of this skill at once: Steps
+1-2 from the workspace's *local* copy, and Step 3 onward from the copy staged
+at `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` -- the
 target release's own copy (or the local one, when the ref predates the skill).
+What follows from that for one old release or another is in
+`older-workspaces.md`.
+
+## Contents
+
+- What must stay stable
+- The scheduled entry: a pinned target and ceiling
+- What the apply must tolerate
+- Trust
 
 ## What must stay stable
 
@@ -12,14 +21,22 @@ target release's own copy (or the local one, when the ref predates the skill).
   so by construction they cannot come from the target. A future version's
   Steps 1-2 must stay "check the backup, take the lease and save a dirty tree,
   then resolve a ref into `$REF`", honoring a pinned message (below).
-- **The target's flow is entered at Step 3**, and everything from there on --
+- **The target's copy is entered at Step 3**, and everything from there on --
   the worker dispatch, the report audit, and the apply (Step 5b runs the
   staged copy's `update_self.py apply`) -- is the target version's. A future
-  version's Step 3 must stay the worker dispatch; otherwise an older initiator
-  handing off into a newer copy (or vice versa) lands at the wrong step.
+  version's Step 3 must stay the worker dispatch, under a heading an older
+  SKILL.md's "follow the staged copy's `SKILL.md` from **Step 3** onward"
+  finds; otherwise an older initiator handing off into a newer copy (or vice
+  versa) lands at the wrong step. An initiator from before SKILL.md had its
+  "Standing instructions" section has not read them, so Step 3 opens by
+  sending it there and to `older-workspaces.md`.
+- **The step headings are parsed.** `update_self_test.py` reads SKILL.md by
+  heading (`## 2. Resolve the target`, `## 3. Dispatch the worker`) and the
+  step references by file name; a renamed heading or a command moved between
+  files moves its test with it.
 - **Step 3a's ceiling re-check** must stay: it is the only ceiling check that
-  runs on a workspace arriving from a template that predates the ceiling (see
-  `version-ceiling.md`).
+  runs whatever copy ran Step 2 (see `version-ceiling.md`, "When Step 3a
+  finds the target above the ceiling").
 - **`/tmp/update-self-target.json` is written by the local copy and read by the
   target's prose**, so its writer can be several releases older or newer than
   its reader. Only `ref` is guaranteed; a version predating the file does not
@@ -46,26 +63,26 @@ target release's own copy (or the local one, when the ref predates the skill).
   this, and to naming only paths `stage-shared-prose` stages:
   `STAGED_PROSE_PATHS` in `update_self.py`). A bare `.agents/shared/...` path
   resolves to the workspace's own tree, which may predate the file, or hold an
-  older one that contradicts this flow. Steps 1-2 run before anything is staged
+  older one that contradicts this skill. Steps 1-2 run before anything is staged
   and name the workspace's copies. Scripts are not staged this way: the ones
   this skill needs from outside are mirrored into its package.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
-  test holds this too): an older workspace's lead follows the staged prose but
-  launches with its own `launch-task/create_worker.py`, which may predate
-  launch-time `lead_agent` stamping; under an old launcher the line is the
-  only thing that gives the worker a report address.
+  test holds this too): the lead follows the staged prose but launches with
+  the workspace's own `launch-task/create_worker.py`, and under a launcher
+  that does not stamp the line it is the only thing that gives the worker a
+  report address.
 - **The prose asks of `create_worker.py` only what every supported launcher
   provides** (`python/update_self_skill/launcher_contract_test.py` pins that set to the oldest
-  release the app updates from). Clearing the previous pass's worker uses
-  plain `mngr list` / `mngr destroy` for this reason.
+  release the app updates from, over SKILL.md and every reference). Clearing
+  the previous pass's worker uses plain `mngr list` / `mngr destroy` for this
+  reason.
 - **The report poll runs the staged skill's own `scripts/run_in_background.py`**,
   whose code (`python/update_self_skill/run_in_background.py`) is a
   byte-identical mirror of `system/scripts/workspace_bare_scripts/run_in_background.py`
   (a test holds the two equal), not the workspace's `system/scripts/` copy, which an
   older tree lacks. It is standard-library only, wraps the floor launcher's
   `await`, and looks up its messenger in the workspace's tree:
-  `system/scripts/message_chat.py` where there is one (minds-v0.6.1 on), else
-  `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
+  `system/scripts/message_chat.py` where there is one, else `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
 
 ## The scheduled entry: a pinned target and ceiling
@@ -88,7 +105,7 @@ message and the template only reads it, from Steps 1 and 2 of the workspace's
 
 The `--ceiling` instruction exists only for the Step 2 copies that predate the
 pin; the app drops it once the oldest release it updates from reads the pin
-itself.
+itself (`older-workspaces.md` carries the marker).
 
 ## What the apply must tolerate
 
@@ -103,7 +120,7 @@ the pre-merge layout, and a skill directory that is staged and run as one unit
 `update_self_skill` package from there, so the staged copy's own code never
 resolves from the workspace's tree or venv).
 
-A caught-up pass (SKILL.md 5b, the worker guide's §7) lands a catch-up merge
+A caught-up pass (SKILL.md Step 5b, the worker guide's Step 7) lands a catch-up merge
 whose first parent is the worker's line and whose second parent is the
 workspace's `HEAD` from before the apply. So the `update-self:` merge stays on
 `HEAD`'s first-parent line, where the apply and `resolve_template_base.py` look
@@ -117,5 +134,5 @@ second parent of a catch-up merge instead.
 The handoff runs the target ref's `update_self.py` and follows its prose
 *before* the worker has validated anything. For the default target (a stable,
 already-tested `minds-v*` tag) that is the same trust basis as the merge
-itself; a `--override` to an untrusted ref means trusting that ref's flow code
+itself; a `--override` to an untrusted ref means trusting that ref's code
 and instructions. Only override to a ref you trust.

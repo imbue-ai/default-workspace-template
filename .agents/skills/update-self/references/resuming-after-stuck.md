@@ -2,7 +2,7 @@
 
 When the user overrides a `stuck` verdict, resume the same pass with the same
 worker as `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md` ("Resuming after the user
-overrides a failure") says. This flow's preconditions, re-taken before the
+overrides a failure") says. This pass's preconditions, re-taken before the
 `reply`, each `tk` call as its own command:
 
 1. The `updating workspace` lease, exactly as SKILL.md Step 1 takes it.
@@ -18,4 +18,4 @@ overrides a failure") says. This flow's preconditions, re-taken before the
    then `bridge-history --ref "$REF"`).
 
 After the `reply`, `run-status delegate update-self` before the `await` poll,
-as SKILL.md Step 3b does.
+as `launching-the-worker.md` (section 5) does.
