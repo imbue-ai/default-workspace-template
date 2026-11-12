@@ -3,7 +3,7 @@ name: update-app
 description: "Use immediately whenever the user asks to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service, before touching its code. Covers apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window), the workspace's own critical apps (the shell, the chat, the terminal) included. For creating a brand-new app use build-app."
 metadata:
   author: imbue
-  exempt-checks: size depth contents
+  exempt-checks: size contents
   exempt-reason: awaiting-restructure
 ---
 

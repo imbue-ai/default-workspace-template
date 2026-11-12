@@ -1,6 +1,6 @@
 # Type: service
 
-A background service -- a supervisord `[program:<name>]` with no tab. Two
+A background service -- a supervisord `[program:<name>]` with no window. Two
 homes: standalone services live under `system/services/<package>/` (a built-in
 one is a root uv workspace member, e.g. `host_backup`, `share_gateway`; a
 user-built one is its own uv project); a service that exists
@@ -39,7 +39,7 @@ solely to support one app lives in that app's folder under
   worktree has no root `.venv`, so run `uv sync --all-packages` once before any
   `uv run`, and `uv add` at the root. An app-owned service shares its app's
   package and follows the app (`type-app.md`).
-- There is no tab and no frontend: test the service's logic directly with unit
+- There is no window and no frontend: test the service's logic directly with unit
   tests in its package, and exercise its entry point with a bounded invocation
   where feasible -- a user-built service's from its own venv (`uv run --no-sync
   --project system/services/<package> <name>`), a built-in one's from the root

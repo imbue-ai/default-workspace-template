@@ -72,15 +72,16 @@ to hand-craft). Include any edge cases you foresaw but chose not to handle, and
 why.
 
 Write a `type: gate`, `name: outline-approval` report whose body is the outline
-plus an explicit "Approve this outline? (yes / no with notes)" prompt. Push it
-and stop. If the user asks for changes, iterate and emit a fresh
+plus an explicit "Approve this outline? (yes / no with notes)" prompt. Deliver
+it and stop. If the user asks for changes, iterate and emit a fresh
 `outline-approval` report. Do not proceed without an explicit yes.
 
 ## Stage 3: Build / harden the creation
 
 Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
-testing/hardening and preserve-and-surface contract from `harden-creation.md`.
+testing and hardening contract from `harden-creation.md`, and the rules of
+`data-and-storage.md` that apply to the creation.
 
 **Pre-existing shape:** Once its own tests pass on your branch,
 commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
@@ -89,7 +90,7 @@ reports (non-blocking)". Name it for what is true at that commit, and make its
 (for an app, naming the phone and sharing checks among what you have not).
 The lead may merge that commit and let the user start using the hardened
 build while you work through the rest of the pass, so do not stop your turn:
-push it and go straight on. For an app, the first work after it is the phone
+deliver it and go straight on. For an app, the first work after it is the phone
 and sharing checks (`type-app.md`, "Phone and sharing checks"), so the user
 gets the hardened core first; then Stage 4.
 
@@ -112,8 +113,8 @@ reports (non-blocking)". Name it for what is true at that commit; its
 `## Tested` section lists the scenarios you ran and their results, the
 validation, and what you have not run (the review gates are still ahead). The
 lead may merge that commit so the user can start using the skill while you run
-the review gates and prepare the final gate, so do not stop your turn: push it
-and go straight on to Stage 5. Declaring a further milestone later is at your
+the review gates and prepare the final gate, so do not stop your turn: deliver
+it and go straight on to Stage 5. Declaring a further milestone later is at your
 discretion.
 
 ## Stage 5: Review gates
@@ -139,7 +140,7 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 ```
 
-Push it and stop. On approval, commit on your branch and emit a `name: done`
+Deliver it and stop. On approval, commit on your branch and emit a `name: done`
 terminal report.
 
 In the **pre-existing/confirmed-live shape**, skip the final gate: commit and
