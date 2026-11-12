@@ -138,6 +138,14 @@ def _chat_id(environ: dict[str, str]) -> str:
     return environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
 
 
+def _notification_body(message: str, title: str | None) -> dict[str, str]:
+    """The notification as both the chat app and the Imbue Studio app take it."""
+    body = {"message": message.strip()}
+    if title:
+        body["title"] = title.strip()
+    return body
+
+
 def show_on_desktop(
     message: str, title: str | None, *, http: HttpClient, environ: dict[str, str]
 ) -> None:
@@ -147,12 +155,9 @@ def show_on_desktop(
     if not chat_id:
         reason = f"{ENV_CHAT_ID} is not set"
     else:
-        payload: dict[str, str] = {"message": message.strip()}
-        if title:
-            payload["title"] = title.strip()
         status, text = http.post_json(
             f"{message_chat.chat_app_url(environ, _REPO_ROOT)}/api/chats/{chat_id}/notification",
-            payload,
+            _notification_body(message, title),
             {"Content-Type": "application/json"},
             timeout=_CHAT_APP_TIMEOUT_SECONDS,
         )
@@ -229,9 +234,7 @@ def notify(
     permissions = environ.get(ENV_GATEWAY_PERMISSIONS, "")
     if permissions:
         headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
-    payload: dict[str, str | list[str]] = {"message": message.strip()}
-    if title:
-        payload["title"] = title.strip()
+    payload: dict[str, str | list[str]] = {**_notification_body(message, title)}
     try:
         payload["watched_by"] = watchers_of_chat(http, environ)
     except WatchersUnknownError as exc:
