@@ -331,9 +331,11 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
 # its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
 # told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
-# drafts through the shell. Its ``#pic`` is a 3 by 2 image of the page's own, drawn larger in a corner.
+# drafts through the shell. Its ``#pic`` is a 3 by 2 image of the page's own, drawn larger in a corner, and its
+# ``#task`` has rows of its own in the menu, of every kind, whose picks it records in ``__picked``.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
+<div id="task" style="position: fixed; left: 4px; bottom: 4px">task</div>
 <img id="pic" alt="" style="position: fixed; right: 4px; bottom: 4px; width: 24px; height: 24px"
   src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAEUlEQVR4nGM4ISf3H4YZkDkAmxUME7OZWHkAAAAASUVORK5CYII=" />
 <script type="module">
@@ -366,7 +368,25 @@ if (isNavigable) {
   };
 }
 const connection = connectToShell(handlers);
-installElementContextMenu({ connection, handshake: () => window.__handshake ?? null });
+window.__picked = [];
+installElementContextMenu({
+  connection,
+  handshake: () => window.__handshake ?? null,
+  extraRows: (target) =>
+    target.element.id !== "task"
+      ? []
+      : [
+          { kind: "check", key: "pinned", label: "Pinned", isChecked: true, onToggle: () => window.__picked.push("pinned") },
+          {
+            kind: "submenu",
+            key: "move",
+            label: "Move to",
+            rows: () => [{ kind: "action", key: "move-inbox", label: "Inbox", onSelect: () => window.__picked.push("move-inbox") }],
+          },
+          { kind: "divider" },
+          { kind: "action", key: "delete", label: "Delete", tone: "danger", icon: "trash", onSelect: () => window.__picked.push("delete") },
+        ],
+});
 window.__navigateTo = (path) => {
   history.pushState(null, "", path);
   show(path);
@@ -1075,6 +1095,46 @@ def test_a_pages_element_menu_copies_an_image_to_the_clipboard(tmp_path: Path, p
         assert poll_until(lambda: _copied_image_size() == [3, 2], timeout=10.0, poll_interval=0.1), (
             f"the clipboard holds {_copied_image_size()}, not the 3 by 2 image"
         )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_page_without_a_framework_draws_its_own_rows_in_the_workspaces_colours(tmp_path: Path, page: Page) -> None:
+    """A page built as plain HTML hands the element menu rows of every kind (a check row, a submenu, a danger row
+    with one of the shared icons), and the served menu draws them all: in the theme's colours, the check mark and
+    the icon in their columns, the submenu beside its row once the pointer rests there, and a pick inside it run
+    (.agents/shared/references/right-click-menus.md)."""
+    with _running_e2e_server(tmp_path) as server:
+        _land(page, server)
+        frame = _page_frame(page, _open_via_shortcut(page, server))
+        frame.evaluate(
+            """() => {
+                document.documentElement.style.setProperty("--c-surface", "rgb(10, 20, 30)");
+                document.documentElement.style.setProperty("--c-danger", "rgb(200, 0, 100)");
+            }"""
+        )
+
+        frame.locator("#task").click(button="right")
+        card = frame.locator("[data-context-menu]")
+        expect(card).to_be_visible()
+        expect(card).to_have_css("background-color", "rgb(10, 20, 30)")
+        delete = card.locator('[data-context-menu-row="delete"]')
+        expect(delete).to_have_css("color", "rgb(200, 0, 100)")
+        expect(delete.locator("svg")).to_be_visible()
+        expect(card.locator('[data-context-menu-row="pinned"]')).to_have_attribute("aria-checked", "true")
+        expect(card.locator('[data-context-menu-row="pinned"]')).to_contain_text("✓")
+        # The page's rows lead, and the rows every page gets follow them.
+        expect(card.locator("[data-context-menu-row]").last).to_have_attribute(
+            "data-context-menu-row", "modify-element"
+        )
+
+        submenu = frame.locator("[data-context-menu-submenu]")
+        expect(submenu).to_have_count(0)
+        card.locator('[data-context-menu-row="move"]').hover()
+        expect(submenu).to_be_visible()
+        submenu.locator('[data-context-menu-row="move-inbox"]').click()
+        expect(card).to_be_hidden()
+        expect(submenu).to_have_count(0)
+        assert frame.evaluate("() => window.__picked") == ["move-inbox"]
 
 
 @pytest.mark.timeout(60, func_only=False)

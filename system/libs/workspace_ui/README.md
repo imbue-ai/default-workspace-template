@@ -33,13 +33,15 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   so no app carries link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
-  a right-clicked element under a random `REF-<id>`, the menu's rows (the
-  browser's own edit, link, and image rows, then "Copy reference",
+  a right-clicked element under a random `REF-<id>`, the menu's rows (a page's
+  own, which may be actions with an icon and a tone, check rows, and submenus,
+  then the browser's own edit, link, and image rows, then "Copy reference",
   "Explain...", and "Modify..."), and the installer every page runs (it leaves
   the Imbue Studio desktop app's native menu the right-clicks that menu answers
   better, the plan's section 11), built into the
   module every app serves at `/_static/context_menu.js` with its framework-free
-  renderer for pages without Mithril (`src/components/contextMenuOpener.ts` is
+  renderer for pages without Mithril, which draws every row kind in the
+  workspace theme's colours (`src/components/contextMenuOpener.ts` is
   the opener a Mithril page hands it, backed by the shared Menu); `src/embed.ts` and
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant

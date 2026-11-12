@@ -1,0 +1,1 @@
+The `build-app` skill now says an element's own right-click rows go to the element menu's `extraRows`, never into a menu the page draws itself, and the new `.agents/shared/references/right-click-menus.md` shows how: the row kinds (actions with an icon and a tone, check rows, submenus), and the marker a handler that has to keep the right-click carries.
