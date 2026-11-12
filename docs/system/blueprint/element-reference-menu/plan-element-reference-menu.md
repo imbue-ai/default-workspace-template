@@ -112,6 +112,7 @@ The standard rows, each present only when it applies:
 | Select All | The target is editable | Selects the field's whole value |
 | Copy link address | The target is in an anchor with an `href` | Copies the absolute URL |
 | Open link | The target is in an anchor with an `href` | Clicks the link, so it opens as a click on it would (the app contract's link rule, desktop-interface contracts.md section 7): a file in the File Viewer, a local URL as the window of the app on whose `<label>.localhost` host or registered port it is, or else in the workspace's browser, an app's address as that app's window, an external web, mail, or phone link in the app of the workspace registered for it, else outside the workspace |
+| Copy image | The target is a loaded image whose pixels the page can read (one of the page's own origin or inline in it, or one loaded with CORS), and the browser writes images to the clipboard | Puts the image on the clipboard, as the PNG a canvas makes of it |
 | Copy image address | The target is an image with a `src` | Copies the absolute URL |
 
 The reference rows, always present:
@@ -166,7 +167,7 @@ Two references drafted before a send are two chips and two prompt lines, each na
 ### 4.1 Right-click on a page
 
 The library's installer listens for `contextmenu` on the document.
-An event that is already `defaultPrevented` is left alone (section 4.4 says how a page's own menus join in instead).
+An event that is already `defaultPrevented` is left alone (section 4.4 says how a page's own menus join in instead), and so is one the Imbue Studio desktop app's native menu answers better (section 11).
 Otherwise the installer prevents the default, reads the target (the event's target element; a text node's parent), the selection (`getSelection().toString()`), and the click position, builds the reference (section 3.1) from those and the page's last handshake, and opens the menu at the pointer.
 The menu closes on a press outside it, on Escape, and after a row runs; the shared Menu component's rules for the built-ins, the same rules in the framework-free renderer for agent-built apps.
 
@@ -302,10 +303,19 @@ Apps built before this change keep their beacon and get no menu until they adopt
 
 ## 11. The minds desktop app
 
-Electron's main process pops a native menu on every `context-menu` event of the window's web contents, which the workspace frame shares.
-It now pops one only for the main frame (the chrome page's own fields), so a right-click inside the workspace frame reaches the page's own menu alone.
-Plain-browser mode needs nothing: the native menu is what the page's `preventDefault` replaces.
-This is the one change outside the template, in the mngr repository's `apps/minds/electron/context-menu.js`.
+Electron's main process pops a native menu, holding the system's items alone, on every `context-menu` event of the window's web contents that a page leaves alone, in any frame (the mngr repository's `apps/minds/electron/context-menu.js`).
+It says so in `minds:embedder-capabilities` (`drawsContextMenus`), which the shell keeps and passes to every page in its `shell:handshake`.
+
+Told so, the installer leaves the app the right-clicks a native menu answers better, and opens nothing for them:
+
+- text being edited, where the native menu corrects a spelling and pastes without asking for the clipboard;
+- a click on the document's selection, where it offers Look Up and Share;
+- a link the page has no rows of its own for, unless the click is on an image;
+- any right-click with Shift held.
+
+Every other right-click opens the element menu as section 4.1 says.
+So each menu has one owner: the native one carries none of the page's rows, the reference rows included, and the page's none of the system's.
+A desktop app from before the capability pops a native menu only for its own page's frame, and a plain browser is told nothing, so there the element menu takes every right-click.
 
 ## 12. Errors and edge cases
 
