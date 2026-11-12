@@ -148,6 +148,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
   IMMERSIVE_CHANGED,
+  WORKSPACE_COLOR,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the
