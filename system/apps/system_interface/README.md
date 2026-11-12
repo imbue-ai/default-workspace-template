@@ -611,11 +611,10 @@ bubble's chat drops it on receipt unless it mentions the viewer); and
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
 connect once reported. Every `bubble` hops its speaker's entry, but only a
 `notification` or a message that mentions the viewer raises a speech bubble. A speech
-bubble is a rounded card hanging above the tray
-with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
-click that opens the chat it was said in; it lives five seconds after its last
-change, a person's new message replaces their bubble, the agent's new message
-within its bubble's lifetime is appended (folding past three lines into "and N
+bubble is a rounded card hanging above the tray with an arrow at the speaker's entry,
+holding what was said, a dismiss X, and a click that opens the chat it was said in; it
+lives five seconds after its last change, a person's new message replaces their bubble,
+the agent's new notification within its bubble's lifetime is appended (folding past three lines into "and N
 more"), bubbles of different speakers stack upward in arrival order, and a mention
 of the viewer wears an accent border and stays until dismissed or its chat is
 opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).

@@ -1188,10 +1188,11 @@ only on the clients of the people it mentions. Every notification a chat sends t
 is posted as a `notification` over the agent's entry, which raises a bubble on every
 client not looking at the chat: the notify-user skill's script tells the chat app with
 `POST /api/chats/<chat-id>/notification` (loopback only; `{"message", "title"}`, the
-title shown as a prefix), whether or not the Imbue Studio app takes the notification. The agent's turns reach the feed through the session watcher a page's stream
+title shown as a prefix), whether or not the Imbue Studio app takes the notification.
+The agent's turns reach the feed through the session watcher a page's stream
 builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
-evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
-a chat nobody has open raises none (the spec's section 11). And every chat-list push is
+evicts, so the agent's entry hops for the turns of the chats a page is reading: a turn in
+a chat nobody has open posts nothing (the spec's section 11). And every chat-list push is
 posted as what each chat is doing (`POST /api/chats-activity`), the last report posted
 again once a minute, since the shell keeps it in memory alone and one restarted since the
 last chat-list change would otherwise paint nothing on the agent's card. Both go through
