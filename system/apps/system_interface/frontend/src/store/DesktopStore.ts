@@ -1371,8 +1371,8 @@ export class DesktopStore {
     return this.bubbles;
   }
 
-  /** The tray entries hopping now: they just became connected, or a bubble of theirs just appeared (the
-   *  multiplayer spec, sections 6.2 and 6.5). */
+  /** The tray entries hopping now: they just became connected, or just said something (the multiplayer spec,
+   *  sections 6.2 and 6.5). */
   getHopping(): ReadonlySet<string> {
     return this.hopping;
   }

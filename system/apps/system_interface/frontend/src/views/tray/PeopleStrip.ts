@@ -2,7 +2,7 @@
  * The people in the tray (the multiplayer spec, section 6.2): one 32px picture per roster entry other than the
  * viewer and the workspace agent, in roster order, then the viewer's own. An entry that is not here is faded; an
  * invited email is a dashed circle; a visiting agent a monogram tile. An entry hops once when it becomes connected
- * and when a bubble of its appears.
+ * and when it says something.
  * With four or more entries the pictures stack, each tucked under the one before it with a ring of the bar's
  * colour, and the row spreads while the pointer is over it. A click on a person opens the Lounge with a mention of
  * them; a click on your own picture or an invited email does nothing. Hovering an entry opens its card (the caller's).
@@ -41,7 +41,7 @@ export interface PeopleStripAttrs {
   readonly roster: readonly RosterParticipant[];
   readonly viewer: string | null;
   readonly now: Date;
-  /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
+  /** The keys of the entries hopping now: they just arrived, or just said something. */
   readonly hopping: ReadonlySet<string>;
   /** The keys of the entries whose desktop somebody else is viewing. */
   readonly ringed: ReadonlySet<string>;
