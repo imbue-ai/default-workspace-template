@@ -8,7 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
-import type { Desktop, DesktopShortcut } from "../model/records";
+import type { AppRecord, Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -656,6 +656,30 @@ describe("the element menu", () => {
     );
   }
 
+  it("where the desktop app draws a native menu, still opens an entry's own menu, and leaves a Shift right-click to the app", () => {
+    store.setDrawsContextMenus(true);
+    m.redraw.sync();
+    const rightClick = (element: Element, init: MouseEventInit = {}): MouseEvent => {
+      const event = new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 10,
+        ...init,
+      });
+      element.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as Element;
+    expect(rightClick(entry).defaultPrevented).toBe(true);
+    expect(menuRowKeys().slice(0, 2)).toEqual(["minimize", "maximize"]);
+    expect(menuRowKeys().slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    pressEscape();
+    expect(rightClick(entry, { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+  });
+
   it("opens over the shell's own chrome on a right-click the views leave alone, with the reference rows", () => {
     const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
@@ -723,6 +747,19 @@ describe("the element menu", () => {
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
+  it("leads the tray agent's menu with its own rows, then the reference rows, and floats the avatar from it", async () => {
+    pinnedEntry();
+    const agent = document.querySelector("[data-tray-agent]") as HTMLElement;
+    agent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys.slice(0, 2)).toEqual(["change-avatar", "float"]);
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    (document.querySelector('[data-menu-row="float"]') as HTMLElement).click();
+    await settle();
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
+  });
+
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
     pinnedEntry();
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
@@ -739,18 +776,6 @@ describe("the element menu", () => {
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');
     expect(launch.endsWith(":window:win-9")).toBe(true);
-  });
-
-  it("leaves a Shift right-click on its own chrome to the desktop app's native menu once the app draws one", () => {
-    const shiftRightClick = (): MouseEvent => {
-      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, shiftKey: true });
-      document.body.dispatchEvent(event);
-      m.redraw.sync();
-      return event;
-    };
-    expect(shiftRightClick().defaultPrevented).toBe(true);
-    store.setDrawsContextMenus(true);
-    expect(shiftRightClick().defaultPrevented).toBe(false);
   });
 });
 
@@ -1047,6 +1072,27 @@ describe("the desktop shortcut rows", () => {
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
       ["browse", "focus"],
     ]);
+  });
+
+  it("opens no shortcut menu over a free-text row, the third and later included, whose launch path is a shortcut", () => {
+    const asker = (name: string): AppRecord =>
+      appRecord(name, {
+        launch_paths: [launchPathRecord({ id: "ask", path: "/ask", params: ["q"], text_param: "q" })],
+        default_shortcuts: [{ launch: "ask", mode: "new" }],
+      });
+    socket.deliver().onAppsUpdated([appRecord("docs"), asker("first"), asker("second"), asker("third")]);
+    store.openLauncher();
+    m.redraw.sync();
+    const field = document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
+    field.value = "hello";
+    field.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    m.redraw.sync();
+
+    const third = document.querySelector('[data-launcher-overlay] [data-launch="third:ask"]') as HTMLElement;
+    expect(third.hasAttribute("data-text-action")).toBe(false);
+    rightClick(third);
+    expect(document.querySelector(".app-shortcut-menu")).toBeNull();
+    expect(document.querySelector(".element-menu")).not.toBeNull();
   });
 });
 

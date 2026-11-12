@@ -10,9 +10,11 @@ import {
   CONTEXT_MENU_CARD_ATTR,
   CONTEXT_MENU_INSTALLED_ATTR,
   CONTEXT_MENU_ROW_ATTR,
+  CONTEXT_MENU_SUBMENU_ATTR,
   installElementContextMenu,
   type ContextMenuConnection,
 } from "./context_menu";
+import type { ContextMenuRow } from "./context_menu_rows";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
@@ -34,6 +36,36 @@ function row(key: string): HTMLButtonElement {
   return found;
 }
 
+function submenuCard(): HTMLElement | null {
+  return document.body.querySelector<HTMLElement>(`[${CONTEXT_MENU_SUBMENU_ATTR}]`);
+}
+
+/** A page's own rows with a submenu ("Status": a check row, a divider, an action), a check row of its own, and
+ *  a danger row with an icon. */
+function statusRows(calls: string[]): ContextMenuRow[] {
+  return [
+    {
+      kind: "submenu",
+      key: "status",
+      label: "Status",
+      rows: () => [
+        { kind: "check", key: "status-open", label: "Open", isChecked: true, onToggle: () => calls.push("open") },
+        { kind: "divider" },
+        { kind: "action", key: "status-close", label: "Close", onSelect: () => calls.push("close") },
+      ],
+    },
+    { kind: "check", key: "pinned", label: "Pinned", isChecked: false, onToggle: () => calls.push("pinned") },
+    {
+      kind: "action",
+      key: "delete",
+      label: "Delete",
+      tone: "danger",
+      icon: "trash",
+      onSelect: () => calls.push("delete"),
+    },
+  ];
+}
+
 function rightClick(element: Element, init: MouseEventInit = {}): MouseEvent {
   const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50, ...init });
   element.dispatchEvent(event);
@@ -53,6 +85,8 @@ afterEach(() => {
   uninstall?.();
   uninstall = null;
   document.body.innerHTML = "";
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("installElementContextMenu", () => {
@@ -283,5 +317,153 @@ describe("installElementContextMenu", () => {
     noop();
     expect(document.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)).toBe(true);
     document.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
+  });
+});
+
+describe("the framework-free renderer", () => {
+  function installWithStatusRows(calls: string[]): void {
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      extraRows: () => statusRows(calls),
+    });
+    rightClick(document.getElementById("para") as Element);
+  }
+
+  it("opens a submenu once the pointer rests on its row, and a pick inside it runs and closes both cards", () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    expect(row("status").getAttribute("aria-haspopup")).toBe("menu");
+    row("status").dispatchEvent(new MouseEvent("mouseenter"));
+    expect(submenuCard()).toBeNull();
+    vi.advanceTimersByTime(150);
+    expect(submenuCard()).not.toBeNull();
+    expect(row("status-open").getAttribute("aria-checked")).toBe("true");
+    row("status-close").click();
+    expect(calls).toEqual(["close"]);
+    expect(card()).toBeNull();
+    expect(submenuCard()).toBeNull();
+  });
+
+  it("opens a submenu at once on a click, and a press inside it keeps the menu up", () => {
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    row("status").click();
+    expect(submenuCard()).not.toBeNull();
+    submenuCard()!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(card()).not.toBeNull();
+    row("status-open").click();
+    expect(calls).toEqual(["open"]);
+    expect(card()).toBeNull();
+  });
+
+  it("closes a submenu once the pointer has sat on another row past the grace, unless it reaches the submenu", () => {
+    vi.useFakeTimers();
+    installWithStatusRows([]);
+    row("status").click();
+    row("pinned").dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(100);
+    submenuCard()!.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(1000);
+    expect(submenuCard()).not.toBeNull();
+    row("pinned").dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(1000);
+    expect(submenuCard()).toBeNull();
+    expect(card()).not.toBeNull();
+  });
+
+  it("opens a submenu after the menu's right edge, or before its left edge where the right would leave the viewport", () => {
+    const boxes = new Map<string, DOMRect>([
+      ["menu-right", new DOMRect(100, 100, 200, 120)],
+      ["menu-left", new DOMRect(820, 100, 200, 120)],
+    ]);
+    let menuBox = boxes.get("menu-right")!;
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(180);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(90);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute(CONTEXT_MENU_CARD_ATTR)) return menuBox;
+      return new DOMRect(menuBox.left, 140, 200, 32);
+    });
+    Object.defineProperty(window, "innerWidth", { value: 1024, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 768, configurable: true });
+    installWithStatusRows([]);
+    row("status").click();
+    expect(submenuCard()!.style.left).toBe("296px");
+    expect(submenuCard()!.style.top).toBe("136px");
+    menuBox = boxes.get("menu-left")!;
+    rightClick(document.getElementById("para") as Element);
+    row("status").click();
+    expect(submenuCard()!.style.left).toBe("644px");
+  });
+
+  it("toggles a check row and closes, and draws a danger row in the theme's danger colour", () => {
+    const calls: string[] = [];
+    installWithStatusRows(calls);
+    expect(row("pinned").getAttribute("role")).toBe("menuitemcheckbox");
+    expect(row("pinned").getAttribute("aria-checked")).toBe("false");
+    expect(row("delete").style.color).toBe("var(--c-danger, #c62828)");
+    row("pinned").click();
+    expect(calls).toEqual(["pinned"]);
+    expect(card()).toBeNull();
+  });
+
+  it("keeps a check column and an icon column on every row, so the labels line up", () => {
+    installWithStatusRows([]);
+    const columnsOf = (key: string): Element[] => Array.from(row(key).children);
+    // The danger row names one of the shared icons; the check row has none, and keeps the column empty.
+    const [deleteCheck, deleteIcon, deleteLabel] = columnsOf("delete");
+    expect(deleteCheck.textContent).toBe("");
+    expect(deleteIcon.querySelector("svg")).not.toBeNull();
+    expect(deleteLabel.textContent).toBe("Delete");
+    const [pinnedCheck, pinnedIcon, pinnedLabel] = columnsOf("pinned");
+    expect([pinnedCheck.textContent, pinnedIcon.childElementCount, pinnedLabel.textContent]).toEqual([
+      "",
+      0,
+      "Pinned",
+    ]);
+  });
+
+  it("draws a row's own icon markup, and no icon column on a menu without icons", () => {
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      extraRows: () => [
+        {
+          kind: "action",
+          key: "star",
+          label: "Star",
+          icon: { markup: '<svg data-own-icon viewBox="0 0 1 1"></svg>' },
+          onSelect: () => undefined,
+        },
+      ],
+    });
+    rightClick(document.getElementById("para") as Element);
+    expect(row("star").querySelector("[data-own-icon]")).not.toBeNull();
+    // The reference rows share the card, so they keep the column; a card of rows without icons has none.
+    expect(row("copy-reference").childElementCount).toBe(2);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    uninstall();
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    expect(row("copy-reference").childElementCount).toBe(1);
+  });
+
+  it("wears the workspace theme's colours, each with a fixed fallback, and marks the theme's parts", () => {
+    installWithStatusRows([]);
+    const style = card()!.getAttribute("style") ?? "";
+    expect(style).toContain("background: var(--c-surface, #ffffff)");
+    expect(style).toContain("color: var(--c-text-primary, #1a1a1a)");
+    expect(card()!.getAttribute("data-part")).toBe("menu");
+    expect(row("pinned").getAttribute("data-part")).toBe("menu-item");
+    expect(card()!.querySelector("hr")?.getAttribute("data-part")).toBe("menu-separator");
+  });
+
+  it("takes an open submenu down with the menu on Escape", () => {
+    installWithStatusRows([]);
+    row("status").click();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(card()).toBeNull();
+    expect(submenuCard()).toBeNull();
   });
 });

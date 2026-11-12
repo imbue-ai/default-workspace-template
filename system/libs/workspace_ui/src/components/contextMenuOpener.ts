@@ -12,6 +12,16 @@ import type { ContextMenuRow } from "../context_menu_rows";
 import { anchorForPoint } from "../menu-position";
 import { createMenu, type Menu, type MenuRow } from "./menu";
 
+/** The shared Menu's row kinds the element menu leaves out on purpose: each holds a Mithril view or a value with
+ *  nothing to pick, which a page without the framework cannot be handed. */
+type MenuOnlyRowKind = "value" | "custom";
+
+type MustBeNever<Kind extends never> = Kind;
+
+/** Fails the build when the shared Menu gains a row kind the element menu neither takes nor names above, so a new
+ *  kind is given to every app's right-click menu, or left out, by decision. */
+export type UnplacedMenuRowKind = MustBeNever<Exclude<MenuRow["kind"], ContextMenuRow["kind"] | MenuOnlyRowKind>>;
+
 export interface ContextMenuOpener {
   /** What ``installElementContextMenu`` calls with the rows and the pointer. */
   open(rows: readonly ContextMenuRow[], point: ContextMenuPoint): void;

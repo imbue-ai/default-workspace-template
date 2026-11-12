@@ -5,11 +5,13 @@
  * element to a chat (Copy reference, Explain, Modify). Also which right-clicks the menu leaves
  * to the Imbue Studio desktop app's native menu (section 11).
  *
- * A row here is structurally an ``ActionRow`` or a ``DividerRow`` of the shared Menu component,
- * so a Mithril page passes the rows straight to ``createMenu`` and the framework-free renderer
- * of ``context_menu.ts`` draws the same objects. This module imports no framework.
+ * A row here is structurally a row of the shared Menu component (an action, a check row, a
+ * divider, or a submenu of those), so a Mithril page passes the rows straight to ``createMenu``
+ * and the framework-free renderer of ``context_menu.ts`` draws the same objects. This module
+ * imports no framework: its one import from the Menu is of types alone.
  */
 
+import type { MenuRowIcon, MenuRowTone } from "./components/menu";
 import {
   contentEditableRegionOf,
   describeElement,
@@ -31,14 +33,41 @@ export interface ContextMenuActionRow {
   label: string;
   isDisabled?: boolean;
   tooltip?: string;
+  tone?: MenuRowTone;
+  icon?: MenuRowIcon;
   onSelect: () => void;
+}
+
+/** A row with a check mark that a pick toggles. Mirrors the shared Menu's ``CheckRow``. */
+export interface ContextMenuCheckRow {
+  kind: "check";
+  key: string;
+  label: string;
+  isChecked: boolean;
+  tooltip?: string;
+  onToggle: () => void;
 }
 
 export interface ContextMenuDividerRow {
   kind: "divider";
 }
 
-export type ContextMenuRow = ContextMenuActionRow | ContextMenuDividerRow;
+/** What a submenu may hold: every row but another submenu. */
+export type ContextMenuSubmenuChildRow = ContextMenuActionRow | ContextMenuCheckRow | ContextMenuDividerRow;
+
+/** A row that opens a submenu of rows, one level deep. Mirrors the shared Menu's ``SubmenuRow``. ``rows`` is read
+ *  each time the submenu opens or redraws, so it should only read the current state. */
+export interface ContextMenuSubmenuRow {
+  kind: "submenu";
+  key: string;
+  label: string;
+  tooltip?: string;
+  rows: () => readonly ContextMenuSubmenuChildRow[];
+}
+
+/** A row of the element menu, a page's own included: the one vocabulary the shared Menu and the framework-free
+ *  renderer both draw, so a row kind added here reaches every app's menu. */
+export type ContextMenuRow = ContextMenuSubmenuChildRow | ContextMenuSubmenuRow;
 
 /** What a right-click landed on, captured when it happened. */
 export interface ContextMenuTarget {

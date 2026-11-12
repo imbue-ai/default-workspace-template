@@ -8,20 +8,27 @@
  *
  * Rendering is the one part a page may replace: a Mithril page hands ``open`` an opener backed
  * by the shared Menu (``components/contextMenuOpener.ts``), and a page without a framework --
- * an app an agent built -- takes the renderer here, a fixed card of buttons with inline styles.
+ * an app an agent built -- takes the renderer here, which draws the same rows as cards of
+ * buttons wearing the workspace theme's colours.
  * Built as its own library entry into the shell's static output and served by every app at
  * ``/_static/context_menu.js`` from its own origin, beside ``app_contract.js``; so it imports
- * the reference and row modules alone, and touches no message primitive (the draft goes
+ * the reference and row modules and the icon strings alone, and touches no message primitive (the draft goes
  * through the connection the page already holds, and an opened link is a click on it, which
  * the app contract follows).
  */
 
+import { icon } from "./components/icons";
 import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
 import {
   elementMenuRows,
   isNativeMenuTarget,
+  joinRowGroups,
   targetOfEvent,
+  type ContextMenuActionRow,
+  type ContextMenuCheckRow,
   type ContextMenuRow,
+  type ContextMenuSubmenuChildRow,
+  type ContextMenuSubmenuRow,
   type ContextMenuTarget,
   type OpenLink,
 } from "./context_menu_rows";
@@ -43,6 +50,13 @@ export interface ContextMenuHandshake extends ReferenceHandshake {
   drawsContextMenus?: boolean;
 }
 
+export type ContextMenuOpen = (
+  rows: readonly ContextMenuRow[],
+  point: ContextMenuPoint,
+  target: ContextMenuTarget,
+  followingRows: readonly ContextMenuRow[],
+) => void;
+
 interface ContextMenuBaseOptions {
   /** The page's last handshake, read at every right-click (so a getter); the scope of every reference. */
   handshake?: () => ContextMenuHandshake | null;
@@ -54,8 +68,10 @@ interface ContextMenuBaseOptions {
   scope?: (target: ContextMenuTarget) => ReferenceScope;
   /** A page's own rows for the target, first in the menu. */
   extraRows?: (target: ContextMenuTarget) => readonly ContextMenuRow[];
-  /** Draw the rows at the point; the framework-free renderer when unset. */
-  open?: (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void;
+  /** Draw the rows at the point, for the right-click on ``target``; the framework-free renderer when unset.
+   *  ``followingRows`` is ``rows`` without the page's own: what a page that draws its own rows itself, reading them
+   *  afresh while the menu is up, puts after them. */
+  open?: ContextMenuOpen;
   /** The document to listen on; the page's own when unset (a test hands in another). */
   document?: Document;
 }
@@ -101,6 +117,7 @@ function routesOf(options: ContextMenuOptions): {
 export const CONTEXT_MENU_INSTALLED_ATTR = "data-element-context-menu";
 /** Marks the framework-free renderer's card and rows, so a test can find them. */
 export const CONTEXT_MENU_CARD_ATTR = "data-context-menu";
+export const CONTEXT_MENU_SUBMENU_ATTR = "data-context-menu-submenu";
 export const CONTEXT_MENU_ROW_ATTR = "data-context-menu-row";
 
 const uninstallerByDocument = new WeakMap<Document, () => void>();
@@ -129,10 +146,12 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
     const ownRows = options.extraRows?.(target) ?? [];
     if (hasNativeMenu() && (event.shiftKey || isNativeMenuTarget(target, ownRows.length > 0))) return;
     event.preventDefault();
-    const rows = elementMenuRows(target, scopeOf(target), draft, isDraftAvailable(), ownRows, openLink);
-    renderer.open(rows, { x: event.clientX, y: event.clientY });
+    const followingRows = elementMenuRows(target, scopeOf(target), draft, isDraftAvailable(), [], openLink);
+    const rows = joinRowGroups([ownRows, followingRows]);
+    renderer.open(rows, { x: event.clientX, y: event.clientY }, target, followingRows);
   };
 
+  // own-context-menu: element-menu -- the element menu itself, the one menu every other right-click's rows join
   ownerDocument.addEventListener("contextmenu", onContextMenu);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
   const uninstall = (): void => {
@@ -147,21 +166,25 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
 
 // The framework-free renderer
 
+// The colours, radius and font are the workspace theme's (the page kit's ``workspace_theme.css`` sets them), so the
+// menu looks like the shared Menu a built-in app draws; each falls back to a fixed value on a page without the kit.
 const CARD_STYLE = [
   "position: fixed",
   "z-index: 2147483000",
   "min-width: 180px",
   "max-width: 320px",
   "padding: 4px 0",
-  "border: 1px solid rgba(0, 0, 0, 0.15)",
-  "border-radius: 8px",
-  "background: #ffffff",
-  "color: #1a1a1a",
-  "box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18)",
-  "font: 13px/1.4 ui-sans-serif, system-ui, sans-serif",
+  "border: 1px solid var(--c-border, rgba(0, 0, 0, 0.15))",
+  "border-radius: var(--radius-md, 8px)",
+  "background: var(--c-surface, #ffffff)",
+  "color: var(--c-text-primary, #1a1a1a)",
+  "box-shadow: var(--c-shadow-overlay, 0 8px 24px rgba(0, 0, 0, 0.18))",
+  "font: var(--font-size-row, 13px)/1.4 var(--font-sans, ui-sans-serif, system-ui, sans-serif)",
 ].join("; ");
 const ROW_STYLE = [
-  "display: block",
+  "display: flex",
+  "align-items: center",
+  "gap: 6px",
   "width: 100%",
   "padding: 6px 12px",
   "border: 0",
@@ -171,31 +194,90 @@ const ROW_STYLE = [
   "text-align: left",
   "cursor: pointer",
 ].join("; ");
-const DISABLED_ROW_STYLE = `${ROW_STYLE}; color: #9a9a9a; cursor: default`;
-const DIVIDER_STYLE = "margin: 4px 0; border: 0; border-top: 1px solid rgba(0, 0, 0, 0.1)";
+const DISABLED_ROW_STYLE = `${ROW_STYLE}; color: var(--c-text-faint, #9a9a9a); cursor: default`;
+const ROW_COLOR_BY_TONE: Readonly<Partial<Record<NonNullable<ContextMenuActionRow["tone"]>, string>>> = {
+  danger: "var(--c-danger, #c62828)",
+  quiet: "var(--c-text-faint, #6b6b6b)",
+};
+const DIVIDER_STYLE = "margin: 4px 0; border: 0; border-top: 1px solid var(--c-border-faint, rgba(0, 0, 0, 0.1))";
+const HOVER_BACKGROUND = "var(--c-fill-hover, rgba(0, 0, 0, 0.06))";
+const GLYPH_STYLE = "display: inline-flex; flex: none; width: 1em; justify-content: center";
+/** The size a row's icon is drawn at, the shared Menu's. */
+const ROW_ICON_SIZE = 14;
+/** The theme contract's parts (``themes/parts.ts``), which a theme's own rules select. */
+const THEME_PART_ATTR = "data-part";
 /** Gap kept between the card and each viewport edge. */
 const EDGE_MARGIN = 6;
+/** How long the pointer rests on a submenu row before its submenu opens: a sweep across rows opens none. */
+const SUBMENU_OPEN_DELAY_MS = 120;
+/** How long an open submenu outlives the pointer moving onto another row of the menu, so a diagonal trip from the
+ *  row to the submenu that grazes a neighbour does not close it. */
+const SUBMENU_CLOSE_GRACE_MS = 300;
+/** How far a submenu tucks under the menu's edge, and rises so its first row lines up with the row opening it. */
+const SUBMENU_OVERLAP = 4;
 
 /** What draws the menu: ``open`` puts the rows at the point; ``close``, when the renderer has one, takes an open
  *  menu down with the listeners it holds. */
 interface ContextMenuRenderer {
-  open: (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void;
+  open: ContextMenuOpen;
   close?: () => void;
 }
 
-/** A renderer that draws the rows as a fixed card and closes it on a press outside, Escape, or a pick. */
-export function createDefaultRenderer(ownerDocument: Document): Required<ContextMenuRenderer> {
-  let card: HTMLElement | null = null;
+/** The leading columns a card keeps on every row once one row fills them. */
+interface RowColumns {
+  hasCheck: boolean;
+  hasIcon: boolean;
+}
 
+/** A row kind this renderer has no case for. Its parameter is ``never``, so adding a kind to ``ContextMenuRow``
+ *  fails the build here until the renderer draws it: no kind reaches the shared Menu's pages and not these. */
+function failOnUndrawnRow(row: never): never {
+  throw new Error(`the element menu cannot draw this row: ${JSON.stringify(row)}`);
+}
+
+/** Keep a card of this size inside the viewport, sliding it left or up from where it would start. */
+function clampedOrigin(view: Window | null, x: number, y: number, width: number, height: number): ContextMenuPoint {
+  const viewportWidth = view?.innerWidth ?? width;
+  const viewportHeight = view?.innerHeight ?? height;
+  return {
+    x: Math.max(EDGE_MARGIN, Math.min(x, viewportWidth - width - EDGE_MARGIN)),
+    y: Math.max(EDGE_MARGIN, Math.min(y, viewportHeight - height - EDGE_MARGIN)),
+  };
+}
+
+/** A renderer that draws the rows as a fixed card, a submenu as a second card beside its row, and closes them on a
+ *  press outside, Escape, or a pick. */
+export function createDefaultRenderer(ownerDocument: Document): Required<ContextMenuRenderer> {
+  const view = ownerDocument.defaultView;
+  let card: HTMLElement | null = null;
+  let submenu: { card: HTMLElement; row: HTMLElement } | null = null;
+  let openTimer: number | null = null;
+  let closeTimer: number | null = null;
+
+  const clearTimer = (timer: number | null): null => {
+    if (timer !== null) view?.clearTimeout(timer);
+    return null;
+  };
+  const closeSubmenu = (): void => {
+    openTimer = clearTimer(openTimer);
+    closeTimer = clearTimer(closeTimer);
+    if (submenu === null) return;
+    submenu.card.remove();
+    submenu.row.style.background = "transparent";
+    submenu = null;
+  };
   const close = (): void => {
+    closeSubmenu();
     if (card === null) return;
     card.remove();
     card = null;
     ownerDocument.removeEventListener("mousedown", onPressOutside, true);
     ownerDocument.removeEventListener("keydown", onKeydown, true);
   };
+  const isInsideMenu = (node: Node): boolean =>
+    (card !== null && card.contains(node)) || (submenu !== null && submenu.card.contains(node));
   const onPressOutside = (event: MouseEvent): void => {
-    if (card !== null && event.target instanceof Node && card.contains(event.target)) return;
+    if (event.target instanceof Node && isInsideMenu(event.target)) return;
     close();
   };
   const onKeydown = (event: KeyboardEvent): void => {
@@ -204,60 +286,182 @@ export function createDefaultRenderer(ownerDocument: Document): Required<Context
     close();
   };
 
-  const open = (rows: readonly ContextMenuRow[], point: ContextMenuPoint): void => {
-    close();
-    const view = ownerDocument.defaultView;
+  /** A new card holding ``rows``, not yet in the document. */
+  const cardOf = (rows: readonly ContextMenuRow[], isSubmenu: boolean): HTMLElement => {
     const next = ownerDocument.createElement("div");
-    next.setAttribute(CONTEXT_MENU_CARD_ATTR, "");
+    next.setAttribute(isSubmenu ? CONTEXT_MENU_SUBMENU_ATTR : CONTEXT_MENU_CARD_ATTR, "");
     next.setAttribute("role", "menu");
+    next.setAttribute(THEME_PART_ATTR, "menu");
     next.setAttribute("style", CARD_STYLE);
     // A right-click on the card itself is handled here, so the installer yields to it (as it
     // yields to the shared Menu's sheet) rather than describing one of the card's own buttons.
+    // own-context-menu: dismisses -- a right-click on the open menu's own card describes nothing
     next.addEventListener("contextmenu", (event) => event.preventDefault());
-    for (const row of rows) {
-      if (row.kind === "divider") {
-        const divider = ownerDocument.createElement("hr");
-        divider.setAttribute("style", DIVIDER_STYLE);
-        next.appendChild(divider);
-        continue;
-      }
-      const button = ownerDocument.createElement("button");
-      button.type = "button";
-      button.setAttribute("role", "menuitem");
-      button.setAttribute(CONTEXT_MENU_ROW_ATTR, row.key);
-      button.textContent = row.label;
-      const isDisabled = row.isDisabled === true;
-      button.setAttribute("style", isDisabled ? DISABLED_ROW_STYLE : ROW_STYLE);
-      if (isDisabled) button.setAttribute("aria-disabled", "true");
-      if (row.tooltip !== undefined) button.title = row.tooltip;
-      button.addEventListener("mouseenter", () => {
-        if (!isDisabled) button.style.background = "rgba(0, 0, 0, 0.06)";
-      });
-      button.addEventListener("mouseleave", () => {
-        button.style.background = "transparent";
-      });
-      // The press must not move focus off the target the edit rows act on, nor collapse the
-      // selection there, as the shared Menu keeps its sheet's press from doing; the click still fires.
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (isDisabled) return;
-        close();
-        row.onSelect();
-      });
-      next.appendChild(button);
+    // A card with a check row or an icon keeps that column on every row, so the labels line up.
+    const columns = {
+      hasCheck: rows.some((row) => row.kind === "check"),
+      hasIcon: rows.some((row) => row.kind === "action" && row.icon !== undefined),
+    };
+    for (const row of rows) next.appendChild(rowElementOf(row, isSubmenu, columns));
+    return next;
+  };
+
+  const glyphOf = (): HTMLElement => {
+    const glyph = ownerDocument.createElement("span");
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.setAttribute("style", GLYPH_STYLE);
+    return glyph;
+  };
+
+  /** The button every row but a divider is: its key, label, tooltip, and the columns the card keeps. */
+  const rowButtonOf = (
+    row: ContextMenuActionRow | ContextMenuCheckRow | ContextMenuSubmenuRow,
+    columns: RowColumns,
+  ): HTMLButtonElement => {
+    const button = ownerDocument.createElement("button");
+    button.type = "button";
+    button.setAttribute(CONTEXT_MENU_ROW_ATTR, row.key);
+    button.setAttribute(THEME_PART_ATTR, "menu-item");
+    button.setAttribute("style", ROW_STYLE);
+    if (row.tooltip !== undefined) button.title = row.tooltip;
+    if (columns.hasCheck) {
+      const mark = glyphOf();
+      mark.textContent = row.kind === "check" && row.isChecked ? "✓" : "";
+      button.appendChild(mark);
     }
+    if (columns.hasIcon) {
+      const glyph = glyphOf();
+      const rowIcon = row.kind === "action" ? row.icon : undefined;
+      // A named icon is the shared set's; markup is the page's own, written by the page that hands the row over.
+      if (typeof rowIcon === "string") glyph.innerHTML = icon(rowIcon, { size: ROW_ICON_SIZE });
+      else if (rowIcon !== undefined) glyph.innerHTML = rowIcon.markup;
+      button.appendChild(glyph);
+    }
+    const label = ownerDocument.createElement("span");
+    label.setAttribute("style", "flex: 1");
+    label.textContent = row.label;
+    button.appendChild(label);
+    // The press must not move focus off the target the edit rows act on, nor collapse the
+    // selection there, as the shared Menu keeps its sheet's press from doing; the click still fires.
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    return button;
+  };
+
+  const dividerElementOf = (): HTMLElement => {
+    const divider = ownerDocument.createElement("hr");
+    divider.setAttribute(THEME_PART_ATTR, "menu-separator");
+    divider.setAttribute("style", DIVIDER_STYLE);
+    return divider;
+  };
+
+  /** A row a pick runs: an action or a check row. */
+  const pickableElementOf = (
+    row: ContextMenuActionRow | ContextMenuCheckRow,
+    isInSubmenu: boolean,
+    columns: RowColumns,
+  ): HTMLElement => {
+    const button = rowButtonOf(row, columns);
+    button.setAttribute("role", row.kind === "check" ? "menuitemcheckbox" : "menuitem");
+    const isDisabled = row.kind === "action" && row.isDisabled === true;
+    if (isDisabled) {
+      button.setAttribute("style", DISABLED_ROW_STYLE);
+      button.setAttribute("aria-disabled", "true");
+    }
+    const toneColor = row.kind === "action" && row.tone !== undefined ? ROW_COLOR_BY_TONE[row.tone] : undefined;
+    if (!isDisabled && toneColor !== undefined) button.style.color = toneColor;
+    if (row.kind === "check") button.setAttribute("aria-checked", row.isChecked ? "true" : "false");
+    button.addEventListener("mouseenter", () => {
+      if (!isDisabled) button.style.background = HOVER_BACKGROUND;
+      // Another row of the menu: the open submenu goes once the grace runs out, unless the pointer reaches it.
+      if (!isInSubmenu && submenu !== null && closeTimer === null) {
+        closeTimer = view?.setTimeout(closeSubmenu, SUBMENU_CLOSE_GRACE_MS) ?? null;
+      }
+    });
+    button.addEventListener("mouseleave", () => {
+      button.style.background = "transparent";
+    });
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (isDisabled) return;
+      close();
+      if (row.kind === "check") row.onToggle();
+      else row.onSelect();
+    });
+    return button;
+  };
+
+  const submenuElementOf = (row: ContextMenuSubmenuRow, columns: RowColumns): HTMLElement => {
+    const button = rowButtonOf(row, columns);
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-haspopup", "menu");
+    const chevron = ownerDocument.createElement("span");
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.textContent = "›";
+    button.appendChild(chevron);
+    button.addEventListener("mouseenter", () => {
+      button.style.background = HOVER_BACKGROUND;
+      closeTimer = clearTimer(closeTimer);
+      if (submenu?.row === button) return;
+      openTimer = clearTimer(openTimer);
+      openTimer = view?.setTimeout(() => openSubmenu(button, row.rows()), SUBMENU_OPEN_DELAY_MS) ?? null;
+    });
+    button.addEventListener("mouseleave", () => {
+      openTimer = clearTimer(openTimer);
+      if (submenu?.row !== button) button.style.background = "transparent";
+    });
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (submenu?.row !== button) openSubmenu(button, row.rows());
+    });
+    return button;
+  };
+
+  const rowElementOf = (row: ContextMenuRow, isInSubmenu: boolean, columns: RowColumns): HTMLElement => {
+    switch (row.kind) {
+      case "divider":
+        return dividerElementOf();
+      case "action":
+      case "check":
+        return pickableElementOf(row, isInSubmenu, columns);
+      case "submenu":
+        return submenuElementOf(row, columns);
+      default:
+        return failOnUndrawnRow(row);
+    }
+  };
+
+  /** Open ``rows`` as a submenu beside ``row``: after the menu's edge, or before it where that would leave the
+   *  viewport, its first row level with ``row``. */
+  const openSubmenu = (row: HTMLElement, rows: readonly ContextMenuSubmenuChildRow[]): void => {
+    closeSubmenu();
+    if (card === null) return;
+    const next = cardOf(rows, true);
+    next.addEventListener("mouseenter", () => {
+      closeTimer = clearTimer(closeTimer);
+    });
     ownerDocument.body.appendChild(next);
-    // Placed after it is in the document, so its size is known: kept inside the viewport by
-    // sliding it left or up when it would overflow.
+    const menuBox = card.getBoundingClientRect();
+    const rowBox = row.getBoundingClientRect();
     const width = next.offsetWidth;
     const height = next.offsetHeight;
-    const viewportWidth = view?.innerWidth ?? width;
-    const viewportHeight = view?.innerHeight ?? height;
-    const left = Math.max(EDGE_MARGIN, Math.min(point.x, viewportWidth - width - EDGE_MARGIN));
-    const top = Math.max(EDGE_MARGIN, Math.min(point.y, viewportHeight - height - EDGE_MARGIN));
-    next.style.left = `${left}px`;
-    next.style.top = `${top}px`;
+    const viewportWidth = view?.innerWidth ?? menuBox.right + width;
+    const after = menuBox.right - SUBMENU_OVERLAP;
+    const x = after + width + EDGE_MARGIN <= viewportWidth ? after : menuBox.left - width + SUBMENU_OVERLAP;
+    const origin = clampedOrigin(view, x, rowBox.top - SUBMENU_OVERLAP, width, height);
+    next.style.left = `${origin.x}px`;
+    next.style.top = `${origin.y}px`;
+    row.style.background = HOVER_BACKGROUND;
+    submenu = { card: next, row };
+  };
+
+  const open = (rows: readonly ContextMenuRow[], point: ContextMenuPoint): void => {
+    close();
+    const next = cardOf(rows, false);
+    ownerDocument.body.appendChild(next);
+    // Placed after it is in the document, so its size is known.
+    const origin = clampedOrigin(view, point.x, point.y, next.offsetWidth, next.offsetHeight);
+    next.style.left = `${origin.x}px`;
+    next.style.top = `${origin.y}px`;
     card = next;
     ownerDocument.addEventListener("mousedown", onPressOutside, true);
     ownerDocument.addEventListener("keydown", onKeydown, true);
