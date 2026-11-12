@@ -577,7 +577,7 @@ colour; a dashed envelope for an invited email; a monogram tile for a visiting
 agent; a neutral silhouette for the owner of a workspace that has not shared;
 faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
-once when it arrives and when a bubble of its appears), the viewer's own
+once when it arrives and when it says something), the viewer's own
 picture, and the agent's avatar at 36px in its mood, attending while the pinned
 chat window is focused -- the one creature's docked home, not drawn while this
 client floats the avatar over the windows instead. Hovering
