@@ -218,16 +218,23 @@ tier (code the system `python3` runs) in general.
 uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --no-exemptions
 ```
 
-Run it whenever you create or edit a skill. It prints `ok` and exits 0, or
-exits 1 with what to fix. It checks:
+Run it whenever you create a skill, and with `--edited` in place of
+`--no-exemptions` whenever you edit one. It prints `ok` and exits 0, or exits 1
+with what to fix. It checks:
 
 - **Frontmatter**: the name rules and directory match, and the description's
   length.
 - **The guide's measurable rules**: `size`, `reachability`, `depth`, `paths`
-  and `contents`. A failure states the goal; restructure the skill to meet it.
-- **Exemptions**: `--no-exemptions` refuses one, which is the mode for a new
-  skill and for any skill you edit. Without the flag, a skill passes with the
-  exemption its frontmatter carries, and a stale one fails.
+  and `contents`. A failure states the goal; change the skill to meet it.
+- **Exemptions**: a skill may carry one in its frontmatter for checks it fails.
+  `--no-exemptions` refuses any: a new skill passes every check. `--edited`
+  refuses a `predates-checks` one, so an edit to a skill that has carried one
+  since before the checks restructures it until those checks pass and removes
+  the two lines. It honours an `awaiting-restructure` one, which a built-in
+  skill carries until the release that restructures it: leave that exemption
+  and that skill's structure alone, and make sure your edit fails no further
+  check. With neither flag a skill passes with whatever exemption it carries.
+  A stale exemption always fails.
 - **Python**: a bare skill's one script imports only the standard library,
   carries no PEP 723 header, and `python3 -S -s <script> --help` exits 0. A
   packaged skill's `python/pyproject.toml` names the project and package as
