@@ -45,7 +45,8 @@ The first release is given in file-level detail; later areas are outlined and ge
 
 - AGENTS.md tells it to run the validator when it edits a skill.
 - A newly crystallized skill must pass every check with no exemption.
-- An edit to a skill that carries an exemption must clear it.
+- An edit to a skill that has carried an exemption since before the checks must clear it.
+- A built-in skill's exemption waits for the release that restructures it. A workspace agent that edits such a skill leaves the exemption and the skill's structure alone; its edit must fail no further check.
 - A failure states the goal and says restructuring is permitted. It does not offer the exemption as a way out.
 - An exemption with a reason outside the closed set is rejected.
 - The `skill_hygiene` category reviews the diff against the guide. For an exempt skill it skips the exempted criteria and judges only what the diff adds.
@@ -117,8 +118,9 @@ Paths are in dwt unless marked (mngr).
 - Paths: every path named under a tracked prefix (`.agents/`, `system/`, `docs/`) exists. Paths under `data/`, absolute paths, globs and paths with a placeholder are skipped.
 - Contents: the file opens with a list whose entries match its H2 headings, at the two thresholds above.
 - Exemptions: read from frontmatter `metadata`, as one string naming the exempted checks and one naming the reason. An unknown check, an unknown reason or a stale exemption is an error.
-- A mode that refuses any exemption, for crystallize and for an edited skill.
-- A stamping mode that recomputes exemptions for every non-third-party skill in a tree and prints what it changed.
+- A mode that refuses any exemption, for crystallize.
+- A mode for an edited skill, which refuses the predates reason and honours the awaiting-restructure one.
+- A stamping mode that recomputes exemptions for every non-third-party skill in a tree and prints what it changed. A skill it newly exempts gets the predates reason; an existing exemption keeps its reason, so only a maintainer writes the awaiting-restructure one.
 - A shared-layer function that lists files under `.agents/shared/` no skill and no AGENTS.md reaches.
 - Failure text states the goal, permits restructuring and names the guide.
 
@@ -132,7 +134,8 @@ Paths are in dwt unless marked (mngr).
 
 **The flows that stamp**
 
-- `.agents/shared/worker/references/op-crystallize.md` and `type-skill.md`: validate in the no-exemption mode; an edit clears an existing exemption.
+- `.agents/shared/worker/references/op-crystallize.md`: validate in the no-exemption mode.
+- `type-skill.md`: a new skill validates in the no-exemption mode and an edited one in the edit mode.
 - `.agents/skills/update-self/references/update-self-worker.md`: after the trial merge, run the stamping mode from the merged tree and list its output in the report.
 - `.agents/skills/migrate-workspace/SKILL.md`: replace the hard validation of migrated skills with the stamping mode.
 - `.agents/skills/use-template/SKILL.md` and `update-installed-template/SKILL.md`: run the stamping mode after the merge lands.
@@ -260,7 +263,8 @@ Paths are in dwt unless marked (mngr).
 - Paths: a missing tracked path fails; a `data/` path, a placeholder path and a glob are skipped.
 - Contents: a long reference with no list fails; a list that omits a heading fails.
 - Exemptions: a valid one suppresses its check only; a stale one, an unknown check and an unknown reason each fail.
-- The no-exemption mode fails a skill that carries a valid exemption.
+- The no-exemption mode fails a skill that carries a valid exemption, whatever its reason.
+- The edit mode fails a skill that carries the predates reason, passes one that carries the awaiting-restructure reason, and still fails that one on a check it is not exempt from.
 - Stamping: a failing skill gains an exemption, a fixed skill loses its stale one, a third-party skill is untouched.
 - Shared layer: an unreached file under `.agents/shared/` is reported.
 
