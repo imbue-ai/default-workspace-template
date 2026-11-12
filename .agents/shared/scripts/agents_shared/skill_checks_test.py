@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from agents_shared.skill_exemptions import (
 )
 
 _LONG_FILLER = "\n".join(f"filler line {index}" for index in range(120))
+_VALIDATE_SKILL_SCRIPT = Path(__file__).with_name("validate_skill.py")
 
 
 def _write(root: Path, relative: str, text: str) -> Path:
@@ -325,6 +327,40 @@ def test_an_edit_clears_the_skills_own_exemption_and_leaves_one_awaiting_its_res
         cleared is not None
         and "an edit clears a `predates-checks` exemption" in cleared
     )
+
+
+def _run_validator(skill: Path, *flags: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_VALIDATE_SKILL_SCRIPT), str(skill), *flags],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_command_line_flag_picks_which_exemption_a_skill_may_keep(
+    tmp_path: Path,
+) -> None:
+    body = "Read `system/gone.py`.\n"
+    own = _skill(tmp_path, "own", body, _exemption("paths", "predates-checks"))
+    built_in = _skill(
+        tmp_path, "built-in", body, _exemption("paths", "awaiting-restructure")
+    )
+
+    for skill in (own, built_in):
+        standing = _run_validator(skill)
+        assert (standing.returncode, standing.stdout) == (0, "ok\n")
+
+    own_edited = _run_validator(own, "--edited")
+    assert own_edited.returncode == 1 and "[paths]" in own_edited.stderr
+    built_in_edited = _run_validator(built_in, "--edited")
+    assert (built_in_edited.returncode, built_in_edited.stdout) == (0, "ok\n")
+
+    built_in_new = _run_validator(built_in, "--no-exemptions")
+    assert built_in_new.returncode == 1 and "[paths]" in built_in_new.stderr
+
+    both = _run_validator(built_in, "--edited", "--no-exemptions")
+    assert both.returncode == 2 and "not allowed with" in both.stderr
 
 
 def test_writing_an_exemption_changes_only_the_metadata_block() -> None:
