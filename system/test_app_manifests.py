@@ -571,10 +571,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "chat": "system",
         "terminal": "system",
         "terminal-pty": "internal",
-        "files": "app",
+        "files": "system",
         "screen": "system",
         "getting-started": "system",
-        "routines": "app",
+        "routines": "system",
         "system-monitor": "system",
         "style-guide": "system",
     }
