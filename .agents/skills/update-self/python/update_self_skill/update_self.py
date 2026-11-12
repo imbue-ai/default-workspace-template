@@ -79,6 +79,14 @@ belong in tested code rather than agent prose:
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
 
+``stage-shared-prose``
+    Stage, beside the staged skill, the prose outside the skill's own directory
+    that the flow reads: ``.agents/shared/``, the ``harden-worker`` skill and
+    ``launch-task``'s references. They come from the same place the staged skill
+    did (the target ref, or the local tree when the ref predates the skill), so
+    the staged flow never reads a shared file from a workspace tree older than
+    itself.
+
 ``bridge-history``
     Give ``HEAD`` a merge base with the target when the workspace predates the
     template's history rewrite: a ``git replace`` graft names the workspace's
@@ -217,6 +225,19 @@ from update_self_skill.update_target import (
 # references/, scripts/, python/). Used by ``bootstrap-skill`` to extract the target
 # ref's own copy of the flow.
 SKILL_DIR_REL = ".agents/skills/update-self"
+
+# Where ``bootstrap-skill`` and ``stage-shared-prose`` stage, relative to the repo root.
+STAGING_DIR_REL = "data/.tasks/update-self/skill-at-target"
+
+# The prose outside the skill's own directory that the staged flow reads, staged
+# beside it by ``stage-shared-prose``. A path the skill's markdown names outside
+# these and outside ``SKILL_DIR_REL`` would be read from the workspace's own tree,
+# which may be older than the flow following it.
+STAGED_PROSE_PATHS = (
+    ".agents/shared",
+    ".agents/skills/harden-worker",
+    ".agents/skills/launch-task/references",
+)
 
 
 def _git(args: Sequence[str], repo_root: Path) -> str:
@@ -573,10 +594,103 @@ def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_in_ref(ref: str, path: str, repo_root: Path) -> bool:
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}:{path}"],
+            cwd=repo_root,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def _extract_from_ref(
+    ref: str, paths: Sequence[str], dest_root: Path, repo_root: Path
+) -> None:
+    """Lay ``paths`` as they are at ``ref`` down under ``dest_root``.
+
+    ``git archive`` reads the already-fetched objects: no network, and no change
+    to the working tree.
+    """
+    archive = subprocess.run(
+        ["git", "archive", ref, *paths],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(dest_root, filter="data")
+
+
+def _staging_root(args: argparse.Namespace, repo_root: Path) -> Path:
+    dest = Path(args.dest)
+    return (dest if dest.is_absolute() else repo_root / dest).resolve()
+
+
+def _cmd_stage_shared_prose(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    dest_root = _staging_root(args, repo_root)
+    if not _names_commit(args.ref, repo_root):
+        print(
+            f"error: {args.ref} does not name a commit in this workspace, so there "
+            "is no release to stage the shared prose of.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # The same choice ``bootstrap-skill`` made for the skill itself: a ref that
+    # predates the skill has the local flow staged, which names the local tree's files.
+    is_from_ref = _is_in_ref(args.ref, SKILL_DIR_REL, repo_root)
+    if is_from_ref:
+        missing = [
+            path
+            for path in STAGED_PROSE_PATHS
+            if not _is_in_ref(args.ref, path, repo_root)
+        ]
+    else:
+        missing = [
+            path for path in STAGED_PROSE_PATHS if not (repo_root / path).is_dir()
+        ]
+    if missing:
+        where = args.ref if is_from_ref else "this workspace's tree"
+        print(
+            f"error: {where} has no {', '.join(missing)}, which the update-self flow "
+            "staged for this pass reads. Nothing was staged.",
+            file=sys.stderr,
+        )
+        return 1
+
+    for path in STAGED_PROSE_PATHS:
+        staged = dest_root / path
+        if staged.exists():
+            shutil.rmtree(staged)
+    if is_from_ref:
+        dest_root.mkdir(parents=True, exist_ok=True)
+        _extract_from_ref(args.ref, STAGED_PROSE_PATHS, dest_root, repo_root)
+    else:
+        for path in STAGED_PROSE_PATHS:
+            shutil.copytree(
+                repo_root / path,
+                dest_root / path,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+    print(
+        json.dumps(
+            {
+                "staged_root": str(dest_root),
+                "paths": list(STAGED_PROSE_PATHS),
+                "source": "ref" if is_from_ref else "local",
+                "ref": args.ref,
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args).resolve()
-    dest = Path(args.dest)
-    dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
+    dest_root = _staging_root(args, repo_root)
     staged_skill = dest_root / SKILL_DIR_REL
 
     # Checked first: the skill-dir probe below cannot tell a ref that names
@@ -599,12 +713,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         shutil.rmtree(dest_root)
     dest_root.mkdir(parents=True)
 
-    exists = subprocess.run(
-        ["git", "cat-file", "-e", f"{args.ref}:{SKILL_DIR_REL}"],
-        cwd=repo_root,
-        capture_output=True,
-    )
-    if exists.returncode != 0:
+    if not _is_in_ref(args.ref, SKILL_DIR_REL, repo_root):
         # The target ref predates the skill, so there is no target copy to hand
         # off to: stage the *local* copy at the fixed path (so the worker still
         # finds the flow there) and report ``differs=False`` -- the caller stays
@@ -622,17 +731,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         )
         return 0
 
-    # Extract the ref's own copy of the skill via ``git archive`` (reads the
-    # already-fetched object, no network, no working-tree mutation). The archive
-    # lays the tree down under ``SKILL_DIR_REL``.
-    archive = subprocess.run(
-        ["git", "archive", args.ref, SKILL_DIR_REL],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-    )
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        tar.extractall(dest_root, filter="data")
+    _extract_from_ref(args.ref, [SKILL_DIR_REL], dest_root, repo_root)
 
     # Whether the ref's skill differs from the local working-tree copy. Let git
     # do the compare: ``git diff`` ignores untracked files, so the ``__pycache__/
@@ -1142,11 +1241,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap_parser.add_argument(
         "--dest",
-        default="data/.tasks/update-self/skill-at-target",
-        help="Staging dir the skill is extracted into (default: "
-        "data/.tasks/update-self/skill-at-target).",
+        default=STAGING_DIR_REL,
+        help=f"Staging dir the skill is extracted into (default: {STAGING_DIR_REL}).",
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
+
+    stage_prose_parser = sub.add_parser(
+        "stage-shared-prose",
+        help="Stage the prose outside the skill's own directory that the flow "
+        "reads, from the release being updated to, beside the staged skill.",
+        parents=[common],
+    )
+    stage_prose_parser.add_argument(
+        "--ref",
+        required=True,
+        help="The resolved target ref, as given to bootstrap-skill.",
+    )
+    stage_prose_parser.add_argument(
+        "--dest",
+        default=STAGING_DIR_REL,
+        help=f"Staging dir bootstrap-skill staged into (default: {STAGING_DIR_REL}).",
+    )
+    stage_prose_parser.set_defaults(func=_cmd_stage_shared_prose)
 
     bridge_parser = sub.add_parser(
         "bridge-history",

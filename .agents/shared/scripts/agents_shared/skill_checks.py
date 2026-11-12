@@ -16,8 +16,10 @@ And one over the layer the skills share (``unreached_shared_files``).
 A link is a path written in a markdown file that resolves to a file: from the repository root,
 from the linking file's directory or its ``references/``, or, in one of the skill's own files,
 from the skill's directory or its ``references/``. A script of the skill that imports a package
-of the skill's uv project reaches the project. A path holding a placeholder (``<name>``,
-``$VAR``, a glob) links to nothing.
+of the skill's uv project reaches the project. A path into a copy of the tree kept somewhere
+else in the repository (``data/.tasks/update-self/skill-at-target/.agents/shared/...``) links
+the file of that name here: the copy is read in its place. A path holding a placeholder
+(``<name>``, ``$VAR``, a glob) links to nothing.
 The crawl follows links through the skill's own markdown and through ``.agents/shared/``; a
 file in another skill is a link's end, not a place to read on from.
 
@@ -270,8 +272,12 @@ class SkillTree:
             ]
             found: set[str] = set()
             for token in _path_tokens(self.text(markdown)):
-                for base in bases:
-                    target = posixpath.normpath(posixpath.join(base, token))
+                _, is_copy, copied = token.partition("/.agents/")
+                for base, name in [
+                    *((base, token) for base in bases),
+                    *([("", f".agents/{copied}")] if is_copy else []),
+                ]:
+                    target = posixpath.normpath(posixpath.join(base, name))
                     if target.startswith(".."):
                         continue
                     if self.is_file(target):

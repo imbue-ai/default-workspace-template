@@ -5,8 +5,8 @@ The release that moved every skill's Python into a package in the skill's
 creations were written under. Built-in code arrives already converted; this
 reference is for what the *user's* skills, services and docs need when the
 update's checks fail on them. The rules themselves are in
-`.agents/shared/references/running-python.md` and
-`.agents/shared/references/spec-summary.md` ("Packaging").
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md` and
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/spec-summary.md` ("Packaging").
 
 ## A skill that came from elsewhere
 
@@ -120,7 +120,7 @@ Every Python package the user's agents made under `system/apps`,
 `system/services` or `system/libs` is now its own uv project: its own
 `pyproject.toml`, `uv.lock` and `.venv`, outside the root workspace, whose
 `members` now names only the built-in packages
-(`.agents/shared/references/running-python.md`, "User packages are standalone
+(`data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md`, "User packages are standalone
 projects"). Until one is converted it has no lock of its own, its program runs
 it from the root venv, and `system/test_user_packages_are_standalone.py` names
 what is missing. The migration command converts it and keeps it on the versions
@@ -252,7 +252,7 @@ lists every site. The common ones:
   app whose script it is, with the package as an editable path dependency), and
   delete the test's `PYTHONPATH`.
 
-A site that one of the reasons in `.agents/shared/references/running-python.md`
+A site that one of the reasons in `data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md`
 ("When a launch or an import-path edit has to stay") really applies to -- a
 wrapper that hands secrets to the program it runs, say -- keeps its process with
 the marker that section shows. Name every marker you add, and every site you

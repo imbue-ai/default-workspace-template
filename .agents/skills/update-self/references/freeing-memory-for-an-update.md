@@ -4,7 +4,9 @@ An update's heaviest moments -- launching the worker, its test gate, the fronten
 ones the memory guard sheds first. When that happens, this pass frees memory itself rather than
 stopping to ask, within the licence below. It is the one flow that may: every other one offers the
 candidates to the user and stops only what they approve
-(`.agents/shared/references/freeing-memory.md`).
+(`data/.tasks/update-self/skill-at-target/.agents/shared/references/freeing-memory.md`; before Step 3 nothing is
+staged yet, so there read the workspace's own copy, the same path without the
+`data/.tasks/update-self/skill-at-target/` prefix).
 
 ## Read the memory the guard acts on, not the container's
 

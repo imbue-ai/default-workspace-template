@@ -13,7 +13,11 @@ changelog gathering, the rollbacks to undo) live in
 flow shipped with the version being updated to (the lead staged it and it was
 synced into this worktree with the runtime dir); reference it by literal each
 time (each bash invocation is a fresh shell) and run it from your worktree
-root. Impact analysis (who depends on a changed file) is deliberately *not*
+root. The lead staged the target release's `.agents/shared/`, `harden-worker`
+skill and `launch-task` references beside it, and this guide names those files
+by their staged path; when one of them names a further `.agents/...` path, read
+the copy under `data/.tasks/update-self/skill-at-target/` if one is there, else
+your worktree's. Impact analysis (who depends on a changed file) is deliberately *not*
 scripted; Step 4a is your recipe for it.
 
 ## 1. Resolve inputs
@@ -393,7 +397,7 @@ in your report.
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
-  `.agents/skills/harden-worker/references/harden-creation.md` ("The test gate")
+  `data/.tasks/update-self/skill-at-target/.agents/skills/harden-worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation; the tree before
   your change, for attributing a failure, is `$MERGE^1` (a test absent there
   arrived with the update). mngr's own suite runs in its repo, not here.
@@ -416,7 +420,7 @@ in your report.
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
   app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/skills/harden-worker/references/web-frontend-testing.md`. Those seven bundles
+  `data/.tasks/update-self/skill-at-target/.agents/skills/harden-worker/references/web-frontend-testing.md`. Those seven bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
   installed only as a set) -- name all seven locations in your report.
 - **Customization survival** -- for every user creation the update touches
@@ -470,7 +474,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ## 6. Report back
 
 Take the frontmatter parse, the report frontmatter, and the body shapes from
-`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
 `data/.tasks/update-self/task.md`).
 
 Deliver the report **by hand**, not with that reference's `report` subcommand:

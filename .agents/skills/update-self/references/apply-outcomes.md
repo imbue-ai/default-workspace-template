@@ -264,7 +264,7 @@ reports the workspace by it. Choose it by what happened:
   best effort at a retry is spent.
 - `STUCK`: a fault stopped the pass and you could not recover from it. The
   worker reported `stuck` for any other reason, a dead worker did not come
-  back through `.agents/skills/launch-task/references/dead-worker-recovery.md`,
+  back through `data/.tasks/update-self/skill-at-target/.agents/skills/launch-task/references/dead-worker-recovery.md`,
   a step the update depends on failed, the apply ended in an emergency
   (exit 3), Step 2 reported a fault, or this chat keeps stopping for a reason
   you cannot find or fix (`resuming-after-a-restart.md`). The watchdog
