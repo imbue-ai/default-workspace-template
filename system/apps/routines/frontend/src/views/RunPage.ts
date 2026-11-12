@@ -72,7 +72,7 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
             "pre",
             {
               class:
-                "max-h-[70vh] overflow-auto rounded-lg bg-inverse-surface p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-accent-content",
+                "max-h-[70vh] overflow-auto rounded-lg bg-inverse-surface p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-inverse-content",
               "data-log": "",
               oncreate: ({ dom }) => {
                 dom.scrollTop = dom.scrollHeight;

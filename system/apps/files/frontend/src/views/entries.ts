@@ -124,7 +124,7 @@ export const RenameField: m.Component<RenameFieldAttrs> = {
             "div.files-rename-error",
             {
               class:
-                "absolute top-full left-0 z-(--z-sticky) mt-1 w-max max-w-[240px] rounded-md bg-danger-surface px-2 py-1 text-left type-helper text-accent-content shadow-overlay",
+                "absolute top-full left-0 z-(--z-sticky) mt-1 w-max max-w-[240px] rounded-md bg-danger-surface px-2 py-1 text-left type-helper text-danger-content shadow-overlay",
             },
             rename.error,
           ),

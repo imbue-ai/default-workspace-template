@@ -42,7 +42,7 @@ export const Toasts: m.Component<ToastsAttrs> = {
             class:
               "toast flex max-w-[min(480px,100%)] animate-[toast-rise_var(--dur-slow)_ease-out] items-start gap-3 " +
               "rounded-[20px] bg-inverse-surface px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line " +
-              `text-accent-content shadow-overlay ${onDismiss === undefined ? "" : "pointer-events-auto"}`,
+              `text-inverse-content shadow-overlay ${onDismiss === undefined ? "" : "pointer-events-auto"}`,
           },
           [
             m("span", { class: "min-w-0 flex-1" }, toast.message),

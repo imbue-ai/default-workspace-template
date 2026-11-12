@@ -457,7 +457,7 @@ function statusSection(): CatalogSection {
         m("span", { class: "spinner" }),
         m("span", { class: "spinner spinner--sm" }),
         m("span", { class: "text-accent-surface" }, m.trust(spinnerIcon(24))),
-        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-accent-content type-body" }, [
+        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-inverse-content type-body" }, [
           m("span", { class: "spinner spinner--sm spinner--current" }),
           "On a colored surface",
         ]),

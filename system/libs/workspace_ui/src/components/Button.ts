@@ -78,17 +78,17 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
   ghost:
     "bg-transparent text-body-content-secondary border-transparent not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:hover:text-body-content not-disabled:not-aria-disabled:active:bg-fill-active",
   destructive:
-    "bg-danger-surface text-accent-content border-danger-surface not-disabled:not-aria-disabled:hover:bg-danger-surface-hover not-disabled:not-aria-disabled:hover:border-danger-surface-hover",
+    "bg-danger-surface text-danger-content border-danger-surface not-disabled:not-aria-disabled:hover:bg-danger-surface-hover not-disabled:not-aria-disabled:hover:border-danger-surface-hover",
   "ghost-destructive":
     "bg-transparent text-danger-surface border-transparent not-disabled:not-aria-disabled:hover:bg-danger-subtle-surface",
   inverse:
-    "bg-inverse-surface text-accent-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
+    "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
   // For controls sitting on a dark overlay (the lightbox). The whites are raw
   // (white/85, white/15) like the overlay's own black scrim -- there is no
   // dark-surface tint token, and on-accent covers only the full-strength hover.
   "ghost-inverse":
-    "bg-transparent text-white/85 border-transparent not-disabled:not-aria-disabled:hover:bg-white/15 not-disabled:not-aria-disabled:hover:text-accent-content",
-  stop: "bg-inverse-surface text-accent-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
+    "bg-transparent text-white/85 border-transparent not-disabled:not-aria-disabled:hover:bg-white/15 not-disabled:not-aria-disabled:hover:text-inverse-content",
+  stop: "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
 };
 
 // The selected (accent-tint) palette replaces the variant's colors outright --

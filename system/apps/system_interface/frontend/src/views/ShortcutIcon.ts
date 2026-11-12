@@ -105,7 +105,7 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
       m(
         "span",
         {
-          class: "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-accent-content",
+          class: "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-body-content",
         },
         label,
       ),

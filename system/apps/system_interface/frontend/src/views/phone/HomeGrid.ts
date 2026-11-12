@@ -74,7 +74,7 @@ export const HomeGrid: m.Component<HomeGridAttrs> = {
                 {
                   class:
                     "phone-app-name line-clamp-2 max-w-(--desk-phone-cell-width) text-xs leading-tight " +
-                    "font-semibold wrap-anywhere text-accent-content [filter:var(--desk-shortcut-label-shadow)]",
+                    "font-semibold wrap-anywhere text-body-content [filter:var(--desk-shortcut-label-shadow)]",
                 },
                 app.display_name,
               ),

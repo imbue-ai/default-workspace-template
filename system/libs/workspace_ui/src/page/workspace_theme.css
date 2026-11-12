@@ -300,7 +300,7 @@
   button:not([data-part])[data-variant="destructive"] {
     border-color: var(--c-danger-surface);
     background: var(--c-danger-surface);
-    color: var(--c-accent-content);
+    color: var(--c-danger-content);
   }
   [data-part="button"][data-variant="destructive"]:not(:disabled):hover,
   button:not([data-part])[data-variant="destructive"]:not(:disabled):hover {

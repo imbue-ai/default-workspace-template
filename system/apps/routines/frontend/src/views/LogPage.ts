@@ -30,7 +30,7 @@ export const LogPage: m.Component<LogPageAttrs> = {
         "pre",
         {
           class:
-            "rounded-lg bg-inverse-surface p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-accent-content",
+            "rounded-lg bg-inverse-surface p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-inverse-content",
           "data-log": "",
         },
         log === "" ? "Nothing was printed." : log,

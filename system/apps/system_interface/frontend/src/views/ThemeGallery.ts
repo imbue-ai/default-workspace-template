@@ -238,7 +238,7 @@ function desktop(state: GalleryState): m.Children {
         m(
           "span",
           { ...partAttrs("shortcut-label"), class: "relative w-full [filter:var(--desk-shortcut-label-shadow)]" },
-          m("span", { class: "rounded px-1 type-helper text-accent-content" }, app.display_name),
+          m("span", { class: "rounded px-1 type-helper text-body-content" }, app.display_name),
         ),
       ]),
     ),
@@ -282,7 +282,7 @@ function tilesAndRows(): m.Children {
         m("span", { class: badgeClass("accent"), ...BADGE_PART }, "accent"),
         m(
           "span",
-          { ...partAttrs("tooltip"), class: "rounded-md bg-inverse-surface px-2 py-1 type-helper text-accent-content" },
+          { ...partAttrs("tooltip"), class: "rounded-md bg-inverse-surface px-2 py-1 type-helper text-inverse-content" },
           "A tooltip",
         ),
       ]),

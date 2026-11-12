@@ -212,7 +212,6 @@ select {
   color: #ffffff;
   /* The accent is the selection's own colour, so a switch or dot drawn in it turns white with the text. */
   --c-accent-surface: #ffffff;
-  --c-accent-content: #000000;
 }
 /* Only the text inside turns: a dot drawn in a colour other than the accent keeps it. */
 [data-part="menu-item"]:not([aria-disabled="true"]):is(:hover, [data-highlighted="true"]) * {
@@ -300,7 +299,6 @@ select {
   color: #ffffff;
   /* The accent is the selection's own colour, so a switch or dot drawn in it turns white with the text. */
   --c-accent-surface: #ffffff;
-  --c-accent-content: #000000;
 }
 /* Only the text inside turns: a status dot drawn in a colour other than the accent keeps it. */
 [data-part="list-row"][aria-current="true"] * {
