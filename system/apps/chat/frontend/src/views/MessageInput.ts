@@ -118,8 +118,8 @@ export const MAX_TEXTAREA_HEIGHT_PX = 240;
  *  Its corners are concentric with the buttons and chips inside: their 6px
  *  radius plus the padding and the border. */
 const INPUT_BOX_CLASS =
-  "message-input-box flex flex-col gap-0.5 rounded-[13px] border bg-composer p-1.5 " +
-  "[transition:border-color_150ms] focus-within:border-2 focus-within:border-accent focus-within:p-[5px]";
+  "message-input-box flex flex-col gap-0.5 rounded-[13px] border bg-body-surface-raised p-1.5 " +
+  "[transition:border-color_150ms] focus-within:border-2 focus-within:border-accent-surface focus-within:p-[5px]";
 
 /** The text and its buttons: paperclip | text | toolbar. ``fitComposer`` sets ``data-stacked`` on the row once
  *  the text needs a second line or there are attachments (``data-attachments``); the text then takes the full
@@ -454,7 +454,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
       oncreate: onShown,
       class:
         `${markerClass} mb-2 flex flex-row items-center justify-between gap-3 rounded-[13px] border ` +
-        "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
+        "border-default bg-body-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-body-content-secondary",
     },
     [
       m("span", sentence),
@@ -859,7 +859,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             // Centred on the corner inside the chip's 1px border, not on the border's outer edge.
             class:
               "composer-attachment-remove absolute -top-[9px] -right-[9px] z-10 inline-flex h-5 w-5 cursor-pointer " +
-              "items-center justify-center rounded-full bg-inverse text-on-accent opacity-0 shadow-sm " +
+              "items-center justify-center rounded-full bg-inverse-surface text-accent-content opacity-0 shadow-sm " +
               "transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100",
             "aria-label": "Remove attachment",
             ...hoverTooltipAttrs("Remove attachment", "above"),
@@ -906,26 +906,26 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const detail = isError
       ? m(
           "span",
-          { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-detail--error text-danger` },
+          { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-detail--error text-danger-surface` },
           "Upload failed",
         )
       : summary === undefined
         ? null
-        : m("span", { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-summary text-secondary` }, summary);
+        : m("span", { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-summary text-body-content-secondary` }, summary);
     return m(
       "div",
       {
         key: attachment.localId,
         class:
           `${chipMarker} group/chip relative flex ${ATTACHMENT_CHIP_HEIGHT_CLASS} max-w-[160px] flex-none items-center ` +
-          "gap-1 rounded-md border bg-surface-secondary pr-1.5 pl-1 " +
-          (isError ? "border-danger-border" : "border-subtle"),
+          "gap-1 rounded-md border bg-body-surface-secondary pr-1.5 pl-1 " +
+          (isError ? "border-danger-4" : "border-subtle"),
       },
       [
         m(
           "span",
           {
-            class: "composer-attachment-icon inline-flex h-4 w-4 flex-none items-center justify-center text-secondary",
+            class: "composer-attachment-icon inline-flex h-4 w-4 flex-none items-center justify-center text-body-content-secondary",
           },
           isUploading
             ? m("span", { class: "composer-attachment-uploading", "aria-label": "Uploading", role: "img" }, spinner)
@@ -935,7 +935,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m(
             "span",
             {
-              class: "composer-attachment-name truncate text-(length:--font-size-helper) leading-[1.3] text-primary",
+              class: "composer-attachment-name truncate text-(length:--font-size-helper) leading-[1.3] text-body-content",
             },
             attachment.fileName,
           ),
@@ -1777,7 +1777,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           {
             class:
               "message-input-switch-strip mx-1 mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 " +
-              "text-(length:--font-size-helper) text-secondary",
+              "text-(length:--font-size-helper) text-body-content-secondary",
             role: "status",
           },
           [
@@ -2029,8 +2029,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   m("textarea", {
                     class:
                       "message-input-textbox col-start-2 row-start-1 w-full resize-none border-none bg-transparent " +
-                      "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
-                      "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
+                      "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-body-content focus:outline-none " +
+                      "placeholder:text-body-content-tertiary group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                       "disabled:cursor-not-allowed disabled:opacity-60",
                     // A switch off a room holds the message like any switch, so its wording comes first.
                     placeholder:

@@ -57,7 +57,7 @@ import { MENU_ITEM_PART, MENU_PART, MENU_SEPARATOR_PART } from "../themes/parts"
 /** The floating card. Positioning is the caller's -- `fixed` here, `absolute` for a card that
  *  lives in its parent -- along with min-width and text size. */
 export function menuCardClass(extra = ""): string {
-  const parts = ["z-(--z-popover) rounded-xl border border-default bg-surface py-1 shadow-overlay"];
+  const parts = ["z-(--z-popover) rounded-xl border border-default bg-body-surface-raised py-1 shadow-overlay"];
   if (extra !== "") parts.push(extra);
   return parts.join(" ");
 }
@@ -73,7 +73,7 @@ export interface MenuRowOptions {
 
 /** The keyboard-focus treatment for a focusable row (a real <button>). Inset so the ring stays
  *  inside the card instead of overhanging it. */
-export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-surface";
 
 /** The row's highlight: a slab inset 4px from the card's edges, with the 12px radius the
  *  card's own 16px corner leaves 4px in, so the highlight looks concentric with the card. The
@@ -275,17 +275,17 @@ const SUBMENU_CARD_CLASS = menuCardClass(`fixed flex flex-col overflow-hidden ${
 const ICON_BOX_CLASS = "flex w-4 shrink-0 items-center justify-center";
 const ROW_LABEL_CLASS = "min-w-0 flex-1 truncate";
 /** A submenu row's or value row's label sits one colour step back from its value. */
-const KEY_LABEL_CLASS = "text-secondary";
+const KEY_LABEL_CLASS = "text-body-content-secondary";
 const KEY_VALUE_CLASS = "ml-auto flex min-w-0 items-center gap-1.5";
-const KEY_SUB_CLASS = "type-helper text-faint";
-const KEY_CHEVRON_CLASS = "shrink-0 text-faint";
+const KEY_SUB_CLASS = "type-helper text-body-content-tertiary";
+const KEY_CHEVRON_CLASS = "shrink-0 text-body-content-tertiary";
 
 const TONE_CLASS: Record<MenuRowTone, string> = {
-  default: "text-primary",
-  danger: "text-danger",
-  quiet: "text-faint hover:text-primary",
+  default: "text-body-content",
+  danger: "text-danger-surface",
+  quiet: "text-body-content-tertiary hover:text-body-content",
 };
-const DISABLED_CLASS = "text-faint cursor-default hover:bg-transparent";
+const DISABLED_CLASS = "text-body-content-tertiary cursor-default hover:bg-transparent";
 
 /** The button inside a row that carries `trailing`: the slab, the hover and the tone live on
  *  the row's wrapper, so this is only the label's own line and its focus ring. */
@@ -797,7 +797,7 @@ export function createMenu(options: MenuOptions): Menu {
             onchange: () => row.onToggle(),
             class:
               "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (row.isChecked ? "border-accent bg-accent" : "border-default bg-surface"),
+              (row.isChecked ? "border-accent-surface bg-accent-surface" : "border-default bg-body-surface-raised"),
           }),
           row.isChecked
             ? m(
@@ -807,7 +807,7 @@ export function createMenu(options: MenuOptions): Menu {
               )
             : null,
         ]),
-        iconBox(row.icon, "text-faint flex w-5 shrink-0 items-center justify-center"),
+        iconBox(row.icon, "text-body-content-tertiary flex w-5 shrink-0 items-center justify-center"),
         row.label,
       ],
     );

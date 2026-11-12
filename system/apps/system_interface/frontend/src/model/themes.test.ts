@@ -85,6 +85,6 @@ describe("resolveDesktopTheme", () => {
     expect(resolveDesktopTheme(catalog, "broken").id).toBe("standard");
     expect(resolveDesktopTheme(catalog, "deleted").id).toBe("standard");
     expect(resolveDesktopTheme({ ...catalog, default: null }, null).id).toBe("standard");
-    expect(resolveDesktopTheme({ default: null, themes: [] }, null).id).toBe("standard");
+    expect(resolveDesktopTheme({ default: null, themes: [], workspaceColor: null }, null).id).toBe("standard");
   });
 });

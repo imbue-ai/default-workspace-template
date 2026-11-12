@@ -179,7 +179,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
         m("div", { class: bannerClass(marker, tone) }, [
           m("span", { class: `${marker}-text min-w-0` }, [
             text(state, notice),
-            error === null ? null : m("span", { class: `${marker}-error ml-2 text-danger` }, error),
+            error === null ? null : m("span", { class: `${marker}-error ml-2 text-danger-surface` }, error),
           ]),
           m("span", { class: "flex flex-none items-center gap-1.5" }, verbs(notice)),
         ]),

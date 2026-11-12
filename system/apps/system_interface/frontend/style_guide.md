@@ -22,12 +22,12 @@ type, borders, states (`hover:`, `focus-visible:`, `disabled:`) included. Do not
 add a new `.feature-*` class to an app's `style.css` for something a utility string can
 say at the call site.
 
-- **Colors** come from the semantic utility layer (`text-primary`,
-  `text-secondary`, `text-faint`, `bg-page`, `bg-surface`, `bg-fill-hover`,
-  `border-default`, `text-accent`, `bg-danger-surface`, …) — see the
+- **Colors** come from the semantic utility layer (`text-body-content`,
+  `text-body-content-secondary`, `text-body-content-tertiary`, `bg-body-surface`, `bg-body-surface-raised`, `bg-fill-hover`,
+  `border-default`, `text-accent-surface`, `bg-danger-subtle-surface`, …) — see the
   `@theme inline` block in the library's `base.css`. Raw palette values live once, as
   `--c-*` on `:root`; hand-written CSS references those directly
-  (`var(--c-accent)`), never a hex.
+  (`var(--c-accent-surface)`), never a hex.
   - One name per token, with no aliases. Design work imported from elsewhere
     gets translated into these names on the way in, not registered under its own
     (the chat frontend's `views/style-modules.test.ts` asserts every colour and `type-*` role the

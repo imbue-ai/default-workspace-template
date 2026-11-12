@@ -134,11 +134,11 @@ function body(page: FilePageModel): m.Children {
   const name = nameOf(path);
   const url = server.urlOf(path);
   const preview = previewKindOf(name, page.options.isText);
-  const centred = "flex h-full items-center justify-center overflow-auto bg-page p-6";
+  const centred = "flex h-full items-center justify-center overflow-auto bg-body-surface p-6";
   if (page.isDeleted) {
     return m("div.files-file-deleted", { class: `${centred} flex-col gap-1 text-center` }, [
-      m("div", { class: "type-label text-secondary" }, `"${name}" was deleted`),
-      m("div", { class: "type-helper text-faint" }, "You can close this window."),
+      m("div", { class: "type-label text-body-content-secondary" }, `"${name}" was deleted`),
+      m("div", { class: "type-helper text-body-content-tertiary" }, "You can close this window."),
     ]);
   }
   switch (preview) {
@@ -164,14 +164,14 @@ function body(page: FilePageModel): m.Children {
     case "text": {
       const text = page.text;
       if (text.status === "loading") return m("div", { class: centred }, m("div.spinner"));
-      if (text.status === "error") return m("div", { class: `${centred} type-body text-danger` }, text.error);
+      if (text.status === "error") return m("div", { class: `${centred} type-body text-danger-surface` }, text.error);
       return m("textarea.files-editor", {
         value: page.draft,
         readOnly: kind === "view",
         spellcheck: false,
         "aria-label": kind === "edit" ? `Editing ${name}` : name,
         class:
-          "block h-full w-full resize-none border-0 bg-surface px-6 py-4 font-mono text-(length:--font-size-body) leading-relaxed text-primary outline-none",
+          "block h-full w-full resize-none border-0 bg-body-surface-raised px-6 py-4 font-mono text-(length:--font-size-body) leading-relaxed text-body-content outline-none",
         oninput: (event: InputEvent) => {
           page.draft = (event.target as HTMLTextAreaElement).value;
         },
@@ -180,8 +180,8 @@ function body(page: FilePageModel): m.Children {
     case "none":
       return m("div", { class: `${centred} flex-col gap-3 text-center` }, [
         m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 128 }),
-        m("div", { class: "type-label text-secondary" }, "No preview available"),
-        m("div", { class: "type-helper text-faint" }, "This file is too large to show, or isn't text."),
+        m("div", { class: "type-label text-body-content-secondary" }, "No preview available"),
+        m("div", { class: "type-helper text-body-content-tertiary" }, "This file is too large to show, or isn't text."),
         m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(page, path) }, "Download"),
       ]);
   }
@@ -221,13 +221,13 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
       const name = nameOf(path);
       // The server calls any small file that decodes as text editable; Edit is offered only on one named as text.
       const canEdit = page.showsText && page.text.status === "ready" && isTextLike(name);
-      return m("div.files-file-page", { class: "flex h-screen min-h-0 flex-col bg-surface text-primary" }, [
+      return m("div.files-file-page", { class: "flex h-screen min-h-0 flex-col bg-body-surface-raised text-body-content" }, [
         m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
           m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [
             m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 20 }),
             m("span.files-file-name", { class: "truncate text-(length:--font-size-row) font-semibold" }, name),
-            page.isDirty ? m("span.files-file-dirty", { class: "type-helper text-faint" }, "Edited") : null,
-            page.size === null ? null : m("span", { class: "shrink-0 type-helper text-faint" }, formatSize(page.size)),
+            page.isDirty ? m("span.files-file-dirty", { class: "type-helper text-body-content-tertiary" }, "Edited") : null,
+            page.size === null ? null : m("span", { class: "shrink-0 type-helper text-body-content-tertiary" }, formatSize(page.size)),
           ]),
           kind === "edit"
             ? [

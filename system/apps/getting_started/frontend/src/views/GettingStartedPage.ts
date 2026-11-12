@@ -38,7 +38,7 @@ const SEE_MORE_LABEL = "See more";
 const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
 const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
 
-const SECTION_HEADING_CLASS = "type-section text-faint";
+const SECTION_HEADING_CLASS = "type-section text-body-content-tertiary";
 const START_GLYPH_SIZE = 24;
 const FIELD_GLYPH_SIZE = 14;
 
@@ -74,14 +74,14 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         ...TILE_PART,
         "aria-disabled": isDisabled ? "true" : undefined,
         class:
-          "getting-started-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
-          (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
+          "getting-started-tile flex h-full flex-col rounded-xl border border-default bg-body-surface-raised p-4 text-left " +
+          (isDisabled ? "cursor-not-allowed text-body-content-tertiary" : `${HOVER_SHADOW_SELF} group cursor-pointer text-body-content`),
         onclick: isDisabled ? undefined : pick,
       },
       [
         m(
           "span",
-          { class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : ` ${HOVER_GLYPH_GROUP}`) },
+          { class: "flex shrink-0 items-center" + (isDisabled ? " text-body-content-tertiary" : ` ${HOVER_GLYPH_GROUP}`) },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
@@ -91,8 +91,8 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
             class:
               "type-helper mt-1 block " +
               (isDisabled
-                ? "text-faint"
-                : "text-secondary transition-colors duration-300 ease-out group-hover:text-primary"),
+                ? "text-body-content-tertiary"
+                : "text-body-content-secondary transition-colors duration-300 ease-out group-hover:text-body-content"),
           },
           option.description,
         ),
@@ -139,7 +139,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   function templatesStatus(message: string): m.Vnode {
     return m(
       "p",
-      { class: "getting-started-templates-status py-1 text-(length:--font-size-row) text-faint" },
+      { class: "getting-started-templates-status py-1 text-(length:--font-size-row) text-body-content-tertiary" },
       message,
     );
   }
@@ -191,9 +191,9 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     const templates = attrs.catalog.kind === "loaded" ? searchTemplates(attrs.catalog.catalog.templates, trimmed) : [];
     if (templates.length === 0) isScrollToTemplatesPending = false;
     if (starts.length === 0 && templates.length === 0) {
-      return m("p", { class: "getting-started-no-matches mt-6 type-body text-secondary" }, [
+      return m("p", { class: "getting-started-no-matches mt-6 type-body text-body-content-secondary" }, [
         "Nothing matches “",
-        m("span", { class: "text-primary" }, trimmed),
+        m("span", { class: "text-body-content" }, trimmed),
         "”.",
       ]);
     }
@@ -224,7 +224,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     return m("div", { class: "getting-started-search relative" }, [
       m(
         "span",
-        { class: "pointer-events-none absolute inset-y-0 left-3 flex items-center text-faint" },
+        { class: "pointer-events-none absolute inset-y-0 left-3 flex items-center text-body-content-tertiary" },
         m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
       ),
       m("input", {
@@ -271,7 +271,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
             ];
       return m(
         "main",
-        { class: "getting-started-page h-screen w-full overflow-y-auto bg-page px-6 py-5 text-primary" },
+        { class: "getting-started-page h-screen w-full overflow-y-auto bg-body-surface px-6 py-5 text-body-content" },
         m("div", { class: "@container mx-auto w-full max-w-4xl" }, body),
       );
     },

@@ -60,7 +60,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
           title,
         },
         [
-          m("p", { class: "send-picker-text type-helper m-0 mb-3 truncate text-secondary" }, `“${text}”`),
+          m("p", { class: "send-picker-text type-helper m-0 mb-3 truncate text-body-content-secondary" }, `“${text}”`),
           m("input", {
             type: "text",
             "data-send-picker-search": "",
@@ -93,7 +93,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
             "div",
             { class: "send-picker-rows mt-2 max-h-[40vh] overflow-y-auto", role: "listbox" },
             shown.length === 0
-              ? m("p", { class: "send-picker-no-match type-helper m-0 px-3 py-2 text-faint" }, NO_MATCH_MESSAGE)
+              ? m("p", { class: "send-picker-no-match type-helper m-0 px-3 py-2 text-body-content-tertiary" }, NO_MATCH_MESSAGE)
               : shown.map((row) =>
                   m(
                     "button",
@@ -105,7 +105,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
                       "aria-selected": row === highlightedRow ? "true" : "false",
                       "data-highlighted": row === highlightedRow ? "true" : "false",
                       class:
-                        menuRowClass({ extra: "rounded-md text-(length:--font-size-row) text-primary" }) +
+                        menuRowClass({ extra: "rounded-md text-(length:--font-size-row) text-body-content" }) +
                         (row === highlightedRow ? " bg-fill-active" : ""),
                       ...MENU_ITEM_PART,
                       onpointerenter: () => {

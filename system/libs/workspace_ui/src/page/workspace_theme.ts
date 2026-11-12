@@ -18,4 +18,5 @@ const remembered = rememberedTheme();
 // Put on while <head> is still being read, so holding the first frame until it loads costs no flash.
 if (remembered.id !== STANDARD_THEME_ID) void wearTheme(remembered, document, { isRenderBlocking: true });
 
-followShellTheme((theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }));
+followShellTheme((theme, revision, isPreview, workspaceColor) =>
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }));

@@ -68,10 +68,10 @@ export interface ChatRailAttrs {
  *  the user has not looked at, see ``chatUnread``) is a green check; attention is amber; idle
  *  is a hollow grey ring; error is red; stopped wears a pause mark. */
 const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
-  working: "chat-rail-dot--pulse bg-accent",
+  working: "chat-rail-dot--pulse bg-accent-surface",
   background: "chat-rail-dot--dashed",
-  attention: "bg-warning",
-  error: "bg-danger",
+  attention: "bg-warn-surface",
+  error: "bg-danger-surface",
 };
 
 function displayStatus(row: ChatRow): string {
@@ -265,7 +265,7 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   if (status === "done") {
     return m(
       "span",
-      { class: `chat-rail-dot -mx-0.5 flex size-3 items-center text-success ${extraClass}`, "data-status": status },
+      { class: `chat-rail-dot -mx-0.5 flex size-3 items-center text-success-surface ${extraClass}`, "data-status": status },
       m.trust(icon("check", { size: 12, strokeWidth: 3 })),
     );
   }
@@ -301,7 +301,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
       "nav",
       {
         class: [
-          "chat-rail relative flex h-full flex-none flex-col bg-surface",
+          "chat-rail relative flex h-full flex-none flex-col bg-body-surface-raised",
           attrs.isTouch ? "w-full" : "border-r border-default",
           // The drawer leaves a strip of the scrim to click away on, however wide the list was dragged.
           attrs.isInDrawer && !attrs.isTouch ? "max-w-[calc(100vw-3rem)]" : "",
@@ -367,7 +367,7 @@ function resizeHandle(): m.Vnode {
   return m("div", {
     class:
       "chat-rail-resize absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none " +
-      "after:absolute after:inset-y-0 after:left-[3px] after:w-0.5 after:bg-accent after:opacity-0 " +
+      "after:absolute after:inset-y-0 after:left-[3px] after:w-0.5 after:bg-accent-surface after:opacity-0 " +
       "after:transition-opacity hover:after:opacity-100 focus-visible:after:opacity-100 focus-visible:outline-none",
     role: "separator",
     tabindex: 0,
@@ -415,7 +415,7 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
         type: "button",
         class: [
           "chat-rail-new flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
-          "text-(length:--font-size-row) text-secondary hover:bg-fill-hover hover:text-primary",
+          "text-(length:--font-size-row) text-body-content-secondary hover:bg-fill-hover hover:text-body-content",
         ].join(" "),
         "aria-label": "New chat",
         onclick: () => attrs.onNew(),
@@ -427,7 +427,7 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
 
 /** A button in the phone layout's bars on a touchscreen, the header's and the drawer's, which read as one bar. */
 export const BAR_ICON_BUTTON_CLASS =
-  "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
+  "flex size-9 flex-none items-center justify-center rounded-lg text-body-content hover:bg-fill-hover";
 
 /** The drawer's header: its name, and "New chat" as a plus at the far end. As tall as the phone header it opens
  *  over, so the two read as one bar. */
@@ -436,7 +436,7 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
     "div",
     { class: "chat-rail-head flex h-11 flex-none items-center justify-between border-b border-default pr-2 pl-4" },
     [
-      m("h1", { class: "type-heading text-primary" }, "Chats"),
+      m("h1", { class: "type-heading text-body-content" }, "Chats"),
       m(
         "button",
         {
@@ -469,12 +469,12 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         // The selected row wears the same grey as a not-yours bubble (one fill for "where you are" and "what
         // someone else said", per the design), so the rows' hover has to read lighter than it.
         isDeleting
-          ? "chat-rail-row--deleting text-danger line-through opacity-50"
+          ? "chat-rail-row--deleting text-danger-surface line-through opacity-50"
           : status === "done"
-            ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
+            ? `chat-rail-row--done font-semibold text-success-surface ${isSelected ? "bg-body-surface-secondary" : "hover:bg-fill-faint"}`
             : isSelected
-              ? "chat-rail-row--selected bg-bubble-other text-primary"
-              : "text-primary hover:bg-fill-faint",
+              ? "chat-rail-row--selected bg-body-surface-secondary text-body-content"
+              : "text-body-content hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
@@ -502,7 +502,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       isRoom(row) && status === "idle"
         ? m(
             "span",
-            { class: "chat-rail-room-glyph -mx-0.5 flex size-3 flex-none items-center text-faint" },
+            { class: "chat-rail-room-glyph -mx-0.5 flex size-3 flex-none items-center text-body-content-tertiary" },
             peopleGlyph(13),
           )
         : statusDot(row, "flex-none"),
@@ -532,7 +532,7 @@ function participantPhotos(row: ChatRow): m.Vnode | null {
         pictureUrl: entry?.profile_picture_url ?? null,
         color: entry?.color ?? null,
         size: 16,
-        extra: "ring-1 ring-sidebar" + (index > 0 ? " -ml-1" : ""),
+        extra: "ring-1 ring-body-surface-secondary" + (index > 0 ? " -ml-1" : ""),
       });
     }),
   );
@@ -543,7 +543,7 @@ function mentionMark(): m.Vnode {
   return m(
     "span",
     {
-      class: "chat-rail-mention flex-none rounded px-1 text-(length:--font-size-helper) font-semibold text-accent",
+      class: "chat-rail-mention flex-none rounded px-1 text-(length:--font-size-helper) font-semibold text-accent-surface",
       "data-chat-row-mention": "",
       ...hoverTooltipAttrs("You were mentioned here", "above"),
     },
@@ -578,8 +578,8 @@ function renamePencil(row: ChatRow): m.Vnode {
       // the title shortens, only while the row is under the pointer or the pencil has the keyboard. Narrowed to
       // nothing rather than hidden, so a tab still reaches it.
       class:
-        "chat-rail-rename -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
-        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "chat-rail-rename -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-body-content-tertiary opacity-0 " +
+        "hover:bg-fill-hover hover:text-body-content group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
         "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
       ...innerButtonAttrs("Rename chat", () => beginRename(row)),
     },
@@ -593,8 +593,8 @@ function hoverKebab(row: ChatRow): m.Vnode {
     "span",
     {
       class:
-        "chat-rail-row-menu -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
-        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "chat-rail-row-menu -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-body-content-tertiary opacity-0 " +
+        "hover:bg-fill-hover hover:text-body-content group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
         "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
       "data-chat-row-menu": row.chatId,
       ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
@@ -609,8 +609,8 @@ function rowKebab(row: ChatRow): m.Vnode {
     "span",
     {
       class:
-        "chat-rail-row-menu -my-1 flex flex-none items-center justify-center rounded-md p-1 text-faint " +
-        "hover:bg-fill-hover hover:text-primary",
+        "chat-rail-row-menu -my-1 flex flex-none items-center justify-center rounded-md p-1 text-body-content-tertiary " +
+        "hover:bg-fill-hover hover:text-body-content",
       "data-chat-row-menu": row.chatId,
       ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
     },
@@ -624,8 +624,8 @@ export function renameField(row: ChatRow): m.Vnode {
   if (state === null) throw new Error("renameField rendered with no rename in progress");
   return m("input", {
     class: [
-      "chat-rail-rename-input min-w-0 flex-1 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
-      state.error === null ? "ring-accent" : "ring-danger",
+      "chat-rail-rename-input min-w-0 flex-1 rounded bg-body-surface-raised px-1 text-(length:--font-size-row) text-body-content outline-none ring-1",
+      state.error === null ? "ring-accent-surface" : "ring-danger-surface",
     ].join(" "),
     type: "text",
     value: state.draft,
@@ -665,7 +665,7 @@ function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode
         "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-1.5 rounded-md py-1.5",
         isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
-        isSelected ? "bg-fill-active text-primary" : "text-primary",
+        isSelected ? "bg-fill-active text-body-content" : "text-body-content",
       ].join(" "),
       "data-chat-id": row.chatId,
     },

@@ -140,7 +140,7 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
       ),
       demoRow(
         "On a dark surface",
-        m("div", { class: "flex items-center gap-2 rounded-lg bg-inverse p-3" }, [
+        m("div", { class: "flex items-center gap-2 rounded-lg bg-inverse-surface p-3" }, [
           m(Button, { variant: "ghost-inverse", id: "button-ghost-inverse" }, "ghost-inverse"),
           m(
             Button,
@@ -344,7 +344,7 @@ function menuSection(demos: ComponentDemos): CatalogSection {
           "Open the menu",
           m.trust(icon("chevron-down", { size: 14 })),
         ]),
-        m("span", { class: "type-helper text-secondary" }, ["Last pick: ", m("strong", demos.lastMenuPick)]),
+        m("span", { class: "type-helper text-body-content-secondary" }, ["Last pick: ", m("strong", demos.lastMenuPick)]),
         demos.menu.view(demos.menuRows()),
       ]),
   };
@@ -444,11 +444,11 @@ function statusSection(): CatalogSection {
         ]),
       ),
       demoRow("Activity dots", [
-        m("span", { class: "flex items-center gap-2 type-body text-secondary" }, [
+        m("span", { class: "flex items-center gap-2 type-body text-body-content-secondary" }, [
           m("span", { class: activityDotClass("h-2 w-2") }),
           "Working",
         ]),
-        m("span", { class: "flex items-center gap-2 type-body text-secondary" }, [
+        m("span", { class: "flex items-center gap-2 type-body text-body-content-secondary" }, [
           m("span", { class: activityDotClass("h-2 w-2", "warning") }),
           "Waiting to come up",
         ]),
@@ -456,8 +456,8 @@ function statusSection(): CatalogSection {
       demoRow("Spinners", [
         m("span", { class: "spinner" }),
         m("span", { class: "spinner spinner--sm" }),
-        m("span", { class: "text-accent" }, m.trust(spinnerIcon(24))),
-        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse px-3 py-2 text-on-accent type-body" }, [
+        m("span", { class: "text-accent-surface" }, m.trust(spinnerIcon(24))),
+        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-accent-content type-body" }, [
           m("span", { class: "spinner spinner--sm spinner--current" }),
           "On a colored surface",
         ]),
@@ -551,36 +551,36 @@ function surfacesSection(): CatalogSection {
     ],
     body: () =>
       m("div", { class: "flex h-56 overflow-hidden rounded-lg border border-default" }, [
-        m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-sidebar p-2" }, [
+        m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-body-surface-secondary p-2" }, [
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-primary hover:bg-fill-hover" },
+            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-body-content hover:bg-fill-hover" },
             "A row (hover me)",
           ),
           m(
             "div",
-            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-row) text-primary" },
+            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-row) text-body-content" },
             "The current row",
           ),
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-secondary hover:bg-fill-hover" },
+            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-body-content-secondary hover:bg-fill-hover" },
             "Another row",
           ),
-          caption("bg-sidebar", "mt-auto"),
+          caption("bg-body-surface-secondary", "mt-auto"),
         ]),
-        m("div", { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-page p-4" }, [
-          m("div", { class: "rounded-lg border border-default bg-surface p-4 shadow-raised" }, [
-            m("p", { class: "type-label text-primary" }, "A card"),
-            m("p", { class: "type-helper text-secondary" }, "bg-surface, border-default, shadow-raised"),
+        m("div", { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" }, [
+          m("div", { class: "rounded-lg border border-default bg-body-surface-raised p-4 shadow-raised" }, [
+            m("p", { class: "type-label text-body-content" }, "A card"),
+            m("p", { class: "type-helper text-body-content-secondary" }, "bg-body-surface-raised, border-default, shadow-raised"),
           ]),
           m(
             "div",
-            { class: "rounded-lg bg-surface-secondary p-3 type-helper text-secondary" },
-            "bg-surface-secondary",
+            { class: "rounded-lg bg-body-surface-secondary p-3 type-helper text-body-content-secondary" },
+            "bg-body-surface-secondary",
           ),
-          m("div", { class: "rounded-lg bg-code p-3 font-mono type-helper text-primary" }, "bg-code: const x = 1;"),
-          caption("bg-page", "mt-auto"),
+          m("div", { class: "rounded-lg bg-body-surface-secondary p-3 font-mono type-helper text-body-content" }, "bg-body-surface-secondary: const x = 1;"),
+          caption("bg-body-surface", "mt-auto"),
         ]),
       ]),
   };

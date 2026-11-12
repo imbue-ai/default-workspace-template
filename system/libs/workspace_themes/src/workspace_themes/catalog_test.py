@@ -79,7 +79,9 @@ def test_a_theme_resolves_through_its_bases_style_files_chrome_and_icons(
         tmp_path,
         '\n[styles]\nfiles = ["dark.css"]\n\n[chrome]\ntrailing = ["minimize", "maximize"]\n',
     )
-    (child / "dark.css").write_text(":root { --c-bg: #000000; }\n", encoding="utf-8")
+    (child / "dark.css").write_text(
+        ":root { --c-body-surface: #000000; }\n", encoding="utf-8"
+    )
 
     entry = _catalog(tmp_path).find_available("dark-paper")
 

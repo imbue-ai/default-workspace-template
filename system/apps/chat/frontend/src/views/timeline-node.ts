@@ -29,7 +29,7 @@ export function timelineSpinnerBullet(): m.Vnode {
     "span",
     {
       class:
-        "pv-icon pv-icon--active inline-flex h-4 w-4 shrink-0 items-center justify-center text-accent " +
+        "pv-icon pv-icon--active inline-flex h-4 w-4 shrink-0 items-center justify-center text-accent-surface " +
         "[--spinner-width:1.5px]",
     },
     m("span.spinner.spinner--sm.spinner--current"),
@@ -82,9 +82,9 @@ const TITLE_BASE =
 /** The title's tone. `pv-tl-title--current` is the hook for the shimmer, which
  *  is a keyframe + background-clip machine and so lives in style.css. */
 export function timelineTitleClass(tone: TimelineTone): string {
-  if (tone === "done") return `${TITLE_BASE} text-faint`;
-  if (tone === "current") return `${TITLE_BASE} pv-tl-title--current text-primary`;
-  return `${TITLE_BASE} text-primary`;
+  if (tone === "done") return `${TITLE_BASE} text-body-content-tertiary`;
+  if (tone === "current") return `${TITLE_BASE} pv-tl-title--current text-body-content`;
+  return `${TITLE_BASE} text-body-content`;
 }
 
 /** The title's words, apart from the chevron beside them. The shimmer is clipped to the text of the element that
@@ -105,5 +105,5 @@ export const TIMELINE_CHEVRON_CLASS =
 
 /** The chevron's open/closed half, appended to {@link TIMELINE_CHEVRON_CLASS}. */
 export function timelineChevronStateClass(isExpanded: boolean): string {
-  return isExpanded ? "pv-chev--open rotate-90 text-primary" : "text-secondary";
+  return isExpanded ? "pv-chev--open rotate-90 text-body-content" : "text-body-content-secondary";
 }

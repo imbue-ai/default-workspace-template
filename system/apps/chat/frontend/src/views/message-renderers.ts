@@ -367,7 +367,7 @@ export function renderSubagentCard(
     : m(
         "svg",
         {
-          class: "subagent-card-status-check shrink-0 text-secondary",
+          class: "subagent-card-status-check shrink-0 text-body-content-secondary",
           width: 16,
           height: 16,
           viewBox: "0 0 16 16",
@@ -383,8 +383,8 @@ export function renderSubagentCard(
       );
 
   const cardTone = isRunning
-    ? "border-accent bg-accent-light"
-    : "subagent-card--done border-default bg-surface-secondary";
+    ? "border-accent-surface bg-accent-subtle-surface"
+    : "subagent-card--done border-default bg-body-surface-secondary";
   const linkBase =
     "shrink-0 whitespace-nowrap text-(length:--font-size-body) transition-[color] duration-(--dur-base)";
   return m(
@@ -400,7 +400,7 @@ export function renderSubagentCard(
         statusIndicator,
         m(
           "span",
-          { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-primary" },
+          { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-body-content" },
           description,
         ),
         agentType
@@ -415,7 +415,7 @@ export function renderSubagentCard(
         ? m(
             "a",
             {
-              class: `subagent-card-link ${linkBase} text-accent no-underline hover:text-accent-hover hover:underline`,
+              class: `subagent-card-link ${linkBase} text-accent-surface no-underline hover:text-accent-surface-hover hover:underline`,
               href: "javascript:void(0)",
               onclick(e: Event) {
                 e.preventDefault();
@@ -428,7 +428,7 @@ export function renderSubagentCard(
         : m(
             "span",
             {
-              class: `subagent-card-link subagent-card-link--pending ${linkBase} cursor-default text-faint hover:text-secondary`,
+              class: `subagent-card-link subagent-card-link--pending ${linkBase} cursor-default text-body-content-tertiary hover:text-body-content-secondary`,
             },
             "View conversation",
           ),
@@ -444,12 +444,12 @@ export function renderSubagentCard(
  * out and signed in again as a new one), there is nothing to re-authenticate: the account signed
  * in, or picked, is what this chat moves to.
  */
-const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
+const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent-surface underline hover:text-accent-surface-hover";
 
 function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
   const accountId = chat?.active_agent.account_id ?? "";
-  return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
+  return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-body-content-tertiary" }, [
     "This provider is no longer working. ",
     m(
       "button",
@@ -534,9 +534,9 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
               offer.label,
             ),
           ];
-  return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-secondary" }, [
+  return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-body-content-secondary" }, [
     m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
-    m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-faint" }, [
+    m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-body-content-tertiary" }, [
       m("summary", { class: "cursor-pointer" }, "See details"),
       m(MarkdownContent, { content: text, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
     ]),
@@ -756,7 +756,7 @@ function appendEventParts(
       // throwing a sign-in screen over whatever the user was doing.
       children.push(
         onLineAsBox(
-          m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
+          m("div", { class: "message-api-error rounded-md bg-danger-surface/8 px-[0.75em] py-[0.5em] text-danger-surface" }, [
             m(MarkdownContent, {
               content: textContent,
               requestedAt: event.timestamp,
@@ -765,7 +765,7 @@ function appendEventParts(
             event.is_provider_fault
               ? m(
                   "div",
-                  { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
+                  { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-body-content-tertiary" },
                   providerFaultNote(event.api_error_kind),
                 )
               : null,

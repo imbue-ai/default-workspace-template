@@ -254,12 +254,12 @@ export const App: m.Component<AppAttrs> = {
     let body: m.Children;
     switch (loaded.kind) {
       case "loading":
-        body = m("p", { class: "type-body p-6 text-faint", "data-loading": "" }, "Loading.");
+        body = m("p", { class: "type-body p-6 text-body-content-tertiary", "data-loading": "" }, "Loading.");
         break;
       case "error":
         body = m(
           "p",
-          { class: "type-body p-6 text-danger", "data-error": "" },
+          { class: "type-body p-6 text-danger-surface", "data-error": "" },
           `Couldn't read your routines: ${loaded.message}`,
         );
         break;

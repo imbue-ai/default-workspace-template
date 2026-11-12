@@ -379,7 +379,7 @@ const ChatRoot: m.Component = {
     return m(
       "div",
       {
-        class: ["chat-root relative flex h-screen w-screen overflow-hidden bg-page", isCompact ? "flex-col" : ""].join(
+        class: ["chat-root relative flex h-screen w-screen overflow-hidden bg-body-surface", isCompact ? "flex-col" : ""].join(
           " ",
         ),
         "data-compact": isCompact ? "true" : "false",
@@ -418,7 +418,7 @@ const ChatRoot: m.Component = {
                 "div",
                 {
                   class:
-                    "chat-root-empty absolute inset-0 flex items-center justify-center text-(length:--font-size-body) text-secondary",
+                    "chat-root-empty absolute inset-0 flex items-center justify-center text-(length:--font-size-body) text-body-content-secondary",
                 },
                 "Pick a chat, or start a new one.",
               )
@@ -486,7 +486,8 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
-    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onTheme: (theme, revision, isPreview, workspaceColor) =>
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }),
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });

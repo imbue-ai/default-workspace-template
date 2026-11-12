@@ -131,7 +131,7 @@ export function KeyboardSettingsSection(): m.Component {
         oncreate: (created: m.VnodeDOM) => (created.dom as HTMLInputElement).focus(),
         onkeydown: (event: KeyboardEvent) => onRecorderKeydown(appView, action, event),
       }),
-      conflict !== null ? m("p", { class: "type-helper mt-1 text-danger" }, conflict) : null,
+      conflict !== null ? m("p", { class: "type-helper mt-1 text-danger-surface" }, conflict) : null,
       m("div", { class: "mt-2 flex flex-wrap gap-2" }, [
         m(
           Button,
@@ -161,7 +161,7 @@ export function KeyboardSettingsSection(): m.Component {
       isOwner && !canEverywhere
         ? m(
             "p",
-            { class: "type-helper mt-1 text-secondary" },
+            { class: "type-helper mt-1 text-body-content-secondary" },
             "Shortcuts saved here apply only in this workspace: saving to your account needs Imbue Studio.",
           )
         : null,
@@ -175,8 +175,8 @@ export function KeyboardSettingsSection(): m.Component {
       m("div", { class: "flex items-center justify-between gap-2" }, [
         m("span", { class: "type-body min-w-0 truncate" }, action.label),
         m("span", { class: "flex shrink-0 items-center gap-2" }, [
-          m("span", { class: "type-helper text-secondary" }, chordsLabel(action.chords)),
-          badge !== undefined ? m("span", { class: "type-helper text-secondary" }, `(${badge})`) : null,
+          m("span", { class: "type-helper text-body-content-secondary" }, chordsLabel(action.chords)),
+          badge !== undefined ? m("span", { class: "type-helper text-body-content-secondary" }, `(${badge})`) : null,
           action.source === "workspace"
             ? m(
                 Button,
@@ -205,7 +205,7 @@ export function KeyboardSettingsSection(): m.Component {
     return m("div", { class: "mt-2", "data-keybinding-unsent": true }, [
       m(
         "p",
-        { class: "type-helper text-secondary" },
+        { class: "type-helper text-body-content-secondary" },
         loaded.has_pending_permission
           ? "Waiting for your approval in Imbue Studio; these apply in this workspace meanwhile."
           : "Not yet saved to your account; these apply in this workspace meanwhile.",
@@ -250,20 +250,20 @@ export function KeyboardSettingsSection(): m.Component {
     },
     view() {
       if (loadError !== null) {
-        return m("p", { class: "type-helper text-danger" }, `The shortcuts could not be loaded: ${loadError}`);
+        return m("p", { class: "type-helper text-danger-surface" }, `The shortcuts could not be loaded: ${loadError}`);
       }
-      if (catalog === null) return m("p", { class: "type-helper text-secondary" }, "Loading the shortcuts...");
+      if (catalog === null) return m("p", { class: "type-helper text-body-content-secondary" }, "Loading the shortcuts...");
       const loaded = catalog;
       return m("div", { class: "mb-3", "data-keyboard-settings": true }, [
         ...loaded.apps
           .filter((appView) => appView.actions.length > 0)
           .map((appView) =>
             m("div", { class: "mb-2" }, [
-              m("p", { class: "type-label text-primary" }, appView.display_name),
+              m("p", { class: "type-label text-body-content" }, appView.display_name),
               ...appView.actions.map((action) => actionRow(appView, action)),
             ]),
           ),
-        notice !== null ? m("p", { class: "type-helper mt-1 text-secondary" }, notice) : null,
+        notice !== null ? m("p", { class: "type-helper mt-1 text-body-content-secondary" }, notice) : null,
         unsentRows(loaded),
       ]);
     },

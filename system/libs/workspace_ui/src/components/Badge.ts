@@ -28,11 +28,11 @@ const BADGE_BASE =
   "border rounded-lg";
 
 const BADGE_TONES: Record<BadgeTone, string> = {
-  neutral: "bg-surface text-secondary border-default",
-  accent: "bg-surface text-accent border-accent",
-  danger: "bg-danger-surface text-danger border-danger-border",
-  warning: "bg-warning-surface text-warning border-transparent",
-  success: "bg-success-surface text-success border-success-border",
+  neutral: "bg-body-surface-raised text-body-content-secondary border-default",
+  accent: "bg-body-surface-raised text-accent-surface border-accent-surface",
+  danger: "bg-danger-subtle-surface text-danger-surface border-danger-4",
+  warning: "bg-warn-subtle-surface text-warn-surface border-transparent",
+  success: "bg-success-subtle-surface text-success-surface border-success-4",
 };
 
 export function badgeClass(tone: BadgeTone, options: BadgeOptions = {}): string {

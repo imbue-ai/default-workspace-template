@@ -99,7 +99,7 @@ function renderStepCaption(step: StepNode, isExpanded: boolean, draft: Assistant
       ? m(
           "div",
           // Faint, matching the greyed-out title of the closed step it belongs to.
-          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-helper) leading-normal text-faint" },
+          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-helper) leading-normal text-body-content-tertiary" },
           step.summary,
         )
       : null;
@@ -280,7 +280,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       return m(
         "div",
         {
-          class: `progress-block ${STRETCH_PIECES_CLASS} text-(length:--font-size-body) leading-normal text-primary`,
+          class: `progress-block ${STRETCH_PIECES_CLASS} text-(length:--font-size-body) leading-normal text-body-content`,
           id,
         },
         [

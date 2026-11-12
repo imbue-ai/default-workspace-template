@@ -75,6 +75,7 @@ import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, EmbedderMessage, PageDriver } from "../store/DesktopStore";
 import {
   currentTheme,
+  currentWorkspaceColor,
   isCurrentThemeRemembered,
   onThemeChanged,
   type ThemeRef,
@@ -124,8 +125,13 @@ const PARKED_TRANSFORM = "translateX(-100000px)";
 function themeMessage(
   theme: ThemeRef,
   isRemembered: boolean,
-): { readonly theme: string; readonly revision: string; readonly isPreview: boolean } {
-  return { theme: theme.id, revision: theme.revision, isPreview: !isRemembered };
+): {
+  readonly theme: string;
+  readonly revision: string;
+  readonly isPreview: boolean;
+  readonly workspaceColor: string | null;
+} {
+  return { theme: theme.id, revision: theme.revision, isPreview: !isRemembered, workspaceColor: currentWorkspaceColor() };
 }
 
 /** Stops the started layer hearing theme changes: the newest layer takes this seat, as it takes the store's
@@ -753,7 +759,7 @@ export class LivePagesLayer implements PageDriver {
     const wrapper = document.createElement("div");
     // A surface while the page loads, under the chrome (whose content box is transparent) and over the
     // wallpaper; the bottom corners follow the chrome's rounding.
-    wrapper.className = `live-page absolute overflow-hidden ${PAGE_CORNERS_CLASS} bg-page`;
+    wrapper.className = `live-page absolute overflow-hidden ${PAGE_CORNERS_CLASS} bg-body-surface`;
     const frame = document.createElement("iframe");
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);

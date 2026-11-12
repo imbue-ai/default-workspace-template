@@ -45,6 +45,8 @@ export interface ThemeCatalog {
   /** The workspace's default theme; null wears the standard one. */
   readonly default: string | null;
   readonly themes: readonly ThemeRecord[];
+  /** The workspace color's revision (docs/system/blueprint/brand-design-system/); null until the shell names it. */
+  readonly workspaceColor: string | null;
 }
 
 export const STANDARD_CHROME: ThemeChrome = {
@@ -67,7 +69,7 @@ export const STANDARD_THEME_RECORD: ThemeRecord = {
   icons: null,
 };
 
-export const EMPTY_THEME_CATALOG: ThemeCatalog = { default: null, themes: [] };
+export const EMPTY_THEME_CATALOG: ThemeCatalog = { default: null, themes: [], workspaceColor: null };
 
 const CHROME_SLOTS: readonly ChromeSlot[] = ["icon", "title", "refresh", "menu", "minimize", "maximize", "close"];
 const DERIVATIONS: readonly IconDerivation[] = ["none", "pixelate", "quantize", "monochrome"];
@@ -141,7 +143,11 @@ export function parseThemeCatalog(value: unknown): ThemeCatalog {
   const themes = Array.isArray(value.themes)
     ? value.themes.map(parseTheme).filter((theme): theme is ThemeRecord => theme !== null)
     : [];
-  return { default: typeof value.default === "string" ? value.default : null, themes };
+  return {
+    default: typeof value.default === "string" ? value.default : null,
+    themes,
+    workspaceColor: typeof value.workspace_color === "string" ? value.workspace_color : null,
+  };
 }
 
 /** The catalog's theme with this id, when there is one and it is available. */

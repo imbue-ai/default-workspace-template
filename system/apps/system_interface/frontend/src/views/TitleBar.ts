@@ -293,7 +293,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             "border-default pr-1 pl-1.5 touch-none select-none " +
             // The open hand says the bar is the handle. The controls carry their own cursor.
             "cursor-grab " +
-            (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
+            (isFocused ? "bg-body-surface-raised text-body-content" : "bg-body-surface-secondary text-body-content-secondary"),
           ondblclick: (event: MouseEvent) => {
             if ((event.target as Element).closest("[data-window-control]") !== null) return;
             onDoubleClick();

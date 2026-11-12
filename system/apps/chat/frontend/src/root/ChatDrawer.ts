@@ -120,7 +120,7 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
           "div",
           {
             class: [
-              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex flex-col bg-surface shadow-overlay",
+              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex flex-col bg-body-surface-raised shadow-overlay",
               "animate-[chat-drawer-in_160ms_ease-out] touch-pan-y",
               attrs.rail.isTouch ? "w-[86%] max-w-[340px]" : "",
             ].join(" "),

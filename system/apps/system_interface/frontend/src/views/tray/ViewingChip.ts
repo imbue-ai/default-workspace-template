@@ -36,7 +36,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
         "data-viewing-desktop": desktop.id,
         class:
           "tray-viewing -mr-2 flex items-center gap-2 self-stretch rounded-tl-xl pr-(--desk-viewing-outline) " +
-          "pb-(--desk-viewing-outline) pl-3 text-on-accent",
+          "pb-(--desk-viewing-outline) pl-3 text-accent-content",
         style: { backgroundColor: color },
       },
       [
@@ -58,7 +58,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
             "data-stop-viewing": "",
             class:
               "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-row) " +
-              "font-medium text-on-accent hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
+              "font-medium text-accent-content hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
             onclick: onStopViewing,
           },
           STOP_VIEWING_LABEL,

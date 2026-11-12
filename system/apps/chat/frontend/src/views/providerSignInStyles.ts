@@ -20,7 +20,7 @@
 /** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
  *  fixed width and padding -- the panel carries the width and pads its own regions. */
 export const MODAL =
-  "overflow-hidden rounded-lg border border-default bg-surface shadow-overlay " +
+  "overflow-hidden rounded-lg border border-default bg-body-surface-raised shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 /** The panel's frame.
  *
@@ -58,30 +58,30 @@ export function panelBody(screen: "status" | "menu" | "form" | "chooser"): strin
 }
 
 export const HEADER = "flex items-center gap-1.5 px-4 pb-3 pt-3";
-export const TITLE = "m-0 type-heading text-primary";
+export const TITLE = "m-0 type-heading text-body-content";
 
 export const ROW_STACK = "flex flex-col gap-2";
 
 /** A lane row: the whole provider, as something to walk into. Raised off the panel and
  *  outlined on hover, because the row IS the affordance -- there is no other control on it. */
 export const CHOOSER_ROW =
-  "flex w-full items-center gap-2 rounded-lg border border-default bg-surface p-3 text-left " +
-  "shadow-raised transition-[border-color,box-shadow] duration-(--dur-base) hover:border-accent " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent cursor-pointer";
+  "flex w-full items-center gap-2 rounded-lg border border-default bg-body-surface-raised p-3 text-left " +
+  "shadow-raised transition-[border-color,box-shadow] duration-(--dur-base) hover:border-accent-surface " +
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface cursor-pointer";
 /** Reserved even when a lane has no mark, so every label lines up. */
 export const CHOOSER_ROW_MARK = "flex w-11 shrink-0 items-center justify-center";
 export const CHOOSER_ROW_TEXT = "min-w-0 flex-1";
-export const CHOOSER_ROW_NAME = "block type-body font-semibold text-primary";
-export const CHOOSER_ROW_BODY = "mt-0.5 block text-(length:--font-size-row) leading-snug text-primary";
-export const CHEVRON = "shrink-0 text-faint";
+export const CHOOSER_ROW_NAME = "block type-body font-semibold text-body-content";
+export const CHOOSER_ROW_BODY = "mt-0.5 block text-(length:--font-size-row) leading-snug text-body-content";
+export const CHEVRON = "shrink-0 text-body-content-tertiary";
 
 /** One sign-in method inside a lane. The chooser row's shape at one step less weight, since
  *  by here the provider is settled and only the method is in question. */
 export const OPTION_ROW = `${CHOOSER_ROW} justify-between`;
-export const OPTION_ROW_NAME = "type-body font-medium text-primary";
-export const OPTION_ROW_DESC = "mt-0.5 type-helper text-secondary";
+export const OPTION_ROW_NAME = "type-body font-medium text-body-content";
+export const OPTION_ROW_DESC = "mt-0.5 type-helper text-body-content-secondary";
 
-export const SECTION_LABEL = "mb-3.5 type-section text-secondary";
+export const SECTION_LABEL = "mb-3.5 type-section text-body-content-secondary";
 /** The break above a section that is an aside to the one before it, with equal air on both
  *  sides so the rule reads as a gap rather than as the lid on what follows.
  *
@@ -89,16 +89,16 @@ export const SECTION_LABEL = "mb-3.5 type-section text-secondary";
  *  into two halves of equal standing, and the fallbacks under it are not that -- they are the
  *  footnote to a method the screen has already picked out. */
 export const SECTION_BREAK = "mt-6 border-t border-dashed border-default pt-6";
-export const LEAD = "mb-4 type-body leading-relaxed text-primary";
+export const LEAD = "mb-4 type-body leading-relaxed text-body-content";
 /** A link inside the lead. Where to GET the key, said in the sentence that explains the screen
  *  rather than promoted to a numbered step -- "go to a website if you have not already" is not
  *  half of a two-part procedure. */
-export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-accent-hover";
+export const LEAD_LINK = "text-accent-surface underline underline-offset-2 hover:text-accent-surface-hover";
 /** Something to do on the provider's side before the sign-in can work. Under the lead, in full
  *  colour rather than a hint's faint, because skipping it fails the sign-in. */
 export const NOTE =
-  "-mt-2 mb-4 type-helper leading-snug text-primary " +
-  "[&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 [&_a]:hover:text-accent-hover";
+  "-mt-2 mb-4 type-helper leading-snug text-body-content " +
+  "[&_a]:text-accent-surface [&_a]:underline [&_a]:underline-offset-2 [&_a]:hover:text-accent-surface-hover";
 
 /** The right-hand end of the header: the harness line and the close button, as one group.
  *
@@ -110,19 +110,19 @@ export const HEADER_END = "ml-auto flex shrink-0 items-center gap-4";
  *  screen states rather than a control -- and helper size, not body, because it sits beside
  *  the heading as an aside rather than reading as a second title. */
 export const RUNS_ON = "inline-flex shrink-0 items-baseline gap-1.5 type-helper";
-export const RUNS_ON_PREFIX = "text-faint";
+export const RUNS_ON_PREFIX = "text-body-content-tertiary";
 /** The harness is the fact worth reading here, so it carries the weight and the full contrast;
  *  "Runs on" is just the label in front of it. */
-export const RUNS_ON_NAME = "font-semibold text-primary";
+export const RUNS_ON_NAME = "font-semibold text-body-content";
 
 /** A step block, and the desaturation put on the one you are past. */
 export const STEP = "mb-4 transition-all duration-(--dur-slow)";
 export const STEP_LAST = "transition-all duration-(--dur-slow)";
 export const STEP_DIMMED = "grayscale opacity-60";
-export const STEP_LABEL = "mb-2 flex items-center gap-2 text-(length:--font-size-row) font-medium text-primary";
+export const STEP_LABEL = "mb-2 flex items-center gap-2 text-(length:--font-size-row) font-medium text-body-content";
 export const STEP_NUM =
-  "inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent " +
-  "type-helper font-semibold text-on-accent";
+  "inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent-surface " +
+  "type-helper font-semibold text-accent-content";
 
 export const FIELD_ROW = "flex items-center gap-2";
 
@@ -133,18 +133,18 @@ export const FOOTER_ROW = "flex justify-end";
 export const RELAY_ACTIONS = "mt-4 flex flex-wrap gap-2";
 
 /** Secondary prose under a field or step. */
-export const HINT = "mt-1.5 type-helper leading-snug text-faint";
-export const HINT_ACTION = "underline underline-offset-2 hover:text-primary cursor-pointer";
+export const HINT = "mt-1.5 type-helper leading-snug text-body-content-tertiary";
+export const HINT_ACTION = "underline underline-offset-2 hover:text-body-content cursor-pointer";
 
 /** Shown when a clipboard write was refused, so the value is still reachable by hand. */
 export const RAW_VALUE =
-  "mt-2 select-all break-all rounded-md border border-default bg-sidebar p-2 font-mono " +
-  "type-helper leading-snug text-primary";
+  "mt-2 select-all break-all rounded-md border border-default bg-body-surface-secondary p-2 font-mono " +
+  "type-helper leading-snug text-body-content";
 
 /** The device flow's one-time code. Label weight in mono with a little tracking: legible
  *  enough to read aloud and retype, and level with the copy button beside it. */
 export const CODE =
-  "flex-1 rounded-md bg-sidebar p-2 text-center font-mono type-label tracking-[0.12em] text-primary select-all";
+  "flex-1 rounded-md bg-body-surface-secondary p-2 text-center font-mono type-label tracking-[0.12em] text-body-content select-all";
 
 /** verifying / success / error, one shape for all three.
  *
@@ -152,25 +152,25 @@ export const CODE =
  *  header already names the screen, so the verdict only has to state the outcome. */
 export const STATUS = "flex flex-col items-center px-2 py-8 text-center";
 const STATUS_DISC = "mb-3 flex h-12 w-12 items-center justify-center rounded-full";
-export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent`;
-export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-light text-accent`;
-export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-danger-surface text-danger`;
-export const STATUS_TITLE = "type-label text-primary";
-export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-secondary";
+export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent-surface`;
+export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-subtle-surface text-accent-surface`;
+export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-danger-subtle-surface text-danger-surface`;
+export const STATUS_TITLE = "type-label text-body-content";
+export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-body-content-secondary";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
-export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-faint";
+export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-body-content-tertiary";
 
 /** A signed-in account: the chooser row's frame without its affordances, because the row is a
  *  listed fact rather than somewhere to navigate. Its actions carry the interactivity. */
 export const ACCOUNT_ROW =
-  "flex w-full items-center gap-2 rounded-lg border border-default bg-surface p-3 text-left shadow-raised";
+  "flex w-full items-center gap-2 rounded-lg border border-default bg-body-surface-raised p-3 text-left shadow-raised";
 /** The same row when the chooser was opened to pick an account: the whole row picks it, as a
  *  lane row walks into its lane, while its own actions stay on top and keep their clicks. */
 export const ACCOUNT_ROW_PICKABLE =
   `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) ` +
-  "has-[.account-pick:enabled]:hover:border-accent " +
+  "has-[.account-pick:enabled]:hover:border-accent-surface " +
   "has-[.account-pick:focus-visible]:outline-2 has-[.account-pick:focus-visible]:outline-offset-2 " +
-  "has-[.account-pick:focus-visible]:outline-accent";
+  "has-[.account-pick:focus-visible]:outline-accent-surface";
 /** The pick target. Its `after` box stretches over the whole row, so a click anywhere on the
  *  row that is not one of the actions lands here. */
 export const ACCOUNT_PICK =
@@ -178,5 +178,5 @@ export const ACCOUNT_PICK =
   "after:absolute after:inset-0 after:rounded-lg after:content-[''] disabled:cursor-default";
 /** Raises an action above the pick target's stretched box. */
 export const ACCOUNT_ACTION = "relative";
-export const ACCOUNT_NEUTRAL_NOTE = "shrink-0 type-helper text-secondary";
-export const ACCOUNT_FAILING_NOTE = "shrink-0 type-helper text-danger";
+export const ACCOUNT_NEUTRAL_NOTE = "shrink-0 type-helper text-body-content-secondary";
+export const ACCOUNT_FAILING_NOTE = "shrink-0 type-helper text-danger-surface";

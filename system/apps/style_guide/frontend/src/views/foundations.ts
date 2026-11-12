@@ -37,42 +37,42 @@ interface TypeRole {
 const TYPE_ROLES: readonly TypeRole[] = [
   {
     utility: "type-heading-lg",
-    className: "type-heading-lg text-primary",
+    className: "type-heading-lg text-body-content",
     sample: "Large heading",
     sizeToken: "font-size-heading-lg",
     weightToken: "weight-bold",
   },
   {
     utility: "type-heading",
-    className: "type-heading text-primary",
+    className: "type-heading text-body-content",
     sample: "Regular heading",
     sizeToken: "font-size-heading",
     weightToken: "weight-semibold",
   },
   {
     utility: "type-label",
-    className: "type-label text-primary",
+    className: "type-label text-body-content",
     sample: "Label",
     sizeToken: "font-size-body",
     weightToken: "weight-semibold",
   },
   {
     utility: "type-body",
-    className: "type-body text-primary",
+    className: "type-body text-body-content",
     sample: "Body: the default readable paragraph text on a surface.",
     sizeToken: "font-size-body",
     weightToken: "weight-regular",
   },
   {
     utility: "type-helper",
-    className: "type-helper text-primary",
+    className: "type-helper text-body-content",
     sample: "Helper: captions, hints and metadata sit at this size.",
     sizeToken: "font-size-helper",
     weightToken: "weight-regular",
   },
   {
     utility: "type-section",
-    className: "type-section text-secondary",
+    className: "type-section text-body-content-secondary",
     sample: "Section title",
     sizeToken: "font-size-helper",
     weightToken: "weight-semibold",
@@ -80,7 +80,7 @@ const TYPE_ROLES: readonly TypeRole[] = [
   },
   {
     utility: "type-tag",
-    className: "type-tag text-primary",
+    className: "type-tag text-body-content",
     sample: "A word badge such as Read-only",
     sizeToken: "font-size-tag",
     weightToken: "weight-regular",
@@ -111,7 +111,7 @@ function colorSample(color: ColorToken): m.Vnode {
         ...sample,
         // Text meant for a colored surface ("on-accent") is shown on one.
         class: `flex h-6 w-12 items-center justify-center rounded-md type-label ${
-          color.name.startsWith("on-") ? "bg-accent" : ""
+          color.name.startsWith("on-") ? "bg-accent-surface" : ""
         }`,
       },
       m("span", { style: { color: paint } }, "Aa"),
@@ -129,10 +129,10 @@ function colorRow(color: ColorToken): m.Vnode {
   return m("tr", { id: `color-${color.name}`, class: "color-swatch border-t border-subtle" }, [
     m("td", { class: "py-1 pr-4 align-middle" }, colorSample(color)),
     m("td", { class: "py-1 pr-6 align-middle whitespace-nowrap" }, [
-      m("code", { class: "font-mono type-helper text-primary select-all" }, color.utility ?? `--${color.variable}`),
+      m("code", { class: "font-mono type-helper text-body-content select-all" }, color.utility ?? `--${color.variable}`),
       color.utility === null
         ? null
-        : m("code", { class: "ml-2 font-mono type-helper text-faint select-all" }, `--${color.variable}`),
+        : m("code", { class: "ml-2 font-mono type-helper text-body-content-tertiary select-all" }, `--${color.variable}`),
     ]),
     m("td", { class: "w-full min-w-48 py-1 align-middle" }, inlineValue(color.variable, color.value)),
   ]);
@@ -144,8 +144,8 @@ function inlineValue(name: string, declared: string): m.Children {
   const value = (text: string, extra: string): m.Vnode =>
     m("code", { class: `font-mono type-helper wrap-break-word ${extra}` }, text);
   return themed === null || themed === declared
-    ? value(declared, "text-secondary")
-    : [value(themed, "text-secondary"), " ", value(declared, "text-faint line-through")];
+    ? value(declared, "text-body-content-secondary")
+    : [value(themed, "text-body-content-secondary"), " ", value(declared, "text-body-content-tertiary line-through")];
 }
 
 /** A token's value as the page wears it, and, when a theme has changed it, the standard value beside it. */
@@ -153,7 +153,7 @@ function valueCaptions(name: string, declared: string): m.Children {
   const themed = themeValue(name);
   return themed === null || themed === declared
     ? subCaption(declared)
-    : [subCaption(themed), m("code", { class: "block font-mono type-helper text-faint line-through" }, declared)];
+    : [subCaption(themed), m("code", { class: "block font-mono type-helper text-body-content-tertiary line-through" }, declared)];
 }
 
 /** What the page wears for a token: the theme's value when it sets one, else the standard one. */
@@ -168,7 +168,7 @@ function colorsSection(tokens: DesignTokens): CatalogSection {
     title: "Color tokens",
     desc: [
       "Every color has one semantic utility over one raw value. Views use the utility (",
-      code("text-primary"),
+      code("text-body-content"),
       ", ",
       code("bg-fill-hover"),
       ", ",
@@ -182,14 +182,14 @@ function colorsSection(tokens: DesignTokens): CatalogSection {
         m(
           "thead",
           m("tr", [
-            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Swatch"),
-            m("th", { class: "pb-1 pr-6 type-section text-faint font-normal" }, "Name"),
-            m("th", { class: "pb-1 type-section text-faint font-normal" }, "Value"),
+            m("th", { class: "pb-1 pr-4 type-section text-body-content-tertiary font-normal" }, "Swatch"),
+            m("th", { class: "pb-1 pr-6 type-section text-body-content-tertiary font-normal" }, "Name"),
+            m("th", { class: "pb-1 type-section text-body-content-tertiary font-normal" }, "Value"),
           ]),
         ),
         tokens.colorGroups.map((group) =>
           m("tbody", { class: "color-group", "data-color-group": group.label }, [
-            m("tr", m("th", { colspan: 3, class: "pt-4 pb-1 type-label text-primary capitalize" }, group.label)),
+            m("tr", m("th", { colspan: 3, class: "pt-4 pb-1 type-label text-body-content capitalize" }, group.label)),
             group.colors.map(colorRow),
           ]),
         ),
@@ -204,7 +204,7 @@ function typeSection(tokens: DesignTokens): CatalogSection {
     title: "Type roles",
     desc: [
       "Seven roles, one utility each, bundling size, weight and line height. Color is separate: compose a role with a text color, e.g. ",
-      code("type-label text-secondary"),
+      code("type-label text-body-content-secondary"),
       ". Dense chrome (the rail, menus, launcher tables) sits on ",
       code("--font-size-row"),
       ".",
@@ -225,7 +225,7 @@ function typeSection(tokens: DesignTokens): CatalogSection {
           ]),
         ),
       ),
-      m("h3", { class: "type-section text-faint mt-8 mb-2" }, "Sizes and weights"),
+      m("h3", { class: "type-section text-body-content-tertiary mt-8 mb-2" }, "Sizes and weights"),
       tokenTable(
         [...tokensWithPrefix(tokens.scales, "font-size-"), ...tokensWithPrefix(tokens.scales, "weight-")],
         (token) =>
@@ -233,20 +233,20 @@ function typeSection(tokens: DesignTokens): CatalogSection {
             ? m("span", { style: { fontSize: `var(--${token.name})` } }, "The quick brown fox")
             : m("span", { style: { fontWeight: `var(--${token.name})` } }, "The quick brown fox"),
       ),
-      m("h3", { class: "type-section text-faint mt-8 mb-2" }, "Font stacks"),
+      m("h3", { class: "type-section text-body-content-tertiary mt-8 mb-2" }, "Font stacks"),
       m("div", { class: "flex flex-col gap-3" }, [
         m("div", { id: "font-sans" }, [
-          m("p", { class: "font-sans type-body text-primary" }, "font-sans -- The workspace's interface text"),
+          m("p", { class: "font-sans type-body text-body-content" }, "font-sans -- The workspace's interface text"),
           valueCaptions("font-sans", valueIn(tokens.theme, "font-sans")),
         ]),
         m("div", { id: "font-mono" }, [
-          m("p", { class: "font-mono type-body text-primary" }, "font-mono -- ids, paths, code"),
+          m("p", { class: "font-mono type-body text-body-content" }, "font-mono -- ids, paths, code"),
           valueCaptions("font-mono", valueIn(tokens.theme, "font-mono")),
         ]),
         m("div", { id: "font-display" }, [
           m(
             "p",
-            { class: "type-body text-primary", style: { fontFamily: "var(--font-display)" } },
+            { class: "type-body text-body-content", style: { fontFamily: "var(--font-display)" } },
             "font-display -- headings, section labels, and a theme's titles, buttons and menus",
           ),
           valueCaptions("font-display", valueIn(tokens.theme, "font-display")),
@@ -264,7 +264,7 @@ function tokenTable(tokens: readonly DeclaredToken[], demo: (token: DeclaredToke
     tokens.flatMap((token) => [
       caption(`--${token.name}`),
       m("div", valueCaptions(token.name, token.value)),
-      m("div", { id: `token-${token.name}`, class: "min-w-0 type-body text-primary" }, demo(token)),
+      m("div", { id: `token-${token.name}`, class: "min-w-0 type-body text-body-content" }, demo(token)),
     ]),
   );
 }
@@ -296,7 +296,7 @@ function spacingSection(tokens: DesignTokens): CatalogSection {
           subCaption(`${step * 4}px`),
           m("div", {
             id: `spacing-${step}`,
-            class: "h-3 rounded-sm bg-accent",
+            class: "h-3 rounded-sm bg-accent-surface",
             style: { width: `calc(var(--spacing) * ${step})` },
           }),
         ]),
@@ -324,7 +324,7 @@ function radiusSection(tokens: DesignTokens): CatalogSection {
         ...tokensWithPrefix(tokens.theme, "radius-").map((token) =>
           m("div", { id: `token-${token.name}`, class: "flex flex-col items-center gap-1.5" }, [
             m("div", {
-              class: "h-16 w-16 border border-default bg-surface-secondary",
+              class: "h-16 w-16 border border-default bg-body-surface-secondary",
               style: { borderRadius: cssValueOf(token) },
             }),
             caption(`rounded-${token.name.slice("radius-".length)}`),
@@ -332,7 +332,7 @@ function radiusSection(tokens: DesignTokens): CatalogSection {
           ]),
         ),
         m("div", { id: "token-radius-full", class: "flex flex-col items-center gap-1.5" }, [
-          m("div", { class: "h-16 w-16 rounded-full border border-default bg-surface-secondary" }),
+          m("div", { class: "h-16 w-16 rounded-full border border-default bg-body-surface-secondary" }),
           caption("rounded-full"),
           subCaption("9999px"),
         ]),
@@ -354,12 +354,12 @@ function elevationSection(tokens: DesignTokens): CatalogSection {
     body: () =>
       m(
         "div",
-        { class: "flex flex-wrap gap-8 rounded-lg bg-page p-6" },
+        { class: "flex flex-wrap gap-8 rounded-lg bg-body-surface p-6" },
         // The values live in the value layer (--c-shadow-*), where a theme redeclares them.
         tokensWithPrefix(tokens.scales, "c-shadow-").map((token) =>
           m("div", { id: `token-${token.name}`, class: "flex max-w-64 flex-col gap-2" }, [
             m("div", {
-              class: "h-20 w-40 rounded-lg border border-default bg-surface",
+              class: "h-20 w-40 rounded-lg border border-default bg-body-surface-raised",
               style: { boxShadow: `var(--${token.name})` },
             }),
             caption(token.name.slice("c-".length)),
@@ -390,10 +390,10 @@ function motionSection(tokens: DesignTokens): CatalogSection {
             m("div", { class: "w-28" }, [caption(`--${token.name}`), subCaption(token.value)]),
             m(
               "div",
-              { class: "relative h-6 w-64 rounded-full bg-surface-secondary" },
+              { class: "relative h-6 w-64 rounded-full bg-body-surface-secondary" },
               m("div", {
                 class:
-                  "absolute top-1 left-1 h-4 w-4 rounded-full bg-accent transition-transform ease-[ease] group-hover:translate-x-[232px]",
+                  "absolute top-1 left-1 h-4 w-4 rounded-full bg-accent-surface transition-transform ease-[ease] group-hover:translate-x-[232px]",
                 style: { transitionDuration: `var(--${token.name})` },
               }),
             ),
@@ -417,7 +417,7 @@ function layersSection(tokens: DesignTokens): CatalogSection {
       tokenTable([...tokensWithPrefix(tokens.scales, "z-"), ...tokensWithPrefix(tokens.scales, "width-")], (token) =>
         token.name.startsWith("width-")
           ? m("div", {
-              class: "h-2 max-w-full rounded-sm bg-faint",
+              class: "h-2 max-w-full rounded-sm bg-body-content-tertiary",
               style: { width: `calc(var(--${token.name}) / 3)` },
             })
           : null,
@@ -429,7 +429,7 @@ function iconsSection(): CatalogSection {
   const special: readonly [string, string][] = [
     ["stopIcon", stopIcon(16)],
     ["warningIcon", warningIcon(20)],
-    ["alertDotIcon", alertDotIcon(14, "text-danger")],
+    ["alertDotIcon", alertDotIcon(14, "text-danger-surface")],
     ["spinnerIcon", spinnerIcon(18)],
     ["statusDoneIcon", statusDoneIcon()],
     ["statusRingIcon", statusRingIcon()],
@@ -451,18 +451,18 @@ function iconsSection(): CatalogSection {
         "div",
         { class: "grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-4 gap-y-3" },
         ICON_NAMES.map((name) =>
-          m("div", { id: `icon-${name}`, class: "icon-tile flex items-center gap-2.5 text-primary" }, [
+          m("div", { id: `icon-${name}`, class: "icon-tile flex items-center gap-2.5 text-body-content" }, [
             m.trust(icon(name, { size: 18 })),
             caption(name),
           ]),
         ),
       ),
-      m("h3", { class: "type-section text-faint mt-6 mb-2" }, "Glyphs with their own builders"),
+      m("h3", { class: "type-section text-body-content-tertiary mt-6 mb-2" }, "Glyphs with their own builders"),
       m(
         "div",
         { class: "grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-4 gap-y-3" },
         special.map(([name, markup]) =>
-          m("div", { id: `icon-${name}`, class: "icon-tile flex items-center gap-2.5 text-primary" }, [
+          m("div", { id: `icon-${name}`, class: "icon-tile flex items-center gap-2.5 text-body-content" }, [
             m.trust(markup),
             caption(name),
           ]),

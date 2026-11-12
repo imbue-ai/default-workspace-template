@@ -24,10 +24,10 @@ export interface InputOptions {
 
 const INPUT_BASE =
   "input block w-full px-3 py-2 " +
-  `${TEXT_BODY_SIZE} text-primary placeholder:text-faint ` +
-  "bg-surface border border-default rounded-md " +
+  `${TEXT_BODY_SIZE} text-body-content placeholder:text-body-content-tertiary ` +
+  "bg-body-surface-raised border border-default rounded-md " +
   "transition-[border-color,box-shadow] duration-(--dur-base) ease-[ease] " +
-  "focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
+  "focus-visible:border-accent-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface " +
   "disabled:opacity-50 disabled:cursor-not-allowed";
 
 export function inputClass(options: InputOptions = {}): string {

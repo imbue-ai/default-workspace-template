@@ -21,12 +21,12 @@ export function renderDismissibleNotice(opts: {
     "div",
     {
       class:
-        `${opts.extraClass} flex max-w-[360px] items-start gap-2 rounded-lg border border-default bg-surface ` +
-        "px-3 py-2 text-(length:--font-size-helper) text-secondary shadow-md",
+        `${opts.extraClass} flex max-w-[360px] items-start gap-2 rounded-lg border border-default bg-body-surface-raised ` +
+        "px-3 py-2 text-(length:--font-size-helper) text-body-content-secondary shadow-md",
       role: "status",
     },
     [
-      m("span", { class: "mt-0.5 shrink-0 text-accent" }, m.trust(opts.iconHtml)),
+      m("span", { class: "mt-0.5 shrink-0 text-accent-surface" }, m.trust(opts.iconHtml)),
       m("span", { class: "min-w-0" }, opts.text),
       m(
         Button,

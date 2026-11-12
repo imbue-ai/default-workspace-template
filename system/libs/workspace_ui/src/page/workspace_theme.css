@@ -11,64 +11,219 @@
    beat them whatever their specificity: [data-part="button"] in a theme restyles a primary button too. */
 
 :root {
-  --c-bg: #fafaf8;
-  --c-bg-sidebar: #f3f2ef;
-  --c-fill-hover: rgb(0 0 0 / 0.07);
-  --c-fill-active: rgb(0 0 0 / 0.11);
+  /* keys: one colour per ramp; a role's solid surface IS its key, exactly */
+  --c-neutral-key: oklch(73% 0.016 85);
+  --c-primary-key: #492222;
+  --c-accent-key: #2f6b4f;
+  --c-success-key: #22a06b;
+  --c-warn-key: #b45309;
+  --c-danger-key: #d83a2c;
+  --c-wallpaper-key: #97630c;
+  /* neutral ramp: twelve steps on one shared lightness ladder (1 lightest), at the key's hue, its
+     chroma warmer as it darkens. Every ramp shares the ladder, so a step reads at the same contrast in
+     every ramp: on step 1, step 3 is 1.12:1, 4 is 1.25:1, 8 is 3.4:1, 9 is 5.1:1, 12 is 15.7:1. */
+  --c-neutral-1: oklch(from var(--c-neutral-key) 0.995 calc(c * 0.28) h);
+  --c-neutral-2: oklch(from var(--c-neutral-key) 0.9798 calc(c * 0.69) h);
+  --c-neutral-3: oklch(from var(--c-neutral-key) 0.9556 calc(c * 0.88) h);
+  --c-neutral-4: oklch(from var(--c-neutral-key) 0.92 calc(c * 0.98) h);
+  --c-neutral-5: oklch(from var(--c-neutral-key) 0.8767 calc(c * 1.05) h);
+  --c-neutral-6: oklch(from var(--c-neutral-key) 0.815 calc(c * 1.1) h);
+  --c-neutral-7: oklch(from var(--c-neutral-key) 0.73 calc(c * 1.1) h);
+  --c-neutral-8: oklch(from var(--c-neutral-key) 0.6304 calc(c * 1.0) h);
+  --c-neutral-9: oklch(from var(--c-neutral-key) 0.532 calc(c * 0.9) h);
+  --c-neutral-10: oklch(from var(--c-neutral-key) 0.4266 calc(c * 0.9) h);
+  --c-neutral-11: oklch(from var(--c-neutral-key) 0.3266 calc(c * 0.85) h);
+  --c-neutral-12: oklch(from var(--c-neutral-key) 0.2512 calc(c * 0.9) h);
+  /* primary ramp: the same ladder, chroma peaking at step 8 */
+  --c-primary-1: oklch(from var(--c-primary-key) 0.995 calc(c * 0.039) h);
+  --c-primary-2: oklch(from var(--c-primary-key) 0.9798 calc(c * 0.149) h);
+  --c-primary-3: oklch(from var(--c-primary-key) 0.9556 calc(c * 0.268) h);
+  --c-primary-4: oklch(from var(--c-primary-key) 0.92 calc(c * 0.416) h);
+  --c-primary-5: oklch(from var(--c-primary-key) 0.8767 calc(c * 0.585) h);
+  --c-primary-6: oklch(from var(--c-primary-key) 0.815 calc(c * 0.788) h);
+  --c-primary-7: oklch(from var(--c-primary-key) 0.73 calc(c * 0.892) h);
+  --c-primary-8: oklch(from var(--c-primary-key) 0.6304 calc(c * 1) h);
+  --c-primary-9: oklch(from var(--c-primary-key) 0.532 calc(c * 0.872) h);
+  --c-primary-10: oklch(from var(--c-primary-key) 0.4266 calc(c * 0.702) h);
+  --c-primary-11: oklch(from var(--c-primary-key) 0.3266 calc(c * 0.536) h);
+  --c-primary-12: oklch(from var(--c-primary-key) 0.2512 calc(c * 0.393) h);
+  /* accent ramp */
+  --c-accent-1: oklch(from var(--c-accent-key) 0.995 calc(c * 0.039) h);
+  --c-accent-2: oklch(from var(--c-accent-key) 0.9798 calc(c * 0.149) h);
+  --c-accent-3: oklch(from var(--c-accent-key) 0.9556 calc(c * 0.268) h);
+  --c-accent-4: oklch(from var(--c-accent-key) 0.92 calc(c * 0.416) h);
+  --c-accent-5: oklch(from var(--c-accent-key) 0.8767 calc(c * 0.585) h);
+  --c-accent-6: oklch(from var(--c-accent-key) 0.815 calc(c * 0.788) h);
+  --c-accent-7: oklch(from var(--c-accent-key) 0.73 calc(c * 0.892) h);
+  --c-accent-8: oklch(from var(--c-accent-key) 0.6304 calc(c * 1) h);
+  --c-accent-9: oklch(from var(--c-accent-key) 0.532 calc(c * 0.872) h);
+  --c-accent-10: oklch(from var(--c-accent-key) 0.4266 calc(c * 0.702) h);
+  --c-accent-11: oklch(from var(--c-accent-key) 0.3266 calc(c * 0.536) h);
+  --c-accent-12: oklch(from var(--c-accent-key) 0.2512 calc(c * 0.393) h);
+  /* success ramp */
+  --c-success-1: oklch(from var(--c-success-key) 0.995 calc(c * 0.039) h);
+  --c-success-2: oklch(from var(--c-success-key) 0.9798 calc(c * 0.149) h);
+  --c-success-3: oklch(from var(--c-success-key) 0.9556 calc(c * 0.268) h);
+  --c-success-4: oklch(from var(--c-success-key) 0.92 calc(c * 0.416) h);
+  --c-success-5: oklch(from var(--c-success-key) 0.8767 calc(c * 0.585) h);
+  --c-success-6: oklch(from var(--c-success-key) 0.815 calc(c * 0.788) h);
+  --c-success-7: oklch(from var(--c-success-key) 0.73 calc(c * 0.892) h);
+  --c-success-8: oklch(from var(--c-success-key) 0.6304 calc(c * 1) h);
+  --c-success-9: oklch(from var(--c-success-key) 0.532 calc(c * 0.872) h);
+  --c-success-10: oklch(from var(--c-success-key) 0.4266 calc(c * 0.702) h);
+  --c-success-11: oklch(from var(--c-success-key) 0.3266 calc(c * 0.536) h);
+  --c-success-12: oklch(from var(--c-success-key) 0.2512 calc(c * 0.393) h);
+  /* warn ramp */
+  --c-warn-1: oklch(from var(--c-warn-key) 0.995 calc(c * 0.039) h);
+  --c-warn-2: oklch(from var(--c-warn-key) 0.9798 calc(c * 0.149) h);
+  --c-warn-3: oklch(from var(--c-warn-key) 0.9556 calc(c * 0.268) h);
+  --c-warn-4: oklch(from var(--c-warn-key) 0.92 calc(c * 0.416) h);
+  --c-warn-5: oklch(from var(--c-warn-key) 0.8767 calc(c * 0.585) h);
+  --c-warn-6: oklch(from var(--c-warn-key) 0.815 calc(c * 0.788) h);
+  --c-warn-7: oklch(from var(--c-warn-key) 0.73 calc(c * 0.892) h);
+  --c-warn-8: oklch(from var(--c-warn-key) 0.6304 calc(c * 1) h);
+  --c-warn-9: oklch(from var(--c-warn-key) 0.532 calc(c * 0.872) h);
+  --c-warn-10: oklch(from var(--c-warn-key) 0.4266 calc(c * 0.702) h);
+  --c-warn-11: oklch(from var(--c-warn-key) 0.3266 calc(c * 0.536) h);
+  --c-warn-12: oklch(from var(--c-warn-key) 0.2512 calc(c * 0.393) h);
+  /* danger ramp */
+  --c-danger-1: oklch(from var(--c-danger-key) 0.995 calc(c * 0.039) h);
+  --c-danger-2: oklch(from var(--c-danger-key) 0.9798 calc(c * 0.149) h);
+  --c-danger-3: oklch(from var(--c-danger-key) 0.9556 calc(c * 0.268) h);
+  --c-danger-4: oklch(from var(--c-danger-key) 0.92 calc(c * 0.416) h);
+  --c-danger-5: oklch(from var(--c-danger-key) 0.8767 calc(c * 0.585) h);
+  --c-danger-6: oklch(from var(--c-danger-key) 0.815 calc(c * 0.788) h);
+  --c-danger-7: oklch(from var(--c-danger-key) 0.73 calc(c * 0.892) h);
+  --c-danger-8: oklch(from var(--c-danger-key) 0.6304 calc(c * 1) h);
+  --c-danger-9: oklch(from var(--c-danger-key) 0.532 calc(c * 0.872) h);
+  --c-danger-10: oklch(from var(--c-danger-key) 0.4266 calc(c * 0.702) h);
+  --c-danger-11: oklch(from var(--c-danger-key) 0.3266 calc(c * 0.536) h);
+  --c-danger-12: oklch(from var(--c-danger-key) 0.2512 calc(c * 0.393) h);
+  /* wallpaper ramp */
+  --c-wallpaper-1: oklch(from var(--c-wallpaper-key) 0.995 calc(c * 0.039) h);
+  --c-wallpaper-2: oklch(from var(--c-wallpaper-key) 0.9798 calc(c * 0.149) h);
+  --c-wallpaper-3: oklch(from var(--c-wallpaper-key) 0.9556 calc(c * 0.268) h);
+  --c-wallpaper-4: oklch(from var(--c-wallpaper-key) 0.92 calc(c * 0.416) h);
+  --c-wallpaper-5: oklch(from var(--c-wallpaper-key) 0.8767 calc(c * 0.585) h);
+  --c-wallpaper-6: oklch(from var(--c-wallpaper-key) 0.815 calc(c * 0.788) h);
+  --c-wallpaper-7: oklch(from var(--c-wallpaper-key) 0.73 calc(c * 0.892) h);
+  --c-wallpaper-8: oklch(from var(--c-wallpaper-key) 0.6304 calc(c * 1) h);
+  --c-wallpaper-9: oklch(from var(--c-wallpaper-key) 0.532 calc(c * 0.872) h);
+  --c-wallpaper-10: oklch(from var(--c-wallpaper-key) 0.4266 calc(c * 0.702) h);
+  --c-wallpaper-11: oklch(from var(--c-wallpaper-key) 0.3266 calc(c * 0.536) h);
+  --c-wallpaper-12: oklch(from var(--c-wallpaper-key) 0.2512 calc(c * 0.393) h);
+  /* body: the page and everything on it as its own surface, the secondary surface a step back (a
+     window's header, a code block, a selected row), and the raised surface a step forward (a field, a
+     card, the composer: what you type into). Its content in three strengths. */
+  --c-body-surface: var(--c-neutral-1);
+  --c-body-surface-secondary: var(--c-neutral-2);
+  --c-body-surface-raised: #ffffff;
+  --c-body-content: var(--c-neutral-12);
+  --c-body-content-secondary: var(--c-neutral-9);
+  --c-body-content-tertiary: var(--c-neutral-8);
+  /* overlay: what floats over the page (a modal, a menu, a popover), and the scrim behind a modal. What
+     sits on it uses the body's content colours. */
+  --c-overlay-surface: var(--c-body-surface-raised);
+  --c-overlay-scrim: rgb(0 0 0 / 0.4);
+  /* inverse: the dark chip (a tooltip, a toast, a count) and its content */
+  --c-inverse-surface: var(--c-neutral-12);
+  --c-inverse-content: var(--c-neutral-1);
+  --c-inverse-content-secondary: rgb(255 255 255 / 0.7);
+  --c-inverse-content-tertiary: rgb(255 255 255 / 0.5);
+  /* roles: each is its key as a solid surface with the content that reads on it, and a subtle
+     surface (step 3: a badge, a banner) with its content (step 10, 7:1 on it), which is also the
+     role's colour as text on the body. */
+  /* primary */
+  --c-primary-surface: var(--c-primary-key);
+  --c-primary-content: #ffffff;
+  --c-primary-subtle-surface: var(--c-primary-3);
+  --c-primary-subtle-content: var(--c-primary-10);
+  /* accent */
+  --c-accent-surface: var(--c-accent-key);
+  --c-accent-content: #ffffff;
+  --c-accent-subtle-surface: var(--c-accent-3);
+  --c-accent-subtle-content: var(--c-accent-10);
+  /* success */
+  --c-success-surface: var(--c-success-key);
+  --c-success-content: #ffffff;
+  --c-success-subtle-surface: var(--c-success-3);
+  --c-success-subtle-content: var(--c-success-10);
+  /* warn */
+  --c-warn-surface: var(--c-warn-key);
+  --c-warn-content: #ffffff;
+  --c-warn-subtle-surface: var(--c-warn-3);
+  --c-warn-subtle-content: var(--c-warn-10);
+  /* danger */
+  --c-danger-surface: var(--c-danger-key);
+  --c-danger-content: #ffffff;
+  --c-danger-subtle-surface: var(--c-danger-3);
+  --c-danger-subtle-content: var(--c-danger-10);
+  /* fills: the resting faint fill (a quiet well, a chip), and the hover and active a transparent
+     control (a ghost button, a row) takes: the page's own neutral steps 3 and 4. */
   --c-fill-faint: rgb(0 0 0 / 0.03);
-  --c-bg-user-bubble: rgb(20 174 92 / 0.11);
-  --c-bubble-other: rgb(0 0 0 / 0.05);
-  --c-bg-composer: #ffffff;
-  --c-bg-chat: #ffffff;
-  --c-bg-code: #f0f0f0;
-  --c-text-primary: #202020;
-  --c-text-secondary: #666666;
-  --c-text-faint: #8c8c8c;
-  --c-border: #e4e3df;
-  --c-border-faint: #efeeeb;
-  --c-border-strong: #cfcdc7;
-  --c-border-code: #e0e0e0;
-  --c-accent: #2f6b4f;
-  --c-accent-hover: #24573f;
-  --c-accent-light: #e9f2ee;
-  --c-surface: #ffffff;
-  --c-surface-secondary: #f3f2ef;
-  --c-stop-button: #64748b;
-  --c-stop-button-hover: #475569;
-  --c-danger: #d83a2c;
-  --c-danger-hover: #b62d22;
-  --c-danger-bg: #fdecea;
-  --c-danger-border: #f4c7c3;
-  --c-warning: #b45309;
-  --c-warning-bg: #fde68a;
-  --c-success: #22a06b;
-  --c-success-bg: #e0f2ea;
-  --c-success-border: #b2decb;
-  --c-step-done: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-faint));
-  --c-step-pending: #c2bfb6;
-  --c-text-on-accent: #ffffff;
-  --c-inverse-surface: #202020;
-  --c-inverse-surface-hover: #383838;
-  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  --font-display: var(--font-sans);
+  --c-fill-hover: var(--c-neutral-3);
+  --c-fill-active: var(--c-neutral-4);
+  /* borders: the default edge (a card, a field, a divider), the subtle seam inside a surface, and focus */
+  --c-border-default: var(--c-neutral-4);
+  --c-border-subtle: var(--c-neutral-3);
+  --c-border-focus: var(--c-primary-surface);
+  /* wallpaper: the default wallpaper's field and the "studio" mark on it */
+  --c-wallpaper-surface: var(--c-wallpaper-3);
+  --c-wallpaper-mark: var(--c-wallpaper-2);
+  /* elevation: two steps, raised and floating, cast in neutral 12 rather than black */
+  --c-shadow-raised: 0 1px 2px 0 rgb(38 33 26 / 0.06), 0 1px 3px 0 rgb(38 33 26 / 0.08);
+  --c-shadow-overlay: 0 2px 6px -1px rgb(38 33 26 / 0.1), 0 8px 24px -4px rgb(38 33 26 / 0.12);
+  /* state shading: hover and active are computed, never tokens. Hover sits a constant contrast ratio
+     from its base, active that ratio squared: with Y = L^3 (OKLCH lightness to luminance),
+     Y' = (Y + flare) * ratio^n - flare and L' = cbrt(Y'). The flare is the glare a screen adds, so near
+     black the step grows on its own and every level reads alike. Darker, unless the base's L is at or
+     below the flip, where it goes lighter; the flip is the lightest L that cannot darken two steps.
+     A theme sets --state-ratio: 1 for flat controls with no hover shade. */
+  --state-ratio: 1.1;
+  --state-flare: 0.15;
+  --state-flip-at: calc(pow(var(--state-flare) * (var(--state-ratio) * var(--state-ratio) - 1), 1 / 3));
+  /* A background window's header: its surface with this much black, held while the window is behind. */
+  --state-inactive: 5%;
+  /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
+     (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
+     text-sm/text-lg utilities, which the views use at their stock values.) */
   --font-size-heading-lg: 24px;
   --font-size-heading: 18px;
   --font-size-body: 14px;
+  /* Row text: the dense-chrome step between body and helper. */
   --font-size-row: 13px;
   --font-size-helper: 12px;
+  /* A word badge set beside other text ("Read-only"): the smallest step. */
+  --font-size-tag: 10px;
+  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
+     role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
   --weight-semibold: 600;
   --weight-bold: 700;
+  /* Motion scale — one unit (ms). Durations back the common UI transitions;
+     off-scale durations and the long looping animation timings stay raw. */
+  --dur-fast: 80ms;
+  --dur-base: 120ms;
+  --dur-slow: 200ms;
+  /* Z-index scale — names the workspace's stacking layers.
+     Modal backdrops + the image lightbox sit at --z-overlay. Menus and dropdowns
+     (components/menu.ts, components/dropdown.ts) sit at --z-popover, ABOVE the
+     overlays: a popover is always the most recently opened thing on screen, and
+     one opened from inside a modal has to paint over that modal. The JS
+     hover-tooltip clears them all at --z-tooltip. */
+  --z-content: 1;
+  --z-sticky: 100;
+  --z-overlay: 10000;
+  --z-popover: 10001;
+  --z-tooltip: 10002;
+  --width-message-column: 672px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-display: var(--font-sans);
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 16px;
-  --dur-fast: 80ms;
-  --dur-base: 120ms;
-  --dur-slow: 200ms;
 }
 
 @layer workspace-page-kit {
@@ -77,8 +232,8 @@
     font-family: var(--font-sans);
     font-size: var(--font-size-body);
     line-height: 1.5;
-    color: var(--c-text-primary);
-    background: var(--c-bg);
+    color: var(--c-body-content);
+    background: var(--c-body-surface);
   }
   h1,
   h2,
@@ -94,26 +249,27 @@
     font-size: var(--font-size-heading);
   }
   a {
-    color: var(--c-accent);
+    color: var(--c-accent-surface);
   }
   code,
   pre,
   kbd {
     font-family: var(--font-mono);
-    background: var(--c-bg-code);
+    background: var(--c-body-surface-secondary);
     border-radius: var(--radius-sm);
   }
 
-  /* A push button: <button>, or <button data-variant="primary|secondary|ghost|destructive"> for emphasis; a button
+  /* A button's hover is computed from its surface (base.css, "state shading"), never a token.
+     A push button: <button>, or <button data-variant="primary|secondary|ghost|destructive"> for emphasis; a button
      that is only an icon is data-shape="icon". */
   [data-part="button"],
   button:not([data-part]) {
     font: inherit;
     padding: 6px 14px;
-    border: 1px solid var(--c-border);
+    border: 1px solid var(--c-border-default);
     border-radius: var(--radius-md);
-    background: var(--c-surface);
-    color: var(--c-text-primary);
+    background: var(--c-body-surface-raised);
+    color: var(--c-body-content);
     cursor: pointer;
   }
   [data-part="button"]:not(:disabled):hover,
@@ -127,13 +283,13 @@
   }
   [data-part="button"][data-variant="primary"],
   button:not([data-part])[data-variant="primary"] {
-    border-color: var(--c-accent);
-    background: var(--c-accent);
-    color: var(--c-text-on-accent);
+    border-color: var(--c-accent-surface);
+    background: var(--c-accent-surface);
+    color: var(--c-accent-content);
   }
   [data-part="button"][data-variant="primary"]:not(:disabled):hover,
   button:not([data-part])[data-variant="primary"]:not(:disabled):hover {
-    background: var(--c-accent-hover);
+    background: oklch(from var(--c-accent-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
   }
   [data-part="button"][data-variant="ghost"],
   button:not([data-part])[data-variant="ghost"] {
@@ -142,14 +298,14 @@
   }
   [data-part="button"][data-variant="destructive"],
   button:not([data-part])[data-variant="destructive"] {
-    border-color: var(--c-danger);
-    background: var(--c-danger);
-    color: var(--c-text-on-accent);
+    border-color: var(--c-danger-surface);
+    background: var(--c-danger-surface);
+    color: var(--c-accent-content);
   }
   [data-part="button"][data-variant="destructive"]:not(:disabled):hover,
   button:not([data-part])[data-variant="destructive"]:not(:disabled):hover {
-    border-color: var(--c-danger-hover);
-    background: var(--c-danger-hover);
+    border-color: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+    background: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
   }
 
   /* A text field or text area: a text <input>, a <textarea>. */
@@ -167,18 +323,18 @@
   textarea:not([data-part]) {
     font: inherit;
     padding: 6px 10px;
-    border: 1px solid var(--c-border-strong);
+    border: 1px solid var(--c-border-default);
     border-radius: var(--radius-md);
-    background: var(--c-surface);
-    color: var(--c-text-primary);
+    background: var(--c-body-surface-raised);
+    color: var(--c-body-content);
   }
 
   /* A card that opens something, and a selectable row (aria-current="true" on the current one). */
   [data-part="tile"] {
     padding: 16px;
-    border: 1px solid var(--c-border);
+    border: 1px solid var(--c-border-default);
     border-radius: var(--radius-xl);
-    background: var(--c-surface);
+    background: var(--c-body-surface-raised);
     color: inherit;
     text-align: left;
   }
@@ -191,7 +347,7 @@
   }
   [data-part="badge"] {
     padding: 1px 6px;
-    border: 1px solid var(--c-border);
+    border: 1px solid var(--c-border-default);
     border-radius: var(--radius-sm);
     font-size: var(--font-size-helper);
   }

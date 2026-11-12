@@ -101,7 +101,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 const STARTING_STATUS = "Starting your chat…";
 const READY_STATUS = "Your chat is ready.";
 const EMPTY_CONVERSATION_STATUS_CLASS =
-  "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
+  "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-body-content-secondary";
 
 const TERMINAL_OUTPUT_CLASS =
   "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
@@ -560,9 +560,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         ...renderFailedCreateHeldSends(chatId),
-        m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
+        m("p", { class: "type-heading text-body-content" }, "This chat could not be started"),
         m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, provisional.error ?? "mngr create failed"),
-        launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
+        launchError !== null ? m("p", { class: "text-danger-surface text-sm" }, launchError) : null,
         provisional.account_id !== ""
           ? m(
               Button,
@@ -735,14 +735,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "type-heading text-primary" }, "No conversation data"),
-        m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+        m("p", { class: "type-heading text-body-content" }, "No conversation data"),
+        m("p", { class: "text-body-content-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
         screenLoading
-          ? m("p", { class: "text-secondary" }, "Loading terminal output...")
+          ? m("p", { class: "text-body-content-secondary" }, "Loading terminal output...")
           : screenContent
             ? m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre` }, screenContent)
             : screenError
-              ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
+              ? m("p", { class: "text-body-content-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
               : null,
       ]);
     }
@@ -774,7 +774,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-danger" }, `Error: ${load.error}`),
+        m("p", { class: "text-danger-surface" }, `Error: ${load.error}`),
         m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
       ]);
     }
@@ -792,7 +792,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             "div",
             { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
             [
-              m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
+              m("span", { class: "text-sm text-danger-surface" }, `Couldn't refresh this conversation: ${load.error}`),
               m(
                 Button,
                 { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) },
@@ -967,14 +967,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   // name for it.
                   class:
                     "chat-drop-overlay absolute inset-0 z-50 m-2 flex items-center justify-center rounded-lg " +
-                    "border-2 border-dashed border-accent bg-accent-light/70 pointer-events-none",
+                    "border-2 border-dashed border-accent-surface bg-accent-subtle-surface/70 pointer-events-none",
                 },
                 m(
                   "div",
                   {
                     class:
-                      "chat-drop-overlay-label rounded-full border border-accent bg-surface px-4.5 py-2.5 " +
-                      "text-(length:--font-size-body) font-medium text-accent shadow-overlay",
+                      "chat-drop-overlay-label rounded-full border border-accent-surface bg-body-surface-raised px-4.5 py-2.5 " +
+                      "text-(length:--font-size-body) font-medium text-accent-surface shadow-overlay",
                   },
                   "Drop files to attach",
                 ),
@@ -997,7 +997,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(
                   "main",
                   {
-                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-chat ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
+                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface-raised ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -1024,13 +1024,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                         class:
                           "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
                       },
-                      m("p", { class: "text-secondary" }, "Loading messages..."),
+                      m("p", { class: "text-body-content-secondary" }, "Loading messages..."),
                     )
                   : null,
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-6"}` }, [
+              m("footer", { class: `app-footer shrink-0 bg-body-surface-raised ${isCompact ? "px-3" : "px-6"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
@@ -1060,7 +1060,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-6"}` },
+            { class: `chat-under-bar shrink-0 bg-body-surface-raised pb-2 ${isCompact ? "px-3" : "px-6"}` },
             m(
               "div",
               {

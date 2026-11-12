@@ -19,9 +19,16 @@ import {
   THEME_REVISION_ATTRIBUTE,
   THEME_STATIC_PREFIX,
   THEME_STORAGE_KEY,
+  WORKSPACE_COLOR_ATTRIBUTE,
+  WORKSPACE_COLOR_LINK_ATTRIBUTE,
+  WORKSPACE_COLOR_STORAGE_KEY,
+  WORKSPACE_COLOR_URL,
 } from "./themeBoot";
 
 export {
+  WORKSPACE_COLOR_ATTRIBUTE,
+  WORKSPACE_COLOR_LINK_ATTRIBUTE,
+  WORKSPACE_COLOR_URL,
   STANDARD_THEME_ID,
   THEME_ATTRIBUTE,
   THEME_LINK_ATTRIBUTE,
@@ -221,13 +228,15 @@ export function onThemeChanged(listener: ThemeListener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Wear the theme a `shell:theme` message names, remembering it unless it is a preview; a malformed message changes
- *  nothing. */
+/** Wear the theme a `shell:theme` message names, remembering it unless it is a preview, and the workspace color it
+ *  names; a malformed message changes nothing. */
 export function wearThemeFromMessage(message: {
   theme?: unknown;
   revision?: unknown;
   isPreview?: unknown;
+  workspaceColor?: unknown;
 }): Promise<void> {
+  wearWorkspaceColorFromMessage(message);
   const theme = { id: message.theme, revision: message.revision ?? "" };
   if (!isThemeRef(theme)) return Promise.resolve();
   return wearTheme(theme, document, { isRemembered: message.isPreview !== true });
@@ -253,12 +262,14 @@ export function mirrorParentTheme(): boolean {
       revision: parentRoot.getAttribute(THEME_REVISION_ATTRIBUTE) ?? "",
     };
     if (isThemeRef(theme)) void wearTheme(theme, document, { isRemembered: false });
+    const color = parentRoot.getAttribute(WORKSPACE_COLOR_ATTRIBUTE);
+    if (color !== null) wearWorkspaceColor(color);
   };
   follow();
   const observer = new MutationObserver(follow);
   observer.observe(parentRoot, {
     attributes: true,
-    attributeFilter: [THEME_ATTRIBUTE, THEME_REVISION_ATTRIBUTE],
+    attributeFilter: [THEME_ATTRIBUTE, THEME_REVISION_ATTRIBUTE, WORKSPACE_COLOR_ATTRIBUTE],
   });
   // The observer is the parent's to hold, so a page that goes away (a frame the parent removes) lets go of it, or
   // the parent would keep the page alive.
@@ -266,6 +277,58 @@ export function mirrorParentTheme(): boolean {
     if (!event.persisted) observer.disconnect();
   });
   return true;
+}
+
+/** The workspace color's stylesheet URL at a revision. */
+export function workspaceColorUrl(revision: string): string {
+  return revision === "" ? WORKSPACE_COLOR_URL : `${WORKSPACE_COLOR_URL}?v=${encodeURIComponent(revision)}`;
+}
+
+function workspaceColorLinks(doc: Document): HTMLLinkElement[] {
+  return Array.from(doc.head.querySelectorAll<HTMLLinkElement>(`link[${WORKSPACE_COLOR_LINK_ATTRIBUTE}]`));
+}
+
+/**
+ * Wear the workspace color at `revision` (docs/system/blueprint/brand-design-system/): load its stylesheet before the
+ * theme's, so the theme still wins, mark `<html>`, and remember it for this origin's next load. The old stylesheet
+ * stays until the new one has loaded, so a change never shows the page in the standard keys in between.
+ */
+export function wearWorkspaceColor(revision: string, doc: Document = document): void {
+  const existing = workspaceColorLinks(doc);
+  if (existing.length > 0 && existing.every((link) => link.getAttribute(WORKSPACE_COLOR_LINK_ATTRIBUTE) === revision)) {
+    return;
+  }
+  const isChange = currentWorkspaceColor(doc) !== revision;
+  doc.documentElement.setAttribute(WORKSPACE_COLOR_ATTRIBUTE, revision);
+  try {
+    window.localStorage.setItem(WORKSPACE_COLOR_STORAGE_KEY, revision);
+  } catch {
+    // Storage refused: only the next load starts in the standard keys until the shell names the color.
+  }
+  const link = doc.createElement("link");
+  link.rel = "stylesheet";
+  link.href = workspaceColorUrl(revision);
+  link.setAttribute(WORKSPACE_COLOR_LINK_ATTRIBUTE, revision);
+  const drop = (): void => {
+    for (const old of existing) old.remove();
+  };
+  link.addEventListener("load", drop, { once: true });
+  link.addEventListener("error", () => link.remove(), { once: true });
+  const firstTheme = themeLinks(doc)[0];
+  if (firstTheme === undefined) doc.head.appendChild(link);
+  else doc.head.insertBefore(link, firstTheme);
+  // The theme's listeners pass the color on with the theme (the shell, to the pages it frames).
+  if (isChange) for (const listener of listeners) listener(current, isCurrentRemembered);
+}
+
+/** The workspace color's revision the page wears; null before the boot script or the shell has named one. */
+export function currentWorkspaceColor(doc: Document = document): string | null {
+  return doc.documentElement.getAttribute(WORKSPACE_COLOR_ATTRIBUTE);
+}
+
+/** Wear the workspace color a `shell:theme` message names; a message without one changes nothing. */
+export function wearWorkspaceColorFromMessage(message: { workspaceColor?: unknown }): void {
+  if (typeof message.workspaceColor === "string") wearWorkspaceColor(message.workspaceColor);
 }
 
 /** The theme this origin wore last, as the boot script read it; the standard look when none is remembered. */
@@ -283,8 +346,11 @@ export function resetThemeClientForTests(): void {
   document.documentElement.removeAttribute(THEME_ATTRIBUTE);
   document.documentElement.removeAttribute(THEME_REVISION_ATTRIBUTE);
   for (const link of themeLinks(document)) link.remove();
+  for (const link of workspaceColorLinks(document)) link.remove();
+  document.documentElement.removeAttribute(WORKSPACE_COLOR_ATTRIBUTE);
   try {
     window.localStorage.removeItem(THEME_STORAGE_KEY);
+    window.localStorage.removeItem(WORKSPACE_COLOR_STORAGE_KEY);
   } catch {
     // Nothing remembered to forget.
   }

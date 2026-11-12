@@ -37,33 +37,33 @@ export const MODEL_SUBMENU_MAX_HEIGHT =
 // The composer trigger
 export const TRIGGER =
   "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
-  "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
+  "text-body-content-tertiary transition-colors hover:bg-fill-hover hover:text-body-content-secondary cursor-pointer";
 /** The trigger's shape with nothing to open: a chat with no agent yet names its account. */
-export const PROVISIONAL_CHIP = "flex h-[30px] items-center rounded-lg px-2 type-helper whitespace-nowrap text-faint";
+export const PROVISIONAL_CHIP = "flex h-[30px] items-center rounded-lg px-2 type-helper whitespace-nowrap text-body-content-tertiary";
 /** The separators between the chip's parts, a step quieter than the values. */
-export const TRIGGER_DOT = "text-faint/60";
+export const TRIGGER_DOT = "text-body-content-tertiary/60";
 
 /** The "next" pill: the mark on whatever states the account this chat's next message switches
  *  to. One recipe wherever it is drawn, since it is one mark; each site adds its own spacing
  *  and weight for the text it sits beside. */
-export const NEXT_BADGE = "rounded-full bg-accent-light px-1.5 text-(length:--font-size-helper) text-accent";
+export const NEXT_BADGE = "rounded-full bg-accent-subtle-surface px-1.5 text-(length:--font-size-helper) text-accent-surface";
 
 // The rows that are not plain rows
 /** A row that holds a control rather than a value: the same height and padding as the shared
  *  row, without its highlight -- a slider is not something one picks. */
 export const ROW_STATIC = "flex h-8 items-center gap-2 px-3";
 /** Labels sit at the values' own size, one colour step back -- the menu reads as a spec sheet. */
-export const ROW_LABEL = "text-secondary";
+export const ROW_LABEL = "text-body-content-secondary";
 export const ROW_VALUE_STATIC = "ml-auto flex items-center gap-2";
 /** The disclosure arrow on a row that opens a chooser of its own rather than a submenu -- the
  *  shared menu draws its own on the rows it owns, and this is the same glyph at the same
  *  weight, so the two kinds of row read alike. */
-export const ROW_CHEVRON = "shrink-0 text-faint";
+export const ROW_CHEVRON = "shrink-0 text-body-content-tertiary";
 /** Marks a row group as a tooltip host. */
 export const ROW_WRAP = "group/conn relative";
 
 // The effort slider
-export const EFFORT_VALUE = "type-helper text-primary";
+export const EFFORT_VALUE = "type-helper text-body-content";
 /** Wraps the track so the level dots can be positioned over it; a bare slider gives no clue
  *  where the levels are. */
 export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
@@ -82,35 +82,35 @@ export const SLIDER_TICKS = "pointer-events-none absolute inset-x-1.5 top-1/2 z-
 const SLIDER_TICK_SHAPE = "absolute top-0 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full";
 /** A dot below the thumb, over the filled part of the track: the surface colour, since what it
  *  is drawn on is the green rather than the track. */
-export const SLIDER_TICK_ON_FILL = `${SLIDER_TICK_SHAPE} bg-surface/70`;
+export const SLIDER_TICK_ON_FILL = `${SLIDER_TICK_SHAPE} bg-body-surface-raised/70`;
 /** A dot above the thumb, over the unfilled track. */
-export const SLIDER_TICK_ON_TRACK = `${SLIDER_TICK_SHAPE} bg-primary/70`;
+export const SLIDER_TICK_ON_TRACK = `${SLIDER_TICK_SHAPE} bg-body-content/70`;
 export const SLIDER =
   "relative h-[6px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
-  "[&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-surface " +
+  "[&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-body-surface-raised " +
   "[&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)] " +
   "[&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none " +
-  "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-surface " +
+  "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-body-surface-raised " +
   "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
 
 // The phone layout
 /** The button at the composer's left that opens the card in the phone layout: as tall as the
  *  composer's one-line box, and lit while its card is up. */
 export const SETTINGS_BUTTON =
-  "flex h-11 w-10 shrink-0 items-center justify-center rounded-xl text-secondary transition-colors " +
-  "hover:bg-fill-hover hover:text-primary aria-expanded:bg-fill-hover aria-expanded:text-primary cursor-pointer";
+  "flex h-11 w-10 shrink-0 items-center justify-center rounded-xl text-body-content-secondary transition-colors " +
+  "hover:bg-fill-hover hover:text-body-content aria-expanded:bg-fill-hover aria-expanded:text-body-content cursor-pointer";
 /** The effort segments' row: the label over the segments, since the levels side by side need
  *  the card's whole width. */
 export const EFFORT_SEGMENTS_ROW = "flex flex-col items-stretch gap-2 px-3 pt-1 pb-2";
 /** A segmented control's well, on which the chosen segment sits raised. Its padding and gap are
  *  each size's own, below. */
-const SEGMENTS_WELL = "flex rounded-lg border border-default bg-surface-secondary";
+const SEGMENTS_WELL = "flex rounded-lg border border-default bg-body-surface-secondary";
 const SEGMENT_SHAPE =
   `flex min-w-0 items-center justify-center rounded-md ${MENU_ROW_FOCUS} ` +
   "disabled:cursor-not-allowed disabled:opacity-50";
-const SEGMENT_OFF = "text-secondary hover:bg-fill-hover cursor-pointer";
-const SEGMENT_ON = "bg-surface font-semibold text-primary shadow-raised";
+const SEGMENT_OFF = "text-body-content-secondary hover:bg-fill-hover cursor-pointer";
+const SEGMENT_ON = "bg-body-surface-raised font-semibold text-body-content shadow-raised";
 export const EFFORT_SEGMENTS = `${SEGMENTS_WELL} gap-1 p-[3px]`;
 const EFFORT_SEGMENT_SHAPE = `${SEGMENT_SHAPE} h-[34px] flex-1`;
 export const EFFORT_SEGMENT = `${EFFORT_SEGMENT_SHAPE} ${SEGMENT_OFF}`;
@@ -136,7 +136,7 @@ export function switchClass(size: SwitchSize): string {
   return (
     `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
     "cursor-pointer " +
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
+    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface " +
     "disabled:cursor-not-allowed disabled:opacity-50"
   );
 }
@@ -145,12 +145,12 @@ export function switchClass(size: SwitchSize): string {
 export function switchKnobClass(size: SwitchSize, on: boolean): string {
   const chosen = SWITCH_SIZES[size];
   return (
-    `inline-flex ${chosen.knob} items-center justify-center rounded-full bg-surface shadow-raised ` +
+    `inline-flex ${chosen.knob} items-center justify-center rounded-full bg-body-surface-raised shadow-raised ` +
     `transition-transform ${on ? chosen.on : SWITCH_KNOB_OFF}`
   );
 }
 
-export const SWITCH_ON = "bg-accent";
+export const SWITCH_ON = "bg-accent-surface";
 export const SWITCH_OFF = "bg-fill-active";
 /** The same 2px at rest whatever the size, so it is not in the table. */
 const SWITCH_KNOB_OFF = "translate-x-[2px]";
@@ -161,7 +161,7 @@ const SWITCH_KNOB_OFF = "translate-x-[2px]";
  *  ring and placeholder match every other text field in the workspace. The margin is BELOW it,
  *  separating it from the list it filters -- above it the submenu's own padding is the gap. */
 export const SEARCH_WRAP = "relative mx-1.5 mb-1.5";
-export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-faint";
+export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-body-content-tertiary";
 /** Room for the magnifier, and the dense-chrome row size the rest of the submenu sits at. */
 export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
 /** The list under the search field, the part of the submenu that scrolls. A slim, always-visible
@@ -180,22 +180,22 @@ const SUBMENU_ROW_SHAPE = `flex h-8 items-center gap-1.5 ${MENU_ROW_SLAB} text-l
  *  only the tick and reserve nothing, or the reserve would truncate every model name for
  *  controls never drawn on them. */
 const ACCOUNT_ROW_BASE = `${SUBMENU_ROW_SHAPE} pr-20`;
-export const SUBMENU_ROW = `${SUBMENU_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
-export const SUBMENU_ROW_SELECTED = `${SUBMENU_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
+export const SUBMENU_ROW = `${SUBMENU_ROW_SHAPE} text-body-content hover:bg-fill-hover cursor-pointer`;
+export const SUBMENU_ROW_SELECTED = `${SUBMENU_ROW_SHAPE} bg-fill-active text-body-content cursor-pointer`;
 /** Lit from the WRAPPER, not the row button. The star, the pencil and the bin are SIBLINGS of
  *  that button, so a pointer on one of them is not on the row by CSS's reckoning -- and the
  *  row would drop its highlight at exactly the moment the pointer arrived at the controls that
  *  highlight had just revealed. */
-export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary group-hover/conn:bg-fill-hover cursor-pointer`;
-export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
+export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-body-content group-hover/conn:bg-fill-hover cursor-pointer`;
+export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-body-content cursor-pointer`;
 export const SUBMENU_ROW_NAME = "truncate";
-export const SUBMENU_ROW_SUB = "type-helper text-faint";
+export const SUBMENU_ROW_SUB = "type-helper text-body-content-tertiary";
 /** The MODEL row's tick: the last thing in the row, pushed out by `ml-auto` and so landing on
  *  the row's own `px-2` padding edge -- which is where the account rows' pinned tick sits too,
  *  13px in from the submenu's edge, so the two lists' ticks share one line. Both ticks stand
  *  centred in the same 20x20 box the row's control buttons do, so every mark at a row's end
  *  shares a centre line however it is drawn. */
-export const SUBMENU_CHECK = "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent";
+export const SUBMENU_CHECK = "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent-surface";
 /** The same tick on a row that also carries controls: pinned to the row's right edge as a
  *  SIBLING of the button, since buttons cannot nest.
  *
@@ -204,10 +204,10 @@ export const SUBMENU_CHECK = "ml-auto inline-flex h-5 w-5 shrink-0 items-center 
  *  pointer leaves. */
 export const SUBMENU_CHECK_PINNED =
   "pointer-events-none absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center " +
-  "justify-center text-accent group-hover/conn:hidden";
-export const SUBMENU_EMPTY = "type-helper text-faint px-3 py-2";
+  "justify-center text-accent-surface group-hover/conn:hidden";
+export const SUBMENU_EMPTY = "type-helper text-body-content-tertiary px-3 py-2";
 /** "+ Add a provider" under the account list: the shared row, one colour step back. */
-export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-fill-hover cursor-pointer`;
+export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-body-content-secondary hover:bg-fill-hover cursor-pointer`;
 
 // The fast-mode submenu
 /** A fast-mode row runs to two lines: what separates the modes is not their names but what each
@@ -218,15 +218,15 @@ export const SUBMENU_ADD = `${SUBMENU_ROW_SHAPE} gap-2 text-secondary hover:bg-f
  *  No width of its own: the slab carries one, and a second beside it would put this row's
  *  trailing tick in a different lane from every other row's. */
 const FAST_ROW_SHAPE = `flex items-center gap-1.5 py-1.5 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
-export const FAST_ROW = `${FAST_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
-export const FAST_ROW_SELECTED = `${FAST_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
+export const FAST_ROW = `${FAST_ROW_SHAPE} text-body-content hover:bg-fill-hover cursor-pointer`;
+export const FAST_ROW_SELECTED = `${FAST_ROW_SHAPE} bg-fill-active text-body-content cursor-pointer`;
 /** The mode and its sentence, stacked. `min-w-0` so the sentence wraps inside the row instead of
  *  widening it. */
 export const FAST_ROW_TEXT = "flex min-w-0 flex-col";
-export const FAST_ROW_DETAIL = "type-helper text-faint";
+export const FAST_ROW_DETAIL = "type-helper text-body-content-tertiary";
 /** The turn-limit field's row. `whitespace-nowrap` because the words either side of the field
  *  are one sentence, and a menu row is one line. */
-export const FAST_LIMIT_ROW = `fast-mode-limit ${ROW_STATIC} whitespace-nowrap text-secondary`;
+export const FAST_LIMIT_ROW = `fast-mode-limit ${ROW_STATIC} whitespace-nowrap text-body-content-secondary`;
 /** The field's box. The width lives HERE rather than in the field's own `extra`, because the
  *  shared input recipe is already `w-full`; a box the field fills is the caller's either way. */
 export const FAST_LIMIT_FIELD = "inline-flex w-[72px] shrink-0";
@@ -257,16 +257,16 @@ export const DEFAULT_SEGMENT_ON = `${DEFAULT_SEGMENT_SHAPE} ${SEGMENT_ON}`;
  *  rest. */
 export const ROW_TRASH =
   "absolute right-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-faint transition-colors hover:text-danger group-hover/conn:inline-flex";
+  "justify-center rounded text-body-content-tertiary transition-colors hover:text-danger-surface group-hover/conn:inline-flex";
 /** The rename control: a SIBLING of the row button like the bin, one slot further in, so each
  *  control keeps its own lane and none of them ever displaces another. */
 export const ROW_PENCIL =
   "absolute right-9 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
+  "justify-center rounded text-body-content-tertiary transition-colors hover:text-body-content group-hover/conn:inline-flex";
 /** The default toggle, in the outermost lane, shown on hover like the pencil and the bin. */
 export const ROW_STAR =
   "absolute right-15 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
+  "justify-center rounded text-body-content-tertiary transition-colors hover:text-body-content group-hover/conn:inline-flex";
 /** The star of the account new chats open on: visible whether or not the row is hovered, since
  *  it is a fact about the account rather than a control that only matters under a pointer.
  *
@@ -280,8 +280,8 @@ export const ROW_STAR =
 export function rowStarPinnedClass(hasTick: boolean): string {
   return (
     `absolute ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15 top-1/2 inline-flex ` +
-    "h-5 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-accent " +
-    "transition-colors hover:text-primary [&>svg]:fill-current"
+    "h-5 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-accent-surface " +
+    "transition-colors hover:text-body-content [&>svg]:fill-current"
   );
 }
 /** The row mid-rename: the field takes the whole row, since every control is hidden while it
@@ -289,7 +289,7 @@ export function rowStarPinnedClass(hasTick: boolean): string {
  *  keeps the row's height, so nothing shifts on the way in or out. */
 export const ROW_RENAME_WRAP = `${ROW_WRAP} px-1.5`;
 export const ROW_RENAME_INPUT =
-  "h-8 w-full rounded-md border border-default bg-surface px-2 text-primary outline-none";
+  "h-8 w-full rounded-md border border-default bg-body-surface-raised px-2 text-body-content outline-none";
 
 /* No tooltip classes here: a CSS bubble inside the menu is clipped by the submenu's
  * `overflow-hidden`, and the menu and the submenu are fixed boxes that are each their own

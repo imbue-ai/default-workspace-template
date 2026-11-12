@@ -30,7 +30,7 @@ export interface PhoneBarAttrs {
 // Bare glyphs at rest; a circle comes up under a press.
 const CONTROL_CLASS =
   "phone-control relative flex h-(--desk-phone-control-height) w-(--desk-phone-control-width) shrink-0 " +
-  "items-center justify-center text-primary disabled:text-faint " +
+  "items-center justify-center text-body-content disabled:text-body-content-tertiary " +
   "before:absolute before:size-(--desk-phone-control-height) before:rounded-full before:content-[''] " +
   "not-disabled:active:before:bg-fill-active [&>svg]:relative";
 
@@ -49,7 +49,7 @@ export const PhoneBar: m.Component<PhoneBarAttrs> = {
         "data-phone-bar": "",
         class:
           "phone-bar relative z-(--z-content) flex shrink-0 items-center justify-center gap-2 border-t " +
-          "border-default bg-page/90 px-(--desk-phone-bar-padding) pt-(--desk-phone-bar-padding) " +
+          "border-default bg-body-surface/90 px-(--desk-phone-bar-padding) pt-(--desk-phone-bar-padding) " +
           "pb-(--desk-phone-safe-bottom) backdrop-blur-xl",
       },
       [
@@ -88,7 +88,7 @@ export const PhoneBar: m.Component<PhoneBarAttrs> = {
                     "data-phone-count": String(count),
                     class:
                       "phone-pill-count ml-auto flex h-6.5 min-w-6.5 shrink-0 items-center justify-center " +
-                      "rounded-full bg-fill-hover px-1.5 text-xs font-bold text-secondary",
+                      "rounded-full bg-fill-hover px-1.5 text-xs font-bold text-body-content-secondary",
                   },
                   String(count),
                 ),

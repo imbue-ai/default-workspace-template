@@ -71,7 +71,7 @@ export function PreviewPane(): m.Component<{ app: FilesController; entry: Entry 
           "pre.files-preview-text",
           {
             class:
-              "h-full w-full overflow-hidden rounded-md border border-subtle bg-surface p-3 font-mono text-(length:--font-size-helper) leading-snug whitespace-pre-wrap break-words text-secondary shadow-raised",
+              "h-full w-full overflow-hidden rounded-md border border-subtle bg-body-surface-raised p-3 font-mono text-(length:--font-size-helper) leading-snug whitespace-pre-wrap break-words text-body-content-secondary shadow-raised",
           },
           snippet.text,
         );
@@ -86,15 +86,15 @@ export function PreviewPane(): m.Component<{ app: FilesController; entry: Entry 
           { class: "flex h-[240px] w-full flex-col items-center justify-center gap-3" },
           picture,
         ),
-        m("div", { class: "w-full text-center type-label break-words text-primary" }, entry.name),
+        m("div", { class: "w-full text-center type-label break-words text-body-content" }, entry.name),
         m(
           "div",
-          { class: "type-helper text-secondary" },
+          { class: "type-helper text-body-content-secondary" },
           `${kindLabelOf(entry.name, false)} · ${formatSize(entry.size)}`,
         ),
         m("dl", { class: "grid w-full grid-cols-[auto_1fr] gap-x-3 gap-y-1 type-helper" }, [
-          m("dt", { class: "text-faint" }, "Modified"),
-          m("dd", { class: "m-0 text-right text-secondary" }, formatModified(entry.mtime)),
+          m("dt", { class: "text-body-content-tertiary" }, "Modified"),
+          m("dd", { class: "m-0 text-right text-body-content-secondary" }, formatModified(entry.mtime)),
         ]),
         m("div", { class: "flex w-full gap-2" }, [
           m(

@@ -127,8 +127,8 @@ export const TrayCardFrame: m.Component<TrayCardFrameAttrs> = {
         role: "dialog",
         "aria-label": vnode.attrs.label,
         class:
-          "tray-card fixed z-(--z-popover) flex flex-col gap-2 rounded-xl border border-default bg-surface p-3 " +
-          "text-(length:--font-size-row) text-primary shadow-overlay",
+          "tray-card fixed z-(--z-popover) flex flex-col gap-2 rounded-xl border border-default bg-body-surface-raised p-3 " +
+          "text-(length:--font-size-row) text-body-content shadow-overlay",
         style: { width: `${CARD_WIDTH_PX}px`, right: `${right}px`, bottom: `${bottom}px` },
         onmouseenter: vnode.attrs.onEnter,
         onmouseleave: vnode.attrs.onLeave,

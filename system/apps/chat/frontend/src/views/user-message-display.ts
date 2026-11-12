@@ -91,11 +91,11 @@ export const USER_MESSAGE_PART = appPartAttrs("chat", "user-message");
  *  another's at the top left where their picture sits). */
 const USER_BUBBLE_BASE =
   "message-user-bubble max-w-[80%] rounded-[18px] px-4 py-2.5 " +
-  "text-(length:--font-size-body) leading-normal text-primary wrap-break-word";
+  "text-(length:--font-size-body) leading-normal text-body-content wrap-break-word";
 /** The viewer's own bubble, right-aligned in the own-message tint, opening a run of theirs. */
-export const USER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-br-[4px] bg-user-bubble`;
+export const USER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-br-[4px] bg-primary-subtle-surface`;
 /** The viewer's own bubble further down a run of theirs. */
-export const USER_BUBBLE_CONTINUED_CLASS = `${USER_BUBBLE_BASE} bg-user-bubble`;
+export const USER_BUBBLE_CONTINUED_CLASS = `${USER_BUBBLE_BASE} bg-primary-subtle-surface`;
 /** Another person's bubble: left-aligned under their name, in the agent's grey. */
 const OTHER_BUBBLE_BASE = `${USER_BUBBLE_BASE} bg-fill-active/75`;
 /** Another person's bubble opening a run of theirs, squared at its top-left where their picture sits. */
@@ -104,7 +104,7 @@ export const OTHER_BUBBLE_CLASS = `${OTHER_BUBBLE_BASE} rounded-tl-[4px]`;
 export const OTHER_BUBBLE_CONTINUED_CLASS = OTHER_BUBBLE_BASE;
 
 /** The small name over the first bubble of a run: "You" over the viewer's own, the author's name over another's. */
-const SPEAKER_LABEL_CLASS = "mb-1 text-(length:--font-size-helper) leading-[1.4] text-faint";
+const SPEAKER_LABEL_CLASS = "mb-1 text-(length:--font-size-helper) leading-[1.4] text-body-content-tertiary";
 
 /** "You", over the first of a run of the viewer's own bubbles. */
 function renderOwnSpeakerLabel(): m.Vnode {
@@ -187,11 +187,11 @@ export function renderNotice(label: string, body: string): m.Vnode {
   return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
     m(
       "span",
-      { class: "mt-px shrink-0 text-accent", ...railNodeAttrs("point") },
+      { class: "mt-px shrink-0 text-accent-surface", ...railNodeAttrs("point") },
       m.trust(icon("check", { size: 13, strokeWidth: 2.5 })),
     ),
-    m("span", { class: "min-w-0 text-secondary" }, [
-      m("span", { class: "font-medium text-primary" }, `${label}:`),
+    m("span", { class: "min-w-0 text-body-content-secondary" }, [
+      m("span", { class: "font-medium text-body-content" }, `${label}:`),
       body ? ` ${body}` : null,
     ]),
   ]);
@@ -278,7 +278,7 @@ function renderResentNote(eventId: string): m.Vnode {
   const expansionKey = `resent-note:${eventId}`;
   const isExpanded = isBlockExpanded(expansionKey);
   return m("div", { class: "message-resent-note mt-1 flex max-w-[80%] flex-col items-end gap-1" }, [
-    m("div", { class: "flex items-center gap-1 text-(length:--font-size-helper) text-faint" }, [
+    m("div", { class: "flex items-center gap-1 text-(length:--font-size-helper) text-body-content-tertiary" }, [
       m("span", "Sent again"),
       m(
         "button",
@@ -286,7 +286,7 @@ function renderResentNote(eventId: string): m.Vnode {
           type: "button",
           class:
             "message-resent-note-help flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full " +
-            "border border-current text-[10px] leading-none hover:text-secondary",
+            "border border-current text-[10px] leading-none hover:text-body-content-secondary",
           "aria-label": "What does sent again mean?",
           "aria-expanded": String(isExpanded),
           onclick: () => {
@@ -299,7 +299,7 @@ function renderResentNote(eventId: string): m.Vnode {
     isExpanded
       ? m(
           "p",
-          { class: "message-resent-note-text text-right text-(length:--font-size-helper) text-secondary" },
+          { class: "message-resent-note-text text-right text-(length:--font-size-helper) text-body-content-secondary" },
           RESENT_NOTE_HELP,
         )
       : null,

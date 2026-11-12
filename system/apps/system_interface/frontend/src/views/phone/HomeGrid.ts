@@ -31,7 +31,7 @@ export const HomeGrid: m.Component<HomeGridAttrs> = {
       "div",
       {
         "data-phone-home-grid": "",
-        class: "phone-home absolute inset-0 bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+        class: "phone-home absolute inset-0 bg-body-surface bg-cover bg-center bg-(image:--desk-default-wallpaper)",
         style: wallpaper === null ? {} : { backgroundImage: wallpaperBackgroundImage(wallpaper) },
       },
       m(
@@ -74,7 +74,7 @@ export const HomeGrid: m.Component<HomeGridAttrs> = {
                 {
                   class:
                     "phone-app-name line-clamp-2 max-w-(--desk-phone-cell-width) text-xs leading-tight " +
-                    "font-semibold wrap-anywhere text-on-accent [filter:var(--desk-shortcut-label-shadow)]",
+                    "font-semibold wrap-anywhere text-accent-content [filter:var(--desk-shortcut-label-shadow)]",
                 },
                 app.display_name,
               ),

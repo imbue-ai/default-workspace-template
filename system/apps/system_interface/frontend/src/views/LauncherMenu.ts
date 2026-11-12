@@ -85,9 +85,9 @@ const ROW_CLASS =
 const SHEET_ROW_CLASS =
   `launcher-row flex h-(--desk-phone-row-height) items-center gap-3 text-left text-(length:--font-size-body) ` +
   `${MENU_ROW_SLAB} ${MENU_ROW_FOCUS} `;
-const CAPTION_CLASS = "type-helper shrink-0 truncate text-faint";
+const CAPTION_CLASS = "type-helper shrink-0 truncate text-body-content-tertiary";
 const ENTER_KEY_LABEL = "Enter";
-const NO_MATCH_CLASS = "launcher-no-matches my-0 mx-3 py-1 text-(length:--font-size-body) text-faint";
+const NO_MATCH_CLASS = "launcher-no-matches my-0 mx-3 py-1 text-(length:--font-size-body) text-body-content-tertiary";
 
 function rowAttrs(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs): m.Attributes {
   const isEnabled = isRowEnabled(row);
@@ -102,7 +102,7 @@ function rowAttrs(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs)
     "aria-disabled": isEnabled ? undefined : "true",
     class:
       (attrs.isSheet ? SHEET_ROW_CLASS : ROW_CLASS) +
-      (isEnabled ? "cursor-pointer text-primary " : "cursor-default text-faint ") +
+      (isEnabled ? "cursor-pointer text-body-content " : "cursor-default text-body-content-tertiary ") +
       // The highlight is the menu's hover tint: the arrow keys move the same mark the pointer does.
       (isHighlighted ? "bg-fill-hover" : ""),
     onpointerenter: isEnabled ? () => attrs.onHighlight(index) : undefined,
@@ -113,7 +113,7 @@ function rowAttrs(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs)
 function glyphCell(markup: string, isSheet: boolean): m.Vnode {
   return m(
     "span",
-    { class: `flex shrink-0 items-center justify-center text-faint ${isSheet ? "size-8" : "size-6"}` },
+    { class: `flex shrink-0 items-center justify-center text-body-content-tertiary ${isSheet ? "size-8" : "size-6"}` },
     m.trust(markup),
   );
 }
@@ -184,7 +184,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           // A phone names no desktop and places what it shows minimized, so the sheet carries neither mark.
           m(
             "span",
-            { class: "min-w-0 flex-1 truncate" + (row.isMinimized && !attrs.isSheet ? " text-faint" : "") },
+            { class: "min-w-0 flex-1 truncate" + (row.isMinimized && !attrs.isSheet ? " text-body-content-tertiary" : "") },
             row.title,
           ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),

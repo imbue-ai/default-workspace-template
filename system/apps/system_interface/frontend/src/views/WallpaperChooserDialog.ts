@@ -73,19 +73,19 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
         "data-wallpaper": value === null ? "default" : `${value.kind}:${value.name}`,
         class:
           "flex h-14 w-20 shrink-0 cursor-pointer flex-col items-center justify-end overflow-hidden rounded-md border bg-cover bg-center " +
-          (isSelected ? "border-accent ring-2 ring-accent" : "border-default"),
+          (isSelected ? "border-accent-surface ring-2 ring-accent-surface" : "border-default"),
         style: url === null ? "" : `background-image: url("${url}")`,
         "aria-pressed": isSelected ? "true" : "false",
         onclick() {
           wallpaper = value;
         },
       },
-      m("span", { class: "w-full truncate bg-surface/80 px-1 text-center type-helper text-primary" }, label),
+      m("span", { class: "w-full truncate bg-body-surface-raised/80 px-1 text-center type-helper text-body-content" }, label),
     );
   }
 
   function wallpaperPicker(attrs: WallpaperChooserDialogAttrs): m.Children {
-    if (attrs.wallpapers === null) return m("p", { class: "type-helper text-faint" }, "Loading wallpapers…");
+    if (attrs.wallpapers === null) return m("p", { class: "type-helper text-body-content-tertiary" }, "Loading wallpapers…");
     const selected = resolvedWallpaper(attrs.wallpapers);
     return m("div", { class: "flex flex-wrap gap-2" }, [
       wallpaperChoice("Default", null, null, selected),
@@ -125,7 +125,7 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
         [
           m("label", { class: MODAL_LABEL_CLASS }, `Wallpaper of ${attrs.desktop.name}`),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
-          error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
+          error ? m("p", { class: "type-helper mt-1 text-danger-surface" }, error) : null,
         ],
       );
     },

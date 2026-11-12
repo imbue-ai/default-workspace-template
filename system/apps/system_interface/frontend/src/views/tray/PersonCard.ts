@@ -85,13 +85,13 @@ export function domainOf(email: string | null): string | null {
 function statusDotClass(state: ReturnType<typeof presenceStateOf>): string {
   switch (state) {
     case "active":
-      return "bg-success";
+      return "bg-success-surface";
     case "idle":
-      return "bg-warning";
+      return "bg-warn-surface";
     case "offline":
-      return "bg-faint";
+      return "bg-body-content-tertiary";
     case "invited":
-      return "border border-dashed border-strong bg-transparent";
+      return "border border-dashed border-default bg-transparent";
   }
 }
 
@@ -116,7 +116,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
         m(TrayAvatar, { entry, sizePx: CARD_PICTURE_SIZE_PX, isFaded: false }),
         m("div", { class: "flex min-w-0 flex-col" }, [
           m("div", { class: "truncate font-semibold", "data-tray-card-name": "" }, name),
-          m("div", { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" }, [
+          m("div", { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" }, [
             m("span", { class: `inline-block size-2 shrink-0 rounded-full ${statusDotClass(state)}` }),
             m(
               "span",
@@ -129,7 +129,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
           entry.is_admitted_by_domain
             ? m(
                 "div",
-                { class: "text-(length:--font-size-helper) text-faint", "data-tray-card-domain": "" },
+                { class: "text-(length:--font-size-helper) text-body-content-tertiary", "data-tray-card-domain": "" },
                 `Here through ${domainOf(entry.email) ?? "a domain grant"}`,
               )
             : null,
@@ -140,7 +140,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
         : m("div", { class: "flex flex-col gap-1", "data-tray-card-looking": looking.window.id }, [
             m(
               "div",
-              { class: "text-(length:--font-size-helper) text-faint" },
+              { class: "text-(length:--font-size-helper) text-body-content-tertiary" },
               state === "idle" ? "Last seen in" : "Looking at",
             ),
             m("div", { class: "flex items-center gap-1.5" }, [
@@ -161,7 +161,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
         : m("div", { class: "flex flex-col gap-0.5", "data-tray-card-desktops": "" }, [
             m(
               "div",
-              { class: "text-(length:--font-size-helper) text-faint" },
+              { class: "text-(length:--font-size-helper) text-body-content-tertiary" },
               isOwn ? "Your desktops" : `${entry.display_name}'s desktops`,
             ),
             desktops.map((desktop) =>
@@ -172,13 +172,13 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                   type: "button",
                   "data-tray-card-desktop": desktop.id,
                   class:
-                    "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-primary hover:bg-fill-hover",
+                    "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-body-content hover:bg-fill-hover",
                   onclick: () => attrs.onOpenDesktop(desktop.id),
                 },
                 [
                   m(
                     "span",
-                    { class: "flex shrink-0 items-center text-secondary" },
+                    { class: "flex shrink-0 items-center text-body-content-secondary" },
                     m.trust(icon("columns", { size: MONITOR_GLYPH_SIZE })),
                   ),
                   m("span", { class: "min-w-0 flex-1 truncate" }, desktop.name),
@@ -186,7 +186,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                     ? m(
                         "span",
                         {
-                          class: "flex items-center gap-1 text-(length:--font-size-helper) text-faint",
+                          class: "flex items-center gap-1 text-(length:--font-size-helper) text-body-content-tertiary",
                           "data-tray-card-there": desktop.id,
                         },
                         [
@@ -199,7 +199,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                       )
                     : null,
                   desktop.id === attrs.activeDesktopId
-                    ? m("span", { class: "text-(length:--font-size-helper) text-faint" }, "Viewing")
+                    ? m("span", { class: "text-(length:--font-size-helper) text-body-content-tertiary" }, "Viewing")
                     : null,
                 ],
               ),
@@ -211,7 +211,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                     type: "button",
                     "data-tray-card-new-desktop": "",
                     class:
-                      "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-secondary hover:bg-fill-hover",
+                      "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-body-content-secondary hover:bg-fill-hover",
                     onclick: attrs.onNewDesktop,
                   },
                   [

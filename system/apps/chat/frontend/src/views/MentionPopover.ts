@@ -68,7 +68,7 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
     {
       class:
         "message-input-mentions absolute bottom-full left-0 z-20 mb-1 max-h-64 w-72 max-w-full overflow-y-auto " +
-        "rounded-lg border border-default bg-surface py-1 shadow-lg",
+        "rounded-lg border border-default bg-body-surface-raised py-1 shadow-lg",
       role: "listbox",
       "data-mention-popover": "",
       // The textarea keeps the focus (and the caret) through a click on a row.
@@ -84,22 +84,22 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
           "data-mention-handle": handle.handle,
           class:
             "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-(length:--font-size-body) " +
-            (index === attrs.selectedIndex ? "bg-fill-active text-primary" : "text-primary hover:bg-fill-hover"),
+            (index === attrs.selectedIndex ? "bg-fill-active text-body-content" : "text-body-content hover:bg-fill-hover"),
           onclick: () => attrs.onPick(handle),
           onmouseenter: () => attrs.onHover(index),
         },
         [
           handle.kind === "chat"
-            ? m("span", { class: "flex w-4 shrink-0 justify-center text-faint" }, peopleGlyph(13))
+            ? m("span", { class: "flex w-4 shrink-0 justify-center text-body-content-tertiary" }, peopleGlyph(13))
             : null,
           m("span", { class: "min-w-0 flex-1 truncate" }, [
             m("span", { class: "font-medium" }, `@${handle.handle}`),
             handle.display_name !== handle.handle
-              ? m("span", { class: "ml-2 text-secondary" }, handle.display_name)
+              ? m("span", { class: "ml-2 text-body-content-secondary" }, handle.display_name)
               : null,
           ]),
           kindLabel(handle)
-            ? m("span", { class: "shrink-0 text-(length:--font-size-helper) text-faint" }, kindLabel(handle))
+            ? m("span", { class: "shrink-0 text-(length:--font-size-helper) text-body-content-tertiary" }, kindLabel(handle))
             : null,
         ],
       ),

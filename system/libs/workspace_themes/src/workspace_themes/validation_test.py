@@ -57,12 +57,12 @@ def test_contract_css_passes(tmp_path: Path) -> None:
     (tmp_path / "fonts" / "face.woff2").write_bytes(b"woff")
     css = """
     @font-face { font-family: "Face"; src: url("fonts/face.woff2") format("woff2"); }
-    :root { --c-accent: #000000; --theme-bevel: inset 1px 1px #fff; --desk-title-bar-height: 20px; }
+    :root { --c-accent-surface: #000000; --theme-bevel: inset 1px 1px #fff; --desk-title-bar-height: 20px; }
     :root[data-touch] { --desk-title-bar-height: 44px; }
     [data-part="window"][data-focused="true"] [data-part="title-bar"] { background: url("data:image/svg+xml,x"); }
     [data-part="window-control"]:is([data-control="close"], [data-control="menu"]):active > * { display: none; }
     input[type="text"], ::selection, a:hover { color: #000000; }
-    [data-part="list-row"]:nth-child(2n+1) { background: var(--c-surface-secondary); }
+    [data-part="list-row"]:nth-child(2n+1) { background: var(--c-body-surface-secondary); }
     @media (prefers-reduced-motion: no-preference) { [data-part="button"] { transition: none; } }
     @keyframes blink { from { opacity: 0; } to { opacity: 1; } }
     """

@@ -223,7 +223,7 @@ export function Overview(): m.Component<OverviewAttrs> {
             // The window's chrome as the live-page layer knows it: the page is laid over the content box below.
             "data-window-id": tile.window.id,
             class:
-              "overview-tile-frame relative flex flex-col overflow-hidden rounded-lg bg-surface shadow-overlay " +
+              "overview-tile-frame relative flex flex-col overflow-hidden rounded-lg bg-body-surface-raised shadow-overlay " +
               "ring-white/0 transition-[box-shadow,transform] duration-(--dur-fast) " +
               "group-hover:scale-[1.02] group-hover:ring-4 group-hover:ring-white/70",
             style: { width: `${width}px`, opacity: tile.isMinimized ? String(MINIMIZED_TILE_OPACITY) : "" },
@@ -234,7 +234,7 @@ export function Overview(): m.Component<OverviewAttrs> {
               {
                 class:
                   "flex shrink-0 items-center gap-2 border-b border-default px-2 text-(length:--font-size-row) " +
-                  "font-semibold text-primary",
+                  "font-semibold text-body-content",
                 style: { height: `${metrics.overviewTileTitle}px` },
               },
               [
@@ -454,7 +454,7 @@ export function Overview(): m.Component<OverviewAttrs> {
                 // hung below it would clip past the viewport, buttons first.
                 class:
                   "absolute bottom-full left-1/2 z-(--z-popover) mb-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-xl " +
-                  "border border-default bg-surface p-3 text-(length:--font-size-row) text-primary shadow-overlay",
+                  "border border-default bg-body-surface-raised p-3 text-(length:--font-size-row) text-body-content shadow-overlay",
               },
               [
                 m("div", ["Delete ", m("strong", desktop.name), "? Its windows close for everyone."]),

@@ -465,7 +465,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         type: "button",
         role: "switch",
         "aria-checked": sourceView.on ? "true" : "false",
-        class: menuRowClass({ extra: "text-primary" }),
+        class: menuRowClass({ extra: "text-body-content" }),
         ...MENU_ITEM_PART,
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
@@ -493,7 +493,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       "button",
       {
         type: "button",
-        class: menuRowClass({ extra: "text-primary" }),
+        class: menuRowClass({ extra: "text-body-content" }),
         ...MENU_ITEM_PART,
         ...hoverTooltipAttrs(opts.tooltip, "above"),
         onclick: (event: MouseEvent) => {
@@ -571,7 +571,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                   // without it this row would read "Auto" while the row that opened the submenu,
                   // stating the same mode, reads "Auto (off now)".
                   isCurrent && mode === "auto" && state.is_switched
-                    ? m("span", { class: "ml-1.5 type-helper text-faint" }, "(off now)")
+                    ? m("span", { class: "ml-1.5 type-helper text-body-content-tertiary" }, "(off now)")
                     : null,
                 ]),
                 m("span", { class: css.FAST_ROW_DETAIL }, fastModeDetail(mode, limit)),
@@ -727,7 +727,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       ),
       m(
         "p",
-        { class: "autocompact-help px-3 py-1.5 type-helper text-faint" },
+        { class: "autocompact-help px-3 py-1.5 type-helper text-body-content-tertiary" },
         "Saves ~50% by compacting right before the cache expires.",
       ),
       m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),

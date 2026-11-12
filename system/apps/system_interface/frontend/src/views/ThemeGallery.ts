@@ -79,7 +79,7 @@ export function galleryStateOf(
 }
 
 function section(title: string, ...children: m.Children[]): m.Vnode {
-  return m("section", { class: "mb-8" }, [m("h2", { class: "type-section mb-3 text-secondary" }, title), ...children]);
+  return m("section", { class: "mb-8" }, [m("h2", { class: "type-section mb-3 text-body-content-secondary" }, title), ...children]);
 }
 
 function windowSpecimen(state: GalleryState, isFocused: boolean, title: string): m.Vnode {
@@ -90,7 +90,7 @@ function windowSpecimen(state: GalleryState, isFocused: boolean, title: string):
       "div",
       {
         "data-gallery-page": "",
-        class: "absolute inset-x-0 bottom-0 top-(--desk-title-bar-height) bg-chat p-3 type-body",
+        class: "absolute inset-x-0 bottom-0 top-(--desk-title-bar-height) bg-body-surface-raised p-3 type-body",
       },
       "The app's page shows through here.",
     ),
@@ -204,7 +204,7 @@ function taskbar(state: GalleryState): m.Children {
         {
           ...partAttrs("launcher-field"),
           class:
-            "launcher-field flex h-9 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0 items-center overflow-hidden rounded-full border border-strong bg-surface px-3 type-body whitespace-nowrap text-faint",
+            "launcher-field flex h-9 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0 items-center overflow-hidden rounded-full border border-default bg-body-surface-raised px-3 type-body whitespace-nowrap text-body-content-tertiary",
         },
         "Open an app or send a message",
       ),
@@ -238,7 +238,7 @@ function desktop(state: GalleryState): m.Children {
         m(
           "span",
           { ...partAttrs("shortcut-label"), class: "relative w-full [filter:var(--desk-shortcut-label-shadow)]" },
-          m("span", { class: "rounded px-1 type-helper text-on-accent" }, app.display_name),
+          m("span", { class: "rounded px-1 type-helper text-accent-content" }, app.display_name),
         ),
       ]),
     ),
@@ -250,10 +250,10 @@ function tilesAndRows(): m.Children {
     m("div", { class: "grid w-96 grid-cols-2 gap-3" }, [
       m(
         "button",
-        { ...TILE_PART, type: "button", class: "rounded-xl border border-default bg-surface p-4 text-left" },
+        { ...TILE_PART, type: "button", class: "rounded-xl border border-default bg-body-surface-raised p-4 text-left" },
         [
           m("div", { class: "type-label" }, "A tile"),
-          m("div", { class: "type-helper text-secondary" }, "That opens something."),
+          m("div", { class: "type-helper text-body-content-secondary" }, "That opens something."),
         ],
       ),
       m(
@@ -262,15 +262,15 @@ function tilesAndRows(): m.Children {
           ...TILE_PART,
           type: "button",
           "aria-pressed": "true",
-          class: "rounded-xl border border-accent bg-surface p-4 text-left",
+          class: "rounded-xl border border-accent-surface bg-body-surface-raised p-4 text-left",
         },
         [
           m("div", { class: "type-label" }, "A chosen tile"),
-          m("div", { class: "type-helper text-secondary" }, "Pressed."),
+          m("div", { class: "type-helper text-body-content-secondary" }, "Pressed."),
         ],
       ),
     ]),
-    m("div", { class: "flex w-56 flex-col gap-1 bg-sidebar p-2" }, [
+    m("div", { class: "flex w-56 flex-col gap-1 bg-body-surface-secondary p-2" }, [
       m(
         "div",
         { ...LIST_ROW_PART, "aria-current": "true", class: "rounded-md bg-fill-active px-2 py-1.5 type-body" },
@@ -282,7 +282,7 @@ function tilesAndRows(): m.Children {
         m("span", { class: badgeClass("accent"), ...BADGE_PART }, "accent"),
         m(
           "span",
-          { ...partAttrs("tooltip"), class: "rounded-md bg-inverse px-2 py-1 type-helper text-on-accent" },
+          { ...partAttrs("tooltip"), class: "rounded-md bg-inverse-surface px-2 py-1 type-helper text-accent-content" },
           "A tooltip",
         ),
       ]),
@@ -311,7 +311,7 @@ function terminalPalette(): m.Children {
   if (!isPaletteSet) {
     return m(
       "p",
-      { "data-gallery-terminal": "own", class: "type-helper text-faint" },
+      { "data-gallery-terminal": "own", class: "type-helper text-body-content-tertiary" },
       "The terminal keeps its own colors.",
     );
   }
@@ -333,20 +333,20 @@ export function ThemeGallery(): m.Component<{ state: GalleryState }> {
     view(vnode) {
       const { state } = vnode.attrs;
       const { theme } = state;
-      return m("main", { "data-gallery-ready": theme.id, class: "h-dvh overflow-y-auto bg-page p-8 text-primary" }, [
+      return m("main", { "data-gallery-ready": theme.id, class: "h-dvh overflow-y-auto bg-body-surface p-8 text-body-content" }, [
         m("header", { class: "mb-8" }, [
           m("h1", { class: "type-heading-lg" }, theme.name),
-          m("p", { class: "type-body text-secondary" }, theme.description),
+          m("p", { class: "type-body text-body-content-secondary" }, theme.description),
           m(
             "p",
-            { "data-gallery-origin": "", class: "type-helper text-faint" },
+            { "data-gallery-origin": "", class: "type-helper text-body-content-tertiary" },
             `${theme.id} · ${theme.source === "builtin" ? "built in" : "made in this workspace"} · revision ${theme.revision}`,
           ),
           theme.problems.length === 0
             ? null
             : m(
                 "ul",
-                { "data-gallery-problems": "", class: "mt-2 type-helper text-danger" },
+                { "data-gallery-problems": "", class: "mt-2 type-helper text-danger-surface" },
                 theme.problems.map((problem) => m("li", problem)),
               ),
         ]),
@@ -365,7 +365,7 @@ export function ThemeGallery(): m.Component<{ state: GalleryState }> {
         section("Tiles, rows, badges, and tooltips", tilesAndRows()),
         section("The avatar", avatars()),
         section("The terminal", terminalPalette()),
-        m("p", { class: "type-helper text-faint" }, `Contract 1 parts: ${PARTS.join(", ")}`),
+        m("p", { class: "type-helper text-body-content-tertiary" }, `Contract 1 parts: ${PARTS.join(", ")}`),
       ]);
     },
   };

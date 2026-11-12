@@ -96,7 +96,7 @@
 .markdown-content {
   line-height: 1.4;
   font-size: var(--font-size-body);
-  color: var(--c-text-primary);
+  color: var(--c-body-content);
 }
 
 /* The agent's prose bubble sets its text a little looser than the transcript's markdown elsewhere, as a person's
@@ -174,8 +174,8 @@
 .markdown-content code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  background-color: var(--c-bg-code);
-  border: 1px solid var(--c-border-code);
+  background-color: var(--c-body-surface-secondary);
+  border: 1px solid var(--c-border-subtle);
   border-radius: 0.25em;
   padding: 0.08em 0.2em;
 }
@@ -184,8 +184,8 @@
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding: 14px 16px;
-  background-color: var(--c-bg-sidebar);
-  border: 1px solid var(--c-border);
+  background-color: var(--c-body-surface-secondary);
+  border: 1px solid var(--c-border-default);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
@@ -208,8 +208,8 @@
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding-left: 1em;
-  border-left: 3px solid var(--c-border);
-  color: var(--c-text-secondary);
+  border-left: 3px solid var(--c-border-default);
+  color: var(--c-body-content-secondary);
 }
 
 /* Inline chat images fit the message column and invite a click to enlarge
@@ -303,7 +303,7 @@
      together and the glyph sits on the first line rather than under it. */
   font-size: var(--font-size-helper);
   line-height: 1.55;
-  color: var(--c-text-faint);
+  color: var(--c-body-content-tertiary);
   transition: transform 150ms;
   pointer-events: none;
 }
@@ -327,16 +327,16 @@
   margin-top: 1.25em;
   margin-bottom: 1.25em;
   border: none;
-  border-top: 1px solid var(--c-border);
+  border-top: 1px solid var(--c-border-default);
 }
 
 .markdown-content a {
-  color: var(--c-accent);
+  color: var(--c-accent-surface);
   text-decoration: underline;
 }
 
 .markdown-content a:hover {
-  color: var(--c-accent-hover);
+  @apply text-accent-surface-hover;
 }
 
 .markdown-content table {
@@ -349,14 +349,14 @@
 
 .markdown-content th,
 .markdown-content td {
-  border: 1px solid var(--c-border);
+  border: 1px solid var(--c-border-default);
   padding: 0.5em 0.75em;
   text-align: left;
 }
 
 .markdown-content th {
   font-weight: 600;
-  background-color: var(--c-surface-secondary);
+  background-color: var(--c-body-surface-secondary);
 }
 
 .app-content::-webkit-scrollbar {
@@ -368,19 +368,19 @@
 }
 
 .app-content::-webkit-scrollbar-thumb {
-  background: var(--c-border);
+  background: var(--c-border-default);
   border-radius: var(--radius-sm);
 }
 
 .app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--c-text-faint);
+  background: var(--c-body-content-tertiary);
 }
 
 /* Chat panel: the chat document's front face */
 .chat-panel {
   /* The pane card's own surface: a chat fills its pane edge to edge, so anything
      else here would read as a second surface inside the card. */
-  background: var(--c-surface);
+  background: var(--c-body-surface-raised);
 }
 
 .chat-panel .app-footer {
@@ -421,7 +421,7 @@
   isolation: isolate;
   /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
      as a hole with two pictures behind it. */
-  background: var(--c-surface);
+  background: var(--c-body-surface-raised);
   border-radius: inherit;
   /* No `overflow: hidden` here: every child that needs clipping does its own, so a clip at the
      face's edge would only ever trim what a child casts past it. */
@@ -499,17 +499,17 @@
   cursor: pointer;
   /* Faint, like the model chip beside it: a view setting under the composer is not something to
      draw the eye down there. */
-  color: var(--c-text-faint);
+  color: var(--c-body-content-tertiary);
   /* The model selector's size, so the two ends of the bar read as one line of text. */
   font-size: var(--font-size-helper);
   transition: color var(--dur-base);
 }
 .terminal-view-toggle:hover {
-  color: var(--c-text-secondary);
+  color: var(--c-body-content-secondary);
 }
 /* Switched ON is a state rather than a hover, and says so at full strength. */
 .terminal-view-toggle[aria-checked="true"] {
-  color: var(--c-text-primary);
+  color: var(--c-body-content);
 }
 
 /* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
@@ -517,7 +517,7 @@
    and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
 .model-submenu-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--c-border) transparent;
+  scrollbar-color: var(--c-border-default) transparent;
 }
 .model-submenu-scroll::-webkit-scrollbar {
   width: 8px;
@@ -529,10 +529,10 @@
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: var(--radius-sm);
-  background-color: var(--c-border);
+  background-color: var(--c-border-default);
 }
 .model-submenu-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: var(--c-text-faint);
+  background-color: var(--c-body-content-tertiary);
 }
 
 /* The tiny muted thinking disclosure atop an assistant message
@@ -549,7 +549,7 @@
   background: transparent;
   padding: 0;
   font-size: var(--font-size-helper);
-  color: var(--c-text-secondary);
+  color: var(--c-body-content-secondary);
   opacity: 0.7;
   cursor: pointer;
 }
@@ -568,9 +568,9 @@
   display: none;
   margin: 2px 0 6px;
   padding: 6px 10px;
-  border-left: 2px solid var(--c-border);
+  border-left: 2px solid var(--c-border-default);
   font-size: var(--font-size-row);
-  color: var(--c-text-secondary);
+  color: var(--c-body-content-secondary);
   white-space: pre-wrap;
 }
 
@@ -615,7 +615,7 @@
   padding-left: --spacing(0.5);
   font-size: var(--font-size-helper);
   font-style: italic;
-  color: var(--c-text-primary);
+  color: var(--c-body-content);
   line-height: 1.5;
 }
 
@@ -625,10 +625,10 @@
    utility is the fallback where background-clip:text is unsupported. */
 .pv-tl-title--current > .pv-tl-title-text,
 .pv-tl-narration {
-  /* #bcbcbc: the highlight, deliberately lighter than --c-text-faint. A
+  /* #bcbcbc: the highlight, deliberately lighter than --c-body-content-tertiary. A
      design-system-exception -- it is one end of a moving gradient, not a text
      role, and at faint the sweep barely reads against the text it crosses. */
-  background: linear-gradient(90deg, var(--c-text-primary) 0%, #bcbcbc 40%, var(--c-text-primary) 80%);
+  background: linear-gradient(90deg, var(--c-body-content) 0%, #bcbcbc 40%, var(--c-body-content) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -651,7 +651,7 @@
   padding-left: --spacing(0.5);
   font-size: var(--font-size-helper);
   font-style: italic;
-  color: var(--c-text-secondary);
+  color: var(--c-body-content-secondary);
   line-height: 1.5;
 }
 .pv-tl-narration p,
@@ -666,10 +666,10 @@
 .pv-tl-narration--static code {
   font-size: 0.9em;
   padding: 0.1em 0.35em;
-  background: var(--c-border-faint);
+  background: var(--c-border-subtle);
   border-radius: var(--radius-sm);
   font-style: normal;
-  -webkit-text-fill-color: var(--c-text-secondary);
+  -webkit-text-fill-color: var(--c-body-content-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
@@ -682,12 +682,12 @@
 .pv-tl-narration--static pre {
   margin: 0.4em 0;
   padding: 0.5em 0.7em;
-  background: var(--c-border-faint);
+  background: var(--c-border-subtle);
   border-radius: var(--radius-sm);
   overflow-x: auto;
   font-size: 0.9em;
   font-style: normal;
-  -webkit-text-fill-color: var(--c-text-secondary);
+  -webkit-text-fill-color: var(--c-body-content-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
@@ -698,7 +698,7 @@
 }
 .pv-tl-narration a,
 .pv-tl-narration--static a {
-  color: var(--c-text-secondary);
+  color: var(--c-body-content-secondary);
   text-decoration: underline;
 }
 .pv-tl-narration ul,
@@ -719,7 +719,7 @@
 .pv-expanded p {
   margin: 0 0 0.6em;
   line-height: 1.5;
-  color: var(--c-text-primary);
+  color: var(--c-body-content);
 }
 .pv-expanded p:last-child {
   margin-bottom: 0;
@@ -771,13 +771,13 @@
   left: 2px;
   right: 2px;
   border-radius: 5px;
-  background: var(--c-border);
+  background: var(--c-border-default);
   pointer-events: none;
 }
 
 .transcript-scrollbar:hover .transcript-scrollbar-thumb,
 .transcript-scrollbar-shown .transcript-scrollbar-thumb {
-  background: color-mix(in srgb, var(--c-text-secondary) 55%, transparent);
+  background: color-mix(in srgb, var(--c-body-content-secondary) 55%, transparent);
 }
 
 /* The shape of a conversation whose transcript is loading (views/ChatPanel.ts). It fades in only
@@ -811,7 +811,7 @@
   width: 35%;
   height: --spacing(8);
   border-radius: var(--radius-lg, 12px);
-  background: var(--c-bg-user-bubble);
+  background: var(--c-primary-subtle-surface);
 }
 
 .message-list-skeleton-bar--short {

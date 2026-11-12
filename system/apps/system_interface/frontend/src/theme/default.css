@@ -41,8 +41,8 @@
   --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
   --desk-window-shadow: var(--shadow-overlay);
   /* Solid, not a pane you can see the desktop through: the bar is a surface the entries sit on. */
-  --desk-taskbar-surface: var(--c-surface);
-  --desk-backdrop: var(--c-bg);
+  --desk-taskbar-surface: var(--c-body-surface-raised);
+  --desk-backdrop: var(--c-body-surface);
   --desk-default-wallpaper: url(/wallpapers/bundled/arcs);
   --desk-icon-size: 48px;
   /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps

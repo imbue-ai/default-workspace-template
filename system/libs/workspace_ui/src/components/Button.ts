@@ -54,7 +54,7 @@ const BTN_BASE =
   "btn inline-flex items-center justify-center gap-1.5 " +
   `${TEXT_BODY_SIZE} leading-none whitespace-nowrap border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface " +
   "disabled:opacity-40 disabled:cursor-not-allowed " +
   "not-disabled:not-aria-disabled:active:translate-y-px";
 
@@ -69,38 +69,38 @@ const BTN_READONLY = "cursor-default";
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "bg-accent text-on-accent border-accent not-disabled:not-aria-disabled:hover:bg-accent-hover not-disabled:not-aria-disabled:hover:border-accent-hover",
+    "bg-accent-surface text-accent-content border-accent-surface not-disabled:not-aria-disabled:hover:bg-accent-surface-hover not-disabled:not-aria-disabled:hover:border-accent-surface-hover",
   // The fill-tinted variants pair hover with the one-step-deeper pressed tint;
   // the solid variants keep their own hover colours and the shared translate-y
   // press cue instead.
   secondary:
-    "bg-surface text-primary border-default not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:active:bg-fill-active",
+    "bg-body-surface-raised text-body-content border-default not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:active:bg-fill-active",
   ghost:
-    "bg-transparent text-secondary border-transparent not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:hover:text-primary not-disabled:not-aria-disabled:active:bg-fill-active",
+    "bg-transparent text-body-content-secondary border-transparent not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:hover:text-body-content not-disabled:not-aria-disabled:active:bg-fill-active",
   destructive:
-    "bg-danger text-on-accent border-danger not-disabled:not-aria-disabled:hover:bg-danger-hover not-disabled:not-aria-disabled:hover:border-danger-hover",
+    "bg-danger-surface text-accent-content border-danger-surface not-disabled:not-aria-disabled:hover:bg-danger-surface-hover not-disabled:not-aria-disabled:hover:border-danger-surface-hover",
   "ghost-destructive":
-    "bg-transparent text-danger border-transparent not-disabled:not-aria-disabled:hover:bg-danger-surface",
+    "bg-transparent text-danger-surface border-transparent not-disabled:not-aria-disabled:hover:bg-danger-subtle-surface",
   inverse:
-    "bg-inverse text-on-accent border-inverse not-disabled:not-aria-disabled:hover:bg-inverse-hover not-disabled:not-aria-disabled:hover:border-inverse-hover",
+    "bg-inverse-surface text-accent-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
   // For controls sitting on a dark overlay (the lightbox). The whites are raw
   // (white/85, white/15) like the overlay's own black scrim -- there is no
   // dark-surface tint token, and on-accent covers only the full-strength hover.
   "ghost-inverse":
-    "bg-transparent text-white/85 border-transparent not-disabled:not-aria-disabled:hover:bg-white/15 not-disabled:not-aria-disabled:hover:text-on-accent",
-  stop: "bg-stop text-on-accent border-stop not-disabled:not-aria-disabled:hover:bg-stop-hover not-disabled:not-aria-disabled:hover:border-stop-hover",
+    "bg-transparent text-white/85 border-transparent not-disabled:not-aria-disabled:hover:bg-white/15 not-disabled:not-aria-disabled:hover:text-accent-content",
+  stop: "bg-inverse-surface text-accent-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
 };
 
 // The selected (accent-tint) palette replaces the variant's colors outright --
 // the builder resolves the conflict in code instead of leaning on the cascade.
 // Exported for the one decorative copy of a selected control (the fast-mode
 // modal's inline illustration), so its tint cannot drift from the real thing.
-// border-transparent, not border-accent: the tint alone says "on" -- an
+// border-transparent, not border-accent-surface: the tint alone says "on" -- an
 // outline reads as a frame around the control (most visibly on the modal's
 // inline illustration), and ghost <-> selected keeps identical geometry.
-export const BTN_SELECTED = "bg-accent-light text-accent border-transparent";
+export const BTN_SELECTED = "bg-accent-subtle-surface text-accent-surface border-transparent";
 // The neutral counterpart: the ghost variant's own pressed tint, held.
-export const BTN_PRESSED = "bg-fill-active text-primary border-transparent";
+export const BTN_PRESSED = "bg-fill-active text-body-content border-transparent";
 
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {

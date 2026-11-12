@@ -18,9 +18,9 @@ describe("readDesignTokens over the shared stylesheet", () => {
   });
 
   it("names each color by its utility and resolves it to the value :root declares", () => {
-    const accent = colors.find((color) => color.utility === "bg-accent");
+    const accent = colors.find((color) => color.utility === "bg-accent-surface");
     expect(accent).toMatchObject({ name: "accent", variable: "c-accent", value: "#2f6b4f" });
-    expect(colors.find((color) => color.utility === "text-primary")?.variable).toBe("c-text-primary");
+    expect(colors.find((color) => color.utility === "text-body-content")?.variable).toBe("c-text-primary");
     expect(colors.find((color) => color.utility === "border-default")?.variable).toBe("c-border");
     expect(colors.find((color) => color.name === "danger-border")?.role).toBe("border");
   });

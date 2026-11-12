@@ -39,10 +39,10 @@ const PAGE_FOLD =
 /** The page, white, with its outline and fold. Below 32px the line is drawn heavier and darker, or a page in a list
  *  row would fade into the row. */
 function pageSvg(isSmall: boolean): string {
-  const color = isSmall ? "var(--c-text-faint)" : "var(--c-border-strong)";
+  const color = isSmall ? "var(--c-body-content-tertiary)" : "var(--c-border-default)";
   const width = isSmall ? 4 : 1.5;
   return (
-    `<path d="${PAGE_OUTLINE}" style="fill:var(--c-surface);stroke:${color}" stroke-width="${width}" stroke-linejoin="round"/>` +
+    `<path d="${PAGE_OUTLINE}" style="fill:var(--c-body-surface-raised);stroke:${color}" stroke-width="${width}" stroke-linejoin="round"/>` +
     `<path d="${PAGE_FOLD}" fill="none" style="stroke:${color}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`
   );
 }
@@ -53,7 +53,7 @@ const PAGE_LINES_PATH =
 /** The ruled lines on a page with no tag, drawn by hand like the page and leaning 1 degree, as a tag does.
  *  Below 32px they are drawn heavier and darker, or a page in a list row would look blank. */
 function pageLinesSvg(isSmall: boolean): string {
-  const color = isSmall ? "var(--c-text-faint)" : "var(--c-border-strong)";
+  const color = isSmall ? "var(--c-body-content-tertiary)" : "var(--c-border-default)";
   const width = isSmall ? 4.5 : 2.5;
   return (
     `<path transform="rotate(1 32 37)" d="${PAGE_LINES_PATH}" fill="none" style="stroke:${color}" ` +
@@ -100,7 +100,7 @@ export function cornerBadge(badge: IconBadge, size: number): m.Vnode {
   return m(
     "span.files-corner-badge",
     {
-      class: `absolute flex items-center justify-center rounded-full bg-surface text-secondary ${size < 32 ? "" : "border border-strong"}`,
+      class: `absolute flex items-center justify-center rounded-full bg-body-surface-raised text-body-content-secondary ${size < 32 ? "" : "border border-default"}`,
       style: `width:${disc}px;height:${disc}px;right:${right}px;bottom:${bottom}px`,
     },
     m.trust(

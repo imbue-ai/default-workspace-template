@@ -49,7 +49,7 @@ function usedColorTokens(module: Record<string, unknown>): Set<string> {
   for (const bare of usedClasses(module)) {
     const match = /^(?:text|bg|border|ring|from|to|decoration|outline|divide)-(.+)$/.exec(bare);
     if (match === null) continue;
-    // `bg-primary/55` is the same token at an opacity; the suffix is not part of its name.
+    // `bg-body-content/55` is the same token at an opacity; the suffix is not part of its name.
     const token = match[1].split("/")[0];
     // Arbitrary values carry their own color; sizes and styles are not colors at all.
     if (token.startsWith("[") || token.startsWith("(") || /^(\d|xs$|sm$|base$|lg$|xl$|\dxl$)/.test(token)) continue;

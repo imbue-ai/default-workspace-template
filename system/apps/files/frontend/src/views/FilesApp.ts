@@ -98,12 +98,12 @@ function sidebarRow(app: FilesController, row: SidebarRow, isCurrent: boolean): 
         : hoverTooltipAttrs(row.tooltip.text, "right", { maxWidth: 260, detail: row.tooltip.detail })),
       class: `flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) ${
         model.dropTarget === row.path
-          ? "bg-accent-light outline-2 -outline-offset-2 outline-accent"
+          ? "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface"
           : isCurrent
-            ? "bg-fill-active text-primary"
+            ? "bg-fill-active text-body-content"
             : row.isFaint === true
-              ? "text-faint hover:bg-fill-hover hover:text-secondary"
-              : "text-secondary hover:bg-fill-hover hover:text-primary"
+              ? "text-body-content-tertiary hover:bg-fill-hover hover:text-body-content-secondary"
+              : "text-body-content-secondary hover:bg-fill-hover hover:text-body-content"
       }`,
       onclick: () => {
         if (row.onOpen !== undefined) row.onOpen();
@@ -140,7 +140,7 @@ function mark(kind: string, label: string, body: m.Children, extra: string): m.V
 
 /** A filled disc with an exclamation: the share's sync stopped and needs a look. */
 function failedMark(): m.Vnode {
-  return mark("failed", "Sync stopped", m.trust(alertDotIcon(12)), "text-warning");
+  return mark("failed", "Sync stopped", m.trust(alertDotIcon(12)), "text-warn-surface");
 }
 
 function readOnlyMark(): m.Vnode {
@@ -148,7 +148,7 @@ function readOnlyMark(): m.Vnode {
     "read-only",
     "Read-only",
     "Read-only",
-    "h-4 items-center rounded-full border border-border px-1 type-tag text-faint",
+    "h-4 items-center rounded-full border border-border px-1 type-tag text-body-content-tertiary",
   );
 }
 
@@ -172,7 +172,7 @@ function shareRow(app: FilesController, connections: Connections, share: Share):
 function sectionHeading(label: string, extra: m.Children = null): m.Vnode {
   return m(
     "div.files-sidebar-heading",
-    { class: "flex h-8 shrink-0 items-center gap-1 px-2 pt-3 pb-1 type-section text-faint" },
+    { class: "flex h-8 shrink-0 items-center gap-1 px-2 pt-3 pb-1 type-section text-body-content-tertiary" },
     [m("span", { class: "min-w-0 flex-1 truncate" }, label), extra],
   );
 }
@@ -231,12 +231,12 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
           model.connectionsError ??
           (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
         connectedBody =
-          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, empty);
+          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-body-content-tertiary" }, empty);
       }
       return m(
         "nav.files-sidebar",
         {
-          class: `flex shrink-0 flex-col bg-surface ${
+          class: `flex shrink-0 flex-col bg-body-surface-raised ${
             floating ? "fixed inset-y-0 left-0 z-(--z-overlay) max-w-[85vw] shadow-overlay" : "relative"
           }`,
           style: `width:${model.preferences.sidebarWidth}px`,
@@ -252,7 +252,7 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
                   {
                     tabindex: 0,
                     "aria-label": CONNECTED_INFO,
-                    class: "flex shrink-0 cursor-help text-faint hover:text-secondary",
+                    class: "flex shrink-0 cursor-help text-body-content-tertiary hover:text-body-content-secondary",
                     ...hoverTooltipAttrs(CONNECTED_INFO, "right", { maxWidth: 220 }),
                   },
                   m.trust(icon("info", { size: 13 })),
@@ -266,7 +266,7 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
                       type: "button",
                       "data-action": "manage-connected",
                       class:
-                        "flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) text-faint hover:bg-fill-hover hover:text-primary",
+                        "flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) text-body-content-tertiary hover:bg-fill-hover hover:text-body-content",
                       onclick: () => {
                         app.isSidebarOpen = false;
                         app.manageConnected();
@@ -330,7 +330,7 @@ function Breadcrumb(): m.Component<{ app: FilesController }> {
         crumbs.map((crumb, index) => {
           const isLast = index === crumbs.length - 1;
           return m.fragment({ key: `${index}:${crumb.path}` }, [
-            index === 0 ? null : m.trust(icon("chevron-right", { size: 12, className: "shrink-0 text-faint" })),
+            index === 0 ? null : m.trust(icon("chevron-right", { size: 12, className: "shrink-0 text-body-content-tertiary" })),
             m(
               "button.files-crumb",
               {
@@ -339,10 +339,10 @@ function Breadcrumb(): m.Component<{ app: FilesController }> {
                 [DROP_FOLDER_ATTR]: crumb.path,
                 class: `shrink-0 cursor-pointer rounded-md px-1.5 py-1 whitespace-nowrap text-(length:--font-size-row) ${
                   model.dropTarget === crumb.path
-                    ? "bg-accent-light text-primary"
+                    ? "bg-accent-subtle-surface text-body-content"
                     : isLast
-                      ? "font-semibold text-primary"
-                      : "text-secondary hover:bg-fill-hover hover:text-primary"
+                      ? "font-semibold text-body-content"
+                      : "text-body-content-secondary hover:bg-fill-hover hover:text-body-content"
                 }`,
                 onclick: () => {
                   if (crumb.path !== model.folder) model.navigate(crumb.path);
@@ -431,7 +431,7 @@ function Toolbar(): m.Component<{ app: FilesController }> {
         ),
         optionsMenu.view(optionRows),
       ]);
-      return m("header.files-toolbar", { class: "flex shrink-0 items-center gap-1 bg-surface px-3 py-1" }, [
+      return m("header.files-toolbar", { class: "flex shrink-0 items-center gap-1 bg-body-surface-raised px-3 py-1" }, [
         app.isNarrow
           ? iconButton("Show sidebar", "panel-left", {
               "data-action": "sidebar",
@@ -487,13 +487,13 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
     "div.files-sync-notice",
     {
       role: "status",
-      class: "mx-3 mt-3 flex items-start gap-2 rounded-lg bg-warning-surface/50 px-3 py-2 type-helper",
+      class: "mx-3 mt-3 flex items-start gap-2 rounded-lg bg-warn-subtle-surface/50 px-3 py-2 type-helper",
     },
     [
-      m.trust(alertDotIcon(14, "mt-0.5 shrink-0 text-warning")),
+      m.trust(alertDotIcon(14, "mt-0.5 shrink-0 text-warn-surface")),
       m("div", [
-        m("div", { class: "font-medium text-primary" }, notice.title),
-        m("div", { class: "text-secondary" }, notice.detail),
+        m("div", { class: "font-medium text-body-content" }, notice.title),
+        m("div", { class: "text-body-content-secondary" }, notice.detail),
       ]),
     ],
   );
@@ -501,8 +501,8 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
 
 function message(title: string, detail: string, retry?: () => void): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
-    m("div", { class: "type-label text-secondary" }, title),
-    detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-faint" }, detail),
+    m("div", { class: "type-label text-body-content-secondary" }, title),
+    detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-body-content-tertiary" }, detail),
     retry === undefined ? null : m(Button, { sm: true, extra: "mt-3", onclick: retry }, "Try again"),
   ]);
 }
@@ -530,13 +530,13 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
         "section.files-uploads",
         {
           class:
-            "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-default bg-surface shadow-overlay",
+            "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-default bg-body-surface-raised shadow-overlay",
         },
         [
           m("div", { class: "flex items-center gap-2 px-3 pt-2.5 pb-2" }, [
             m("div", { class: "min-w-0 flex-1" }, [
-              m("div.files-uploads-summary", { class: "type-label text-primary" }, summary),
-              m("div", { class: "type-helper text-faint" }, `${formatSize(loaded)} of ${formatSize(total)}`),
+              m("div.files-uploads-summary", { class: "type-label text-body-content" }, summary),
+              m("div", { class: "type-helper text-body-content-tertiary" }, `${formatSize(loaded)} of ${formatSize(total)}`),
             ]),
             busy
               ? m(Button, { sm: true, variant: "ghost", onclick: () => uploads.cancelAll() }, "Cancel")
@@ -555,7 +555,7 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
             "div",
             { class: "mx-3 mb-2 h-1 overflow-hidden rounded-full bg-fill-hover" },
             m("div", {
-              class: `h-full rounded-full ${failed > 0 && !busy ? "bg-danger" : "bg-accent"}`,
+              class: `h-full rounded-full ${failed > 0 && !busy ? "bg-danger-surface" : "bg-accent-surface"}`,
               style: `width:${percent}%`,
             }),
           ),
@@ -569,16 +569,16 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
                 [
                   m(
                     "span",
-                    { class: "min-w-0 flex-1 truncate text-primary", title: item.error ?? item.name },
+                    { class: "min-w-0 flex-1 truncate text-body-content", title: item.error ?? item.name },
                     item.name,
                   ),
                   m(
                     "span",
-                    { class: `shrink-0 ${item.status === "failed" ? "text-danger" : "text-faint"}` },
+                    { class: `shrink-0 ${item.status === "failed" ? "text-danger-surface" : "text-body-content-tertiary"}` },
                     item.status === "uploading"
                       ? `${Math.round((item.loaded / Math.max(item.file.size, 1)) * 100)}%`
                       : item.status === "done"
-                        ? m.trust(icon("check", { size: 13, className: "text-success" }))
+                        ? m.trust(icon("check", { size: 13, className: "text-success-surface" }))
                         : item.status === "failed"
                           ? "Failed"
                           : item.status === "canceled"
@@ -680,7 +680,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
     view({ attrs: { app } }) {
       const model = app.model;
       const fileDropOnFolder = model.dropTarget !== null && model.dropTarget === model.folder;
-      return m("div.files-app", { class: "flex h-screen min-h-0 bg-surface text-primary" }, [
+      return m("div.files-app", { class: "flex h-screen min-h-0 bg-body-surface-raised text-body-content" }, [
         app.isNarrow ? null : m(Sidebar, { app, floating: false }),
         m("div", { class: `flex min-w-0 flex-1 flex-col ${app.isNarrow ? "" : "border-l border-default"}` }, [
           m(Toolbar, { app }),
@@ -689,7 +689,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
             {
               [FOLDER_SURFACE_ATTR]: model.folder,
               class: `relative min-h-0 flex-1 ${app.viewMode === "columns" ? "overflow-hidden" : "overflow-y-auto"} ${
-                fileDropOnFolder ? "bg-accent-light/50 outline-2 -outline-offset-4 outline-accent outline-dashed" : ""
+                fileDropOnFolder ? "bg-accent-subtle-surface/50 outline-2 -outline-offset-4 outline-accent-surface outline-dashed" : ""
               }`,
               onclick: () => {
                 if (model.selection.length > 0) model.clearSelection();

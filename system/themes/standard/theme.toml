@@ -1,9 +1,9 @@
 # The standard look, and the base every other theme starts from. Its tokens are the defaults compiled into
 # every app (system/libs/workspace_ui/src/base.css and the shell's theme/default.css), so it has no style files.
-contract = 1
+contract = 2
 id = "standard"
 name = "Standard"
-description = "The workspace's own look: warm neutrals, a green accent, and hand-drawn two-color icon tiles."
+description = "The Imbue look: warm paper neutrals, near-black ink, and colors drawn from the workspace color, with hand-drawn two-color icon tiles."
 
 [icons]
 guide = "icons/guide.md"

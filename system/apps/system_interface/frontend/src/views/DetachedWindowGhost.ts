@@ -40,18 +40,18 @@ export const DetachedWindowGhost: m.Component<DetachedWindowGhostAttrs> = {
         // windows above, and it takes the press itself (the layer it sits in is inert).
         class:
           "detached-window-ghost pointer-events-auto absolute flex flex-col items-center justify-center gap-3 " +
-          "rounded-(--desk-window-radius) border-2 border-dashed border-accent bg-surface/60 p-4 text-center " +
+          "rounded-(--desk-window-radius) border-2 border-dashed border-accent-surface bg-body-surface-raised/60 p-4 text-center " +
           "select-none",
         style: { ...rectStyle(rect), zIndex: windowChromeZIndex(stackIndex) },
       },
       [
-        m("span", { class: "flex items-center text-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
+        m("span", { class: "flex items-center text-body-content-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
         m(
           "div",
-          { class: "window-title max-w-full truncate text-(length:--font-size-row) font-medium text-primary" },
+          { class: "window-title max-w-full truncate text-(length:--font-size-row) font-medium text-body-content" },
           title,
         ),
-        m("div", { class: "text-(length:--font-size-row) text-faint" }, "Open in its own window"),
+        m("div", { class: "text-(length:--font-size-row) text-body-content-tertiary" }, "Open in its own window"),
         m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
           m(Button, { variant: "secondary", sm: true, "data-ghost-action": "show", onclick: onShow }, "Show"),
           m(Button, { variant: "secondary", sm: true, "data-ghost-action": "hide", onclick: onHide }, "Hide"),

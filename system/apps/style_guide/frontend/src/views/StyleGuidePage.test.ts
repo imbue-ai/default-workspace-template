@@ -44,8 +44,8 @@ describe("StyleGuidePage", () => {
     const colors = tokens.colorGroups.flatMap((group) => group.colors);
     expect(root.querySelectorAll(".color-swatch")).toHaveLength(colors.length);
     const accent = root.querySelector<HTMLElement>("#color-accent [data-color-sample]");
-    expect(accent?.style.backgroundColor).toBe("var(--c-accent)");
-    expect(root.querySelector("#color-accent")?.textContent).toContain("bg-accent");
+    expect(accent?.style.backgroundColor).toBe("var(--c-accent-surface)");
+    expect(root.querySelector("#color-accent")?.textContent).toContain("bg-accent-surface");
   });
 
   it("draws every icon of the shared set and every button variant and badge tone", () => {
@@ -125,7 +125,7 @@ describe("StyleGuidePage", () => {
     unmountViews();
     const theme = document.createElement("style");
     theme.setAttribute("data-workspace-theme", "");
-    theme.textContent = ":root { --c-accent: #000080; }";
+    theme.textContent = ":root { --c-accent-surface: #000080; }";
     document.head.appendChild(theme);
     try {
       const root = mountPage();

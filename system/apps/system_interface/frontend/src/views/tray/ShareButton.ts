@@ -24,8 +24,8 @@ export const ShareButton: m.Component = {
         "data-tray-share": "",
         class:
           "tray-share flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-dashed " +
-          "border-strong bg-transparent p-0 text-secondary outline-none hover:bg-fill-hover hover:text-primary " +
-          "focus-visible:ring-2 focus-visible:ring-accent",
+          "border-default bg-transparent p-0 text-body-content-secondary outline-none hover:bg-fill-hover hover:text-body-content " +
+          "focus-visible:ring-2 focus-visible:ring-accent-surface",
         "aria-label": "Share this workspace",
         ...hoverTooltipAttrs("Share this workspace", "above"),
         onclick: openWorkspaceShareSettings,

@@ -245,14 +245,14 @@ function renderPicker(dialog: OpenDialog): m.Children {
   if (dialog.options === null) {
     return m(
       "p",
-      { class: "switch-dialog-loading text-(length:--font-size-helper) text-secondary" },
+      { class: "switch-dialog-loading text-(length:--font-size-helper) text-body-content-secondary" },
       "Loading models…",
     );
   }
   if (dialog.optionsError !== null) {
     return m(
       "p",
-      { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" },
+      { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-body-content-secondary" },
       `Could not load ${harness}'s models (${dialog.optionsError}). ` +
         `${whenNothingIsPicked}; you can change it once it is running.`,
     );
@@ -260,7 +260,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
   if (dialog.options.length === 0) {
     return m(
       "p",
-      { class: "switch-dialog-no-models text-(length:--font-size-helper) text-secondary" },
+      { class: "switch-dialog-no-models text-(length:--font-size-helper) text-body-content-secondary" },
       `${whenNothingIsPicked}; you can change it once it is running.`,
     );
   }

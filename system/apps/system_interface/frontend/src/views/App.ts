@@ -1045,7 +1045,7 @@ export function App(): m.Component<AppAttrs> {
     return {
       desktop: viewed,
       owner,
-      color: owner?.color ?? "var(--c-text-faint)",
+      color: owner?.color ?? "var(--c-body-content-tertiary)",
       onStopViewing: () => void current.stopViewing(),
     };
   }
@@ -1331,7 +1331,7 @@ export function App(): m.Component<AppAttrs> {
       const soloWindowId = current.getSoloWindowId();
       if (soloWindowId !== null) {
         // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
-        return m("div", { class: "app-layout flex h-dvh flex-col bg-page" }, [
+        return m("div", { class: "app-layout flex h-dvh flex-col bg-body-surface" }, [
           m(UpdateStalenessBanner),
           m(UpdateNoticeBanner, { store: current }),
           m(SoloView, {
@@ -1415,7 +1415,7 @@ export function App(): m.Component<AppAttrs> {
               desktop === null
                 ? m(
                     "div",
-                    { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
+                    { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-body-content-tertiary" },
                     state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
                   )
                 : m(Backdrop, {

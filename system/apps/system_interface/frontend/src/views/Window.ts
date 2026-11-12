@@ -105,10 +105,10 @@ export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
     "div",
-    { "data-stopped-app": "", class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
+    { "data-stopped-app": "", class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface-raised" },
     [
-      m("div", { class: "type-label text-primary" }, label),
-      m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
+      m("div", { class: "type-label text-body-content" }, label),
+      m("div", { class: "text-(length:--font-size-row) text-body-content-tertiary" }, detail),
     ],
   );
 }
@@ -147,13 +147,13 @@ function fullscreenStrip(attrs: WindowAttrs): m.Vnode {
       {
         "data-fullscreen-strip-controls": "",
         class:
-          "hidden h-(--desk-title-bar-height) items-center gap-2 border-b border-default bg-surface px-2 " +
-          "text-primary group-focus-within:flex group-hover:flex",
+          "hidden h-(--desk-title-bar-height) items-center gap-2 border-b border-default bg-body-surface-raised px-2 " +
+          "text-body-content group-focus-within:flex group-hover:flex",
       },
       [
         m(
           "span",
-          { "data-fullscreen-hint": "", class: "min-w-0 truncate text-(length:--font-size-row) text-secondary" },
+          { "data-fullscreen-hint": "", class: "min-w-0 truncate text-(length:--font-size-row) text-body-content-secondary" },
           fullscreenStripHint(immersive),
         ),
         m("span", { class: "flex-1" }),

@@ -27,9 +27,9 @@ import { MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/the
  *  that sets none. */
 const SUBMENU_DEFAULT_MAX_HEIGHT = 2 * 5 + 10 * 32;
 
-const TONE_CLASS = { default: "text-primary", danger: "text-danger", quiet: "text-faint" } as const;
+const TONE_CLASS = { default: "text-body-content", danger: "text-danger-surface", quiet: "text-body-content-tertiary" } as const;
 const KEY_VALUE_CLASS = "ml-auto flex min-w-0 items-center gap-1.5";
-const KEY_SUB_CLASS = "type-helper text-faint";
+const KEY_SUB_CLASS = "type-helper text-body-content-tertiary";
 
 export interface SlidingMenuTrackOptions {
   /** Run whenever the submenu shown changes, with its key or null: where state scoped to a submenu is reset. */
@@ -75,7 +75,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             role: "menuitem",
             class: menuRowClass({
               tightGap: row.tightGap,
-              extra: `${isDisabled ? "text-faint cursor-default" : TONE_CLASS[row.tone ?? "default"]} ${row.extraClass ?? ""}`,
+              extra: `${isDisabled ? "text-body-content-tertiary cursor-default" : TONE_CLASS[row.tone ?? "default"]} ${row.extraClass ?? ""}`,
             }),
             ...MENU_ITEM_PART,
             "aria-disabled": isDisabled ? "true" : undefined,
@@ -118,11 +118,11 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             },
           },
           [
-            m("span", { class: "text-secondary" }, row.label),
+            m("span", { class: "text-body-content-secondary" }, row.label),
             m("span", { class: KEY_VALUE_CLASS }, [
               valueText(row.value, row.truncateValue),
               row.sub === undefined ? null : m("span", { class: KEY_SUB_CLASS }, `(${row.sub})`),
-              m("span", { class: "shrink-0 text-faint" }, m.trust(icon("chevron-right", { size: 13 }))),
+              m("span", { class: "shrink-0 text-body-content-tertiary" }, m.trust(icon("chevron-right", { size: 13 }))),
             ]),
           ],
         );
@@ -137,7 +137,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             ...keyAttrs(row.key, row.tooltip),
           },
           [
-            m("span", { class: "text-secondary" }, row.label),
+            m("span", { class: "text-body-content-secondary" }, row.label),
             m("span", { class: KEY_VALUE_CLASS }, [
               valueText(row.value, row.truncateValue),
               row.sub === undefined ? null : m("span", { class: KEY_SUB_CLASS }, `(${row.sub})`),
@@ -166,7 +166,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
         "button",
         {
           type: "button",
-          class: menuRowClass({ tightGap: true, extra: "text-secondary" }),
+          class: menuRowClass({ tightGap: true, extra: "text-body-content-secondary" }),
           ...MENU_ITEM_PART,
           "data-menu-track-back": "",
           onclick: (event: MouseEvent) => {

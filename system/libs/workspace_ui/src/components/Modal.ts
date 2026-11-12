@@ -36,19 +36,19 @@ export const MODAL_OVERLAY_CLASS =
   "animate-[modal-overlay-in_150ms_ease-out]";
 
 export const MODAL_CARD_CLASS =
-  "modal-card w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
+  "modal-card w-[420px] max-w-[90vw] p-6 bg-body-surface-raised border border-default rounded-lg shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 
 export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
 
-export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-primary";
+export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-body-content";
 
 // Dialog body copy reads at full strength by default -- it is the point of the
 // dialog. A genuinely secondary line (a footnote, a hint) opts into
-// text-secondary / text-faint at its own call site.
-export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-primary";
+// text-body-content-secondary / text-body-content-tertiary at its own call site.
+export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-body-content";
 
-export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-secondary`;
+export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-body-content-secondary`;
 
 export const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
 

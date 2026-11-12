@@ -39,7 +39,7 @@ export const SoloView: m.Component<SoloViewAttrs> = {
               "div",
               {
                 "data-solo-window-gone": "",
-                class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint",
+                class: "flex h-full items-center justify-center text-(length:--font-size-row) text-body-content-tertiary",
               },
               "This window is no longer open.",
             ),

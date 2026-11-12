@@ -80,8 +80,8 @@ describe("Button quiet option", () => {
 describe("Button selected option", () => {
   it("swaps the ghost palette for the accent tint, dropping the hover utilities", () => {
     const element = renderButton({ variant: "ghost", selected: true });
-    expect(element.classList.contains("bg-accent-light")).toBe(true);
-    expect(element.classList.contains("text-accent")).toBe(true);
+    expect(element.classList.contains("bg-accent-subtle-surface")).toBe(true);
+    expect(element.classList.contains("text-accent-surface")).toBe(true);
     const hoverUtilities = Array.from(element.classList).filter((name) => name.includes("hover:"));
     expect(hoverUtilities).toEqual([]);
   });
@@ -98,15 +98,15 @@ describe("Button pressed option", () => {
   it("holds the ghost's own pressed tint in the text colour, with no accent and no hover utilities", () => {
     const element = renderButton({ variant: "ghost", pressed: true });
     expect(element.classList.contains("bg-fill-active")).toBe(true);
-    expect(element.classList.contains("text-primary")).toBe(true);
-    expect(element.classList.contains("bg-accent-light")).toBe(false);
+    expect(element.classList.contains("text-body-content")).toBe(true);
+    expect(element.classList.contains("bg-accent-subtle-surface")).toBe(false);
     expect(Array.from(element.classList).filter((name) => name.includes("hover:"))).toEqual([]);
   });
 
   it("wins over selected", () => {
     const element = renderButton({ variant: "ghost", pressed: true, selected: true });
     expect(element.classList.contains("bg-fill-active")).toBe(true);
-    expect(element.classList.contains("bg-accent-light")).toBe(false);
+    expect(element.classList.contains("bg-accent-subtle-surface")).toBe(false);
   });
 });
 

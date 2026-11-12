@@ -206,7 +206,7 @@ export function themeRecord(id: string, overrides: Partial<ThemeRecord> = {}): T
 
 /** A catalog of the standard theme and the named ones, with no workspace default. */
 export function themeCatalog(...records: ThemeRecord[]): ThemeCatalog {
-  return { default: null, themes: [themeRecord("standard"), ...records] };
+  return { default: null, themes: [themeRecord("standard"), ...records], workspaceColor: null };
 }
 
 /** A focus-mode shortcut for an app's ``new`` launch path, in the cell given. */

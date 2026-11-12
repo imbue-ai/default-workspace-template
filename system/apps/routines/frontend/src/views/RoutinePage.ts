@@ -23,15 +23,15 @@ export interface RoutinePageAttrs {
 }
 
 const OUTCOME_CLASS: Record<Outcome, string> = {
-  SUCCEEDED: "text-success",
-  FAILED: "text-danger",
-  TIMED_OUT: "text-danger",
-  INTERRUPTED: "text-warning",
+  SUCCEEDED: "text-success-surface",
+  FAILED: "text-danger-surface",
+  TIMED_OUT: "text-danger-surface",
+  INTERRUPTED: "text-warn-surface",
 };
 
 /** One run as a row that is a link to its page, like a routine's row on the list (its chat is linked there). */
 function runRow(run: RunRecord): m.Vnode {
-  const outcomeClass = run.outcome === null ? "text-accent" : OUTCOME_CLASS[run.outcome];
+  const outcomeClass = run.outcome === null ? "text-accent-surface" : OUTCOME_CLASS[run.outcome];
   return m(
     "a",
     {
@@ -42,14 +42,14 @@ function runRow(run: RunRecord): m.Vnode {
       "data-run": run.run_id,
     },
     [
-      m("div", { class: "whitespace-nowrap text-primary" }, run.when_text),
-      m("div", { class: "whitespace-nowrap text-secondary" }, run.trigger === "MANUAL" ? "manual" : "automatic"),
+      m("div", { class: "whitespace-nowrap text-body-content" }, run.when_text),
+      m("div", { class: "whitespace-nowrap text-body-content-secondary" }, run.trigger === "MANUAL" ? "manual" : "automatic"),
       m("div", { class: `font-semibold whitespace-nowrap ${outcomeClass}` }, run.outcome_text),
-      m("div", { class: "whitespace-nowrap text-secondary" }, run.duration_text),
-      m("div", { class: "min-w-0 text-secondary" }, [
+      m("div", { class: "whitespace-nowrap text-body-content-secondary" }, run.duration_text),
+      m("div", { class: "min-w-0 text-body-content-secondary" }, [
         run.summary,
         run.warnings.includes("RESTARTED_PREVIOUS_RUN")
-          ? m("span", { class: "ml-2 text-warning" }, "The previous run was still going and was cut off.")
+          ? m("span", { class: "ml-2 text-warn-surface" }, "The previous run was still going and was cut off.")
           : null,
       ]),
     ],
@@ -67,36 +67,36 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
       m(
         "nav",
         { class: "type-helper" },
-        m("a", { href: "/", class: "text-secondary hover:underline" }, "All routines"),
+        m("a", { href: "/", class: "text-body-content-secondary hover:underline" }, "All routines"),
       ),
       m("header", { class: "flex flex-col gap-2" }, [
         m("div", { class: "flex flex-wrap items-center gap-3" }, [
-          m("h1", { class: "type-heading-lg text-primary" }, row.title),
+          m("h1", { class: "type-heading-lg text-body-content" }, row.title),
           healthPill(row),
         ]),
-        m("p", { class: "type-body text-secondary" }, row.what),
+        m("p", { class: "type-body text-body-content-secondary" }, row.what),
         row.health_detail === ""
           ? null
-          : m("p", { class: "type-helper text-secondary", "data-health-detail": "" }, row.health_detail),
+          : m("p", { class: "type-helper text-body-content-secondary", "data-health-detail": "" }, row.health_detail),
       ]),
       m("dl", { class: "grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 type-helper" }, [
-        m("dt", { class: "text-faint" }, "Schedule"),
-        m("dd", { class: "text-primary" }, [
+        m("dt", { class: "text-body-content-tertiary" }, "Schedule"),
+        m("dd", { class: "text-body-content" }, [
           row.schedule_text,
           row.next_run_text === "" ? "" : ` (next: ${row.next_run_text})`,
         ]),
-        m("dt", { class: "text-faint" }, "Last run"),
-        m("dd", { class: "text-primary" }, row.last_run_text),
-        m("dt", { class: "text-faint" }, isBroken ? "Problem" : row.kind === "SKILL" ? "Runs the skill" : "Runs"),
+        m("dt", { class: "text-body-content-tertiary" }, "Last run"),
+        m("dd", { class: "text-body-content" }, row.last_run_text),
+        m("dt", { class: "text-body-content-tertiary" }, isBroken ? "Problem" : row.kind === "SKILL" ? "Runs the skill" : "Runs"),
         m(
           "dd",
-          { class: "font-mono text-primary" },
+          { class: "font-mono text-body-content" },
           isBroken ? row.error : row.kind === "SKILL" ? `/${row.skill}` : row.command.join(" "),
         ),
-        row.app === null ? null : m("dt", { class: "text-faint" }, "App"),
-        row.app === null ? null : m("dd", { class: "text-primary" }, row.app),
-        m("dt", { class: "text-faint" }, "Definition"),
-        m("dd", { class: "font-mono text-primary" }, detail.definition_path),
+        row.app === null ? null : m("dt", { class: "text-body-content-tertiary" }, "App"),
+        row.app === null ? null : m("dd", { class: "text-body-content" }, row.app),
+        m("dt", { class: "text-body-content-tertiary" }, "Definition"),
+        m("dd", { class: "font-mono text-body-content" }, detail.definition_path),
       ]),
       m("div", { class: "flex flex-wrap gap-2", "data-controls": "" }, [
         needsFixing
@@ -123,14 +123,14 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
         m(Button, { variant: "ghost-destructive", disabled: isBusy, onclick: onRemove, "data-remove": "" }, "Remove"),
       ]),
       m("section", [
-        m("h2", { class: "type-section mb-1 text-faint" }, "Runs"),
+        m("h2", { class: "type-section mb-1 text-body-content-tertiary" }, "Runs"),
         detail.runs.length === 0
-          ? m("p", { class: "type-helper text-faint", "data-no-runs": "" }, "No runs yet.")
+          ? m("p", { class: "type-helper text-body-content-tertiary", "data-no-runs": "" }, "No runs yet.")
           : m("div", { class: "flex flex-col" }, [
               m(
                 "div",
                 {
-                  class: `hidden gap-x-4 px-1 pb-1 type-tag uppercase tracking-wide text-faint sm:grid ${RUN_COLUMNS}`,
+                  class: `hidden gap-x-4 px-1 pb-1 type-tag uppercase tracking-wide text-body-content-tertiary sm:grid ${RUN_COLUMNS}`,
                 },
                 ["When", "Started", "Result", "Took", "Summary"].map((heading) => m("div", heading)),
               ),

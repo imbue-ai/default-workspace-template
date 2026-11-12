@@ -70,7 +70,7 @@ export function textParagraphs(text: string): m.Children[] {
   return text
     .split("\n\n")
     .map((paragraph, index) =>
-      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-primary` }, paragraph),
+      m("p", { class: `${index === 0 ? "m-0" : "mt-2 mb-0"} type-body text-body-content` }, paragraph),
     );
 }
 
@@ -169,7 +169,7 @@ export function TourCard(): m.Component<TourCardAttrs> {
           "data-tour-badge": notice === "badge" ? "" : undefined,
           "data-tour-paused": notice === "paused" ? "" : undefined,
           class:
-            "tour-card fixed z-(--z-popover) rounded-lg border border-default bg-surface p-4 shadow-overlay " +
+            "tour-card fixed z-(--z-popover) rounded-lg border border-default bg-body-surface-raised p-4 shadow-overlay " +
             (size === null ? "invisible" : ""),
           style: { left: `${placement.left}px`, top: `${placement.top}px`, width: `${width}px` },
         },
@@ -178,7 +178,7 @@ export function TourCard(): m.Component<TourCardAttrs> {
             ? null
             : m("span", {
                 "aria-hidden": "true",
-                class: "tour-arrow absolute rotate-45 border border-default bg-surface",
+                class: "tour-arrow absolute rotate-45 border border-default bg-body-surface-raised",
                 style: { ...arrow, width: `${ARROW_SIZE_PX}px`, height: `${ARROW_SIZE_PX}px` },
               }),
           m("div", { class: "flex items-start gap-3" }, [
@@ -194,7 +194,7 @@ export function TourCard(): m.Component<TourCardAttrs> {
                 ? null
                 : m(
                     "ul",
-                    { class: "mt-2 mb-0 list-disc pl-5 type-body text-primary" },
+                    { class: "mt-2 mb-0 list-disc pl-5 type-body text-body-content" },
                     bullets.map((line) => m("li", line)),
                   ),
             ]),

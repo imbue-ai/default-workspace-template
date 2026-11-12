@@ -41,8 +41,8 @@ export function groupRows(rows: readonly RoutineRow[], appNames: Record<string, 
 
 function stat(value: string | number, label: string, isBad: boolean): m.Vnode {
   return m("div", { class: "flex flex-col gap-0.5" }, [
-    m("span", { class: `type-heading ${isBad ? "text-danger" : "text-primary"}` }, String(value)),
-    m("span", { class: "type-tag uppercase tracking-wide text-faint" }, label),
+    m("span", { class: `type-heading ${isBad ? "text-danger-surface" : "text-body-content"}` }, String(value)),
+    m("span", { class: "type-tag uppercase tracking-wide text-body-content-tertiary" }, label),
   ]);
 }
 
@@ -58,24 +58,24 @@ function row(routine: RoutineRow): m.Vnode {
     },
     [
       m("div", { class: "min-w-0" }, [
-        m("div", { class: "type-body font-semibold text-primary" }, routine.title),
-        m("div", { class: "type-helper text-secondary" }, routine.what),
+        m("div", { class: "type-body font-semibold text-body-content" }, routine.title),
+        m("div", { class: "type-helper text-body-content-secondary" }, routine.what),
       ]),
-      m("div", { class: "type-helper text-secondary" }, [
+      m("div", { class: "type-helper text-body-content-secondary" }, [
         m("div", routine.schedule_text),
-        routine.next_run_text === "" ? null : m("div", { class: "text-faint" }, `Next: ${routine.next_run_text}`),
+        routine.next_run_text === "" ? null : m("div", { class: "text-body-content-tertiary" }, `Next: ${routine.next_run_text}`),
       ]),
-      m("div", { class: "flex flex-col items-start gap-1 type-helper text-secondary" }, [
+      m("div", { class: "flex flex-col items-start gap-1 type-helper text-body-content-secondary" }, [
         healthPill(routine),
-        routine.health_detail === "" ? null : m("div", { class: "text-faint" }, routine.health_detail),
-        m("div", { class: "text-faint" }, routine.last_run_text),
+        routine.health_detail === "" ? null : m("div", { class: "text-body-content-tertiary" }, routine.health_detail),
+        m("div", { class: "text-body-content-tertiary" }, routine.last_run_text),
         routine.last_run !== null && routine.last_run.summary !== ""
-          ? m("div", { class: "truncate text-faint" }, routine.last_run.summary)
+          ? m("div", { class: "truncate text-body-content-tertiary" }, routine.last_run.summary)
           : null,
         routine.last_run !== null && routine.last_run.warnings.includes("RESTARTED_PREVIOUS_RUN")
           ? m(
               "div",
-              { class: "text-warning", "data-warning": "" },
+              { class: "text-warn-surface", "data-warning": "" },
               "The previous run was still going and was cut off.",
             )
           : null,
@@ -98,8 +98,8 @@ export const ListPage: m.ClosureComponent<ListPageAttrs> = () => {
       const { summary } = listing;
       return m("div", { class: "mx-auto flex max-w-[1040px] flex-col gap-6 px-4 py-6 sm:px-7" }, [
         m("header", { class: "flex flex-col gap-1" }, [
-          m("h1", { class: "type-heading-lg text-primary" }, "Routines"),
-          m("p", { class: "type-body text-secondary" }, "Everything in your workspace that runs on its own."),
+          m("h1", { class: "type-heading-lg text-body-content" }, "Routines"),
+          m("p", { class: "type-body text-body-content-secondary" }, "Everything in your workspace that runs on its own."),
         ]),
         m(
           "form",
@@ -135,12 +135,12 @@ export const ListPage: m.ClosureComponent<ListPageAttrs> = () => {
         listing.routines.length === 0
           ? m(
               "p",
-              { class: "type-body py-6 text-faint", "data-empty": "" },
+              { class: "type-body py-6 text-body-content-tertiary", "data-empty": "" },
               "Nothing runs on its own yet. Describe one above to add it.",
             )
           : groupRows(listing.routines, listing.app_names).map(([heading, rows]) =>
               m("section", { "data-group": heading }, [
-                m("h2", { class: "type-section mt-2 mb-1 text-faint" }, heading),
+                m("h2", { class: "type-section mt-2 mb-1 text-body-content-tertiary" }, heading),
                 rows.map(row),
               ]),
             ),

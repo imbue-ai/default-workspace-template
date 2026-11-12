@@ -442,7 +442,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             onclick: () => pickRoom(),
           },
           [
-            m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
+            m("span", { class: "flex w-6 shrink-0 items-center justify-center text-body-content-secondary" }, peopleGlyph(20)),
             m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
           ],
         ),

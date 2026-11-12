@@ -29,8 +29,8 @@ function tocLink(id: string, label: string, className: string, isActive: boolean
       href: `#${id}`,
       "data-toc-target": id,
       "aria-current": isActive ? "location" : undefined,
-      class: `toc-link block rounded-md px-2 hover:bg-fill-hover hover:text-primary ${className} ${
-        isActive ? "bg-fill-hover text-primary" : ""
+      class: `toc-link block rounded-md px-2 hover:bg-fill-hover hover:text-body-content ${className} ${
+        isActive ? "bg-fill-hover text-body-content" : ""
       }`,
       onclick: (event: MouseEvent) => {
         event.preventDefault();
@@ -114,7 +114,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
       // The page kit is the Theming group's own section, so it is named here rather than looked up.
       labels.set("page-kit", "Plain pages");
       const groups: readonly CatalogGroup[] = [...catalog, themingGroup((id) => labels.get(id) ?? id)];
-      return m("div", { class: "style-guide flex h-screen bg-surface" }, [
+      return m("div", { class: "style-guide flex h-screen bg-body-surface-raised" }, [
         m(
           "nav",
           {
@@ -127,7 +127,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
           },
           groups.map((group) =>
             m("div", { class: "mb-5" }, [
-              tocLink(group.id, group.label, "type-section py-1 text-faint", activeId === group.id),
+              tocLink(group.id, group.label, "type-section py-1 text-body-content-tertiary", activeId === group.id),
               m(
                 "ul",
                 { class: "mt-1 flex flex-col gap-px" },
@@ -137,7 +137,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
                     tocLink(
                       section.id,
                       section.toc,
-                      "py-1 text-(length:--font-size-row) text-secondary",
+                      "py-1 text-(length:--font-size-row) text-body-content-secondary",
                       activeId === section.id,
                     ),
                   ),
@@ -151,17 +151,17 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
           { id: SCROLL_ID, class: "h-full min-w-0 flex-1 overflow-y-auto" },
           m("main", { class: "mx-auto max-w-5xl px-8 py-10" }, [
             m("header", { class: "mb-10" }, [
-              m("h1", { class: "type-heading-lg text-primary" }, "Workspace Style Guide"),
-              m("p", { class: "type-body mt-1 max-w-[640px] text-secondary" }, [
+              m("h1", { class: "type-heading-lg text-body-content" }, "Workspace Style Guide"),
+              m("p", { class: "type-body mt-1 max-w-[640px] text-body-content-secondary" }, [
                 "The design system every workspace app draws with. Tokens live in ",
-                m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/base.css"),
+                m("code", { class: "font-mono text-body-content" }, "system/libs/workspace_ui/src/base.css"),
                 ", components in ",
-                m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/components/"),
+                m("code", { class: "font-mono text-body-content" }, "system/libs/workspace_ui/src/components/"),
                 ". A convention for the default look, not a rule: a restyle to your own taste is always welcome.",
               ]),
-              m("p", { id: "worn-theme", class: "type-helper mt-2 text-secondary" }, [
+              m("p", { id: "worn-theme", class: "type-helper mt-2 text-body-content-secondary" }, [
                 "Showing the ",
-                m("code", { class: "font-mono text-primary" }, wornThemeId()),
+                m("code", { class: "font-mono text-body-content" }, wornThemeId()),
                 " theme, the one this desktop wears; values a theme changed show the standard one struck through.",
               ]),
             ]),
@@ -173,8 +173,8 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
                   class: `catalog-group mb-8 scroll-mt-8 ${index === 0 ? "" : "mt-16 border-t border-default pt-12"}`,
                 },
                 [
-                  m("h2", { class: "type-heading-lg text-primary" }, group.label),
-                  m("p", { class: "type-body mt-1 text-secondary" }, group.description),
+                  m("h2", { class: "type-heading-lg text-body-content" }, group.label),
+                  m("p", { class: "type-body mt-1 text-body-content-secondary" }, group.description),
                 ],
               ),
               group.sections.map(renderSection),

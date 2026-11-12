@@ -183,9 +183,9 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
       const header = m(
         "header",
-        { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-page px-8 py-3.5" },
+        { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-body-surface px-8 py-3.5" },
         [
-          m("h1", { class: "app-header-title type-heading text-primary" }, title),
+          m("h1", { class: "app-header-title type-heading text-body-content" }, title),
           agentType ? m("span", { class: badgeClass("neutral", { mono: true }), ...BADGE_PART }, agentType) : null,
         ],
       );
@@ -196,19 +196,19 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-loading flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "Loading events..."),
+          m("p", { class: "text-body-content-secondary" }, "Loading events..."),
         );
       } else if (loadingError) {
         content = m(
           "div",
           { class: "message-list-error flex items-center justify-center h-full" },
-          m("p", { class: "text-danger" }, `Error: ${loadingError}`),
+          m("p", { class: "text-danger-surface" }, `Error: ${loadingError}`),
         );
       } else if (events.length === 0) {
         content = m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "No events yet."),
+          m("p", { class: "text-body-content-secondary" }, "No events yet."),
         );
       } else {
         content = renderWindowedList(chatId);
@@ -220,7 +220,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           m(
             "main",
             {
-              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-6 py-6",
+              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface-raised px-6 py-6",
               tabindex: 0,
               oncreate: (mainVnode: m.VnodeDOM) => {
                 engine.afterRender(mainVnode.dom as HTMLElement);

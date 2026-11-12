@@ -13,6 +13,7 @@ from pydantic import Field
 from workspace_themes.data_types import ThemeCatalog
 from workspace_themes.errors import ThemeFileNotFoundError
 from workspace_themes.flask_routes import register_theme_static_route
+from workspace_themes.flask_routes import register_workspace_color_route
 from workspace_themes.primitives import ThemeId
 from workspace_themes.serving import resolve_theme_icon
 from workspace_themes.serving import theme_file_security_headers
@@ -24,6 +25,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
 from imbue.system_interface.shell.theme_wire import theme_catalog_wire
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 
 
 class AppThemingRequest(FrozenModel):
@@ -60,6 +62,12 @@ def require_available_theme(catalog: ThemeCatalog, theme: ThemeId | None) -> The
     return theme
 
 
+class WorkspaceColorRefreshResponse(FrozenModel):
+    """What asking for the workspace color to be re-read answers."""
+
+    is_started: bool = Field(description="Whether the read was started")
+
+
 class DefaultThemeResponse(FrozenModel):
     """What setting the workspace's default theme answers."""
 
@@ -69,7 +77,9 @@ class DefaultThemeResponse(FrozenModel):
 def list_themes() -> ResponseReturnValue:
     """The workspace's themes, each with what the picker shows and where its icons are, and the default it wears."""
     shell = _shell()
-    return model_response(theme_catalog_wire(shell.themes.load(), shell.desktops.read_theme_choices()))
+    return model_response(
+        theme_catalog_wire(shell.themes.load(), shell.desktops.read_theme_choices(), shell.workspace_color.read())
+    )
 
 
 def set_default_theme() -> ResponseReturnValue:
@@ -94,6 +104,13 @@ def set_app_theming(app_name: str) -> ResponseReturnValue:
     shell.app_theming.set(entry.row.name, body.is_on)
     shell.inventory.broadcast_if_changed()
     return model_response(AppThemingResponse(app=app_name, is_on=body.is_on))
+
+
+def refresh_workspace_color() -> ResponseReturnValue:
+    """Re-read the workspace color label, which Imbue Studio said changed; a change reaches every window as
+    ``themes_changed``. Answers at once: the read runs on a thread of its own."""
+    _shell().workspace_color.refresh_in_background()
+    return model_response(WorkspaceColorRefreshResponse(is_started=True))
 
 
 def serve_theme_icon(theme_id: str, file_name: str) -> ResponseReturnValue:
@@ -121,6 +138,13 @@ def register_theme_routes(application: Flask) -> None:
         endpoint="serve_theme_icon",
     )
     register_theme_static_route(application, lambda: _shell().themes.load())
+    register_workspace_color_route(application, WORKSPACE_ROOT_DIRECTORY.resolve())
+    application.add_url_rule(
+        "/api/workspace-color/refresh",
+        view_func=refresh_workspace_color,
+        methods=["POST"],
+        endpoint="refresh_workspace_color",
+    )
     application.add_url_rule(
         "/api/apps/<app_name>/theming", view_func=set_app_theming, methods=["POST"], endpoint="set_app_theming"
     )
