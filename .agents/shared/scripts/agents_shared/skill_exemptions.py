@@ -35,6 +35,27 @@ class ExemptionReason(enum.StrEnum):
     AWAITING_RESTRUCTURE = "awaiting-restructure"
 
 
+class ExemptionAllowance(enum.Enum):
+    """Which exemptions a validation honours, by what is being validated."""
+
+    # A skill as it stands: whatever exemption it carries.
+    STANDING_SKILL = enum.auto()
+    # A skill being edited. Its own exemption, written when it came under the checks, has to
+    # go with the edit. A built-in's waits for the release that restructures it.
+    EDITED_SKILL = enum.auto()
+    # A skill being created: none.
+    NEW_SKILL = enum.auto()
+
+    def honours(self, reason: ExemptionReason) -> bool:
+        match self:
+            case ExemptionAllowance.STANDING_SKILL:
+                return True
+            case ExemptionAllowance.EDITED_SKILL:
+                return reason is ExemptionReason.AWAITING_RESTRUCTURE
+            case ExemptionAllowance.NEW_SKILL:
+                return False
+
+
 @dataclass(frozen=True)
 class Exemption:
     checks: frozenset[Check]
