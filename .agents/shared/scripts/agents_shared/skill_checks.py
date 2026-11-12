@@ -79,8 +79,8 @@ class CheckFailure:
 
 _GOALS: dict[Check, str] = {
     Check.SIZE: (
-        "After a compaction an agent keeps only the first 5,000 tokens of a skill it invoked, "
-        "about 14 KB. Keep the standing instructions and the step list in SKILL.md, and move "
+        "A SKILL.md is short enough that an agent reads all of it and keeps all of it through "
+        "a long task. Keep the standing instructions and the step list in SKILL.md, and move "
         "each step's detail into a reference the step names."
     ),
     Check.REACHABILITY: (
