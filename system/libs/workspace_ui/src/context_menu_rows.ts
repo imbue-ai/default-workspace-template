@@ -343,7 +343,9 @@ export function joinRowGroups(groups: readonly (readonly ContextMenuRow[])[]): C
   return rows;
 }
 
-/** Whether the click landed on the document's selection: inside one of the boxes its ranges are drawn as. */
+/** Whether the click landed on the document's selection: inside one of the boxes its ranges are drawn as. The
+ *  selection read here is the user's own: the desktop app's Chromium selects the word under a right-click on macOS
+ *  only after a ``contextmenu`` event no page handled, so it is not yet there when this runs. */
 function isClickOnSelection(target: ContextMenuTarget): boolean {
   const selection = target.element.ownerDocument.getSelection();
   if (selection === null || selection.isCollapsed) return false;
