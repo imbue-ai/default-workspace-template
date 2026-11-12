@@ -1098,7 +1098,7 @@ def _act_on_accepted_send(
         return
     handler = state.mention_handler
     targets: tuple[MentionTarget, ...] = ()
-    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+    if snapshot.kind is ChatKind.ROOM and handler is not None:
         targets = handler.resolve(text)
     sender = participant_key_of(identity)
     if state.tray_feed is not None:

@@ -307,7 +307,7 @@ class ChatAppState(MutableModel):
         if snapshot is None or snapshot.active_agent.agent_id != agent_id:
             return
         for text, event_id in posts:
-            targets = self.mention_handler.resolve(text) if self.mention_handler is not None and "@" in text else ()
+            targets = self.mention_handler.resolve(text) if self.mention_handler is not None else ()
             self.tray_feed.post_bubble(
                 WORKSPACE_AGENT_PARTICIPANT_KEY,
                 chat_id,
