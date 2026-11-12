@@ -498,9 +498,10 @@ def validate(
     except ValueError as exc:
         return str(exc)
     failures = check_failures(skill_dir, tree)
-    is_honoured = exemption is not None and allowance.honours(exemption.reason)
     exempted = (
-        exemption.checks if exemption is not None and is_honoured else frozenset()
+        exemption.checks
+        if exemption is not None and allowance.honours(exemption.reason)
+        else frozenset()
     )
     unexcused = [failure for failure in failures if failure.check not in exempted]
     if unexcused:
