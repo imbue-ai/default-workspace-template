@@ -68,6 +68,26 @@ specifics, but the shape below holds for all of them.
      conveys the idea and real wiring is costly -- but it may *not convince* when
      real rendering matters.
 
+   A prototype that is a page reaches the user as a window on their desktop,
+   never as a link: a localhost link to a page the workspace does not know as an
+   app opens in the workspace's browser, outside the desktop they review on. A
+   specialization's own surface (a preview, a mock frame) is already a window. A
+   hand-built page goes up in the labeled preview frame, served from its
+   directory (`<slug>` is lowercase letters, digits and single hyphens):
+
+   ```bash
+   uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up --name <slug> \
+       --cwd <the page's directory> --port main --service-name <slug>-page \
+       --preview-service-name <slug> --preview-title "<what it shows>" --inner-path /<page>.html \
+       -- python3 -m http.server {port:main} --bind {host}
+   uv run --no-sync workspace-layout open <slug>
+   ```
+
+   The server reads the file on every request, so after an edit `uv run --no-sync
+   workspace-layout refresh <slug>` shows it. Once the prototype is retired, take
+   it down: `uv run --no-sync workspace-layout close <slug>`, then
+   `serve_isolated_instance.py down --name <slug>`.
+
    Keep this phase **throwaway either way: no commits on the served branch and no
    production state** (nothing production-grade: no production scripts, data
    layers, or tests; the scaffold a specialization sets up to serve the prototype
