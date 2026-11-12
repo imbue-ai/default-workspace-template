@@ -1085,8 +1085,8 @@ def _act_on_accepted_send(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
     """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
-    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
-    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    7.4): it is posted to the tray, hopping their entry and naming the people a room message mentions, whose clients
+    raise it as a bubble; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
     agent chat a handle is a word the agent reads like any other. A send no proxy stamped (a script's, the
     terminal's) is nobody's speech: it raises no bubble and its mentions act on nothing. Takes the sender's
     ``identity`` rather than reading the request's, since an intake nobody waits on and a room's first message land
