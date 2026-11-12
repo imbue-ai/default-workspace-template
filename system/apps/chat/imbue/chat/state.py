@@ -39,6 +39,7 @@ from imbue.chat.harnesses.room.transcript import is_workspace_agent_turn
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.lounge import LoungeKeeper
+from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions import MentionStore
 from imbue.chat.primitives import ChatId
@@ -307,9 +308,14 @@ class ChatAppState(MutableModel):
             return
         for text, event_id in posts:
             targets = self.mention_handler.resolve(text) if self.mention_handler is not None and "@" in text else ()
-            mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
             self.tray_feed.post_bubble(
-                WORKSPACE_AGENT_PARTICIPANT_KEY, chat_id, snapshot.title, text, event_id, mentioned, BubbleKind.MESSAGE
+                WORKSPACE_AGENT_PARTICIPANT_KEY,
+                chat_id,
+                snapshot.title,
+                text,
+                event_id,
+                mentioned_people(targets),
+                BubbleKind.MESSAGE,
             )
 
     def name_authors(self, events: list[dict[str, Any]]) -> None:

@@ -150,6 +150,7 @@ from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.mention_parser import MentionTarget
+from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions_endpoints import requester_mention_keys
@@ -1101,8 +1102,9 @@ def _act_on_accepted_send(
         targets = handler.resolve(text)
     sender = participant_key_of(identity)
     if state.tray_feed is not None:
-        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
-        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned, BubbleKind.MESSAGE)
+        state.tray_feed.post_bubble(
+            sender, chat_id, snapshot.title, text, message_id, mentioned_people(targets), BubbleKind.MESSAGE
+        )
     if handler is not None and targets:
         sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
         handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
