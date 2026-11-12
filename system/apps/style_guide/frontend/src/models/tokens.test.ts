@@ -42,6 +42,7 @@ describe("readDesignTokens over the shared stylesheet", () => {
       "radius-md",
       "radius-lg",
       "radius-xl",
+      "radius-2xl",
     ]);
     expect(tokensWithPrefix(tokens.theme, "font-").map((token) => token.name)).toEqual([
       "font-sans",

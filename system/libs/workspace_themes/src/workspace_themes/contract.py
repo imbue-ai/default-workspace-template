@@ -241,6 +241,7 @@ SHAPE_TOKENS: Final[tuple[str, ...]] = (
     "--radius-md",
     "--radius-lg",
     "--radius-xl",
+    "--radius-2xl",
 )
 
 MOTION_TOKENS: Final[tuple[str, ...]] = ("--dur-fast", "--dur-base", "--dur-slow")

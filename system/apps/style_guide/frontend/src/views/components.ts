@@ -27,6 +27,7 @@ import { caption, code, demoRow, type CatalogGroup, type CatalogSection } from "
 
 export const BUTTON_VARIANTS: readonly ButtonVariant[] = [
   "primary",
+  "accent",
   "secondary",
   "ghost",
   "destructive",
@@ -150,7 +151,8 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
         ]),
       ),
       demoRow("Sizes", [
-        m(Button, { variant: "primary" }, "Default (34px)"),
+        m(Button, { variant: "primary", lg: true }, "Large (36px)"),
+        m(Button, { variant: "primary" }, "Default (32px)"),
         m(Button, { variant: "primary", sm: true }, "Small (28px)"),
         m(Button, { icon: true, "aria-label": "Settings" }, m.trust(icon("settings", { size: 16 }))),
         m(Button, { icon: true, sm: true, "aria-label": "Refresh" }, m.trust(icon("refresh", { size: 14 }))),
@@ -162,7 +164,7 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
         m(Button, { round: true }, "Round"),
         m(
           Button,
-          { variant: "primary", icon: true, round: true, "aria-label": "Send" },
+          { variant: "accent", icon: true, round: true, "aria-label": "Send" },
           m.trust(icon("send", { size: 16 })),
         ),
       ]),
@@ -344,7 +346,10 @@ function menuSection(demos: ComponentDemos): CatalogSection {
           "Open the menu",
           m.trust(icon("chevron-down", { size: 14 })),
         ]),
-        m("span", { class: "type-helper text-body-content-secondary" }, ["Last pick: ", m("strong", demos.lastMenuPick)]),
+        m("span", { class: "type-helper text-body-content-secondary" }, [
+          "Last pick: ",
+          m("strong", demos.lastMenuPick),
+        ]),
         demos.menu.view(demos.menuRows()),
       ]),
   };
@@ -457,10 +462,11 @@ function statusSection(): CatalogSection {
         m("span", { class: "spinner" }),
         m("span", { class: "spinner spinner--sm" }),
         m("span", { class: "text-accent-surface" }, m.trust(spinnerIcon(24))),
-        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-inverse-content type-body" }, [
-          m("span", { class: "spinner spinner--sm spinner--current" }),
-          "On a colored surface",
-        ]),
+        m(
+          "span",
+          { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-inverse-content type-body" },
+          [m("span", { class: "spinner spinner--sm spinner--current" }), "On a colored surface"],
+        ),
       ]),
     ],
   };
@@ -554,7 +560,10 @@ function surfacesSection(): CatalogSection {
         m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-body-surface-secondary p-2" }, [
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content hover:bg-fill-hover" },
+            {
+              class:
+                "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content hover:bg-fill-hover",
+            },
             "A row (hover me)",
           ),
           m(
@@ -564,24 +573,39 @@ function surfacesSection(): CatalogSection {
           ),
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover" },
+            {
+              class:
+                "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover",
+            },
             "Another row",
           ),
           caption("bg-body-surface-secondary", "mt-auto"),
         ]),
-        m("div", { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" }, [
-          m("div", { class: "rounded-lg border border-default bg-body-surface-raised p-4 shadow-raised" }, [
-            m("p", { class: "type-title-sm text-body-content" }, "A card"),
-            m("p", { class: "type-helper text-body-content-secondary" }, "bg-body-surface-raised, border-default, shadow-raised"),
-          ]),
-          m(
-            "div",
-            { class: "rounded-lg bg-body-surface-secondary p-3 type-helper text-body-content-secondary" },
-            "bg-body-surface-secondary",
-          ),
-          m("div", { class: "rounded-lg bg-body-surface-secondary p-3 font-mono type-helper text-body-content" }, "bg-body-surface-secondary: const x = 1;"),
-          caption("bg-body-surface", "mt-auto"),
-        ]),
+        m(
+          "div",
+          { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" },
+          [
+            m("div", { class: "rounded-lg border border-default bg-body-surface-raised p-4 shadow-raised" }, [
+              m("p", { class: "type-title-sm text-body-content" }, "A card"),
+              m(
+                "p",
+                { class: "type-helper text-body-content-secondary" },
+                "bg-body-surface-raised, border-default, shadow-raised",
+              ),
+            ]),
+            m(
+              "div",
+              { class: "rounded-lg bg-body-surface-secondary p-3 type-helper text-body-content-secondary" },
+              "bg-body-surface-secondary",
+            ),
+            m(
+              "div",
+              { class: "rounded-lg bg-body-surface-secondary p-3 font-mono type-helper text-body-content" },
+              "bg-body-surface-secondary: const x = 1;",
+            ),
+            caption("bg-body-surface", "mt-auto"),
+          ],
+        ),
       ]),
   };
 }

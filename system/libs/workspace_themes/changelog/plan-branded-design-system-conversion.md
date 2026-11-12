@@ -5,3 +5,4 @@ Theme contract 2 (`docs/system/blueprint/brand-design-system/`): the colors are 
 - `workspace-themes migrate [<id>...] [--all]` rewrites a contract-1 theme in `themes/` to contract 2 in place. A theme already on contract 2 is left as is.
 - Every app that serves themes also serves `/_static/workspace_color.css`: the keys the workspace color stands for, worked out so white text reads on every key and the colors stay inside sRGB. Imbue's own color, or none, keeps the standard keys.
 - The type tokens follow the brand's ramp: `--font-size-row` is `--font-size-body-dense`, and `--font-size-title-page`, `--font-size-title`, `--font-size-section`, and `--weight-medium` are new. `migrate` renames `--font-size-row` too.
+- `--radius-2xl` is a contract token.

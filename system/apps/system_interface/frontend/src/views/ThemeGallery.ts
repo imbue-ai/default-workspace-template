@@ -250,7 +250,7 @@ function tilesAndRows(): m.Children {
     m("div", { class: "grid w-96 grid-cols-2 gap-3" }, [
       m(
         "button",
-        { ...TILE_PART, type: "button", class: "rounded-xl border border-default bg-body-surface-raised p-4 text-left" },
+        { ...TILE_PART, type: "button", class: "rounded-2xl border border-default bg-body-surface-raised p-4 text-left" },
         [
           m("div", { class: "type-title-sm" }, "A tile"),
           m("div", { class: "type-helper text-body-content-secondary" }, "That opens something."),
@@ -262,7 +262,7 @@ function tilesAndRows(): m.Children {
           ...TILE_PART,
           type: "button",
           "aria-pressed": "true",
-          class: "rounded-xl border border-accent-surface bg-body-surface-raised p-4 text-left",
+          class: "rounded-2xl border border-accent-surface bg-body-surface-raised p-4 text-left",
         },
         [
           m("div", { class: "type-title-sm" }, "A chosen tile"),

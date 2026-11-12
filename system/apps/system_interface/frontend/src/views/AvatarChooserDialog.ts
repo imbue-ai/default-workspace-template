@@ -76,7 +76,7 @@ function designCell(design: AvatarDesign, attrs: AvatarChooserDialogAttrs): m.Vn
       "aria-pressed": isSelected ? "true" : "false",
       class:
         "flex min-w-0 cursor-pointer flex-col items-center gap-1 rounded-md border p-2 text-center type-helper " +
-        "hover:bg-fill-hover focus-visible:outline-accent-surface " +
+        "hover:bg-fill-hover focus-visible:outline-focus " +
         (isSelected ? "border-accent-surface bg-fill-active text-body-content" : "border-transparent text-body-content-secondary"),
       onclick: () => attrs.onSelect(design.id),
     },

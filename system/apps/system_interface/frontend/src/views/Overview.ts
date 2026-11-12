@@ -453,7 +453,7 @@ export function Overview(): m.Component<OverviewAttrs> {
                 // Above the thumbnail: the desktops row sits against the bottom of the screen, so a confirmation
                 // hung below it would clip past the viewport, buttons first.
                 class:
-                  "absolute bottom-full left-1/2 z-(--z-popover) mb-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-xl " +
+                  "absolute bottom-full left-1/2 z-(--z-popover) mb-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-2xl " +
                   "border border-default bg-body-surface-raised p-3 text-(length:--font-size-body-dense) text-body-content shadow-overlay",
               },
               [

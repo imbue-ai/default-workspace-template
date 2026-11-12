@@ -2162,7 +2162,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       ? m(
                           Button,
                           {
-                            variant: "primary",
+                            variant: "accent",
                             sm: true,
                             extra: "message-input-send-button message-input-send-button--switch shrink-0",
                             ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
@@ -2181,7 +2181,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       : m(
                           Button,
                           {
-                            variant: canSendNow ? "primary" : "ghost",
+                            variant: canSendNow ? "accent" : "ghost",
                             icon: true,
                             sm: true,
                             extra: "message-input-send-button shrink-0",

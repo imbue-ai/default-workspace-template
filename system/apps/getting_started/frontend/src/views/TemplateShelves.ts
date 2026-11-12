@@ -205,7 +205,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
             "justify-center rounded-full text-body-content-secondary transition-[background-color,color] " +
             "duration-(--dur-base) ease-[ease] group-hover:bg-fill-hover group-hover:text-body-content " +
             "group-active:bg-fill-active group-focus-visible:outline-2 group-focus-visible:outline-offset-2 " +
-            "group-focus-visible:outline-accent-surface",
+            "group-focus-visible:outline-focus",
           style: { top: railArrowTop(artCentre) },
         },
         m.trust(icon(isRight ? "chevron-right" : "chevron-left", { size: RAIL_ARROW_GLYPH_SIZE })),

@@ -83,7 +83,7 @@ function zoneGrid(actions: WindowSizeActions, onPlaced: () => void): m.Vnode {
           title: zone.label,
           class:
             "flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-body-content-secondary " +
-            "hover:bg-fill-hover hover:text-body-content focus-visible:outline-2 focus-visible:outline-accent-surface",
+            "hover:bg-fill-hover hover:text-body-content focus-visible:outline-2 focus-visible:outline-focus",
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
             placeIn(zone, actions);

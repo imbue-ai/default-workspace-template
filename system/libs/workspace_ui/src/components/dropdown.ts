@@ -45,10 +45,10 @@ export const DROPDOWN_OPTION_ATTR = "data-dropdown-option";
 /** The field-shaped trigger. Sized and framed like a text input (see `inputClass`), so a
  *  dropdown and the field beside it read as one form. */
 const TRIGGER_CLASS =
-  "flex w-full items-center justify-between gap-2 rounded-md border border-default bg-body-surface-raised " +
-  "px-3 py-2 text-left type-body transition-[border-color] duration-(--dur-base) " +
-  "hover:border-accent-surface focus-visible:outline-2 focus-visible:outline-offset-2 " +
-  "focus-visible:outline-accent-surface cursor-pointer";
+  "flex h-9 w-full items-center justify-between gap-2 rounded-xl border border-default bg-body-surface-raised " +
+  "px-3 text-left type-body transition-[border-color] duration-(--dur-base) " +
+  "hover:border-default-hover focus-visible:border-transparent focus-visible:outline-2 focus-visible:outline-offset-0 " +
+  "focus-visible:outline-focus cursor-pointer";
 const TRIGGER_VALUE_CLASS = "flex min-w-0 items-baseline gap-2";
 const TRIGGER_LABEL_CLASS = "truncate text-body-content";
 const TRIGGER_DETAIL_CLASS = "shrink-0 font-mono type-helper text-body-content-tertiary";

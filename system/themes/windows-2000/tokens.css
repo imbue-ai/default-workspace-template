@@ -38,6 +38,7 @@
   --radius-md: 0px;
   --radius-lg: 0px;
   --radius-xl: 0px;
+  --radius-2xl: 0px;
 
   /* The Windows 2000 bevels, outermost line first: light and dark edges, then the inner light and
      shadow lines. */

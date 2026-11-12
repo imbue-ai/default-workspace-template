@@ -57,7 +57,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
           "shrink-0 items-center gap-1.5 rounded-md p-1 pr-2 text-(length:--font-size-body) " +
-          "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent-surface " +
+          "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-focus " +
           // The chrome's own two control tints and nothing else: the hover one under the pointer, the
           // active one for the window you are in (and for the entry whose menu is open, which is the
           // same statement about the same chip). No border, no elevation -- a tint is the whole of it.

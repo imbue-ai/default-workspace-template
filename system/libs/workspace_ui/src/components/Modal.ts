@@ -32,11 +32,11 @@ import { TEXT_BODY_SIZE } from "./typography";
 // chooser's resizing multi-screen panel) but must still scrim and stack like
 // every other modal.
 export const MODAL_OVERLAY_CLASS =
-  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 " +
+  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-overlay-scrim " +
   "animate-[modal-overlay-in_150ms_ease-out]";
 
 export const MODAL_CARD_CLASS =
-  "modal-card w-[420px] max-w-[90vw] p-6 bg-body-surface-raised border border-default rounded-lg shadow-overlay " +
+  "modal-card w-[420px] max-w-[90vw] p-6 bg-overlay-surface border border-default rounded-2xl shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 
 export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";

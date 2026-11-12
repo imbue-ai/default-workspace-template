@@ -136,7 +136,7 @@ export function switchClass(size: SwitchSize): string {
   return (
     `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
     "cursor-pointer " +
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface " +
+    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus " +
     "disabled:cursor-not-allowed disabled:opacity-50"
   );
 }

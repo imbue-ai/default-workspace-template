@@ -37,6 +37,7 @@
   --radius-md: 0px;
   --radius-lg: 0px;
   --radius-xl: 0px;
+  --radius-2xl: 0px;
 
   /* The 50% gray of the System 6 desktop: a one-pixel checker. An SVG with no size of its own takes the
      backdrop's, and its pattern tiles in CSS pixels, so the wallpaper's cover sizing cannot stretch it. */

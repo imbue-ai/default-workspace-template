@@ -74,7 +74,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         ...TILE_PART,
         "aria-disabled": isDisabled ? "true" : undefined,
         class:
-          "getting-started-tile flex h-full flex-col rounded-xl border border-default bg-body-surface-raised p-4 text-left " +
+          "getting-started-tile flex h-full flex-col rounded-2xl border border-default bg-body-surface-raised p-4 text-left " +
           (isDisabled ? "cursor-not-allowed text-body-content-tertiary" : `${HOVER_SHADOW_SELF} group cursor-pointer text-body-content`),
         onclick: isDisabled ? undefined : pick,
       },

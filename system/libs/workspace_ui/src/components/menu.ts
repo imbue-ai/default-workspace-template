@@ -57,7 +57,7 @@ import { MENU_ITEM_PART, MENU_PART, MENU_SEPARATOR_PART } from "../themes/parts"
 /** The floating card. Positioning is the caller's -- `fixed` here, `absolute` for a card that
  *  lives in its parent -- along with min-width and text size. */
 export function menuCardClass(extra = ""): string {
-  const parts = ["z-(--z-popover) rounded-xl border border-default bg-body-surface-raised py-1 shadow-overlay"];
+  const parts = ["z-(--z-popover) rounded-2xl border border-default bg-overlay-surface py-1 shadow-overlay"];
   if (extra !== "") parts.push(extra);
   return parts.join(" ");
 }
@@ -73,7 +73,7 @@ export interface MenuRowOptions {
 
 /** The keyboard-focus treatment for a focusable row (a real <button>). Inset so the ring stays
  *  inside the card instead of overhanging it. */
-export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-surface";
+export const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
 
 /** The row's highlight: a slab inset 4px from the card's edges, with the 12px radius the
  *  card's own 16px corner leaves 4px in, so the highlight looks concentric with the card. The

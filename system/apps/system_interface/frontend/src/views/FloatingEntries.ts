@@ -57,7 +57,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             "aria-label": tooltip,
             class:
               "floating-entry pointer-events-auto absolute flex cursor-pointer items-center justify-center " +
-              "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-accent-surface " +
+              "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-focus " +
               (isAvatar
                 ? "rounded-2xl border-0 bg-transparent p-0 [&>img]:size-full "
                 : // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing and

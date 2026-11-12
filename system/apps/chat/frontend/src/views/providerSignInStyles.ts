@@ -67,7 +67,7 @@ export const ROW_STACK = "flex flex-col gap-2";
 export const CHOOSER_ROW =
   "flex w-full items-center gap-2 rounded-lg border border-default bg-body-surface-raised p-3 text-left " +
   "shadow-raised transition-[border-color,box-shadow] duration-(--dur-base) hover:border-accent-surface " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface cursor-pointer";
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus cursor-pointer";
 /** Reserved even when a lane has no mark, so every label lines up. */
 export const CHOOSER_ROW_MARK = "flex w-11 shrink-0 items-center justify-center";
 export const CHOOSER_ROW_TEXT = "min-w-0 flex-1";
@@ -170,7 +170,7 @@ export const ACCOUNT_ROW_PICKABLE =
   `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) ` +
   "has-[.account-pick:enabled]:hover:border-accent-surface " +
   "has-[.account-pick:focus-visible]:outline-2 has-[.account-pick:focus-visible]:outline-offset-2 " +
-  "has-[.account-pick:focus-visible]:outline-accent-surface";
+  "has-[.account-pick:focus-visible]:outline-focus";
 /** The pick target. Its `after` box stretches over the whole row, so a click anywhere on the
  *  row that is not one of the actions lands here. */
 export const ACCOUNT_PICK =

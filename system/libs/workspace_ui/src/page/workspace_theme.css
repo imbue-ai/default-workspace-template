@@ -29,7 +29,7 @@
   --c-neutral-5: oklch(from var(--c-neutral-key) 0.8767 calc(c * 1.05) h);
   --c-neutral-6: oklch(from var(--c-neutral-key) 0.815 calc(c * 1.1) h);
   --c-neutral-7: oklch(from var(--c-neutral-key) 0.73 calc(c * 1.1) h);
-  --c-neutral-8: oklch(from var(--c-neutral-key) 0.6304 calc(c * 1.0) h);
+  --c-neutral-8: oklch(from var(--c-neutral-key) 0.6304 calc(c * 1) h);
   --c-neutral-9: oklch(from var(--c-neutral-key) 0.532 calc(c * 0.9) h);
   --c-neutral-10: oklch(from var(--c-neutral-key) 0.4266 calc(c * 0.9) h);
   --c-neutral-11: oklch(from var(--c-neutral-key) 0.3266 calc(c * 0.85) h);
@@ -227,7 +227,8 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 16px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
 }
 
 @layer workspace-page-kit {
@@ -272,9 +273,11 @@
   [data-part="button"],
   button:not([data-part]) {
     font: inherit;
-    padding: 6px 14px;
+    font-weight: var(--weight-medium);
+    height: 32px;
+    padding: 0 12px;
     border: 1px solid var(--c-border-default);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-xl);
     background: var(--c-body-surface-raised);
     color: var(--c-body-content);
     cursor: pointer;
@@ -296,7 +299,20 @@
   }
   [data-part="button"][data-variant="primary"]:not(:disabled):hover,
   button:not([data-part])[data-variant="primary"]:not(:disabled):hover {
-    background: oklch(from var(--c-primary-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+    background: oklch(
+      from var(--c-primary-surface)
+        calc(
+          pow(
+            max(
+              0,
+              (l * l * l + var(--state-flare)) *
+                pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+            ),
+            1 / 3
+          )
+        )
+        c h / alpha
+    );
   }
   [data-part="button"][data-variant="ghost"],
   button:not([data-part])[data-variant="ghost"] {
@@ -311,8 +327,34 @@
   }
   [data-part="button"][data-variant="destructive"]:not(:disabled):hover,
   button:not([data-part])[data-variant="destructive"]:not(:disabled):hover {
-    border-color: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-    background: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+    border-color: oklch(
+      from var(--c-danger-surface)
+        calc(
+          pow(
+            max(
+              0,
+              (l * l * l + var(--state-flare)) *
+                pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+            ),
+            1 / 3
+          )
+        )
+        c h / alpha
+    );
+    background: oklch(
+      from var(--c-danger-surface)
+        calc(
+          pow(
+            max(
+              0,
+              (l * l * l + var(--state-flare)) *
+                pow(var(--state-ratio), clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+            ),
+            1 / 3
+          )
+        )
+        c h / alpha
+    );
   }
 
   /* A text field or text area: a text <input>, a <textarea>. */
@@ -329,18 +371,62 @@
     ),
   textarea:not([data-part]) {
     font: inherit;
-    padding: 6px 10px;
+    padding: 6px 12px;
     border: 1px solid var(--c-border-default);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-xl);
     background: var(--c-body-surface-raised);
     color: var(--c-body-content);
+  }
+  input[data-part="field"],
+  input:not([data-part]):is(
+      [type="text"],
+      [type="search"],
+      [type="email"],
+      [type="url"],
+      [type="password"],
+      [type="number"],
+      [type="tel"],
+      :not([type])
+    ) {
+    height: 36px;
+    padding-block: 0;
+  }
+  [data-part="field"]:focus,
+  input:not([data-part]):is(
+      [type="text"],
+      [type="search"],
+      [type="email"],
+      [type="url"],
+      [type="password"],
+      [type="number"],
+      [type="tel"],
+      :not([type])
+    ):focus,
+  textarea:not([data-part]):focus {
+    border-color: transparent;
+    outline: 2px solid var(--c-border-focus);
+    outline-offset: 0;
+  }
+  [data-part="field"][aria-invalid="true"],
+  input:not([data-part]):is(
+      [type="text"],
+      [type="search"],
+      [type="email"],
+      [type="url"],
+      [type="password"],
+      [type="number"],
+      [type="tel"],
+      :not([type])
+    )[aria-invalid="true"],
+  textarea:not([data-part])[aria-invalid="true"] {
+    border-color: var(--c-danger-surface);
   }
 
   /* A card that opens something, and a selectable row (aria-current="true" on the current one). */
   [data-part="tile"] {
     padding: 16px;
     border: 1px solid var(--c-border-default);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-2xl);
     background: var(--c-body-surface-raised);
     color: inherit;
     text-align: left;
@@ -355,7 +441,7 @@
   [data-part="badge"] {
     padding: 1px 6px;
     border: 1px solid var(--c-border-default);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     font-size: var(--font-size-helper);
   }
 }

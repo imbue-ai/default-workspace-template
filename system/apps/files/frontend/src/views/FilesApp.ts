@@ -530,7 +530,7 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
         "section.files-uploads",
         {
           class:
-            "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-default bg-body-surface-raised shadow-overlay",
+            "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-default bg-body-surface-raised shadow-overlay",
         },
         [
           m("div", { class: "flex items-center gap-2 px-3 pt-2.5 pb-2" }, [

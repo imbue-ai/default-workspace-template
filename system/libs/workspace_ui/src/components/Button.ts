@@ -17,10 +17,20 @@ import { TEXT_BODY_SIZE } from "./typography";
  * contiguous literal -- never build one by string interpolation. */
 
 export type ButtonVariant =
-  "primary" | "secondary" | "ghost" | "destructive" | "ghost-destructive" | "inverse" | "ghost-inverse" | "stop";
+  | "primary"
+  | "accent"
+  | "secondary"
+  | "ghost"
+  | "destructive"
+  | "ghost-destructive"
+  | "inverse"
+  | "ghost-inverse"
+  | "stop";
 
 export interface ButtonOptions {
   sm?: boolean;
+  /** The large step (36px), for the one action a page or a dialog is for. Loses to `sm`. */
+  lg?: boolean;
   /** The smallest step, icon-only (20px box). Wins over `sm`; requires `icon`
    *  (there is no xs text button -- the recipe explodes if asked for one). */
   xs?: boolean;
@@ -54,8 +64,9 @@ const BTN_BASE =
   "btn inline-flex items-center justify-center gap-1.5 " +
   `${TEXT_BODY_SIZE} leading-none whitespace-nowrap border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-surface " +
-  "disabled:opacity-40 disabled:cursor-not-allowed " +
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus " +
+  // Disabled is its own colors, not a fade: placeholder text, and each variant's own flat fill below.
+  "disabled:text-body-content-tertiary disabled:cursor-not-allowed " +
   "not-disabled:not-aria-disabled:active:translate-y-px";
 
 // Cursor and the aria-disabled treatment, resolved in the builder: an
@@ -67,30 +78,42 @@ const BTN_BASE =
 const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-40 aria-disabled:cursor-not-allowed";
 const BTN_READONLY = "cursor-default";
 
+// A solid variant's disabled look: the active fill, no edge.
+const BTN_SOLID_DISABLED = "disabled:bg-fill-active disabled:border-transparent";
+
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
   // The main action wears the workspace color: the primary role, the same color as the window around the
-  // workspace in Imbue Studio.
+  // workspace in Imbue Studio. A dialog's confirm is primary.
   primary:
-    "bg-primary-surface text-primary-content border-primary-surface not-disabled:not-aria-disabled:hover:bg-primary-surface-hover not-disabled:not-aria-disabled:hover:border-primary-surface-hover",
+    "bg-primary-surface text-primary-content border-primary-surface not-disabled:not-aria-disabled:hover:bg-primary-surface-hover not-disabled:not-aria-disabled:hover:border-primary-surface-hover " +
+    BTN_SOLID_DISABLED,
+  // An action that carries the brand (send, make it mine). Accent stays rare.
+  accent:
+    "bg-accent-surface text-accent-content border-accent-surface not-disabled:not-aria-disabled:hover:bg-accent-surface-hover not-disabled:not-aria-disabled:hover:border-accent-surface-hover " +
+    BTN_SOLID_DISABLED,
   // The fill-tinted variants pair hover with the one-step-deeper pressed tint;
   // the solid variants keep their own hover colours and the shared translate-y
   // press cue instead.
   secondary:
-    "bg-body-surface-raised text-body-content border-default not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:active:bg-fill-active",
+    "bg-body-surface-raised text-body-content border-default not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:active:bg-fill-active disabled:bg-body-surface disabled:border-subtle",
   ghost:
     "bg-transparent text-body-content-secondary border-transparent not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:hover:text-body-content not-disabled:not-aria-disabled:active:bg-fill-active",
   destructive:
-    "bg-danger-surface text-danger-content border-danger-surface not-disabled:not-aria-disabled:hover:bg-danger-surface-hover not-disabled:not-aria-disabled:hover:border-danger-surface-hover",
+    "bg-danger-surface text-danger-content border-danger-surface not-disabled:not-aria-disabled:hover:bg-danger-surface-hover not-disabled:not-aria-disabled:hover:border-danger-surface-hover " +
+    BTN_SOLID_DISABLED,
   "ghost-destructive":
     "bg-transparent text-danger-surface border-transparent not-disabled:not-aria-disabled:hover:bg-danger-subtle-surface",
   inverse:
-    "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
+    "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover " +
+    BTN_SOLID_DISABLED,
   // For controls sitting on a dark overlay (the lightbox). The whites are raw
   // (white/85, white/15) like the overlay's own black scrim -- there is no
   // dark-surface tint token, and on-accent covers only the full-strength hover.
   "ghost-inverse":
     "bg-transparent text-white/85 border-transparent not-disabled:not-aria-disabled:hover:bg-white/15 not-disabled:not-aria-disabled:hover:text-inverse-content",
-  stop: "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover",
+  stop:
+    "bg-inverse-surface text-inverse-content border-inverse-surface not-disabled:not-aria-disabled:hover:bg-inverse-surface-hover not-disabled:not-aria-disabled:hover:border-inverse-surface-hover " +
+    BTN_SOLID_DISABLED,
 };
 
 // The selected (accent-tint) palette replaces the variant's colors outright --
@@ -107,6 +130,7 @@ export const BTN_PRESSED = "bg-fill-active text-body-content border-transparent"
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {
     sm = false,
+    lg = false,
     xs = false,
     icon = false,
     round = false,
@@ -120,15 +144,21 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
   if (xs && !icon) {
     throw new Error("buttonClass: xs is an icon-only size (pass icon: true)");
   }
+  // The brand's steps: 28 (sm), 32, 36 (lg), and a square of the same height for an icon. A leading icon pulls
+  // the side next to it in.
   const size = icon
     ? xs
       ? "h-5 w-5 p-0"
       : sm
-        ? "h-[28px] w-[28px] p-0"
-        : "h-[34px] w-[34px] p-0"
+        ? "h-7 w-7 p-0"
+        : lg
+          ? "h-9 w-9 p-0"
+          : "h-8 w-8 p-0"
     : sm
-      ? "h-[28px] px-3"
-      : "h-[34px] px-3.5";
+      ? "h-7 px-2 has-[>svg:first-child]:pl-1.5"
+      : lg
+        ? "h-9 px-4 has-[>svg:first-child]:pl-3"
+        : "h-8 px-3 has-[>svg:first-child]:pl-2";
   // `btn--<variant>` is a bare marker like `btn` (tests find "the primary
   // button" by it) -- interpolating it is fine because it is not a utility the
   // scanner needs to see.
@@ -138,7 +168,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     `btn--${variant}`,
     size,
     quiet ? "font-normal" : "font-medium",
-    round ? "rounded-full" : "rounded-md",
+    round ? "rounded-full" : "rounded-xl",
     pressed ? BTN_PRESSED : selected ? BTN_SELECTED : BTN_VARIANTS[variant],
   ];
   if (block) parts.push("w-full");
@@ -162,6 +192,7 @@ interface ButtonAttrs extends m.Attributes, ButtonOptions {
 const OWN_KEYS = [
   "variant",
   "sm",
+  "lg",
   "xs",
   "icon",
   "round",
@@ -179,6 +210,7 @@ export function Button(): m.Component<ButtonAttrs> {
       const {
         variant = "secondary",
         sm,
+        lg,
         xs,
         icon,
         round,
@@ -196,7 +228,7 @@ export function Button(): m.Component<ButtonAttrs> {
         "button",
         {
           type: "button",
-          class: buttonClass(variant, { sm, xs, icon, round, selected, pressed, readonly, quiet, block, extra }),
+          class: buttonClass(variant, { sm, lg, xs, icon, round, selected, pressed, readonly, quiet, block, extra }),
           ...buttonPartAttrs(variant, icon === true),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),

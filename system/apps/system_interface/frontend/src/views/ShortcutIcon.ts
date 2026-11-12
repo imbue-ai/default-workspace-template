@@ -210,7 +210,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           {
             class:
               "shortcut-highlight flex w-full flex-col items-center gap-3 rounded-lg p-1 " +
-              "group-focus-visible:outline-2 group-focus-visible:outline-accent-surface " +
+              "group-focus-visible:outline-2 group-focus-visible:outline-focus " +
               (isSelected ? "bg-accent-surface/15 outline-1 outline-accent-surface" : ""),
           },
           shortcutContent(app, label, lift !== null),
