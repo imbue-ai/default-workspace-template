@@ -104,7 +104,7 @@ Paths are in dwt unless marked (mngr).
 - `system/scripts/fetch_mngr_assets.sh`: add `skill_authoring_guide.md` to `ASSET_PATHS`.
 - `docs/system/skill_authoring_guide.md`: symlink into `system/vendor/mngr-assets/`, like `style_guide.md`.
 - `.reviewer/code-issue-categories.md`: the same category, pointing at the vendored guide.
-- `.agents/shared/references/spec-summary.md`: shrink to dwt packaging rules plus the dwt glossary of product vocabulary; point at the guide for everything else. `user-facing-language.md` stays the authority for words shown to users.
+- `.agents/shared/references/spec-summary.md`: shrink to dwt packaging rules; point at the guide for everything else. The dwt glossary of product vocabulary is its own file, `.agents/shared/references/glossary.md`, named from `AGENTS.md` and not from `spec-summary.md` (a link from there would put it a third link from `update-self`'s SKILL.md). `user-facing-language.md` stays the authority for words shown to users.
 
 **The validator** (`.agents/shared/scripts/agents_shared/validate_skill.py`)
 
