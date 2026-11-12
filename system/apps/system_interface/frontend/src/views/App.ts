@@ -127,8 +127,8 @@ type MenuSubject =
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string }
   | { readonly kind: "size"; readonly windowId: string }
-  | (MenuSubject & { readonly trailingRows: readonly MenuRow[] })
-  | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
+  | (MenuSubject & { readonly trailingRows: readonly ContextMenuRow[] })
+  | { readonly kind: "element"; readonly rows: readonly ContextMenuRow[] };
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
  *  holds the target, when one does. */
@@ -144,7 +144,7 @@ function shellReferenceScope(store: DesktopStore, target: Element): ReferenceSco
 
 /** The reference rows a right-click menu of the shell's own ends with (element-reference-menu plan section
  *  4.4): none for a menu opened without a right-click (a long press with nothing under it). */
-function referenceRowsFor(store: DesktopStore, target: Element | null, x: number, y: number): MenuRow[] {
+function referenceRowsFor(store: DesktopStore, target: Element | null, x: number, y: number): ContextMenuRow[] {
   if (target === null) return [];
   const click = { clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY };
   const reference = describeElement(target, click, shellReferenceScope(store, target));
@@ -152,7 +152,10 @@ function referenceRowsFor(store: DesktopStore, target: Element | null, x: number
 }
 
 /** ``rows`` followed by ``trailingRows`` after a divider, or ``rows`` alone when there are none. */
-function withTrailingRows(rows: MenuRow[] | null, trailingRows: readonly MenuRow[]): MenuRow[] | null {
+function withTrailingRows(
+  rows: ContextMenuRow[] | null,
+  trailingRows: readonly ContextMenuRow[],
+): ContextMenuRow[] | null {
   if (rows === null || trailingRows.length === 0) return rows;
   return [...rows, { kind: "divider" }, ...trailingRows];
 }
