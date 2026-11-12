@@ -1,0 +1,28 @@
+{
+  "recipe:417361125162e32e": {
+    "image_id": "im-Ls2fF2aRoI9WF96NONwf9c",
+    "recipe": {
+      "builder": {
+        "modal": {
+          "dockerfile": "system/Dockerfile",
+          "include_dir": null,
+          "script": "6b393167d6cfc9d9e3553bbfc7d1693fa802924623cc04a5020ca5c47a136d71"
+        }
+      },
+      "copy_dirs": [],
+      "escaping_symlinks": {
+        "content": "86e60c71c670e4cc476c6ac0d732f8bf4978b1736aad1cb1af1be6ab171aaf7a",
+        "paths": [
+          "docs/system/skill_authoring_guide.md",
+          "docs/system/style_guide.md"
+        ]
+      },
+      "export_extras": null,
+      "format": 2,
+      "sandbox_init_cmd": "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
+    },
+    "config_path": "offload-modal.toml",
+    "offload_version": "0.10.0",
+    "built_at": "2026-11-12T20:24:01Z"
+  }
+}
