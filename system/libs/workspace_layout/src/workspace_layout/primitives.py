@@ -220,6 +220,15 @@ class ChatActivityKind(LowerCaseStrEnum):
     ROOM = auto()
 
 
+class BubbleKind(LowerCaseStrEnum):
+    """What a bubble post carries (a wire value): a message somebody sent, which hops their tray entry and raises a
+    bubble only on the clients of the people it mentions, or a chat's notification to the user, which raises one on
+    every client not looking at that chat."""
+
+    MESSAGE = auto()
+    NOTIFICATION = auto()
+
+
 class IfPresent(LowerCaseStrEnum):
     """What an open does about a window of the app already at the path: focus it, or open another (a wire value)."""
 

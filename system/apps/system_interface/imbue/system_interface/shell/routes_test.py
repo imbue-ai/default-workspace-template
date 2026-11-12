@@ -276,6 +276,7 @@ def _bubble_body(speaker: str) -> dict[str, Any]:
         "text": "hi all",
         "message_id": "m-1",
         "mentions": ["user:user-josh-0001"],
+        "kind": "message",
     }
 
 
@@ -302,6 +303,8 @@ def test_a_bubble_reaches_every_window_but_the_speakers_own_clients(
         == 403
     )
     assert client.post("/api/bubbles", json={"speaker": "user:x"}).status_code == 400
+    shouted = {**_bubble_body("user:user-bob-4471"), "kind": "shout"}
+    assert client.post("/api/bubbles", json=shouted).status_code == 400
 
 
 def test_the_chats_activity_is_kept_and_broadcast(

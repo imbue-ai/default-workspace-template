@@ -4,6 +4,7 @@ import {
   WORKSPACE_AGENT_KEY,
   foldedLabel,
   nextExpiryOf,
+  raisesBubble,
   withBubble,
   withoutChat,
   withoutExpired,
@@ -19,11 +20,25 @@ function wire(speaker: string, text: string, overrides: Partial<BubbleWire> = {}
     text,
     message_id: `m-${text}`,
     mentions: [],
+    kind: "message",
     ...overrides,
   };
 }
 
 const VIEWER = "user:user-josh-0001";
+
+describe("raisesBubble", () => {
+  it("raises a chat's notification for anyone and a message only for the people it mentions", () => {
+    const notification = wire(WORKSPACE_AGENT_KEY, "The report is ready.", { kind: "notification" });
+    expect(raisesBubble(notification, VIEWER)).toBe(true);
+    expect(raisesBubble(notification, null)).toBe(true);
+    expect(raisesBubble(wire(WORKSPACE_AGENT_KEY, "Looking into it."), VIEWER)).toBe(false);
+    expect(raisesBubble(wire("user:bob", "hi all"), VIEWER)).toBe(false);
+    expect(raisesBubble(wire("user:bob", "@Josh look", { mentions: [VIEWER] }), VIEWER)).toBe(true);
+    expect(raisesBubble(wire("user:bob", "@Carol look", { mentions: ["user:carol"] }), VIEWER)).toBe(false);
+    expect(raisesBubble(wire("user:bob", "@Josh look", { mentions: [VIEWER] }), null)).toBe(false);
+  });
+});
 
 describe("withBubble (S11)", () => {
   it("replaces a person's bubble and restarts its timer, and appends to the agent's within its lifetime", () => {

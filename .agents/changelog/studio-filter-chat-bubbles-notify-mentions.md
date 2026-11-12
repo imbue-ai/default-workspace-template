@@ -1,0 +1,1 @@
+The notify-user script now also shows each notification on the workspace's desktop, as a bubble over the agent for everyone not looking at the chat, whether or not the Imbue Studio app takes it. When the chat app cannot show it, the script prints a warning and the exit code is unchanged. A garbled answer to a POST now counts as unreachable instead of crashing the script.

@@ -6,6 +6,12 @@ this script never holds one), addressed as the current runtime agent for
 authorization. The app reads that agent's chat_id label for the stable
 conversation destination, including after a chat moves between agents.
 
+It first tells the chat app about the notification
+(``POST /api/chats/<chat id>/notification``), which shows it as a bubble over
+the agent on the workspace's desktop for everyone not looking at this chat,
+whether or not the Imbue Studio app takes it; when the chat app cannot be told
+in two seconds, a warning goes to stderr and nothing else changes.
+
 Before posting it asks the chat app which pages are watching this chat (shown
 and focused, ``GET /api/chats/<chat id>/watchers``) and sends their instance
 ids as ``watched_by``, so the app can show nothing to a user who is already
@@ -28,9 +34,9 @@ Environment:
     MNGR_AGENT_ID              Current runtime agent id, registered with the
                               gateway. MINDS_CHAT_ID identifies a conversation,
                               not the agent authorized to call this route.
-    MINDS_CHAT_ID              The chat whose watchers are asked for; an agent
-                              that is its own chat may lack it, and then
-                              MNGR_AGENT_ID stands in.
+    MINDS_CHAT_ID              The chat the notification is from, whose watchers
+                              are asked for; an agent that is its own chat may
+                              lack it, and then MNGR_AGENT_ID stands in.
     MINDS_APPS_FILE            The app registry the chat app's address is read
                               from (default data/.state/apps.toml).
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
@@ -75,9 +81,9 @@ ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 # turn.
 _TIMEOUT_SECONDS = 10.0
 
-# The watcher question is a courtesy: the notification goes out without its
-# answer rather than wait on a slow chat app.
-_WATCHERS_TIMEOUT_SECONDS = 2.0
+# The watcher question and the desktop bubble are courtesies: the notification
+# goes out without them rather than wait on a slow chat app.
+_CHAT_APP_TIMEOUT_SECONDS = 2.0
 
 # This module sits five directories below the repo root
 # (.agents/skills/notify-user/python/notify_user_skill/).
@@ -90,7 +96,8 @@ class HttpClient:
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> tuple[int | None, str]:
-        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable."""
+        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable, too slow, or
+        garbled."""
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
@@ -98,7 +105,12 @@ class HttpClient:
                 return int(response.status), response.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             return int(exc.code), exc.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, OSError) as exc:
+        except (
+            urllib.error.URLError,
+            OSError,
+            http.client.HTTPException,
+            ValueError,
+        ) as exc:
             return None, str(exc)
 
     def get(self, url: str, timeout: float) -> tuple[int | None, str]:
@@ -121,14 +133,49 @@ class WatchersUnknownError(Exception):
     """The chat app could not say who is watching this chat."""
 
 
+def _chat_id(environ: dict[str, str]) -> str:
+    """The chat this notification is from, or "" when the env names none."""
+    return environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+
+
+def show_on_desktop(
+    message: str, title: str | None, *, http: HttpClient, environ: dict[str, str]
+) -> None:
+    """Tell the chat app about the notification, so the workspace's desktop shows it over the agent; a warning on
+    stderr when it cannot, since the notification still goes to the app."""
+    chat_id = _chat_id(environ)
+    if not chat_id:
+        reason = f"{ENV_CHAT_ID} is not set"
+    else:
+        payload: dict[str, str] = {"message": message.strip()}
+        if title:
+            payload["title"] = title.strip()
+        status, text = http.post_json(
+            f"{message_chat.chat_app_url(environ, _REPO_ROOT)}/api/chats/{chat_id}/notification",
+            payload,
+            {"Content-Type": "application/json"},
+            timeout=_CHAT_APP_TIMEOUT_SECONDS,
+        )
+        if status == 200:
+            return
+        reason = (
+            f"the chat app did not answer: {text}"
+            if status is None
+            else f"the chat app answered {status}"
+        )
+    sys.stderr.write(
+        f"notify-user: could not show the notification on the workspace's desktop ({reason})\n"
+    )
+
+
 def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
     """The instance ids of the pages watching this chat; raises WatchersUnknownError naming why they are unknown."""
-    chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+    chat_id = _chat_id(environ)
     if not chat_id:
         raise WatchersUnknownError(f"{ENV_CHAT_ID} is not set")
     status, text = http.get(
         f"{message_chat.chat_app_url(environ, _REPO_ROOT)}/api/chats/{chat_id}/watchers",
-        timeout=_WATCHERS_TIMEOUT_SECONDS,
+        timeout=_CHAT_APP_TIMEOUT_SECONDS,
     )
     if status is None:
         raise WatchersUnknownError(f"the chat app did not answer: {text}")
@@ -156,6 +203,7 @@ def notify(
     if not message.strip():
         sys.stderr.write("notify-user: the message is empty; nothing was sent.\n")
         return False
+    show_on_desktop(message, title, http=http, environ=environ)
     gateway = environ.get(ENV_GATEWAY, "")
     password = environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:

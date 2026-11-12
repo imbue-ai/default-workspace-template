@@ -39,6 +39,7 @@ from workspace_bare_scripts import room_agent
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import parse_identity_header
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -6400,6 +6401,7 @@ def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_me
         ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
         ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
 
 
 def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_nothing(tmp_path: Path) -> None:
@@ -6469,6 +6471,57 @@ def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Pa
         ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
         ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
+
+
+def test_a_chats_notification_raises_a_notification_bubble_over_the_agents_entry(tmp_path: Path) -> None:
+    """The notify script tells the chat app about each notification it sends (the multiplayer spec, section 6.5):
+    the chat app raises it over the agent's entry, under the chat's title, the optional title as its prefix."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    plain = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "The report is ready."})
+    titled = client.post(
+        f"/api/chats/{_LOUNGE_ID}/notification", json={"message": "All 412 passed.", "title": "Test run"}
+    )
+
+    assert (plain.status_code, titled.status_code) == (200, 200)
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both notifications to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.mentions, bubble.kind)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "The report is ready.", (), BubbleKind.NOTIFICATION),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "Test run: All 412 passed.", (), BubbleKind.NOTIFICATION),
+    ]
+    assert shell.bubbles[0].message_id != shell.bubbles[1].message_id
+
+
+def test_a_notification_is_taken_only_from_loopback_for_a_chat_there_is_with_something_to_say(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    unknown_chat = "agent-00000000000000000000000000000099"
+
+    remote = client.post(
+        f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"}, environ_base={"REMOTE_ADDR": "10.0.0.7"}
+    )
+    unknown = client.post(f"/api/chats/{unknown_chat}/notification", json={"message": "hi"})
+    not_an_id = client.post("/api/chats/not-an-agent/notification", json={"message": "hi"})
+    empty = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": ""})
+
+    assert [response.status_code for response in (remote, unknown, not_an_id, empty)] == [403, 404, 404, 400]
+    assert shell.bubbles == []
+
+
+def test_a_secondary_chat_app_takes_a_notification_and_raises_no_bubble(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+
+    response = app.test_client().post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert _fake_shell_of(app).bubbles == []
 
 
 def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ import threading
 from pydantic import Field
 from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatsActivityReport
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ChatActivityKind
 from workspace_layout.primitives import ChatActivityStatus
 from workspace_layout.primitives import ParticipantKey
@@ -59,7 +60,7 @@ def test_a_bubble_is_posted_to_the_shell_off_the_callers_thread() -> None:
     shell = FakeShell()
     feed = TrayFeed(shell=shell)
 
-    feed.post_bubble(_BOB, _CHAT, "Lounge", "  @Josh look  ", "m-1", (_JOSH,)).result(timeout=10)
+    feed.post_bubble(_BOB, _CHAT, "Lounge", "  @Josh look  ", "m-1", (_JOSH,), BubbleKind.MESSAGE).result(timeout=10)
 
     assert shell.bubbles == [
         BubblePost(
@@ -69,6 +70,7 @@ def test_a_bubble_is_posted_to_the_shell_off_the_callers_thread() -> None:
             text="@Josh look",
             message_id="m-1",
             mentions=(_JOSH,),
+            kind=BubbleKind.MESSAGE,
         )
     ]
     feed.shutdown()
@@ -79,7 +81,7 @@ def test_a_post_after_shutdown_is_dropped_and_settles_without_raising() -> None:
     feed = TrayFeed(shell=shell)
     feed.shutdown()
 
-    feed.post_bubble(_BOB, _CHAT, "Lounge", "late", "m-9", ()).result(timeout=10)
+    feed.post_bubble(_BOB, _CHAT, "Lounge", "late", "m-9", (), BubbleKind.MESSAGE).result(timeout=10)
     feed.report_chats([make_chat_snapshot("agent-1", name="Late")]).result(timeout=10)
 
     assert shell.bubbles == [] and shell.chats_activity == []
@@ -96,7 +98,7 @@ class _BrokenShell(FakeShell):
 def test_a_post_that_fails_for_a_reason_the_client_does_not_handle_is_logged(loguru_records: list[str]) -> None:
     feed = TrayFeed(shell=_BrokenShell())
 
-    future = feed.post_bubble(_BOB, _CHAT, "Lounge", "hi", "m-1", ())
+    future = feed.post_bubble(_BOB, _CHAT, "Lounge", "hi", "m-1", (), BubbleKind.MESSAGE)
     assert isinstance(future.exception(timeout=10), RuntimeError)
     feed.shutdown()
 

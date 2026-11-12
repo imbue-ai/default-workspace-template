@@ -47,7 +47,15 @@ import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Prese
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
 import { applyChatsActivity } from "../model/ChatsActivity";
-import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
+import {
+  isMentionOf,
+  nextExpiryOf,
+  raisesBubble,
+  withBubble,
+  withoutChat,
+  withoutExpired,
+  withoutSpeaker,
+} from "../model/Bubbles";
 import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, pinPageOfLink, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
@@ -1392,14 +1400,15 @@ export class DesktopStore {
     }, TRAY_HOP_MS);
   }
 
-  /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
-   *  timeout is armed. A bubble for the chat the user is looking at says nothing they cannot already see, so it
-   *  is not raised -- unless it mentions the viewer, whose mark must not be missable. */
+  /** Somebody just said something, or a chat notified the user: their entry hops, and when it is a notification
+   *  or mentions the viewer their bubble is raised or refreshed (S11) and the next timeout is armed. A bubble for
+   *  the chat the user is looking at says nothing they cannot already see, so it is not raised -- unless it
+   *  mentions the viewer, whose mark must not be missable. */
   private takeBubble(bubble: BubbleWire): void {
     this.hop([bubble.speaker]);
     const viewer = getOwnParticipant();
-    const isMentionOfViewer = viewer !== null && bubble.mentions.includes(viewer);
-    if (!isMentionOfViewer && isChatOnScreen(this.state, bubble.chat_id)) return;
+    if (!raisesBubble(bubble, viewer)) return;
+    if (!isMentionOf(bubble, viewer) && isChatOnScreen(this.state, bubble.chat_id)) return;
     this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
   }
 

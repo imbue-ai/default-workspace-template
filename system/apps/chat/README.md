@@ -86,7 +86,8 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, destroy, rename, make-main, start, stop; the subagent reads under
+  the queue actions, presence and watchers, a notification's desktop bubble, destroy, rename, make-main, start,
+  stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads`,
@@ -1179,10 +1180,15 @@ the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
 The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
 visiting agent sends (the send route, an intake's send, a room's first message once it has
 landed, a new agent chat's first message as its create is accepted) is posted to the shell
-as a speech bubble (`POST /api/bubbles`, with the people it mentions when the chat is a
+as a `message` (`POST /api/bubbles`, with the people it mentions when the chat is a
 room), as is every turn the workspace agent closes with text (an assistant turn
 of the chat's live agent's own session, or its post into a room), cut to the bubble's
-length. The agent's turns reach the feed through the session watcher a page's stream
+length. A `message` hops its speaker's tray entry everywhere and raises a speech bubble
+only on the clients of the people it mentions. Every notification a chat sends the user
+is posted as a `notification` over the agent's entry, which raises a bubble on every
+client not looking at the chat: the notify-user skill's script tells the chat app with
+`POST /api/chats/<chat-id>/notification` (loopback only; `{"message", "title"}`, the
+title shown as a prefix), whether or not the Imbue Studio app takes the notification. The agent's turns reach the feed through the session watcher a page's stream
 builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
 evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
 a chat nobody has open raises none (the spec's section 11). And every chat-list push is

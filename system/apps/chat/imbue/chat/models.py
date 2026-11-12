@@ -280,6 +280,13 @@ class ChatWatchersResponse(FrozenModel):
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
 
 
+class ChatNotificationRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/notification: the notification the chat just sent the user."""
+
+    message: str = Field(min_length=1, description="What the notification says")
+    title: str | None = Field(default=None, description="Its optional title, shown as a prefix on the message")
+
+
 class DrainToComposerResponse(FrozenModel):
     """Response from POST /api/chats/{id}/drain-to-composer.
 

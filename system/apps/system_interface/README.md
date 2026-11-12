@@ -600,15 +600,18 @@ runs the primary text action with nothing to send, which opens the main chat;
 clicking your own picture does nothing. The shell names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
-somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
-"chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
+somebody sends, every turn the agent closes with text, and every notification a chat
+sends the user (`{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions",
+"kind"}`, `kind` being `message` or `notification`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
 carry the speaker's key; the owner's under either of their keys, the account's or
 the synthetic `owner`, whichever the bubble carries; a window looking at the
 bubble's chat drops it on receipt unless it mentions the viewer); and
 `POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
-connect once reported. A speech bubble is a rounded card hanging above the tray
+connect once reported. Every `bubble` hops its speaker's entry, but only a
+`notification` or a message that mentions the viewer raises a speech bubble. A speech
+bubble is a rounded card hanging above the tray
 with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
 click that opens the chat it was said in; it lives five seconds after its last
 change, a person's new message replaces their bubble, the agent's new message

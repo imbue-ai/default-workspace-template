@@ -1,12 +1,15 @@
 /**
  * Speech bubbles (the multiplayer spec, section 6.5, S11): what somebody just said, hanging over their tray entry.
  *
+ * Only two things raise one: a chat's notification to the user (over the agent's entry), and a message that
+ * mentions the viewer. Every other message only hops its speaker's entry.
+ *
  * One bubble per speaker, debounced: a person's new message replaces their bubble and restarts its timer; the
  * agent's new message within its bubble's lifetime is appended to it ("and 2 more" past three lines) and restarts
  * the timer; bubbles of different speakers stack upward in arrival order. A bubble lives `BUBBLE_LIFETIME_MS` after
- * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened. Every
- * message raises one on every client but the speaker's own (the shell leaves those out) and the clients looking at
- * the chat it was said in (the store leaves those out on receipt -- a mention of the viewer still rises there).
+ * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened. A bubble
+ * rises on every client but the speaker's own (the shell leaves those out) and the clients looking at the chat it was
+ * said in (the store leaves those out on receipt -- a mention of the viewer still rises there).
  * The reducer is pure; the timers are the model's.
  */
 
@@ -36,10 +39,21 @@ export interface Bubble {
 /** The bubbles in arrival order (the first arrived first; the view stacks them upward). */
 export type BubbleStack = readonly Bubble[];
 
+/** Whether the push mentions the viewer. */
+export function isMentionOf(wire: BubbleWire, viewer: string | null): boolean {
+  return viewer !== null && wire.mentions.includes(viewer);
+}
+
+/** Whether the push raises a bubble for the viewer at all: a chat's notification does, and a message does only when
+ *  it mentions them. */
+export function raisesBubble(wire: BubbleWire, viewer: string | null): boolean {
+  return wire.kind === "notification" || isMentionOf(wire, viewer);
+}
+
 /** Add a wire bubble to the stack (S11): the speaker's bubble replaced (a person) or appended to (the agent) when
  *  one is up, else a new one at the end. */
 export function withBubble(stack: BubbleStack, wire: BubbleWire, viewer: string | null, now: number): BubbleStack {
-  const isMention = viewer !== null && wire.mentions.includes(viewer);
+  const isMention = isMentionOf(wire, viewer);
   const index = stack.findIndex((bubble) => bubble.speaker === wire.speaker);
   const previous = index === -1 ? null : stack[index];
   const isAppended = previous !== null && wire.speaker === WORKSPACE_AGENT_KEY;

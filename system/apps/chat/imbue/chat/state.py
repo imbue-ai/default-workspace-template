@@ -11,6 +11,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 
@@ -305,7 +306,9 @@ class ChatAppState(MutableModel):
         if snapshot is None or snapshot.active_agent.agent_id != agent_id:
             return
         for text, event_id in spoken:
-            self.tray_feed.post_bubble(WORKSPACE_AGENT_PARTICIPANT_KEY, chat_id, snapshot.title, text, event_id, ())
+            self.tray_feed.post_bubble(
+                WORKSPACE_AGENT_PARTICIPANT_KEY, chat_id, snapshot.title, text, event_id, (), BubbleKind.MESSAGE
+            )
 
     def _agents_words_in(self, event: dict[str, Any]) -> tuple[str, str]:
         """What the workspace agent said in one event and the event's id: its post into a room, or an assistant turn

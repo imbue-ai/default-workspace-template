@@ -23,7 +23,7 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
-import type { GridCell } from "../model/records";
+import type { BubbleWire, GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
@@ -3187,51 +3187,82 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
         message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
       }),
     ]);
-    const bubble = {
-      speaker: "user:user-bob-4471",
-      chat_id: "agent-2",
-      chat_title: "Lounge",
-      text: "hi",
-      message_id: "m-1",
-      mentions: [],
-    };
-    socket.deliver().onBubble(bubble);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", message_id: "m-2" });
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual([
-      "user:user-bob-4471",
-      "user:user-carol-1d2e",
-    ]);
-
-    store.dismissBubble("user:user-carol-1d2e");
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
-    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS + 1);
-    expect(store.getBubbles()).toEqual([]);
-
-    socket.deliver().onBubble({ ...bubble, message_id: "m-3" });
-    store.openBubble("user:user-bob-4471");
-    await settle();
-    expect(store.getBubbles()).toEqual([]);
-    expect(api.relayedMessages).toEqual([
-      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
-    ]);
-
-    // A mention of the viewer never times out, but showing its chat from anywhere (the agent card's rows) puts
-    // it away; a bubble of another chat stays.
     setOwnIdentityForTesting({
       owner: true,
       user_id: "user-josh-0001",
       email: "josh@example.com",
       participant: VIEWER,
     });
-    socket.deliver().onBubble({ ...bubble, message_id: "m-4", mentions: [VIEWER] });
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-5" });
-    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    const notification: BubbleWire = {
+      speaker: "workspace-agent",
+      chat_id: "agent-2",
+      chat_title: "Main chat",
+      text: "The report is ready.",
+      message_id: "m-1",
+      mentions: [],
+      kind: "notification",
+    };
+    const mention: BubbleWire = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-3",
+      chat_title: "Lounge",
+      text: "@Josh look",
+      message_id: "m-2",
+      mentions: [VIEWER],
+      kind: "message",
+    };
+    socket.deliver().onBubble(notification);
+    socket.deliver().onBubble(mention);
     expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.isMention])).toEqual([
+      ["workspace-agent", false],
       ["user:user-bob-4471", true],
     ]);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-6" });
-    expect(await store.showChat("agent-2")).toBe(true);
-    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-carol-1d2e"]);
+
+    // The notification times out; the mention of the viewer never does, until it is dismissed.
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
+    store.dismissBubble("user:user-bob-4471");
+    expect(store.getBubbles()).toEqual([]);
+
+    socket.deliver().onBubble({ ...notification, message_id: "m-3" });
+    store.openBubble("workspace-agent");
+    await settle();
+    expect(store.getBubbles()).toEqual([]);
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
+    ]);
+
+    // Showing a chat from anywhere (the agent card's rows) puts its bubbles away, a mention of the viewer included;
+    // a bubble of another chat stays.
+    socket.deliver().onBubble({ ...mention, message_id: "m-4" });
+    socket.deliver().onBubble({ ...notification, chat_id: "agent-4", message_id: "m-5" });
+    expect(await store.showChat("agent-3")).toBe(true);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["workspace-agent"]);
+  });
+
+  it("raises no bubble for a message that does not mention the viewer, the agent's words included, but hops its speaker", async () => {
+    const store = await startedStore();
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    const message: BubbleWire = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "@Carol hi",
+      message_id: "m-1",
+      mentions: ["user:user-carol-1d2e"],
+      kind: "message",
+    };
+
+    socket.deliver().onBubble(message);
+    socket.deliver().onBubble({ ...message, speaker: "workspace-agent", text: "Looking into it.", mentions: [] });
+
+    expect(store.getBubbles()).toEqual([]);
+    expect(store.getHopping()).toEqual(new Set(["user:user-bob-4471", "workspace-agent"]));
   });
 
   it("raises no bubble for the chat the user is looking at, unless it mentions the viewer", async () => {
@@ -3245,38 +3276,49 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
       placements: [placementRecord("win-1"), placementRecord("win-chat")],
     });
     const store = await startedStore();
-    const bubble = {
-      speaker: "user:user-bob-4471",
+    const notification: BubbleWire = {
+      speaker: "workspace-agent",
       chat_id: "agent-2",
       chat_title: "Lounge",
-      text: "hi",
+      text: "The report is ready.",
       message_id: "m-1",
       mentions: [],
+      kind: "notification",
     };
 
-    // The chat's window is focused: its bubbles say nothing the user cannot see, so none is raised; the entry
-    // still hops, and a bubble of another chat still rises.
-    socket.deliver().onBubble(bubble);
+    // The chat's window is focused: its notification says nothing the user cannot see, so none is raised; the
+    // entry still hops, and a notification of another chat still rises.
+    socket.deliver().onBubble(notification);
     expect(store.getBubbles()).toEqual([]);
-    expect(store.getHopping().has(bubble.speaker)).toBe(true);
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-2" });
+    expect(store.getHopping().has(notification.speaker)).toBe(true);
+    socket.deliver().onBubble({ ...notification, chat_id: "agent-3", message_id: "m-2" });
     expect(store.getBubbles().map((candidate) => candidate.chatId)).toEqual(["agent-3"]);
 
-    // A mention of the viewer rises even over its own chat; with the chat's window minimized, everything rises.
+    // A mention of the viewer rises even over its own chat; with the chat's window minimized, a notification of it
+    // rises too.
     setOwnIdentityForTesting({
       owner: true,
       user_id: "user-josh-0001",
       email: "josh@example.com",
       participant: VIEWER,
     });
-    socket.deliver().onBubble({ ...bubble, message_id: "m-3", mentions: [VIEWER] });
+    socket.deliver().onBubble({
+      ...notification,
+      speaker: "user:user-bob-4471",
+      message_id: "m-3",
+      mentions: [VIEWER],
+      kind: "message",
+    });
     expect(store.getBubbles().map((candidate) => [candidate.chatId, candidate.isMention])).toEqual([
       ["agent-3", false],
       ["agent-2", true],
     ]);
     store.minimizeWindow("win-chat");
-    socket.deliver().onBubble({ ...bubble, speaker: "user:user-dave-9b3c", message_id: "m-4" });
-    expect(last(store.getBubbles())?.speaker).toBe("user:user-dave-9b3c");
+    socket.deliver().onBubble({ ...notification, message_id: "m-4" });
+    expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.chatId])).toEqual([
+      ["workspace-agent", "agent-2"],
+      ["user:user-bob-4471", "agent-2"],
+    ]);
   });
 
   it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
@@ -3381,6 +3423,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
       text: "@Josh look",
       message_id: "m-1",
       mentions: [VIEWER],
+      kind: "message",
     });
     expect(await store.mentionPerson("Bob")).toBe(false);
     expect(await store.showChat("agent-1")).toBe(false);
@@ -3415,6 +3458,7 @@ describe("the tray's hops", () => {
       text: "hi",
       message_id: "m-1",
       mentions: [],
+      kind: "message",
     });
     expect(store.getHopping()).toEqual(new Set([bob.key, carol.key]));
 
@@ -3855,9 +3899,10 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
       speaker: alice.key,
       chat_id: "agent-2",
       chat_title: "Lounge",
-      text: "hi",
+      text: "@Josh hi",
       message_id: "m-1",
-      mentions: [],
+      mentions: [VIEWER],
+      kind: "message",
     });
     await store.switchDesktop("alice");
     const callsBefore = api.calls.length;
