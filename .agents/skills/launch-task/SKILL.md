@@ -3,6 +3,8 @@ name: launch-task
 description: Create a sub-agent to perform a larger task. Use when work is large enough to warrant a separate context, involves multi-file changes, or benefits from isolation.
 metadata:
   author: imbue
+  exempt-checks: depth contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Launching a task
@@ -11,6 +13,15 @@ Pick a short kebab-case slug `$NAME` for this dispatch (e.g.
 `fix-login-bug`, `add-search-feature`). It is used for the worker name,
 its branch (`mngr/$NAME`), and the local runtime path
 (`data/.tasks/launch-task/$NAME/`). Names must be unique.
+
+## Contents
+
+- 0. Open a single tk step for the whole delegation
+- 1. Write the task file
+- 2. Launch the worker
+- 3. Background-poll for the worker's report
+- 4. Handle the report
+- Guidelines
 
 ## 0. Open a single tk step for the whole delegation
 

@@ -3,6 +3,8 @@ name: update-self
 description: Safely pull updates from the upstream template repo (default target is the release the running Imbue Studio app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
+  exempt-checks: size depth paths contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Pulling updates from the upstream template, safely

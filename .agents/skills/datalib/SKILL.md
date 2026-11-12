@@ -8,6 +8,14 @@ metadata:
 
 # datalib
 
+## Contents
+
+- Instructions
+- Driving datalib: start at `datalib-step help`
+- Authorizing a source
+- Supported sources (inside Imbue Studio)
+- Notes
+
 ## Instructions
 
 **datalib is not announced to users yet.** It ships in every workspace so it

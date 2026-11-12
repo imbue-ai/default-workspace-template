@@ -5,6 +5,16 @@ titles and summaries, skill "report to the user" steps, notifications. The
 output style and `AGENTS.md` both defer here, so a rule about what the user
 hears lives in this file and nowhere else.
 
+## Contents
+
+- Who is reading
+- Invisible plumbing
+- Version control in particular
+- Skills in particular
+- Other common leaks
+- When to switch registers
+- Progress-view titles and summaries
+
 ## Who is reading
 
 Assume a non-technical reader. They asked for an outcome (a page that works, a

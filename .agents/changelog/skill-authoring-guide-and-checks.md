@@ -1,0 +1,15 @@
+Skills are now held to the skill authoring guide (`docs/system/skill_authoring_guide.md`).
+
+- **`validate_skill.py` checks five more things.** `size` (SKILL.md at most 14,000 bytes, the 5,000 tokens an agent keeps of a skill after a compaction, and 500 body lines), `reachability` (every file in the skill's directory is linked), `depth` (no reference more than two links from SKILL.md), `paths` (every path named under `.agents/`, `system/` or `docs/` exists) and `contents` (a long file has a list naming its sections). A failure states the goal and says restructuring is permitted.
+
+- **Exemptions.** A skill that fails a check carries `exempt-checks` and `exempt-reason` in its frontmatter `metadata`. 18 built-in skills carry one, with the reason `awaiting-restructure`. A stale exemption fails. `--no-exemptions` refuses one, and a new skill is validated that way (`op-crystallize.md`). `--edited` is the mode for a skill that was edited (`type-skill.md`): it refuses `predates-checks`, the reason a user's own skill carries, so the edit clears it; it honours `awaiting-restructure`, so nobody is asked to restructure a built-in skill locally ahead of the release that does.
+
+- **`validate_skill.py --stamp`** records what each existing skill fails as an exemption and changes nothing else. A skill it newly exempts gets `predates-checks`; one that already carries an exemption keeps its reason. `update-self`'s worker, `migrate-workspace`, `use-template` and `update-installed-template` run it, and so does the packaging migration (`python-packaging-migration.md`) when a skill it converts fails a check, so a user's existing skills are never restructured by a flow.
+
+- **`imbue-studio` is listed as a third-party skill**, so the checks leave it out; it is restructured in the mngr repository.
+
+- **Contents lists** were added to 28 long SKILL.md and reference files, and `publish-template`'s checklist names its last section.
+
+- **`spec-summary.md`** now holds only this workspace's packaging rules; the rest moved to the guide. The product terms skills use are in a new shared `glossary.md`, which `AGENTS.md` names.
+
+- **Shared layer.** The worker's reference table names its operation and type files, the orphaned `verification.md` is deleted, and example paths in `service-processes.md` and `running-python.md` use placeholders.

@@ -3,6 +3,8 @@ name: update-published-template
 description: Create a NEW version of a template you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of a template they previously published.
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # Update a published template
@@ -73,6 +75,20 @@ format) and a template's own publish count. See
 > fix the real blocker and retry the documented step, or STOP and tell the user
 > plainly what failed and that you did not publish an update. A broken or partial
 > "update" is strictly worse than leaving the existing published version alone.
+
+## Contents
+
+- Shared conventions
+- 1. Locate the published template
+- 2. Fetch the published tip, verify it, compute the delta, and run the scope gate
+- 3. Delegate the re-assembly to a launch-task worker
+- 4. What the worker guarantees (guard rails)
+- 5. Confirm the update in chat (final gate)
+- 6. Ensure GitHub push access (latchkey -- not the gh CLI)
+- 7. Push v(n+1) and tag it
+- 8. Record the v(n+1) entry in the ledger (ONLY after the push succeeded)
+- 9. Close out
+- Invariants preserved (call them out)
 
 ## Shared conventions
 

@@ -8,6 +8,17 @@ creation reference (where it lives, how to test it, what not to touch).
 A heal has a **single final gate** -- no outline gate. The creation already
 exists; you are not redesigning it, just repairing it.
 
+## Contents
+
+- Valid report `name:` values
+- Stage 1: Replicate
+- Stage 2: Diagnose the root cause
+- Stage 3: Apply the minimal fix
+- Stage 4: Re-run 2-3 fresh scenarios
+- Stage 5: Review gates
+- Stage 6: Final gate, then commit and hand off
+- If you cannot fix it
+
 ## Valid report `name:` values
 
 - Gates: `final-creation` (Stage 6), and `question` mid-flight, whenever the

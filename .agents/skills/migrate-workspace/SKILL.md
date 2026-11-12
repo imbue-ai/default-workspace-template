@@ -4,6 +4,8 @@ description: "Bring everything from another (older, broken, or replaced) workspa
 compatibility: Requires latchkey (the Imbue Studio API gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
+  exempt-checks: size depth paths contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Migrating another workspace into this one
@@ -33,6 +35,20 @@ summary. Every mechanical step lives in
 the raw material for your judgement, not a substitute for it. **Where the script
 reports something ambiguous or incomplete, that is a real question -- never treat
 an empty or partial result as "nothing there".**
+
+## Contents
+
+- 0. If the user asked you from the OLD workspace
+- 1. Identify the source
+- 2. Get access, in one batched request
+- 3. Preconditions
+- 4. Detect the layout, then resolve the baseline
+- 5. Inventory and audit -- ask everything now
+- 6. Dispatch the worker
+- 7. The worker's half
+- 8. Handle the report, then verify
+- 9. Close out
+- Running it again against the same source
 
 ## 0. If the user asked you from the OLD workspace
 
@@ -523,8 +539,12 @@ an assumption:
 
 - **Every migrated app opens and shows the user's own data** -- not an empty
   state. Open it and look.
-- **Every migrated skill loads**:
-  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`.
+- **Every migrated skill is recorded against the skill checks, then loads**:
+  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp` adds an
+  exemption to each skill that fails one and changes nothing else (commit the result;
+  never restructure a migrated skill to pass), then
+  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
+  prints `ok` for each.
 - **The data is present** at its new locations, including the secrets file that
   was supposed to come over.
 - **Every recreated tab renders its history**, on the account the chat ran on

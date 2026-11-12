@@ -4,6 +4,15 @@ Generic file-based protocol for signaling the lead at each gate and at
 terminal status. The worker supplies flow-specific runtime paths and the
 enum of allowed `name:` values.
 
+## Contents
+
+- Task-file inputs
+- Reporting procedure
+- Report shape
+- `name: question` is valid on every run
+- Milestone reports (non-blocking)
+- Terminal status report bodies
+
 ## Task-file inputs
 
 Your task file has been synced to your worktree at `<RUNTIME_DIR>/task.md`.

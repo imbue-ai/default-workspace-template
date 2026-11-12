@@ -1,0 +1,1 @@
+../../system/vendor/mngr-assets/skill_authoring_guide.md

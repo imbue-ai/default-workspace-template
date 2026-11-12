@@ -16,6 +16,17 @@ reorganizations (`mngr/fix-data-layout`, `mngr/declutter-template`,
 container base-image change. This is a one-off for that discontinuity, not the
 first of a versioned series.
 
+## Contents
+
+- Why the test is the tree, not the version
+- Absolute roots
+- Repo-relative paths
+- Substrate deltas
+- Skills and worker references that were renamed
+- Capabilities that did not exist then
+- The 30-minute `host-backup-now` hang
+- Two gotchas specific to this crossing
+
 ## Why the test is the tree, not the version
 
 The reorganization shipped in **no** `minds-v*` tag: `minds-v0.3.9` still carries
