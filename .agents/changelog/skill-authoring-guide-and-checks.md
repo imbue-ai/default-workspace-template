@@ -10,6 +10,6 @@ Skills are now held to the skill authoring guide (`docs/system/skill_authoring_g
 
 - **Contents lists** were added to 28 long SKILL.md and reference files, and `publish-template`'s checklist names its last section.
 
-- **`spec-summary.md`** now holds only this workspace's packaging rules and its glossary of product terms; the rest moved to the guide.
+- **`spec-summary.md`** now holds only this workspace's packaging rules; the rest moved to the guide. The product terms skills use are in a new shared `glossary.md`, which `AGENTS.md` names.
 
 - **Shared layer.** The worker's reference table names its operation and type files, the orphaned `verification.md` is deleted, and example paths in `service-processes.md` and `running-python.md` use placeholders.
