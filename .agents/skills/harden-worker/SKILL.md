@@ -88,7 +88,7 @@ By what the pass is:
 | Load when | Reference | What it gives you |
 |---|---|---|
 | you reconstruct the work from the lead's session | `transcript-exploration.md` | how to find the work in the lead's transcript |
-| a creation is a `skill` | `.agents/shared/references/spec-summary.md` | this workspace's skill packaging rules and vocabulary |
+| a creation is a `skill` | `.agents/shared/references/spec-summary.md` | this workspace's skill packaging rules |
 | a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
 | a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update in place, or split off a new skill |
 | a creation is an `app` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
