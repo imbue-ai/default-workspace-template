@@ -93,7 +93,7 @@ The diff should not include excessive changes, or changes unrelated to the user'
 
 ## skill_hygiene
 
-Apply the skill authoring guide to skill markdown the diff adds or changes. **Read `docs/system/skill_authoring_guide.md` for the criteria and rationale** -- the guide is the source of truth; this category does not restate it. `.agents/shared/references/spec-summary.md` adds this repository's packaging rules and its glossary of product terms.
+Apply the skill authoring guide to skill markdown the diff adds or changes. **Read `docs/system/skill_authoring_guide.md` for the criteria and rationale** -- the guide is the source of truth; this category does not restate it. `.agents/shared/references/spec-summary.md` adds this repository's packaging rules, and `.agents/shared/references/glossary.md` its product terms.
 
 It covers markdown an agent reads under `.agents/`: `SKILL.md` files, their references, the shared references under `.agents/shared/`, and the harden worker's references.
 
@@ -101,7 +101,7 @@ Judge what no script can decide:
 - A `SKILL.md` written as the full manual instead of standing instructions, a step list, and steps that name their references.
 - Instructions, file paths or other body content in a `description`, or a description in the first or second person.
 - Version-bound text outside an old-patterns reference.
-- A term that drifts from the guide's glossary or from `spec-summary.md`'s.
+- A term that drifts from the guide's glossary or from `.agents/shared/references/glossary.md`.
 - A fixed procedure left as prose that should be a script.
 
 **Exceptions:**
