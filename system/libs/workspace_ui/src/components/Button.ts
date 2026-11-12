@@ -36,13 +36,9 @@ export interface ButtonOptions {
   xs?: boolean;
   icon?: boolean;
   round?: boolean;
-  /** Accent-tint pressed look; an icon ghost with `selected` is the on/off
+  /** The held, active-fill look; an icon ghost with `selected` is the on/off
    *  toggle recipe. */
   selected?: boolean;
-  /** The neutral pressed look (the fill-active tint in the text colour), for
-   *  an on/off control whose "on" should not read as the accent: the
-   *  composer's mic while it listens. Wins over `selected`. */
-  pressed?: boolean;
   /** Non-interactive without `disabled`: resting look, default cursor, no
    *  hover/press. The element stays enabled so a hover tooltip can explain
    *  why; the component marks it aria-disabled for assistive tech. */
@@ -116,16 +112,14 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
     BTN_SOLID_DISABLED,
 };
 
-// The selected (accent-tint) palette replaces the variant's colors outright --
-// the builder resolves the conflict in code instead of leaning on the cascade.
-// Exported for the one decorative copy of a selected control (the fast-mode
-// modal's inline illustration), so its tint cannot drift from the real thing.
-// border-transparent, not border-accent-surface: the tint alone says "on" -- an
-// outline reads as a frame around the control (most visibly on the modal's
-// inline illustration), and ghost <-> selected keeps identical geometry.
-export const BTN_SELECTED = "bg-accent-subtle-surface text-accent-surface border-transparent";
-// The neutral counterpart: the ghost variant's own pressed tint, held.
-export const BTN_PRESSED = "bg-fill-active text-body-content border-transparent";
+// The selected palette replaces the variant's colors outright -- the builder
+// resolves the conflict in code instead of leaning on the cascade. It is the
+// active fill in body text: the brand keeps the accent rare, so "on" is a
+// neutral tint. Exported for the one decorative copy of a selected control (the
+// fast-mode modal's inline illustration), so its tint cannot drift from the
+// real thing. No edge: the tint alone says "on", and ghost <-> selected keeps
+// identical geometry.
+export const BTN_SELECTED = "bg-fill-active text-body-content border-transparent";
 
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {
@@ -135,7 +129,6 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     icon = false,
     round = false,
     selected = false,
-    pressed = false,
     readonly = false,
     quiet = false,
     block = false,
@@ -169,7 +162,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     size,
     quiet ? "font-normal" : "font-medium",
     round ? "rounded-full" : "rounded-xl",
-    pressed ? BTN_PRESSED : selected ? BTN_SELECTED : BTN_VARIANTS[variant],
+    selected ? BTN_SELECTED : BTN_VARIANTS[variant],
   ];
   if (block) parts.push("w-full");
   if (extra !== "") parts.push(extra);
@@ -197,7 +190,6 @@ const OWN_KEYS = [
   "icon",
   "round",
   "selected",
-  "pressed",
   "readonly",
   "quiet",
   "block",
@@ -215,7 +207,6 @@ export function Button(): m.Component<ButtonAttrs> {
         icon,
         round,
         selected,
-        pressed,
         readonly,
         quiet,
         block,
@@ -228,7 +219,7 @@ export function Button(): m.Component<ButtonAttrs> {
         "button",
         {
           type: "button",
-          class: buttonClass(variant, { sm, lg, xs, icon, round, selected, pressed, readonly, quiet, block, extra }),
+          class: buttonClass(variant, { sm, lg, xs, icon, round, selected, readonly, quiet, block, extra }),
           ...buttonPartAttrs(variant, icon === true),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),

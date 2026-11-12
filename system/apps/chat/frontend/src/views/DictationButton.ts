@@ -171,7 +171,7 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
           variant: "ghost",
           icon: true,
           sm: true,
-          pressed: state === "listening",
+          selected: state === "listening",
           // A download or a spinner is not a press: the button waits, explained by its tooltip.
           readonly: state === "loading" || isBusy,
           disabled,
