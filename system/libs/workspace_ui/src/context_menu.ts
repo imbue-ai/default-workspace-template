@@ -2,7 +2,9 @@
  * The element menu's one installer (docs/system/blueprint/element-reference-menu/, section
  * 4.1): a ``contextmenu`` listener on the document that yields to a page's own handling (an
  * event already ``defaultPrevented``), captures the target and the selection as they were at
- * the click, builds the rows, and opens the menu at the pointer.
+ * the click, builds the rows, and opens the menu at the pointer. Where the Imbue Studio desktop
+ * app draws a native menu (section 11), a right-click on text or a plain link, and any with
+ * Shift held, is left to it.
  *
  * Rendering is the one part a page may replace: a Mithril page hands ``open`` an opener backed
  * by the shared Menu (``components/contextMenuOpener.ts``), and a page without a framework --
@@ -17,6 +19,7 @@
 import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
 import {
   elementMenuRows,
+  isNativeMenuTarget,
   targetOfEvent,
   type ContextMenuRow,
   type ContextMenuTarget,
@@ -35,9 +38,17 @@ export interface ContextMenuPoint {
   y: number;
 }
 
+/** The handshake fields the installer reads: the scope, and whether the desktop app draws a native menu. */
+export interface ContextMenuHandshake extends ReferenceHandshake {
+  drawsContextMenus?: boolean;
+}
+
 interface ContextMenuBaseOptions {
   /** The page's last handshake, read at every right-click (so a getter); the scope of every reference. */
-  handshake?: () => ReferenceHandshake | null;
+  handshake?: () => ContextMenuHandshake | null;
+  /** Whether the Imbue Studio desktop app draws a native menu for a right-click the page leaves alone; the
+   *  handshake's ``drawsContextMenus`` when unset (the shell, which is no frame's page, has it from its store). */
+  hasNativeMenu?: () => boolean;
   /** The scope of a reference, for a page that knows more than its handshake says (the shell, which is no
    *  frame's page); ``handshake`` when unset. */
   scope?: (target: ContextMenuTarget) => ReferenceScope;
@@ -110,19 +121,15 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
     options.open === undefined ? createDefaultRenderer(ownerDocument) : { open: options.open };
   const { draft, isDraftAvailable, openLink } = routesOf(options);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
+  const hasNativeMenu = options.hasNativeMenu ?? (() => options.handshake?.()?.drawsContextMenus === true);
 
   const onContextMenu = (event: MouseEvent): void => {
     if (event.defaultPrevented) return;
-    event.preventDefault();
     const target = targetOfEvent(event, ownerDocument);
-    const rows = elementMenuRows(
-      target,
-      scopeOf(target),
-      draft,
-      isDraftAvailable(),
-      options.extraRows?.(target) ?? [],
-      openLink,
-    );
+    const ownRows = options.extraRows?.(target) ?? [];
+    if (hasNativeMenu() && (event.shiftKey || isNativeMenuTarget(target, ownRows.length > 0))) return;
+    event.preventDefault();
+    const rows = elementMenuRows(target, scopeOf(target), draft, isDraftAvailable(), ownRows, openLink);
     renderer.open(rows, { x: event.clientX, y: event.clientY });
   };
 

@@ -1,8 +1,9 @@
 /**
  * The rows of a page's element menu (docs/system/blueprint/element-reference-menu/, section
  * 3.3): the standard rows the browser's own menu would have offered the target (Cut, Copy,
- * Paste, Select All, the link rows, the image row) and the reference rows that hand the
- * element to a chat (Copy reference, Explain, Modify).
+ * Paste, Select All, the link rows, the image rows) and the reference rows that hand the
+ * element to a chat (Copy reference, Explain, Modify). Also which right-clicks the menu leaves
+ * to the Imbue Studio desktop app's native menu (section 11).
  *
  * A row here is structurally an ``ActionRow`` or a ``DividerRow`` of the shared Menu component,
  * so a Mithril page passes the rows straight to ``createMenu`` and the framework-free renderer
@@ -90,6 +91,53 @@ export async function copyText(text: string): Promise<boolean> {
     return true;
   } catch (error) {
     reportFailure("copy", error);
+    return false;
+  }
+}
+
+/** Whether the page can hand the image's pixels back: one from the page's own origin or inline in it, or one
+ *  loaded with CORS. A canvas refuses to give back any other image drawn on it. */
+function isImageReadable(image: HTMLImageElement): boolean {
+  if (!image.complete || image.naturalWidth === 0) return false;
+  if (image.crossOrigin !== null) return true;
+  let url: URL;
+  try {
+    url = new URL(image.currentSrc || image.src, image.ownerDocument.baseURI);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "data:") return true;
+  return url.origin === image.ownerDocument.defaultView?.location.origin;
+}
+
+/** Whether "Copy image" can run on the image: the browser writes images to the clipboard, and the page can read
+ *  this one. */
+export function canCopyImage(image: HTMLImageElement): boolean {
+  if (typeof ClipboardItem === "undefined" || typeof navigator.clipboard?.write !== "function") return false;
+  return isImageReadable(image);
+}
+
+/** Put the image itself on the clipboard, as the PNG a canvas makes of it (the one image type every browser
+ *  writes); answers whether it landed, reporting a refusal to the console. */
+export async function copyImage(image: HTMLImageElement): Promise<boolean> {
+  const canvas = image.ownerDocument.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  try {
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("the canvas has no 2d context");
+    context.drawImage(image, 0, 0);
+    // Handed over as a promise, so the write starts inside the pick's user activation.
+    const png = new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => (blob === null ? reject(new Error("the canvas made no image")) : resolve(blob)),
+        "image/png",
+      );
+    });
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    return true;
+  } catch (error) {
+    reportFailure("copy image", error);
     return false;
   }
 }
@@ -221,9 +269,18 @@ export function standardContextMenuRows(target: ContextMenuTarget, openLink: Ope
   }
   const src = imageSrcOf(element);
   if (src !== null) {
+    const image = element as HTMLImageElement;
+    if (canCopyImage(image)) {
+      mediaRows.push({
+        kind: "action",
+        key: "copy-image",
+        label: "Copy image",
+        onSelect: () => void copyImage(image),
+      });
+    }
     mediaRows.push({
       kind: "action",
-      key: "copy-image",
+      key: "copy-image-address",
       label: "Copy image address",
       onSelect: () => void copyText(src),
     });
@@ -262,6 +319,35 @@ export function joinRowGroups(groups: readonly (readonly ContextMenuRow[])[]): C
     rows.push(...group);
   }
   return rows;
+}
+
+/** Whether the click landed on the document's selection: inside one of the boxes its ranges are drawn as. */
+function isClickOnSelection(target: ContextMenuTarget): boolean {
+  const selection = target.element.ownerDocument.getSelection();
+  if (selection === null || selection.isCollapsed) return false;
+  const { clientX, clientY } = target.click;
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const range = selection.getRangeAt(index);
+    // A range's boxes are a rendering fact; an environment without layout draws the selection nowhere.
+    if (typeof range.getClientRects !== "function") continue;
+    for (const box of Array.from(range.getClientRects())) {
+      if (clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a right-click is one the Imbue Studio desktop app's native menu answers better than the page's
+ * (section 11): text being edited, the selection under the pointer, or a link the page has no rows of its own
+ * for. The native menu carries what a page cannot offer there (spelling suggestions, Look Up, a paste that asks
+ * no permission) and none of the page's rows. An image keeps the page's menu, inside a link or not.
+ */
+export function isNativeMenuTarget(target: ContextMenuTarget, hasOwnRows: boolean): boolean {
+  const { element } = target;
+  if (isEditableElement(element) || isClickOnSelection(target)) return true;
+  if (hasOwnRows || imageSrcOf(element) !== null) return false;
+  return element.closest("a[href]") !== null;
 }
 
 /** The whole element menu (section 3.3): the page's own rows, the standard rows, the reference rows. */

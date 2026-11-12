@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * The installer: it opens on a right-click and yields to one a page already handled, it draws
- * the rows with the default renderer (closed by a press outside, Escape, or a pick), it hands a
- * draft to the connection, it takes a page's own renderer, and it installs once per document.
+ * The installer: it opens on a right-click and yields to one a page already handled, it leaves
+ * text and plain links to the desktop app's native menu where there is one, it draws the rows
+ * with the default renderer (closed by a press outside, Escape, or a pick), it hands a draft to
+ * the connection, it takes a page's own renderer, and it installs once per document.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -92,6 +93,58 @@ describe("installElementContextMenu", () => {
     paragraph.addEventListener("contextmenu", (event) => event.preventDefault());
     rightClick(paragraph);
     expect(card()).toBeNull();
+  });
+
+  it("leaves text, a plain link, and any Shift right-click to the desktop app's native menu", () => {
+    document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a><img id="pic" src="/a.png">';
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => ({ ...HANDSHAKE, drawsContextMenus: true }),
+    });
+    for (const id of ["field", "docs"]) {
+      expect(rightClick(document.getElementById(id) as Element).defaultPrevented).toBe(false);
+      expect(card()).toBeNull();
+    }
+    expect(rightClick(document.getElementById("para") as Element, { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(card()).toBeNull();
+    // Anything else is still the page's menu: an image, plain content.
+    for (const id of ["pic", "para"]) {
+      expect(rightClick(document.getElementById(id) as Element).defaultPrevented).toBe(true);
+      expect(card()).not.toBeNull();
+    }
+  });
+
+  it("keeps a link the page has rows of its own for, with those rows first", () => {
+    document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a>';
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => ({ ...HANDSHAKE, drawsContextMenus: true }),
+      extraRows: (target) =>
+        target.element.id === "docs"
+          ? [{ kind: "action", key: "rename", label: "Rename", onSelect: () => undefined }]
+          : [],
+    });
+    expect(rightClick(document.getElementById("docs") as Element).defaultPrevented).toBe(true);
+    expect(row("rename")).not.toBeNull();
+    expect(row("open-link")).not.toBeNull();
+  });
+
+  it("draws its own menu for text and with Shift held where no native menu is announced", () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    expect(rightClick(document.getElementById("field") as Element, { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(row("paste")).not.toBeNull();
+  });
+
+  it("takes the page's own word on a native menu over the handshake's", () => {
+    let hasNativeMenu = true;
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      hasNativeMenu: () => hasNativeMenu,
+    });
+    expect(rightClick(document.getElementById("field") as Element).defaultPrevented).toBe(false);
+    hasNativeMenu = false;
+    expect(rightClick(document.getElementById("field") as Element).defaultPrevented).toBe(true);
   });
 
   it("drafts the prompt and the block through the connection, and closes on the pick", () => {

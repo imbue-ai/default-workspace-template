@@ -156,7 +156,7 @@ interface LivePage {
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
   greetedIsViewing: boolean;
-  /** Whether the last handshake said the Imbue Studio desktop app draws the page's context menu. */
+  /** Whether the last handshake said the Imbue Studio desktop app draws a native right-click menu. */
   greetedDrawsContextMenus: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
@@ -465,7 +465,7 @@ export class LivePagesLayer implements PageDriver {
       this.show(page, box, stackIndex, isInteractive, covered.has(page.windowId));
       // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
       // attaches to its session as a viewer or as a user by it. So it is when the chrome's word on drawing context
-      // menus arrives after the page's greeting: the page's element menu leaves its right-clicks to the chrome.
+      // menus arrives after the page's greeting: the page's element menu leaves right-clicks on text to the chrome.
       if (
         desktop !== null &&
         page.greetedDesktopId !== null &&

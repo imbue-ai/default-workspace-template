@@ -154,7 +154,7 @@ export function hasWorkspaceCoordinate(host: string): boolean {
  * What the shell says about the frame it created: the client, the window, its desktop, the app
  * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
  * shell opens its settings for the files shared from the user's computer (desktop-interface
- * contracts.md section 7), whether it draws the page's context menu natively, and whether the
+ * contracts.md section 7), whether it draws a native right-click menu, and whether the
  * window is being viewed on somebody else's desktop. The client id is required; a text field the
  * shell does not send, a page reads as "", and a flag it does not send, as false.
  */
@@ -165,8 +165,8 @@ export interface ShellHandshake {
   app: string;
   path: string;
   opensLocalFiles: boolean;
-  /** Whether the Imbue Studio desktop app draws the page's context menu natively (element-reference-menu plan
-   *  section 11): the element menu then leaves the right-click to it rather than opening a menu of its own. */
+  /** Whether the Imbue Studio desktop app draws a native menu for a right-click the page leaves alone
+   *  (element-reference-menu plan section 11): the element menu then leaves it those on text and plain links. */
   drawsContextMenus: boolean;
   /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
    *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */

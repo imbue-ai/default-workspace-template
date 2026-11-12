@@ -1256,6 +1256,18 @@ describe("the switch to the phone layout", () => {
     expect(rightClick().defaultPrevented).toBe(true);
   });
 
+  it("leaves a Shift right-click on its own chrome to the desktop app's native menu once the app draws one", () => {
+    const shiftRightClick = (): MouseEvent => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, shiftKey: true });
+      document.body.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+    expect(shiftRightClick().defaultPrevented).toBe(true);
+    store.setDrawsContextMenus(true);
+    expect(shiftRightClick().defaultPrevented).toBe(false);
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");
