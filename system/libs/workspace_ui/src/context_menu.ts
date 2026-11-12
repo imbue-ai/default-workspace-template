@@ -195,7 +195,9 @@ const ROW_STYLE = [
   "cursor: pointer",
 ].join("; ");
 const DISABLED_ROW_STYLE = `${ROW_STYLE}; color: var(--c-text-faint, #9a9a9a); cursor: default`;
-const ROW_COLOR_BY_TONE: Readonly<Partial<Record<NonNullable<ContextMenuActionRow["tone"]>, string>>> = {
+/** The colour of each tone that has one; the default tone keeps the card's. Every other tone has an entry, so one
+ *  added to the shared Menu fails the build here until it is given its colour. */
+const ROW_COLOR_BY_TONE: Readonly<Record<Exclude<NonNullable<ContextMenuActionRow["tone"]>, "default">, string>> = {
   danger: "var(--c-danger, #c62828)",
   quiet: "var(--c-text-faint, #6b6b6b)",
 };
@@ -367,7 +369,8 @@ export function createDefaultRenderer(ownerDocument: Document): Required<Context
       button.setAttribute("style", DISABLED_ROW_STYLE);
       button.setAttribute("aria-disabled", "true");
     }
-    const toneColor = row.kind === "action" && row.tone !== undefined ? ROW_COLOR_BY_TONE[row.tone] : undefined;
+    const tone = row.kind === "action" ? row.tone : undefined;
+    const toneColor = tone === undefined || tone === "default" ? undefined : ROW_COLOR_BY_TONE[tone];
     if (!isDisabled && toneColor !== undefined) button.style.color = toneColor;
     if (row.kind === "check") button.setAttribute("aria-checked", row.isChecked ? "true" : "false");
     button.addEventListener("mouseenter", () => {
