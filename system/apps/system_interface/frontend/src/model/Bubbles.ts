@@ -39,7 +39,6 @@ export interface Bubble {
 /** The bubbles in arrival order (the first arrived first; the view stacks them upward). */
 export type BubbleStack = readonly Bubble[];
 
-/** Whether the push mentions the viewer. */
 export function isMentionOf(wire: BubbleWire, viewer: string | null): boolean {
   return viewer !== null && wire.mentions.includes(viewer);
 }
