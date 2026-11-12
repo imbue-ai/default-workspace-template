@@ -319,7 +319,7 @@ def size(size: str | None) -> None:
 
 @main.group()
 def browser() -> None:
-    """The browser on the Screen: one Chromium with the fleet's profile (the agentic-browser-fleet command drives it)."""
+    """The browser on the Screen: one Chromium with the fleet's profile (the use-browser command drives it)."""
 
 
 @browser.command("open")

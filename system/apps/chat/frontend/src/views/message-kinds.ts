@@ -225,7 +225,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
 
 /**
  * Cross-layer contract: the sentinel an automated in-workspace sender (today the
- * agentic browser fleet's wake-ups) wraps its agent-facing nudges in, so this
+ * browser fleet's wake-ups) wraps its agent-facing nudges in, so this
  * frontend can recognise them (-> UserMessageKind.SystemChip) instead of showing a
  * bare user bubble. mngr itself is untouched (it is an independent product and has
  * no business knowing about this display concern).
@@ -235,5 +235,9 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
  * backend's copy is `BROWSER_FLEET_TAG` in `harnesses/message_display.py`. Keep the
  * tag string in sync. The tag adds no newlines, so a wrapped message types into the
  * agent's pane identically to the same text sent unwrapped.
+ *
+ * The backend is what recognises a nudge, and it also recognises the tag nudges carried
+ * before the command was renamed (`RETIRED_BROWSER_FLEET_TAG` there), which old
+ * transcripts still hold.
  */
-export const BROWSER_FLEET_TAG = "agentic-browser-fleet";
+export const BROWSER_FLEET_TAG = "use-browser";

@@ -454,7 +454,7 @@ update is the one flow that may go further on its own judgment; see the
   a crash and restart it. A plain `mngr stop` would look like a crash.
 - **A browser**: `POST /browsers/<name>/stop` on the Screen service. This
   keeps the browser's profile and tabs; the browser launch path, `uv run --no-sync
-  agentic-browser-fleet new` or `POST /browsers/<name>/start` starts it again.
+  use-browser new` or `POST /browsers/<name>/start` starts it again.
 - **An app**: `supervisorctl stop <program>`, and `supervisorctl start
   <program>` to put it back. Stopping the program leaves the app's windows
   where they are: a window is the shell's, not the app's, and only an explicit

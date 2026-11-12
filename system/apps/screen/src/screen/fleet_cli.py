@@ -1,4 +1,4 @@
-"""``agentic-browser-fleet``: own the browser on the Screen from an agent's shell (spec section 16.3).
+"""``use-browser``: own the browser on the Screen from an agent's shell (spec section 16.3).
 
 This is the CLI the agent calls to own a browser, not to drive one: a thin, stateless HTTP client to the Screen
 service's fleet routes. Driving happens over ``playwright-cli``, pointed at the gated CDP URL that ``new`` and
@@ -56,7 +56,7 @@ def agent_headers() -> dict[str, str]:
     """The identity headers; a hard failure with no chat id to send (no null owner)."""
     chat_id = own_chat_id()
     if not chat_id:
-        _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync agentic-browser-fleet` from inside an agent.")
+        _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync use-browser` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
     headers = {AGENT_ID_HEADER: chat_id, "Content-Type": "application/json"}
     name = os.environ.get("MNGR_AGENT_NAME")

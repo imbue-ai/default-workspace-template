@@ -40,11 +40,15 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 
-# Cross-layer contract: the sentinel an automated in-workspace sender (today the agentic
+# Cross-layer contract: the sentinel an automated in-workspace sender (today the
 # browser fleet's wake-ups) wraps its agent-facing nudges in. The wrapping side is
 # ``system/scripts/message_chat.py --browser-fleet`` (``BROWSER_FLEET_TAG``), which posts through
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
-BROWSER_FLEET_TAG = "agentic-browser-fleet"
+BROWSER_FLEET_TAG = "use-browser"
+# CLEANUP: the tag those nudges carried while the command was named ``agentic-browser-fleet``. A
+# transcript keeps the text it was sent, so this can go only once no transcript from before the
+# rename needs to show its nudges as chips, which in practice takes a migration rewriting them.
+RETIRED_BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 # Cross-layer contract: the wrapper ``system/scripts/workspace_bare_scripts/run_in_background.py`` puts around the
 # report it sends an agent's own chat when a command it ran for that agent exits. Only its
@@ -75,7 +79,7 @@ _TASK_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>")
 _ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
-_BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
+_BROWSER_FLEET_RE = re.compile(rf"^\s*<({BROWSER_FLEET_TAG}|{RETIRED_BROWSER_FLEET_TAG})>([\s\S]*)</\1>\s*$")
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
@@ -367,7 +371,7 @@ def _match_browser_fleet(content: str) -> MessageDisplay | None:
     match = _BROWSER_FLEET_RE.match(content)
     if match is None:
         return None
-    return MessageDisplay(display=DisplayKind.CHIP, display_label="Browser fleet", display_body=match.group(1).strip())
+    return MessageDisplay(display=DisplayKind.CHIP, display_label="Browser fleet", display_body=match.group(2).strip())
 
 
 def _match_composer_command(content: str) -> MessageDisplay | None:

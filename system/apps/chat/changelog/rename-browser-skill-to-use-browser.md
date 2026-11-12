@@ -1,0 +1,1 @@
+A browser nudge (the message that tells an agent its browser is free or was handed back) now arrives wrapped in `<use-browser>`, following the rename of the `agentic-browser-fleet` command to `use-browser`. The chat shows a nudge wrapped in either tag as a "Browser fleet" chip, so a transcript from before the rename, which still holds `<agentic-browser-fleet>`, reads as it did.

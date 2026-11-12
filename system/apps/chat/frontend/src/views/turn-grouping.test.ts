@@ -1521,7 +1521,7 @@ function stopHook(ts: string, id: string): UserMessageEvent {
 }
 
 function fleetNudge(ts: string, id: string): UserMessageEvent {
-  return userMsg(ts, "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>", id, {
+  return userMsg(ts, "<use-browser>Browser foo-1 was handed back to you.</use-browser>", id, {
     display: "chip",
     display_label: "Browser fleet",
     display_body: "Browser foo-1 was handed back to you.",

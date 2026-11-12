@@ -41,7 +41,7 @@ Built-in apps:
   PulseAudio and neko) as a window, with the control lease the human and the
   agents share, the `screen` command, and the browser (one Fortress Chromium on
   the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
-  drive it through, `agentic-browser-fleet`). Served on port 8090 by the
+  drive it through, `use-browser`). Served on port 8090 by the
   `screen-service` package.
 - `routines/` - Routines: everything that runs on a schedule (the routines
   library, `system/libs/routines/`), each with its health, next run and history,

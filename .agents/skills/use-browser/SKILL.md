@@ -1,5 +1,5 @@
 ---
-name: agentic-browser-fleet
+name: use-browser
 description: Drive the workspace's shared Chromium browser directly, one command at a time, from the shell, in the same chat. Use when the connect-external-service skill has decided a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction). Never the first skill to load for such a request; connect-external-service is.
 metadata:
   author: imbue
@@ -11,12 +11,12 @@ metadata:
 
 Two commands, and the split matters:
 
-- **`agentic-browser-fleet`** *owns* the browser -- start it, list it, hand it to the human,
+- **`use-browser`** *owns* the browser -- start it, list it, hand it to the human,
   give it back. Run from the repo root via `uv run --no-sync`.
 - **`playwright-cli`** *drives* it -- look at the page, click, type, scroll.
 
 ```bash
-uv run --no-sync agentic-browser-fleet new
+uv run --no-sync use-browser new
   -> started browser browser-1
      drive it:  playwright-cli -s=browser-1 attach --cdp=http://127.0.0.1:8083/browser-1/<token>
      then:      playwright-cli -s=browser-1 <command>
@@ -94,14 +94,14 @@ rather than erroring.
 ## Fleet commands
 
 ```bash
-uv run --no-sync agentic-browser-fleet ls                      # the browser: name, who holds it, tabs
-uv run --no-sync agentic-browser-fleet ls --include-tabs       # every tab
-uv run --no-sync agentic-browser-fleet new                     # the browser (started if stopped); prints its name + attach line
-uv run --no-sync agentic-browser-fleet close <name>            # rarely: end it AND DELETE its profile (logins)
-uv run --no-sync agentic-browser-fleet acquire <name>          # reserve it (reprints the attach line)
-uv run --no-sync agentic-browser-fleet acquire <name> --reclaim   # take back from a human -- only if they said so
-uv run --no-sync agentic-browser-fleet release <name>          # hand it back (alias: unlock)
-uv run --no-sync agentic-browser-fleet handoff <name> "reason" # give it to the human (alias: request-human)
+uv run --no-sync use-browser ls                      # the browser: name, who holds it, tabs
+uv run --no-sync use-browser ls --include-tabs       # every tab
+uv run --no-sync use-browser new                     # the browser (started if stopped); prints its name + attach line
+uv run --no-sync use-browser close <name>            # rarely: end it AND DELETE its profile (logins)
+uv run --no-sync use-browser acquire <name>          # reserve it (reprints the attach line)
+uv run --no-sync use-browser acquire <name> --reclaim   # take back from a human -- only if they said so
+uv run --no-sync use-browser release <name>          # hand it back (alias: unlock)
+uv run --no-sync use-browser handoff <name> "reason" # give it to the human (alias: request-human)
 ```
 
 `ls` shows who controls the Screen the browser runs on (`you`, `agent <name>`, `human (took
@@ -143,7 +143,7 @@ crashed browser and a stale ref all look identical; a refused command may report
 `Execution context was destroyed` or simply time out after 30s. None of that is diagnostic.
 
 ```bash
-uv run --no-sync agentic-browser-fleet ls
+uv run --no-sync use-browser ls
 ```
 
 That is the only thing that distinguishes "the human took control" from "the browser crashed"
@@ -229,7 +229,7 @@ CAPTCHA, "verify you're human", an SMS/2FA code you don't have, or a login needi
 credentials: **do not try to solve it yourself** -- you will fail and may get the account flagged.
 
 ```bash
-uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
+uv run --no-sync use-browser handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
 `handoff` puts you at the **front** of the resume queue, hands the Screen to the human pinned (no
@@ -290,7 +290,7 @@ These are the **fleet's** exit codes. `playwright-cli` has its own and they are 
 
 ```bash
 # Start the browser and start driving.
-uv run --no-sync agentic-browser-fleet new                       # prints the attach line -- run it once
+uv run --no-sync use-browser new                       # prints the attach line -- run it once
 playwright-cli -s=browser-1 goto https://example.com
 playwright-cli -s=browser-1 find "More information"    # cheaper than a full snapshot
 playwright-cli -s=browser-1 click e14
@@ -305,14 +305,14 @@ playwright-cli -s=browser-1 mousewheel 0 800
 playwright-cli -s=browser-1 find "the thing you want"  # repeat until rows stop advancing
 
 # Hit a CAPTCHA -- hand it over, then STOP.
-uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
+uv run --no-sync use-browser handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
 ## Don'ts
 
 - **Don't run `playwright-cli close`, `attach` (twice), `detach`, `close-all`, `kill-all` or
   `delete-data`.** The fleet owns lifecycle: the browser runs until the user quits it or the Screen
-  ends. `agentic-browser-fleet close <name>` deletes the profile (every login) with it, so use it
+  ends. `use-browser close <name>` deletes the profile (every login) with it, so use it
   only when the user asks for a fresh browser.
 - **Don't re-attach a slug whose session died** -- see "Crashes" above. It hangs rather than
   erroring, which is the one failure you cannot recover from; use a new slug.

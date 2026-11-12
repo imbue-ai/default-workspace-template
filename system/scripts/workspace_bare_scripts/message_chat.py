@@ -99,7 +99,7 @@ CHAT_APP_FALLBACK_URL = "http://127.0.0.1:8010"
 
 # Mirrors ``BROWSER_FLEET_TAG`` in the chat app's ``harnesses/message_display.py``
 # (and the frontend's copy); a test in the chat app pins the two equal.
-BROWSER_FLEET_TAG = "agentic-browser-fleet"
+BROWSER_FLEET_TAG = "use-browser"
 
 # ``mngr message``'s exit codes (``imbue/mngr/cli/exit_codes.py``).
 EXIT_DELIVERED = 0

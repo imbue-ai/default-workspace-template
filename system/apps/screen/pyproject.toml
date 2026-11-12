@@ -50,7 +50,7 @@ dev = [
 screen-service = "screen.main:main"
 screen-watch = "screen.watch:main"
 screen = "screen.cli:main"
-agentic-browser-fleet = "screen.fleet_cli:main"
+use-browser = "screen.fleet_cli:main"
 
 [build-system]
 requires = ["hatchling"]
