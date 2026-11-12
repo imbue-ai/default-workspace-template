@@ -82,7 +82,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
           role: "alert",
         },
         [
-          m("p", { class: "handoff-failed-title type-label text-danger-surface" }, title),
+          m("p", { class: "handoff-failed-title type-title-sm text-danger-surface" }, title),
           m(
             "pre",
             {

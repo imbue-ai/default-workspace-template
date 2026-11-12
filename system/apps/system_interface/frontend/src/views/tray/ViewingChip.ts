@@ -47,7 +47,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
               { class: "flex shrink-0 items-center rounded-full ring-2 ring-white" },
               m(TrayAvatar, { entry: owner, sizePx: OWNER_PICTURE_SIZE_PX, isFaded: false }),
             ),
-        m("span", { class: "flex min-w-0 items-baseline gap-1 text-(length:--font-size-row) font-medium" }, [
+        m("span", { class: "flex min-w-0 items-baseline gap-1 text-(length:--font-size-body-dense) font-medium" }, [
           m("span", { class: "truncate", "data-viewing-owner": "" }, viewedOwnerName(owner)),
           m("span", { class: "truncate font-normal opacity-75" }, ` · ${desktop.name}`),
         ]),
@@ -57,7 +57,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
             type: "button",
             "data-stop-viewing": "",
             class:
-              "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-row) " +
+              "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-body-dense) " +
               "font-medium text-accent-content hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
             onclick: onStopViewing,
           },

@@ -569,7 +569,7 @@
   margin: 2px 0 6px;
   padding: 6px 10px;
   border-left: 2px solid var(--c-border-default);
-  font-size: var(--font-size-row);
+  font-size: var(--font-size-body-dense);
   color: var(--c-body-content-secondary);
   white-space: pre-wrap;
 }

@@ -230,7 +230,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           {
             ...partAttrs("window-title"),
             class:
-              `window-title ${margin} min-w-0 truncate text-(length:--font-size-row) ` +
+              `window-title ${margin} min-w-0 truncate text-(length:--font-size-body-dense) ` +
               (isFocused ? "font-bold" : "font-medium opacity-70"),
           },
           title,
@@ -250,7 +250,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
               ...partAttrs("window-title"),
               class:
                 "window-title pointer-events-none absolute left-1/2 max-w-[60%] min-w-0 -translate-x-1/2 truncate " +
-                "text-(length:--font-size-row) " +
+                "text-(length:--font-size-body-dense) " +
                 (isFocused ? "font-bold" : "font-medium opacity-70"),
             },
             title,
@@ -273,7 +273,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
               {
                 ...partAttrs("window-title"),
                 class:
-                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-body-dense) " +
                   (isFocused ? "font-bold" : "font-medium opacity-70"),
               },
               title,

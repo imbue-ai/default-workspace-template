@@ -188,16 +188,20 @@
      (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
      text-sm/text-lg utilities, which the views use at their stock values.) */
   --font-size-heading-lg: 24px;
-  --font-size-heading: 18px;
+  --font-size-heading: 20px;
+  --font-size-title-page: 18px;
+  --font-size-title: 16px;
   --font-size-body: 14px;
-  /* Row text: the dense-chrome step between body and helper. */
-  --font-size-row: 13px;
+  /* Dense body: menus, segmented controls, list rows, the chrome's own small text. */
+  --font-size-body-dense: 13px;
   --font-size-helper: 12px;
+  /* A section's all-caps title. */
+  --font-size-section: 11px;
   /* A word badge set beside other text ("Read-only"): the smallest step. */
   --font-size-tag: 10px;
-  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
-     role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
+  /* The mono label's and the section title's weight. */
+  --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
   /* Motion scale — one unit (ms). Durations back the common UI transitions;
@@ -217,9 +221,9 @@
   --z-popover: 10001;
   --z-tooltip: 10002;
   --width-message-column: 672px;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  --font-display: var(--font-sans);
+  --font-sans: "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-display: "Besley Display", Georgia, serif;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -236,11 +240,14 @@
     background: var(--c-body-surface);
   }
   h1,
-  h2,
-  h3 {
+  h2 {
     font-family: var(--font-display);
-    font-weight: var(--weight-semibold);
-    line-height: 1.3;
+    font-weight: var(--weight-regular);
+    line-height: 1.2;
+  }
+  h3 {
+    font-weight: var(--weight-bold);
+    line-height: 1.4;
   }
   h1 {
     font-size: var(--font-size-heading-lg);

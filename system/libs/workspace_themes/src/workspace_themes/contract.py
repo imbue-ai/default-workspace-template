@@ -174,7 +174,7 @@ STATE_TOKENS: Final[tuple[str, ...]] = (
     "--state-inactive",
 )
 
-# Contract 1's color tokens and what each became in contract 2; None for the computed hover and active shades,
+# Contract 1's tokens that contract 2 renamed or dropped, and what each became; None for the computed hover and active shades,
 # which are no longer tokens. The migration rewrites a contract-1 theme with it, and the validator names the new
 # token when a contract-2 theme still sets an old one.
 CONTRACT_1_RENAMES: Final[Mapping[str, str | None]] = {
@@ -212,6 +212,7 @@ CONTRACT_1_RENAMES: Final[Mapping[str, str | None]] = {
     "--c-step-done": "--c-accent-subtle-content",
     "--c-step-pending": "--c-neutral-6",
     "--c-inverse-surface-hover": None,
+    "--font-size-row": "--font-size-body-dense",
 }
 
 TYPE_TOKENS: Final[tuple[str, ...]] = (
@@ -220,10 +221,14 @@ TYPE_TOKENS: Final[tuple[str, ...]] = (
     "--font-display",
     "--font-size-heading-lg",
     "--font-size-heading",
+    "--font-size-title-page",
+    "--font-size-title",
     "--font-size-body",
-    "--font-size-row",
+    "--font-size-body-dense",
     "--font-size-helper",
+    "--font-size-section",
     "--weight-regular",
+    "--weight-medium",
     "--weight-semibold",
     "--weight-bold",
 )

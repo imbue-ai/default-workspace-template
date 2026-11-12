@@ -48,10 +48,10 @@ export const DetachedWindowGhost: m.Component<DetachedWindowGhostAttrs> = {
         m("span", { class: "flex items-center text-body-content-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
         m(
           "div",
-          { class: "window-title max-w-full truncate text-(length:--font-size-row) font-medium text-body-content" },
+          { class: "window-title max-w-full truncate text-(length:--font-size-body-dense) font-medium text-body-content" },
           title,
         ),
-        m("div", { class: "text-(length:--font-size-row) text-body-content-tertiary" }, "Open in its own window"),
+        m("div", { class: "text-(length:--font-size-body-dense) text-body-content-tertiary" }, "Open in its own window"),
         m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
           m(Button, { variant: "secondary", sm: true, "data-ghost-action": "show", onclick: onShow }, "Show"),
           m(Button, { variant: "secondary", sm: true, "data-ghost-action": "hide", onclick: onHide }, "Hide"),

@@ -5,6 +5,7 @@
  * the theme this origin last wore before the first paint, then whatever the shell names in `shell:theme`.
  */
 
+import "../fonts.css";
 import "./workspace_theme.css";
 import { followShellTheme } from "../app_contract";
 import { STANDARD_THEME_ID } from "../themes/themeBoot";

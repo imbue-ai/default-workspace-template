@@ -137,7 +137,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
                     tocLink(
                       section.id,
                       section.toc,
-                      "py-1 text-(length:--font-size-row) text-body-content-secondary",
+                      "py-1 text-(length:--font-size-body-dense) text-body-content-secondary",
                       activeId === section.id,
                     ),
                   ),

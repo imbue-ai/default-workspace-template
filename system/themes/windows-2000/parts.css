@@ -224,7 +224,7 @@ select {
   --font-size-heading-lg: 12px;
   --font-size-heading: 12px;
   --font-size-body: 12px;
-  --font-size-row: 12px;
+  --font-size-body-dense: 12px;
   --font-size-helper: 11px;
   padding: 0 10px 10px;
   border: none;

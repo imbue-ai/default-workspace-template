@@ -72,7 +72,7 @@ export const CHOOSER_ROW =
 export const CHOOSER_ROW_MARK = "flex w-11 shrink-0 items-center justify-center";
 export const CHOOSER_ROW_TEXT = "min-w-0 flex-1";
 export const CHOOSER_ROW_NAME = "block type-body font-semibold text-body-content";
-export const CHOOSER_ROW_BODY = "mt-0.5 block text-(length:--font-size-row) leading-snug text-body-content";
+export const CHOOSER_ROW_BODY = "mt-0.5 block text-(length:--font-size-body-dense) leading-snug text-body-content";
 export const CHEVRON = "shrink-0 text-body-content-tertiary";
 
 /** One sign-in method inside a lane. The chooser row's shape at one step less weight, since
@@ -119,7 +119,7 @@ export const RUNS_ON_NAME = "font-semibold text-body-content";
 export const STEP = "mb-4 transition-all duration-(--dur-slow)";
 export const STEP_LAST = "transition-all duration-(--dur-slow)";
 export const STEP_DIMMED = "grayscale opacity-60";
-export const STEP_LABEL = "mb-2 flex items-center gap-2 text-(length:--font-size-row) font-medium text-body-content";
+export const STEP_LABEL = "mb-2 flex items-center gap-2 text-(length:--font-size-body-dense) font-medium text-body-content";
 export const STEP_NUM =
   "inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent-surface " +
   "type-helper font-semibold text-accent-content";
@@ -155,7 +155,7 @@ const STATUS_DISC = "mb-3 flex h-12 w-12 items-center justify-center rounded-ful
 export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent-surface`;
 export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-subtle-surface text-accent-surface`;
 export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-danger-subtle-surface text-danger-surface`;
-export const STATUS_TITLE = "type-label text-body-content";
+export const STATUS_TITLE = "type-title-sm text-body-content";
 export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-body-content-secondary";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-body-content-tertiary";

@@ -413,7 +413,7 @@ export function renderPermissionCard(
         m(
           "div",
           {
-            class: "permission-request-receipt-title min-w-0 truncate type-label text-body-content",
+            class: "permission-request-receipt-title min-w-0 truncate type-title-sm text-body-content",
           },
           title ?? GENERIC_PERMISSION_TITLE,
         ),
@@ -446,7 +446,7 @@ export function renderPermissionCard(
     m("div", { class: "permission-request-body mt-2.5 flex items-start gap-2.5" }, [
       m("div", { class: `permission-request-badge h-8 w-8 rounded-lg ${BADGE_BASE}` }, renderSubjectMark(details, 16)),
       m("div", { class: "permission-request-info min-w-0 flex-1" }, [
-        bodyTitle !== null ? m("div", { class: "permission-request-title type-label text-body-content" }, bodyTitle) : null,
+        bodyTitle !== null ? m("div", { class: "permission-request-title type-title-sm text-body-content" }, bodyTitle) : null,
         details.rationale
           ? m(
               "div",

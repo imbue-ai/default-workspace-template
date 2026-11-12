@@ -554,24 +554,24 @@ function surfacesSection(): CatalogSection {
         m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-body-surface-secondary p-2" }, [
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-body-content hover:bg-fill-hover" },
+            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content hover:bg-fill-hover" },
             "A row (hover me)",
           ),
           m(
             "div",
-            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-row) text-body-content" },
+            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content" },
             "The current row",
           ),
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-body-content-secondary hover:bg-fill-hover" },
+            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover" },
             "Another row",
           ),
           caption("bg-body-surface-secondary", "mt-auto"),
         ]),
         m("div", { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" }, [
           m("div", { class: "rounded-lg border border-default bg-body-surface-raised p-4 shadow-raised" }, [
-            m("p", { class: "type-label text-body-content" }, "A card"),
+            m("p", { class: "type-title-sm text-body-content" }, "A card"),
             m("p", { class: "type-helper text-body-content-secondary" }, "bg-body-surface-raised, border-default, shadow-raised"),
           ]),
           m(

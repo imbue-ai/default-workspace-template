@@ -73,13 +73,13 @@ export const IconView: m.Component<ViewAttrs> = {
               ? m(RenameField, {
                   app,
                   multiline: true,
-                  extraClass: "resize-none text-center text-(length:--font-size-row) leading-tight",
+                  extraClass: "resize-none text-center text-(length:--font-size-body-dense) leading-tight",
                 })
               : m(
                   "div.files-name",
                   {
                     class:
-                      "line-clamp-2 w-full text-center text-(length:--font-size-row) leading-tight break-words text-body-content",
+                      "line-clamp-2 w-full text-center text-(length:--font-size-body-dense) leading-tight break-words text-body-content",
                   },
                   entry.name,
                 ),
@@ -182,7 +182,7 @@ export const ListView: m.Component<ViewAttrs> = {
             "div.files-row",
             {
               key: entry.path,
-              class: `mx-2 grid ${LIST_COLUMNS} h-7 cursor-default items-center gap-3 rounded-md px-3 text-(length:--font-size-row) ${stateClass(app, entry)}`,
+              class: `mx-2 grid ${LIST_COLUMNS} h-7 cursor-default items-center gap-3 rounded-md px-3 text-(length:--font-size-body-dense) ${stateClass(app, entry)}`,
               ...entryAttrs(app, entry, entries, "list"),
             },
             [
@@ -255,7 +255,7 @@ function columnBody(
       "div.files-row",
       {
         key: entry.path,
-        class: `mx-1 flex h-[22px] shrink-0 cursor-default items-center gap-2 rounded-md px-2 text-(length:--font-size-row) ${highlight}`,
+        class: `mx-1 flex h-[22px] shrink-0 cursor-default items-center gap-2 rounded-md px-2 text-(length:--font-size-body-dense) ${highlight}`,
         ...entryAttrs(app, entry, entries, "column"),
       },
       [

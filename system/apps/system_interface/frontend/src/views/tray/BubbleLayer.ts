@@ -66,7 +66,7 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
             "data-bubble-mention": bubble.isMention ? "true" : null,
             class:
               "bubble pointer-events-auto absolute flex max-w-(--desk-bubble-width) cursor-pointer items-start gap-1 rounded-(--desk-bubble-radius) " +
-              "border bg-body-surface-raised px-3 py-2 text-(length:--font-size-row) text-body-content shadow-overlay " +
+              "border bg-body-surface-raised px-3 py-2 text-(length:--font-size-body-dense) text-body-content shadow-overlay " +
               (bubble.isMention ? "border-accent-surface border-2 " : "border-default "),
             style: { right: `${right}px`, bottom, zIndex: String(index + 1) },
             onclick: () => attrs.onOpen(bubble.speaker),

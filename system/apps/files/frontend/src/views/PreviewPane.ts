@@ -86,7 +86,7 @@ export function PreviewPane(): m.Component<{ app: FilesController; entry: Entry 
           { class: "flex h-[240px] w-full flex-col items-center justify-center gap-3" },
           picture,
         ),
-        m("div", { class: "w-full text-center type-label break-words text-body-content" }, entry.name),
+        m("div", { class: "w-full text-center type-title-sm break-words text-body-content" }, entry.name),
         m(
           "div",
           { class: "type-helper text-body-content-secondary" },

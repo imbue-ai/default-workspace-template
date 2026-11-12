@@ -105,7 +105,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
                       "aria-selected": row === highlightedRow ? "true" : "false",
                       "data-highlighted": row === highlightedRow ? "true" : "false",
                       class:
-                        menuRowClass({ extra: "rounded-md text-(length:--font-size-row) text-body-content" }) +
+                        menuRowClass({ extra: "rounded-md text-(length:--font-size-body-dense) text-body-content" }) +
                         (row === highlightedRow ? " bg-fill-active" : ""),
                       ...MENU_ITEM_PART,
                       onpointerenter: () => {

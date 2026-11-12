@@ -251,7 +251,7 @@ function renderVerdict(resolution: SecretResolution): m.Vnode {
 }
 
 function renderTitle(details: SecretRequestDetails): m.Vnode {
-  return m("div", { class: "secret-request-title type-label text-body-content" }, `Store ${details.envPath}`);
+  return m("div", { class: "secret-request-title type-title-sm text-body-content" }, `Store ${details.envPath}`);
 }
 
 function renderInputs(details: SecretRequestDetails, state: SecretCardState, handlers: SecretCardHandlers): m.Vnode {
@@ -341,7 +341,7 @@ export function renderSecretCard(
       m("div", { class: "secret-request-receipt mt-2.5 flex items-center gap-2" }, [
         m(
           "div",
-          { class: "secret-request-receipt-title min-w-0 truncate type-label text-body-content" },
+          { class: "secret-request-receipt-title min-w-0 truncate type-title-sm text-body-content" },
           details ? details.envPath : "Secret request",
         ),
         renderVerdict(resolution),

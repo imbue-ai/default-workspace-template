@@ -163,7 +163,7 @@ const SWITCH_KNOB_OFF = "translate-x-[2px]";
 export const SEARCH_WRAP = "relative mx-1.5 mb-1.5";
 export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-body-content-tertiary";
 /** Room for the magnifier, and the dense-chrome row size the rest of the submenu sits at. */
-export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
+export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-body-dense)";
 /** The list under the search field, the part of the submenu that scrolls. A slim, always-visible
  *  track, because an overlay scrollbar that only appears mid-scroll says nothing about there
  *  being more until it is too late (the track's own rules are in style.css). */
@@ -238,7 +238,7 @@ export const FAST_LIMIT_FIELD = "inline-flex w-[72px] shrink-0";
  *  last box in the content area and the number is right-aligned against them, so padding moves
  *  the pair together. */
 export const FAST_LIMIT_INPUT_EXTRA =
-  "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-row) " +
+  "fast-limit-input h-6 px-2 py-0 text-right text-(length:--font-size-body-dense) " +
   "[&::-webkit-inner-spin-button]:opacity-100 [&::-webkit-inner-spin-button]:ml-1.5";
 /** "New chats start with" and the choices it can name, at the foot of the fast-mode and
  *  auto-compact submenus. Laid out like the limit row, so the settings under the choices read as

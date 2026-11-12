@@ -259,7 +259,7 @@ export function KeyboardSettingsSection(): m.Component {
           .filter((appView) => appView.actions.length > 0)
           .map((appView) =>
             m("div", { class: "mb-2" }, [
-              m("p", { class: "type-label text-body-content" }, appView.display_name),
+              m("p", { class: "type-title-sm text-body-content" }, appView.display_name),
               ...appView.actions.map((action) => actionRow(appView, action)),
             ]),
           ),

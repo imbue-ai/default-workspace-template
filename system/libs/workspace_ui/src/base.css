@@ -23,6 +23,7 @@
    `@import "tailwindcss" source(none)` and adds its own `@source`; a class name
    assembled by string concatenation is NOT detected -- safelist any such case
    with `@source inline("...")`. */
+@import "./fonts.css";
 @source "./**/*.ts";
 
 /* Colour tokens — two layers.
@@ -219,16 +220,20 @@
      (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
      text-sm/text-lg utilities, which the views use at their stock values.) */
   --font-size-heading-lg: 24px;
-  --font-size-heading: 18px;
+  --font-size-heading: 20px;
+  --font-size-title-page: 18px;
+  --font-size-title: 16px;
   --font-size-body: 14px;
-  /* Row text: the dense-chrome step between body and helper. */
-  --font-size-row: 13px;
+  /* Dense body: menus, segmented controls, list rows, the chrome's own small text. */
+  --font-size-body-dense: 13px;
   --font-size-helper: 12px;
+  /* A section's all-caps title. */
+  --font-size-section: 11px;
   /* A word badge set beside other text ("Read-only"): the smallest step. */
   --font-size-tag: 10px;
-  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
-     role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
+  /* The mono label's and the section title's weight. */
+  --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
   /* Motion scale — one unit (ms). Durations back the common UI transitions;
@@ -432,11 +437,11 @@
   /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
      default (so body text needs no explicit font-family) and backs font-sans;
      --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  /* The display face: headings, section labels, and the type a theme gives its titles, buttons, and
-     menus (a theme's token, docs/system/blueprint/workspace-themes/). The standard look sets it in the body face. */
-  --font-display: var(--font-sans);
+  --font-sans: "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* The display face: the headings (a theme's token, docs/system/blueprint/workspace-themes/). The standard look
+     sets them in Besley (fonts.css). */
+  --font-display: "Besley Display", Georgia, serif;
   /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
      `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
      references the same scale via the `--spacing(N)` function (e.g.
@@ -476,54 +481,109 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Typography roles.
- * The role-based type system, declared as Tailwind utilities so they
- * compose with variants, sort under the prettier plugin,
- * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
- * is orthogonal — compose with text-primary / text-secondary / text-faint.
- * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
- * font-size/weight. `medium` (500) is a valid weight but is intentionally NOT
- * used on interactive controls (buttons/tabs) — that treatment comes with the
- * Button/Tab primitive. */
+/* Typography roles: the brand's type ramp (docs/system/blueprint/brand-design-system/).
+ * Declared as Tailwind utilities so they compose with variants, sort under the
+ * prettier plugin, and work inside @apply. Each bundles face, size, weight,
+ * leading, and tracking; COLOR is orthogonal -- compose with text-body-content /
+ * -secondary / -tertiary. Faces have fixed jobs: the display face for the one
+ * headline a window exists to show, the sans for anything you read, press, or
+ * that changes (titles included), and the mono for static labels and code. */
 @utility type-heading-lg {
   font-family: var(--font-display);
   font-size: var(--font-size-heading-lg);
-  font-weight: var(--weight-bold);
-  line-height: 1.25;
+  font-weight: var(--weight-regular);
+  line-height: 28px;
+  letter-spacing: -0.01em;
 }
 @utility type-heading {
   font-family: var(--font-display);
   font-size: var(--font-size-heading);
-  font-weight: var(--weight-semibold);
-  line-height: 1.3;
+  font-weight: var(--weight-regular);
+  line-height: 24px;
+  letter-spacing: -0.005em;
 }
-@utility type-label {
+@utility type-title-page {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-title-page);
+  font-weight: var(--weight-bold);
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+@utility type-title {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-title);
+  font-weight: var(--weight-bold);
+  line-height: 22px;
+  letter-spacing: -0.005em;
+}
+/* The title of one item among others: a card, a request, a row, an app in a list. */
+@utility type-title-sm {
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  font-weight: var(--weight-semibold);
-  line-height: 1.4;
+  font-weight: var(--weight-bold);
+  line-height: 20px;
 }
 @utility type-body {
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
   font-weight: var(--weight-regular);
-  line-height: 1.5;
+  line-height: 20px;
+}
+@utility type-body-dense {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-regular);
+  line-height: 18px;
+}
+/* A static label: a shelf's or a field's name, never a title that changes. */
+@utility type-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-medium);
+  line-height: 16px;
+}
+@utility type-label-large {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
 }
 @utility type-helper {
+  font-family: var(--font-sans);
   font-size: var(--font-size-helper);
   font-weight: var(--weight-regular);
-  line-height: 1.4;
+  line-height: 16px;
+  letter-spacing: 0.005em;
+}
+@utility type-section {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-section);
+  font-weight: var(--weight-medium);
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 @utility type-tag {
   font-size: var(--font-size-tag);
   font-weight: var(--weight-regular);
   line-height: 1;
 }
-@utility type-section {
-  font-family: var(--font-display);
+@utility type-badge {
+  font-size: var(--font-size-tag);
+  font-weight: var(--weight-bold);
+  line-height: 12px;
+}
+@utility type-code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-regular);
+  line-height: 20px;
+}
+@utility type-code-small {
+  font-family: var(--font-mono);
   font-size: var(--font-size-helper);
-  font-weight: var(--weight-semibold);
-  line-height: 1.3;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: var(--weight-regular);
+  line-height: 16px;
 }
 
 /* Default border color. Tailwind v4 defaults un-colored

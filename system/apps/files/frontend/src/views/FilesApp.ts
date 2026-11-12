@@ -96,7 +96,7 @@ function sidebarRow(app: FilesController, row: SidebarRow, isCurrent: boolean): 
       ...(row.tooltip === undefined
         ? {}
         : hoverTooltipAttrs(row.tooltip.text, "right", { maxWidth: 260, detail: row.tooltip.detail })),
-      class: `flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) ${
+      class: `flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-body-dense) ${
         model.dropTarget === row.path
           ? "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface"
           : isCurrent
@@ -266,7 +266,7 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
                       type: "button",
                       "data-action": "manage-connected",
                       class:
-                        "flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) text-body-content-tertiary hover:bg-fill-hover hover:text-body-content",
+                        "flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-body-dense) text-body-content-tertiary hover:bg-fill-hover hover:text-body-content",
                       onclick: () => {
                         app.isSidebarOpen = false;
                         app.manageConnected();
@@ -337,7 +337,7 @@ function Breadcrumb(): m.Component<{ app: FilesController }> {
                 type: "button",
                 "data-crumb": crumb.path,
                 [DROP_FOLDER_ATTR]: crumb.path,
-                class: `shrink-0 cursor-pointer rounded-md px-1.5 py-1 whitespace-nowrap text-(length:--font-size-row) ${
+                class: `shrink-0 cursor-pointer rounded-md px-1.5 py-1 whitespace-nowrap text-(length:--font-size-body-dense) ${
                   model.dropTarget === crumb.path
                     ? "bg-accent-subtle-surface text-body-content"
                     : isLast
@@ -501,7 +501,7 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
 
 function message(title: string, detail: string, retry?: () => void): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
-    m("div", { class: "type-label text-body-content-secondary" }, title),
+    m("div", { class: "type-title-sm text-body-content-secondary" }, title),
     detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-body-content-tertiary" }, detail),
     retry === undefined ? null : m(Button, { sm: true, extra: "mt-3", onclick: retry }, "Try again"),
   ]);
@@ -535,7 +535,7 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
         [
           m("div", { class: "flex items-center gap-2 px-3 pt-2.5 pb-2" }, [
             m("div", { class: "min-w-0 flex-1" }, [
-              m("div.files-uploads-summary", { class: "type-label text-body-content" }, summary),
+              m("div.files-uploads-summary", { class: "type-title-sm text-body-content" }, summary),
               m("div", { class: "type-helper text-body-content-tertiary" }, `${formatSize(loaded)} of ${formatSize(total)}`),
             ]),
             busy

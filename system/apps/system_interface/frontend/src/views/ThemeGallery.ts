@@ -252,7 +252,7 @@ function tilesAndRows(): m.Children {
         "button",
         { ...TILE_PART, type: "button", class: "rounded-xl border border-default bg-body-surface-raised p-4 text-left" },
         [
-          m("div", { class: "type-label" }, "A tile"),
+          m("div", { class: "type-title-sm" }, "A tile"),
           m("div", { class: "type-helper text-body-content-secondary" }, "That opens something."),
         ],
       ),
@@ -265,7 +265,7 @@ function tilesAndRows(): m.Children {
           class: "rounded-xl border border-accent-surface bg-body-surface-raised p-4 text-left",
         },
         [
-          m("div", { class: "type-label" }, "A chosen tile"),
+          m("div", { class: "type-title-sm" }, "A chosen tile"),
           m("div", { class: "type-helper text-body-content-secondary" }, "Pressed."),
         ],
       ),

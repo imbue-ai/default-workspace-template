@@ -415,7 +415,7 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
         type: "button",
         class: [
           "chat-rail-new flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
-          "text-(length:--font-size-row) text-body-content-secondary hover:bg-fill-hover hover:text-body-content",
+          "text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover hover:text-body-content",
         ].join(" "),
         "aria-label": "New chat",
         onclick: () => attrs.onNew(),
@@ -506,7 +506,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
             peopleGlyph(13),
           )
         : statusDot(row, "flex-none"),
-      m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
+      m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-body-dense)" }, row.title),
       row.hasMention ? mentionMark() : null,
       participantPhotos(row),
       attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
@@ -624,7 +624,7 @@ export function renameField(row: ChatRow): m.Vnode {
   if (state === null) throw new Error("renameField rendered with no rename in progress");
   return m("input", {
     class: [
-      "chat-rail-rename-input min-w-0 flex-1 rounded bg-body-surface-raised px-1 text-(length:--font-size-row) text-body-content outline-none ring-1",
+      "chat-rail-rename-input min-w-0 flex-1 rounded bg-body-surface-raised px-1 text-(length:--font-size-body-dense) text-body-content outline-none ring-1",
       state.error === null ? "ring-accent-surface" : "ring-danger-surface",
     ].join(" "),
     type: "text",

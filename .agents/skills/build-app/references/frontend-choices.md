@@ -7,8 +7,9 @@ Clean, modern, functional design. No unnecessary gimmicks.
 
 ## Default font choices
 Feel free to use different fonts if it helps the task at hand. However, the following are reasonable defaults you can just use:
-* For all text: `font-family: ui-sans-serif, system-ui, sans-serif;`
-* For code: `font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;`
+* For all text: `font-family: var(--font-sans, "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, sans-serif);` -- the workspace's brand face, which the page kit (`/_static/workspace_theme.css`) and the shared library serve.
+* For a page's one main headline: `font-family: var(--font-display, "Besley Display", Georgia, serif);`
+* For code and static labels: `font-family: var(--font-mono, "Atkinson Hyperlegible Mono", ui-monospace, monospace);`
 
 ## Cards
 Don't over-use visible cards in your design.

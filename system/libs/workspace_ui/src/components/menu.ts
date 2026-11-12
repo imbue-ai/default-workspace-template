@@ -262,7 +262,7 @@ const SUBMENU_DEFAULT_MAX_HEIGHT = 2 * SUBMENU_PADDING + 10 * MENU_ROW_HEIGHT;
  *  rendering after it as a sibling. `menu-sheet` is a bare marker with no CSS attached. */
 const SHEET_CLASS = "menu-sheet fixed inset-0 z-(--z-popover)";
 
-const CARD_TEXT = "text-(length:--font-size-row)";
+const CARD_TEXT = "text-(length:--font-size-body-dense)";
 
 /** The 12px the calc subtracts is `MENU_MARGIN` on each side: a menu taller than the window
  *  scrolls between the margins rather than running off it. */

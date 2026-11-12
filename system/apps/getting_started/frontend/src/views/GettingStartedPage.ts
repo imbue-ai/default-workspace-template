@@ -84,7 +84,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
           { class: "flex shrink-0 items-center" + (isDisabled ? " text-body-content-tertiary" : ` ${HOVER_GLYPH_GROUP}`) },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
-        m("span", { class: "type-label mt-3 block" }, option.title),
+        m("span", { class: "type-title-sm mt-3 block" }, option.title),
         m(
           "span",
           {
@@ -139,7 +139,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   function templatesStatus(message: string): m.Vnode {
     return m(
       "p",
-      { class: "getting-started-templates-status py-1 text-(length:--font-size-row) text-body-content-tertiary" },
+      { class: "getting-started-templates-status py-1 text-(length:--font-size-body-dense) text-body-content-tertiary" },
       message,
     );
   }

@@ -79,7 +79,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 {
                   class:
                     "chat-header-title ml-1 min-w-0 flex-1 truncate font-semibold " +
-                    (attrs.isTouch ? "text-(length:--font-size-body) " : "text-(length:--font-size-row) ") +
+                    (attrs.isTouch ? "text-(length:--font-size-body) " : "text-(length:--font-size-body-dense) ") +
                     (isRowDeleting ? "text-danger-surface line-through opacity-50" : "text-body-content"),
                 },
                 row?.title ?? "Chats",

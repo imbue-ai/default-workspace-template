@@ -94,7 +94,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               m("div", { class: "text-[15px] font-medium text-body-content" }, chat.name),
               m(
                 "div",
-                { class: "text-(length:--font-size-row) text-body-content-tertiary" },
+                { class: "text-(length:--font-size-body-dense) text-body-content-tertiary" },
                 handoffPhaseText(chat.handoff, agent.harness),
               ),
             ],
@@ -113,7 +113,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
             m("div", { class: "flex w-fit max-w-full flex-col items-center gap-3 text-center" }, [
               m(
                 "div",
-                { class: "text-(length:--font-size-row) text-body-content-tertiary" },
+                { class: "text-(length:--font-size-body-dense) text-body-content-tertiary" },
                 "This agent is stopped, so its terminal has nothing to attach to.",
               ),
               // A failed start leaves the agent dead, which lands back on this face --
@@ -122,7 +122,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                 ? null
                 : m(
                     "div",
-                    { class: "agent-terminal-start-error w-0 min-w-full text-(length:--font-size-row) text-danger-surface" },
+                    { class: "agent-terminal-start-error w-0 min-w-full text-(length:--font-size-body-dense) text-danger-surface" },
                     `Could not start agent: ${startError}`,
                   ),
             ]),
@@ -132,7 +132,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                 type: "button",
                 class:
                   "agent-terminal-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-default px-4 text-(length:--font-size-row) font-medium text-body-content hover:bg-fill-hover",
+                  "border-default px-4 text-(length:--font-size-body-dense) font-medium text-body-content hover:bg-fill-hover",
                 onclick: () => {
                   starting = true;
                   startError = null;

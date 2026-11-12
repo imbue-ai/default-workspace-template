@@ -1,0 +1,68 @@
+/* The brand's type (docs/system/blueprint/brand-design-system/), bundled so every app serves it from its own
+ * origin: Atkinson Hyperlegible Next for anything you read, press, or that changes; Atkinson Hyperlegible Mono for
+ * static labels and code; Besley for the one headline a window exists to show, set from its Medium weight, which
+ * the brand guidelines name as the display face's stand-in at the regular weight the headings ask for. All three
+ * are SIL Open Font License 1.1 (licenses/, THIRD_PARTY_NOTICES.md). */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-Regular.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-Medium.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-SemiBold.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-Bold.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleMono-Regular.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleMono-Medium.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleMono-SemiBold.otf") format("opentype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleMono-Bold.otf") format("opentype");
+}
+@font-face {
+  font-family: "Besley Display";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/Besley-Medium.woff2") format("woff2");
+}

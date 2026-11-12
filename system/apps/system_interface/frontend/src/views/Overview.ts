@@ -233,7 +233,7 @@ export function Overview(): m.Component<OverviewAttrs> {
               "div",
               {
                 class:
-                  "flex shrink-0 items-center gap-2 border-b border-default px-2 text-(length:--font-size-row) " +
+                  "flex shrink-0 items-center gap-2 border-b border-default px-2 text-(length:--font-size-body-dense) " +
                   "font-semibold text-body-content",
                 style: { height: `${metrics.overviewTileTitle}px` },
               },
@@ -454,7 +454,7 @@ export function Overview(): m.Component<OverviewAttrs> {
                 // hung below it would clip past the viewport, buttons first.
                 class:
                   "absolute bottom-full left-1/2 z-(--z-popover) mb-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-xl " +
-                  "border border-default bg-body-surface-raised p-3 text-(length:--font-size-row) text-body-content shadow-overlay",
+                  "border border-default bg-body-surface-raised p-3 text-(length:--font-size-body-dense) text-body-content shadow-overlay",
               },
               [
                 m("div", ["Delete ", m("strong", desktop.name), "? Its windows close for everyone."]),

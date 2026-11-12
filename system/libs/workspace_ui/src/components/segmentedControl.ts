@@ -35,7 +35,7 @@ const SEGMENT_CLASS =
   "flex h-6 cursor-pointer items-center justify-center rounded-md transition-colors duration-(--dur-base) " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-surface";
 const GLYPH_SEGMENT_CLASS = "w-7";
-const LABEL_SEGMENT_CLASS = "px-2.5 text-(length:--font-size-row)";
+const LABEL_SEGMENT_CLASS = "px-2.5 text-(length:--font-size-body-dense)";
 const CHOSEN_CLASS = "bg-fill-active text-body-content";
 const IDLE_CLASS = "text-body-content-secondary hover:bg-fill-hover hover:text-body-content";
 

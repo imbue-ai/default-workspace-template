@@ -137,7 +137,7 @@ function body(page: FilePageModel): m.Children {
   const centred = "flex h-full items-center justify-center overflow-auto bg-body-surface p-6";
   if (page.isDeleted) {
     return m("div.files-file-deleted", { class: `${centred} flex-col gap-1 text-center` }, [
-      m("div", { class: "type-label text-body-content-secondary" }, `"${name}" was deleted`),
+      m("div", { class: "type-title-sm text-body-content-secondary" }, `"${name}" was deleted`),
       m("div", { class: "type-helper text-body-content-tertiary" }, "You can close this window."),
     ]);
   }
@@ -180,7 +180,7 @@ function body(page: FilePageModel): m.Children {
     case "none":
       return m("div", { class: `${centred} flex-col gap-3 text-center` }, [
         m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 128 }),
-        m("div", { class: "type-label text-body-content-secondary" }, "No preview available"),
+        m("div", { class: "type-title-sm text-body-content-secondary" }, "No preview available"),
         m("div", { class: "type-helper text-body-content-tertiary" }, "This file is too large to show, or isn't text."),
         m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(page, path) }, "Download"),
       ]);
@@ -225,7 +225,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
         m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
           m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [
             m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 20 }),
-            m("span.files-file-name", { class: "truncate text-(length:--font-size-row) font-semibold" }, name),
+            m("span.files-file-name", { class: "truncate text-(length:--font-size-body-dense) font-semibold" }, name),
             page.isDirty ? m("span.files-file-dirty", { class: "type-helper text-body-content-tertiary" }, "Edited") : null,
             page.size === null ? null : m("span", { class: "shrink-0 type-helper text-body-content-tertiary" }, formatSize(page.size)),
           ]),
