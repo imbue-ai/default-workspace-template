@@ -233,7 +233,7 @@ export function rowMenuRows(
             key: "make-main",
             label: "Make main chat",
             onSelect: () => makeMainFromMenu(row),
-          } as ContextMenuRow,
+          } satisfies ContextMenuRow,
         ]),
     // The main chat is kept running (the chat app wakes it whenever it is found stopped), and a chat that is not an
     // agent yet has nothing to stop, so neither offers these. A room's reader is stopped and restarted like any
@@ -246,7 +246,7 @@ export function rowMenuRows(
             key: isStopped ? "start" : "stop",
             label: `${isStopped ? "Restart" : "Stop"} ${isRoom(row) ? "room" : "chat"}`,
             onSelect: () => setRunningFromMenu(row, isStopped),
-          } as ContextMenuRow,
+          } satisfies ContextMenuRow,
         ]),
     { kind: "divider" },
     {
@@ -256,7 +256,7 @@ export function rowMenuRows(
       tone: "danger",
       onSelect: () => deleteFromMenu(attrs, row),
     },
-    ...(trailingRows.length === 0 ? [] : [{ kind: "divider" } as ContextMenuRow, ...trailingRows]),
+    ...(trailingRows.length === 0 ? [] : [{ kind: "divider" } satisfies ContextMenuRow, ...trailingRows]),
   ];
 }
 
