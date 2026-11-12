@@ -237,6 +237,24 @@ function failOnUndrawnRow(row: never): never {
   throw new Error(`the element menu cannot draw this row: ${JSON.stringify(row)}`);
 }
 
+/** The fields of each row kind this renderer reads. */
+interface DrawnRowFields {
+  action: "kind" | "key" | "label" | "isDisabled" | "tooltip" | "tone" | "icon" | "onSelect";
+  check: "kind" | "key" | "label" | "isChecked" | "tooltip" | "onToggle";
+  divider: "kind";
+  submenu: "kind" | "key" | "label" | "tooltip" | "rows";
+}
+
+type MustBeNever<Field extends never> = Field;
+
+/** Fails the build when a row of ``ContextMenuRow`` gains a field ``DrawnRowFields`` does not name. The shared
+ *  Menu draws such a field at once, the row types being structurally its own, so it is drawn here first. */
+export type UndrawnRowField = MustBeNever<
+  {
+    [Kind in ContextMenuRow["kind"]]: Exclude<keyof Extract<ContextMenuRow, { kind: Kind }>, DrawnRowFields[Kind]>;
+  }[ContextMenuRow["kind"]]
+>;
+
 /** Keep a card of this size inside the viewport, sliding it left or up from where it would start. */
 function clampedOrigin(view: Window | null, x: number, y: number, width: number, height: number): ContextMenuPoint {
   const viewportWidth = view?.innerWidth ?? width;
