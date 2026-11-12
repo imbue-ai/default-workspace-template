@@ -465,7 +465,7 @@ export class LivePagesLayer implements PageDriver {
       this.show(page, box, stackIndex, isInteractive, covered.has(page.windowId));
       // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
       // attaches to its session as a viewer or as a user by it. So it is when the chrome's word on drawing context
-      // menus arrives after the page's greeting: the page's element menu leaves right-clicks on text to the chrome.
+      // menus arrives after the page's greeting: the page's element menu leaves some right-clicks to the chrome.
       if (
         desktop !== null &&
         page.greetedDesktopId !== null &&

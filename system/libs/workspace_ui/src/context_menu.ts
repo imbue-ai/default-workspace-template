@@ -3,8 +3,8 @@
  * 4.1): a ``contextmenu`` listener on the document that yields to a page's own handling (an
  * event already ``defaultPrevented``), captures the target and the selection as they were at
  * the click, builds the rows, and opens the menu at the pointer. Where the Imbue Studio desktop
- * app draws a native menu (section 11), a right-click on text or a plain link, and any with
- * Shift held, is left to it.
+ * app draws a native menu (section 11), a right-click on text being edited, on the selection, or
+ * on a plain link, and any with Shift held, is left to it.
  *
  * Rendering is the one part a page may replace: a Mithril page hands ``open`` an opener backed
  * by the shared Menu (``components/contextMenuOpener.ts``), and a page without a framework --

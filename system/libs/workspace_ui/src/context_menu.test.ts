@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The installer: it opens on a right-click and yields to one a page already handled, it leaves
- * text and plain links to the desktop app's native menu where there is one, it draws the rows
- * with the default renderer (closed by a press outside, Escape, or a pick), it hands a draft to
- * the connection, it takes a page's own renderer, and it installs once per document.
+ * text being edited and plain links to the desktop app's native menu where there is one, it draws
+ * the rows with the default renderer (closed by a press outside, Escape, or a pick), it hands a
+ * draft to the connection, it takes a page's own renderer, and it installs once per document.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -95,7 +95,7 @@ describe("installElementContextMenu", () => {
     expect(card()).toBeNull();
   });
 
-  it("leaves text, a plain link, and any Shift right-click to the desktop app's native menu", () => {
+  it("leaves a field, a plain link, and any Shift right-click to the desktop app's native menu", () => {
     document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a><img id="pic" src="/a.png">';
     uninstall = installElementContextMenu({
       connection,
@@ -129,7 +129,7 @@ describe("installElementContextMenu", () => {
     expect(row("open-link")).not.toBeNull();
   });
 
-  it("draws its own menu for text and with Shift held where no native menu is announced", () => {
+  it("draws its own menu for a field and with Shift held where no native menu is announced", () => {
     uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
     expect(rightClick(document.getElementById("field") as Element, { shiftKey: true }).defaultPrevented).toBe(true);
     expect(row("paste")).not.toBeNull();
