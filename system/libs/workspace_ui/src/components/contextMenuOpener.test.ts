@@ -39,4 +39,43 @@ describe("createContextMenuOpener", () => {
     expect(document.body.querySelector("[data-context-menu-root]")).toBeNull();
     opener = null;
   });
+
+  it("closes on a check row's pick, at the top level and inside a submenu, as the framework-free menu does", () => {
+    opener = createContextMenuOpener();
+    const toggled: string[] = [];
+    const open = (): void =>
+      opener!.open(
+        [
+          { kind: "check", key: "pinned", label: "Pinned", isChecked: false, onToggle: () => toggled.push("pinned") },
+          {
+            kind: "submenu",
+            key: "sort",
+            label: "Sort",
+            rows: () => [
+              {
+                kind: "check",
+                key: "descending",
+                label: "Descending",
+                isChecked: true,
+                onToggle: () => toggled.push("descending"),
+              },
+            ],
+          },
+        ],
+        { x: 12, y: 34 },
+      );
+    const pick = (key: string): void =>
+      (document.body.querySelector(`[${MENU_ROW_ATTR}="${key}"] input`) as HTMLInputElement).click();
+
+    open();
+    pick("pinned");
+    expect(toggled).toEqual(["pinned"]);
+    expect(opener.menu.isOpen()).toBe(false);
+
+    open();
+    (document.body.querySelector(`[${MENU_ROW_ATTR}="sort"]`) as HTMLElement).click();
+    pick("descending");
+    expect(toggled).toEqual(["pinned", "descending"]);
+    expect(opener.menu.isOpen()).toBe(false);
+  });
 });

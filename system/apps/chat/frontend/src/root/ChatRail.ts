@@ -23,6 +23,7 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { menuRowsOfContextMenu } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { ContextMenuOpen, ContextMenuOptions } from "@imbue/workspace-ui/src/context_menu";
 import { elementReferenceRows, type ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
@@ -360,7 +361,11 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
           railGroups(attrs),
         ),
         attrs.isTouch ? null : resizeHandle(),
-        menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuTrailingRows)),
+        menuRow === undefined
+          ? null
+          : railMenu.view(
+              menuRowsOfContextMenu(rowMenuRows(attrs, menuRow, menuTrailingRows), () => railMenu.close()),
+            ),
       ],
     );
   },

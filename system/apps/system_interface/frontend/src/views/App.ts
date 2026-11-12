@@ -16,6 +16,7 @@ import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
+import { menuRowsOfContextMenu } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
@@ -879,9 +880,11 @@ export function App(): m.Component<AppAttrs> {
       case "size":
         return rowsOfSizeMenu(current, open.windowId);
       case "element":
-        return [...open.rows];
-      default:
-        return withTrailingRows(rowsOfSubject(current, open), open.trailingRows);
+        return menuRowsOfContextMenu(open.rows, () => menu.close());
+      default: {
+        const rows = withTrailingRows(rowsOfSubject(current, open), open.trailingRows);
+        return rows === null ? null : menuRowsOfContextMenu(rows, () => menu.close());
+      }
     }
   }
 
