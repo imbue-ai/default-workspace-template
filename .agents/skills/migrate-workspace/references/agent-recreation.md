@@ -16,6 +16,7 @@ whether the source is pre-declutter or current-layout.
 
 - 1. Enumerate the agents
 - 2. Why the history file is load-bearing
+- Accounts
 - 3. Stage the session files locally
 - 4. Recreate, dormant
 - 5. Why the primary agent is excluded
