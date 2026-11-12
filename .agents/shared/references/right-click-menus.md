@@ -46,8 +46,8 @@ installElementContextMenu({
 ```
 
 - A row is an `action` (`onSelect`; `isDisabled` greys it, `tooltip` says why), a `check` row (`isChecked`,
-  `onToggle`), a `divider`, or a `submenu` of those, one level deep. A submenu's `rows` is read each time the
-  submenu opens, so it only reads state and changes nothing.
+  `onToggle`; a pick toggles it and closes the menu), a `divider`, or a `submenu` of those, one level deep. A
+  submenu's `rows` is read each time the submenu opens, so it only reads state and changes nothing.
 - Every `key` is unique across the whole menu, a submenu's rows included.
 - `tone` is `"danger"` for a destructive row or `"quiet"` for a secondary one.
 - `icon` names one of the workspace's shared icons (the keys of `STROKE_PATHS` in
