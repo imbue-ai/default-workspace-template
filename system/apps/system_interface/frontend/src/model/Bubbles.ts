@@ -8,7 +8,8 @@
  * One bubble per speaker, debounced: a person's new message replaces their bubble and restarts its timer; the
  * agent's new bubble within its bubble's lifetime is appended to it ("and 2 more" past three lines) and restarts
  * the timer; bubbles of different speakers stack upward in arrival order. A bubble lives `BUBBLE_LIFETIME_MS` after
- * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened. A bubble
+ * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened (the
+ * agent's words appended to its mention of the viewer leave it pointing at the mention's chat). A bubble
  * rises on every client but the speaker's own (the shell leaves those out) and the clients looking at the chat it was
  * said in (the store leaves those out on receipt -- a mention of the viewer still rises there).
  * The reducer is pure; the timers are the model's.
@@ -57,16 +58,20 @@ export function withBubble(stack: BubbleStack, wire: BubbleWire, viewer: string 
   const index = stack.findIndex((bubble) => bubble.speaker === wire.speaker);
   const previous = index === -1 ? null : stack[index];
   const isAppended = previous !== null && wire.speaker === WORKSPACE_AGENT_KEY;
+  // The agent's mention of the viewer keeps pointing at its own chat when its later words are appended, so it
+  // neither times out nor opens elsewhere.
+  const isMentionHeld = isAppended && previous.isMention && !isMention;
   const lines = isAppended ? [...previous.lines, wire.text] : [wire.text];
   const shown = lines.slice(-BUBBLE_LINE_LIMIT);
   const next: Bubble = {
     speaker: wire.speaker,
-    chatId: wire.chat_id,
-    chatTitle: wire.chat_title,
+    chatId: isMentionHeld ? previous.chatId : wire.chat_id,
+    chatTitle: isMentionHeld ? previous.chatTitle : wire.chat_title,
     lines: shown,
     foldedCount: (isAppended ? previous.foldedCount : 0) + lines.length - shown.length,
-    messageId: wire.message_id,
-    isMention: isMention || (previous !== null && previous.isMention && previous.chatId === wire.chat_id),
+    messageId: isMentionHeld ? previous.messageId : wire.message_id,
+    isMention:
+      isMention || isMentionHeld || (previous !== null && previous.isMention && previous.chatId === wire.chat_id),
     changedAt: now,
   };
   if (previous === null) return [...stack, next];

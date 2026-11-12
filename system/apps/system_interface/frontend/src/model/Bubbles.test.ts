@@ -73,6 +73,23 @@ describe("withBubble (S11)", () => {
     expect(nextExpiryOf(stack)).toBeNull();
     expect(withoutChat(stack, "chat-1")).toEqual([]);
     expect(withoutSpeaker(stack, "user:bob")).toEqual([]);
+    // The agent's notification from another chat, appended to its mention of the viewer, leaves the mention standing.
+    let agents = withBubble(
+      [],
+      wire(WORKSPACE_AGENT_KEY, "@Josh done", { chat_id: "lounge", chat_title: "Lounge", mentions: [VIEWER] }),
+      VIEWER,
+      1000,
+    );
+    agents = withBubble(
+      agents,
+      wire(WORKSPACE_AGENT_KEY, "The report is ready.", { chat_id: "main", chat_title: "Main", kind: "notification" }),
+      VIEWER,
+      2000,
+    );
+    expect(agents.map((bubble) => [bubble.chatId, bubble.chatTitle, bubble.lines, bubble.isMention])).toEqual([
+      ["lounge", "Lounge", ["@Josh done", "The report is ready."], true],
+    ]);
+    expect(withoutExpired(agents, 2000 + BUBBLE_LIFETIME_MS * 10)).toEqual(agents);
     // Somebody else's mention is not the viewer's.
     expect(withBubble([], wire("user:bob", "@Carol", { mentions: ["user:carol"] }), VIEWER, 1)[0].isMention).toBe(
       false,
