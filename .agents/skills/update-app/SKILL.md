@@ -105,7 +105,10 @@ and each one stays its own request. Treat each as if it had arrived alone:
 decide on its own whether it needs its shape confirmed and how long it will take
 to build, then hand the long ones to the worker and build the short ones
 yourself. A request that would not have been mocked on its own is not added to
-another request's mock or held back until that mock is approved.
+another request's mock or held back until that mock is approved. When the user
+approves a mock that covers several requests, each request in it is still its
+own request: size each one again on its own, build the short ones yourself, and
+send only the long ones to the worker.
 
 ## Hand large work to a background worker
 
