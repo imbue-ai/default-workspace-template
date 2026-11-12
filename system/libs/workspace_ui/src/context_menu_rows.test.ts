@@ -14,7 +14,6 @@ import {
   elementReferenceRows,
   explainPromptOf,
   isNativeMenuTarget,
-  isPointOnSelection,
   joinRowGroups,
   modifyPromptOf,
   standardContextMenuRows,
@@ -349,34 +348,6 @@ describe("elementMenuRows", () => {
 });
 
 describe("isNativeMenuTarget", () => {
-  it("takes text being edited, in a field or a contenteditable region", () => {
-    expect(isNativeMenuTarget(targetOf(byId("field")), false, false)).toBe(true);
-    expect(isNativeMenuTarget(targetOf(byId("note")), false, false)).toBe(true);
-    // The page's own rows for the field do not keep it: the native menu is what corrects a spelling.
-    expect(isNativeMenuTarget(targetOf(byId("field")), true, false)).toBe(true);
-  });
-
-  it("takes a click on a selection the user made, the page's own rows for it or not", () => {
-    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), false, true)).toBe(true);
-    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), true, true)).toBe(true);
-    // A selection elsewhere on the page is not what was clicked.
-    expect(isNativeMenuTarget(targetOf(byId("pic"), "plain words"), false, false)).toBe(false);
-  });
-
-  it("takes a plain link, but not one the page has rows for, nor an image inside one", () => {
-    document.body.innerHTML += '<a id="thumb" href="/full.png"><img id="inner" src="/thumb.png"></a>';
-    expect(isNativeMenuTarget(targetOf(byId("link")), false, false)).toBe(true);
-    expect(isNativeMenuTarget(targetOf(byId("link")), true, false)).toBe(false);
-    expect(isNativeMenuTarget(targetOf(byId("inner")), false, false)).toBe(false);
-  });
-
-  it("leaves an image and plain content to the page", () => {
-    expect(isNativeMenuTarget(targetOf(byId("pic")), false, false)).toBe(false);
-    expect(isNativeMenuTarget(targetOf(byId("para")), false, false)).toBe(false);
-  });
-});
-
-describe("isPointOnSelection", () => {
   afterEach(() => {
     delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
   });
@@ -386,17 +357,37 @@ describe("isPointOnSelection", () => {
     Object.defineProperty(Range.prototype, "getClientRects", { value: () => [box], configurable: true });
   }
 
-  it("takes a point inside a box of the selection, and not one beside it or with nothing selected", () => {
-    drawSelectionAt({ left: 0, right: 10, top: 0, bottom: 10 });
-    expect(isPointOnSelection(document, 1, 2)).toBe(false);
-    selectContentsOf(byId("para"));
-    expect(isPointOnSelection(document, 1, 2)).toBe(true);
-    expect(isPointOnSelection(document, 50, 2)).toBe(false);
+  it("takes text being edited, in a field or a contenteditable region", () => {
+    expect(isNativeMenuTarget(targetOf(byId("field")), false)).toBe(true);
+    expect(isNativeMenuTarget(targetOf(byId("note")), false)).toBe(true);
+    // The page's own rows for the field do not keep it: the native menu is what corrects a spelling.
+    expect(isNativeMenuTarget(targetOf(byId("field")), true)).toBe(true);
   });
 
-  it("places a selection nowhere where the environment draws none", () => {
+  it("takes a click on the selection, and leaves one beside it to the page", () => {
     selectContentsOf(byId("para"));
-    expect(isPointOnSelection(document, 1, 2)).toBe(false);
+    drawSelectionAt({ left: 0, right: 10, top: 0, bottom: 10 });
+    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), false)).toBe(true);
+    expect(
+      isNativeMenuTarget({ ...targetOf(byId("pic"), "plain words"), click: { ...CLICK, clientX: 50 } }, false),
+    ).toBe(false);
+  });
+
+  it("leaves a selection it cannot place to the page", () => {
+    selectContentsOf(byId("para"));
+    expect(isNativeMenuTarget(targetOf(byId("para"), "plain words"), false)).toBe(false);
+  });
+
+  it("takes a plain link, but not one the page has rows for, nor an image inside one", () => {
+    document.body.innerHTML += '<a id="thumb" href="/full.png"><img id="inner" src="/thumb.png"></a>';
+    expect(isNativeMenuTarget(targetOf(byId("link")), false)).toBe(true);
+    expect(isNativeMenuTarget(targetOf(byId("link")), true)).toBe(false);
+    expect(isNativeMenuTarget(targetOf(byId("inner")), false)).toBe(false);
+  });
+
+  it("leaves an image and plain content to the page", () => {
+    expect(isNativeMenuTarget(targetOf(byId("pic")), false)).toBe(false);
+    expect(isNativeMenuTarget(targetOf(byId("para")), false)).toBe(false);
   });
 });
 

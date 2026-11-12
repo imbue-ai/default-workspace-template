@@ -3,8 +3,8 @@
  * 4.1): a ``contextmenu`` listener on the document that yields to a page's own handling (an
  * event already ``defaultPrevented``), captures the target and the selection as they were at
  * the click, builds the rows, and opens the menu at the pointer. Where the Imbue Studio desktop
- * app draws a native menu (section 11), a right-click on text being edited, on a selection the
- * user made, or on a plain link, and any with Shift held, is left to it.
+ * app draws a native menu (section 11), a right-click on text being edited, on the selection, or
+ * on a plain link, and any with Shift held, is left to it.
  *
  * Rendering is the one part a page may replace: a Mithril page hands ``open`` an opener backed
  * by the shared Menu (``components/contextMenuOpener.ts``), and a page without a framework --
@@ -22,7 +22,6 @@ import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "
 import {
   elementMenuRows,
   isNativeMenuTarget,
-  isPointOnSelection,
   joinRowGroups,
   targetOfEvent,
   type ContextMenuActionRow,
@@ -121,17 +120,6 @@ export const CONTEXT_MENU_CARD_ATTR = "data-context-menu";
 export const CONTEXT_MENU_SUBMENU_ATTR = "data-context-menu-submenu";
 export const CONTEXT_MENU_ROW_ATTR = "data-context-menu-row";
 
-/** A press that opens a menu, and whether it landed on the selection as the user had left it. */
-interface MenuPress {
-  x: number;
-  y: number;
-  wasOnSelection: boolean;
-}
-
-/** How far a ``contextmenu`` event may sit from the press it came from: a pointer event's coordinates may be
- *  fractional where that event's are whole. */
-const PRESS_SLOP_PX = 1;
-
 const uninstallerByDocument = new WeakMap<Document, () => void>();
 
 /**
@@ -152,41 +140,11 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
   const hasNativeMenu = options.hasNativeMenu ?? (() => options.handshake?.()?.drawsContextMenus === true);
 
-  // macOS selects the word or the link under a right-click before ``contextmenu`` fires, so the selection read
-  // then lies under the pointer whether or not the user made it. The press comes first, and is asked instead.
-  let press: MenuPress | null = null;
-  const onPointerDown = (event: MouseEvent): void => {
-    // The secondary button, or the primary one with Control, which is macOS's other right-click.
-    const opensMenu = event.button === 2 || (event.button === 0 && event.ctrlKey);
-    if (!opensMenu || !hasNativeMenu()) {
-      press = null;
-      return;
-    }
-    const { clientX, clientY } = event;
-    press = { x: clientX, y: clientY, wasOnSelection: isPointOnSelection(ownerDocument, clientX, clientY) };
-  };
-  /** Whether the right-click landed on a selection the user had made: what its press found, or the selection as
-   *  it stands for a menu no press here opened (the keyboard's). */
-  const isOnSelection = (event: MouseEvent, pressed: MenuPress | null): boolean => {
-    const isFromPress =
-      pressed !== null &&
-      Math.abs(pressed.x - event.clientX) <= PRESS_SLOP_PX &&
-      Math.abs(pressed.y - event.clientY) <= PRESS_SLOP_PX;
-    return isFromPress ? pressed.wasOnSelection : isPointOnSelection(ownerDocument, event.clientX, event.clientY);
-  };
-
   const onContextMenu = (event: MouseEvent): void => {
-    const pressed = press;
-    press = null;
     if (event.defaultPrevented) return;
     const target = targetOfEvent(event, ownerDocument);
     const ownRows = options.extraRows?.(target) ?? [];
-    if (
-      hasNativeMenu() &&
-      (event.shiftKey || isNativeMenuTarget(target, ownRows.length > 0, isOnSelection(event, pressed)))
-    ) {
-      return;
-    }
+    if (hasNativeMenu() && (event.shiftKey || isNativeMenuTarget(target, ownRows.length > 0))) return;
     event.preventDefault();
     const followingRows = elementMenuRows(target, scopeOf(target), draft, isDraftAvailable(), [], openLink);
     const rows = joinRowGroups([ownRows, followingRows]);
@@ -195,12 +153,10 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
 
   // own-context-menu: element-menu -- the element menu itself, the one menu every other right-click's rows join
   ownerDocument.addEventListener("contextmenu", onContextMenu);
-  ownerDocument.addEventListener("pointerdown", onPointerDown, true);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
   const uninstall = (): void => {
     renderer.close?.();
     ownerDocument.removeEventListener("contextmenu", onContextMenu);
-    ownerDocument.removeEventListener("pointerdown", onPointerDown, true);
     ownerDocument.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
     uninstallerByDocument.delete(ownerDocument);
   };

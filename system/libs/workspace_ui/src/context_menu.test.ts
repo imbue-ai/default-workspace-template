@@ -148,51 +148,6 @@ describe("installElementContextMenu", () => {
     }
   });
 
-  it("leaves a selection the user made to the native menu, and keeps one the right-click itself made", () => {
-    // Where a layout (which jsdom lacks) would have drawn the selection: under the pointer.
-    Object.defineProperty(Range.prototype, "getClientRects", {
-      value: () => [{ left: 0, right: 100, top: 0, bottom: 100 }],
-      configurable: true,
-    });
-    const paragraph = document.getElementById("para") as Element;
-    const select = (): void => {
-      const range = document.createRange();
-      range.selectNodeContents(paragraph);
-      document.getSelection()?.removeAllRanges();
-      document.getSelection()?.addRange(range);
-    };
-    const press = (init: MouseEventInit = { button: 2 }): void => {
-      paragraph.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 40, clientY: 50, ...init }));
-    };
-    uninstall = installElementContextMenu({
-      connection,
-      handshake: () => ({ ...HANDSHAKE, drawsContextMenus: true }),
-    });
-    try {
-      select();
-      press();
-      expect(rightClick(paragraph).defaultPrevented).toBe(false);
-      expect(card()).toBeNull();
-
-      // macOS selects the word under a right-click between the press and the event; Control with the primary
-      // button is its other right-click.
-      for (const init of [{ button: 2 }, { button: 0, ctrlKey: true }]) {
-        document.getSelection()?.removeAllRanges();
-        press(init);
-        select();
-        expect(rightClick(paragraph).defaultPrevented).toBe(true);
-        expect(row("copy")).not.toBeNull();
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-      }
-
-      // A menu the keyboard opens has no press; an ordinary click before it is not one.
-      press({ button: 0 });
-      expect(rightClick(paragraph).defaultPrevented).toBe(false);
-    } finally {
-      delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
-    }
-  });
-
   it("keeps a link the page has rows of its own for, with those rows first", () => {
     document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a>';
     uninstall = installElementContextMenu({
