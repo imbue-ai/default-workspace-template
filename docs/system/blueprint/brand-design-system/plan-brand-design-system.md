@@ -14,7 +14,7 @@
 > * Work is split into PRs. PR 1 is the foundation: contract 2, tokens, fonts, the workspace-color pipeline, the theme ports and migration, and a mechanical rename in every app. After that, one PR per batch of new components plus the apps that adopt them.
 > * The prototype's "theme" means a color change inside one theme, not a template theme. There is exactly one Standard theme, and its dynamic colors all derive from the workspace color (the existing Imbue Studio setting). Other themes can do whatever they want.
 > * The shell reads the workspace's `color` label through mngr (on boot and on change) and pushes it to every app with `shell:theme`. Plain HTML pages get it through the page kit.
-> * Imbue Studio also posts the new color into the shell frame after writing the label, so a change shows instantly with no polling (tentative; see Open questions).
+> * Imbue Studio also posts the new color into the shell frame after writing the label, so a change shows instantly with no polling. This is a paired change in mngr-internal, which is in scope.
 > * With no color label, the workspace uses Courage (#492222), the brand's precomputed default.
 > * The workspace color drives a full derivation as in `seedTheme`: primary is the color exactly; neutral, accent, status (harmonized) and wallpaper follow from it.
 > * The default wallpaper is a solid wallpaper ramp step derived from the workspace color, with the "studio" wordmark mark.
@@ -48,7 +48,9 @@
 **Workspace color**
 - A workspace whose Imbue Studio color is Courage, or which has no color label (local docker, tests, older workspaces), shows the hand-tuned Imbue keys: Courage primary, green accent, warm neutral, Honey-derived wallpaper.
 - Any other color becomes the primary exactly. Neutral, accent, the status hues and the wallpaper are derived from it. White text on every derived key meets 4.5:1. The text on the primary itself is black or white by APCA polarity, lightly tinted.
-- Changing the color in Imbue Studio recolors every open app without a reload: instantly if Studio posts the change, otherwise the next time a client connects or the shell restarts.
+- Changing the color in Imbue Studio recolors every open app at once, without a reload.
+- A workspace opened in a plain browser (a sharing link) gets no message from Imbue Studio. It wears the label as the shell last read it, and the shell rereads the label on every boot.
+- An older Imbue Studio paired with a newer workspace, or the reverse, degrades quietly: the color still applies on the shell's next boot.
 - Pages paint in the right colors on first frame. There is no flash of Courage before the workspace color arrives.
 
 **Themes**
@@ -122,8 +124,7 @@
   - `WorkspaceColorStore` writes `data/.state/workspace_color.json` (`{"hex": ..., "revision": ...}`), the one file every app's route reads.
 - Triggers:
   - Shell boot.
-  - A new client connection (`client_activity.py`), throttled to once per minute.
-  - A new embedder message `workspace_color {hex}` in `embedder_messages.py`, sent by Imbue Studio after it writes the label. The shell trusts the label it rereads, not the message body.
+  - The new embedder message `minds:workspace-color` (below), relayed through `embedder_messages.py`. It triggers a reread of the label; the shell trusts the label, not the message body.
 - `theme_wire.py` and `shell:theme`: add `workspaceColor: {hex, revision}`. The shell sends `themes_changed` when the revision changes.
 - `workspace_ui/src/themes/themeClient.ts`:
   - `wearWorkspaceColor(revision)` keeps one `<link data-workspace-color href="/_static/workspace_color.css?v=...">` immediately before the theme link, so a theme always wins over keys.
@@ -131,6 +132,15 @@
 - `themes/themeBoot.ts`: the inline boot script inserts the remembered `workspace_color.css` link before first paint, as it does for the theme.
 - Cascade, lowest to highest: `base.css` (Imbue keys, ramps, roles), then `workspace_color.css` (keys only), then `theme.css` (theme overrides).
 - Every app that calls `register_workspace_theme_route` (chat, terminal, files, getting started, style guide, and system monitor once rebuilt) gets the route for free. The shell's `register_theme_static_route` gets the same.
+
+### Imbue Studio side (mngr-internal, paired PR)
+
+- `apps/minds/docs/embed-contract.md`: add the embedder-to-workspace type `minds:workspace-color` with payload `{ hex }`, and bump the version history. This follows the tolerant policy: it is a new type, so older receivers ignore it.
+- The Studio frontend's frame messaging (next to where it sends `minds:permission-resolutions`):
+  - Send it to every frame mounted on that workspace right after a successful color write. The write is `set_workspace_color` in `apps/minds/imbue/minds/desktop_client/workspace_settings.py`, reached from the workspace options page and `SettingsGroups.ts`.
+  - Also send it after `minds:workspace-ready`, as a snapshot, so a frame that loads mid-change catches up.
+- Tests beside the existing ones (`workspace_settings_test.py`, `workspaceOptions.test.ts`), plus a changelog entry under `apps/minds/changelog/`.
+- It is filed and submitted per `.agents/skills/submit-upstream-changes/references/mngr-changes.md`, paired with the template's foundation PR.
 
 ### Shipped and user themes
 
@@ -244,7 +254,7 @@ Each app's feature-specific variables are remapped to role or ramp tokens in the
    - Contract-parity test updated.
    - Result: every app renders on Courage keys with brand type. Components keep their current shapes.
 2. **Theme ports and migration.** `migration.py`, `workspace-themes migrate`, validator rules, the env.d converge unit; Classic Mac and Windows 2000 ported and verified in the gallery. Result: all three shipped themes switch cleanly, and old user themes migrate on boot.
-3. **Workspace color pipeline.** `workspace_color.py` (library and shell), the state file, the `workspace_color.css` route, `shell:theme` extension, `themeClient`/`themeBoot` link handling, boot and client-connect triggers, and the embedder-message handler. Result: a labelled workspace wears its color. Without Imbue Studio's message, a change applies on the next connect.
+3. **Workspace color pipeline.** `workspace_color.py` (library and shell), the state file, the `workspace_color.css` route, `shell:theme` extension, `themeClient`/`themeBoot` link handling, the boot trigger, and the embedder-message handler; the paired Imbue Studio change sends `minds:workspace-color`. Result: a labelled workspace wears its color, and picking a new one in Imbue Studio recolors it at once.
 4. **Desktop chrome and wallpaper.** Title bar, window, launcher field and shortcut states; the "studio" default wallpaper. Result: the desktop matches the prototype apart from the tray.
 5. **Docs and skills.** style_guide.md, themeable-apps.md, create-theme, make-theme-icon and build-app references rewritten.
 
@@ -278,8 +288,7 @@ Feature-specific variable remaps (`--files-*`, `--ink-*`, start-glyph hues, shel
   - Label read from a fake `mngr list` result.
   - The state file write and revision bump.
   - `themes_changed` sent on a change.
-  - The client-connect throttle.
-  - The embedder message triggers a reread and does not trust its body.
+  - `minds:workspace-color` triggers a reread and does not trust its body; an unknown or malformed payload is ignored.
 - **Route:** `/_static/workspace_color.css` content, ETag and no-cache headers; a 304 on an unchanged revision.
 - **Frontend unit (vitest):** `themeClient` keeps one workspace-color link ahead of the theme link and swaps it on revision change; `themeBoot` inserts it before first paint.
 - **Browser tests** (marked `browser`):
@@ -301,12 +310,11 @@ Feature-specific variable remaps (`--files-*`, `--ink-*`, start-glyph hues, shel
 
 ## Open questions
 
-- **How a color change reaches the workspace (1b, tentative).** Instant updates need Imbue Studio (mngr-internal) to post a `workspace_color` message into the shell frame after `mngr label`. That is a paired change in another repo. Until it lands, changes apply on the next client connect or shell boot. Is that acceptable as the interim, or should the shell also poll slowly while a client is connected?
 - **Default mismatch.** Imbue Studio's own default color is `confusion` (#0b292b), and it renders unlabelled workspaces that way. The workspace will show Courage for the same case, so Studio's chrome and the desktop would disagree for older workspaces. Should Studio backfill a label, or should the template default follow Studio?
 - **The user's own chat bubble.** Today it is a green accent tint. `primary-subtle-surface` would make it follow the workspace color; `accent-subtle-surface` would keep it green-ish. Which?
 - **Field borders.** Contract 1's `border-strong` (fields read as "type here") has no contract-2 role. Do fields use `border-default`, a ramp step (neutral 5), or a new `--c-border-strong` role?
 - **Type ramp conflicts.** Studio-brand's ramp and color-themes' `typography.ts` ("no row step: dense chrome is body") may disagree on `--font-size-row`/`body-dense` and on button heights (32 vs 34px). These go to the user as they come up.
-- **Relative color syntax support.** The ramps and computed states need `oklch(from ...)`: Chrome 119+, Safari 16.4+, Firefox 128+. Older phone browsers would lose every color. Precompute ramps in Python and `base.css`, and keep only hover/active computed? Or accept the floor?
+- **Relative color syntax floor.** The ramps and computed states need `oklch(from ...)` and CSS `pow()`. That means roughly Chrome/Edge 120+, Safari 16.4+ (fully reliable from about 18) and Firefox 128+. Imbue Studio's own Chromium is always past this. Only sharing-link visitors on old browsers fall below it: iOS 15 and earlier (iPhone 6s/7), Firefox ESR 115, or a Chromium that hasn't updated since late 2023. The current lean is to accept the floor. Exact versions to be confirmed before PR 1.
 - **Imbue icon set.** It is deferred here (icons stay as they are). Should it be the next design-system PR after this plan?
 - **Wallpaper key.** In `seedTheme` the wallpaper follows the primary, while the Imbue default uses Honey. Should a non-Courage color derive its wallpaper from the primary (as the prototype does) or from its own rotated hue?
 - **Screen and terminal.** They stay on literal dark palettes. Should a follow-up move their chrome onto inverse roles so themes reach them?
