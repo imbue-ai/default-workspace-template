@@ -8,8 +8,9 @@ app's own rows instead, so every app's menu is built from the same rows. So ever
 prevents the default, in the template's apps and the user's alike, fails here unless a marker among the comment
 lines directly above it names why it has to, ``// own-context-menu: <reason> -- <why>``.
 
-The scan reads source text: an inline handler, or one named by an identifier defined in the same file, is read for a
-``preventDefault`` call; a handler reached any other way (a property of an object, an import) is not followed.
+The scan reads source text, a page kept as a string in a Python file (a scaffolded app's ``runner.py``) included:
+an inline handler, or one named by an identifier defined in the same file, is read for a ``preventDefault`` call; a
+handler reached any other way (a property of an object, an import) is not followed.
 """
 
 from __future__ import annotations
@@ -29,7 +30,17 @@ _REASONS = frozenset(
 _MARKER_RE = re.compile(r"^\s*(?://|/?\*|<!--)\s*own-context-menu:(.*?)(?:-->)?\s*$")
 _COMMENT_RE = re.compile(r"^\s*(?://|/\*|\*|<!--)")
 
-_SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".html", ".vue", ".svelte")
+_SOURCE_SUFFIXES = (
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".html",
+    ".vue",
+    ".svelte",
+    ".py",
+)
 _SKIPPED_PARTS = frozenset({"vendor", "node_modules", "dist"})
 
 # Where a handler starts: a DOM or Mithril ``oncontextmenu`` (property, attribute, or attrs key), a JSX
@@ -187,7 +198,10 @@ def _is_scanned(relative: str) -> bool:
     if _SKIPPED_PARTS.intersection(path.parts) or path.name.endswith(".d.ts"):
         return False
     return not (
-        ".test." in path.name or ".spec." in path.name or path.name.startswith("test_")
+        ".test." in path.name
+        or ".spec." in path.name
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
     )
 
 
@@ -331,6 +345,18 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
             "element.oncontextmenu = select\n"
             "cancel.onclick = (event) => event.preventDefault()\n"
         ),
+        "app/runner.py": (
+            'PAGE = f"""<!doctype html><body>\n'
+            '<div oncontextmenu="event.preventDefault(); openMenu()">x</div>\n'
+            '<script type="module">\n'
+            "  // own-context-menu: forwards -- the canvas takes the right-click as a stroke\n"
+            '  canvas.addEventListener("contextmenu", (event) => event.preventDefault());\n'
+            '  list.addEventListener("contextmenu", (event) => {{\n'
+            "    event.preventDefault();\n"
+            "  }});\n"
+            "</script></body>\n"
+            '"""\n'
+        ),
         "app/marked.ts": (
             "// The stage hands the right-click to the remote desktop.\n"
             "// own-context-menu: forwards -- the remote desktop takes the right-click\n"
@@ -366,6 +392,9 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
         ("app/view.tsx", 3, False),
         ("app/wrapped.ts", 1, False),
         ("app/wrapped.ts", 5, False),
+        ("app/runner.py", 2, False),
+        ("app/runner.py", 5, True),
+        ("app/runner.py", 6, False),
         ("app/marked.ts", 3, True),
         ("app/marked.ts", 5, False),
         ("app/marked.ts", 7, False),
@@ -386,9 +415,12 @@ def test_the_scan_sees_each_form_of_handler_and_what_keeps_one(tmp_path: Path) -
 def test_tests_vendored_code_and_builds_are_not_scanned() -> None:
     assert _is_scanned("system/apps/notes/frontend/src/menu.ts")
     assert _is_scanned("system/apps/notes/templates/index.html")
+    assert _is_scanned("system/apps/notes/src/notes/runner.py")
     for relative in (
         "system/apps/notes/frontend/src/menu.test.ts",
         "system/apps/notes/frontend/e2e/menu.spec.ts",
+        "system/apps/notes/src/notes/runner_test.py",
+        "system/apps/notes/test_notes.py",
         "system/vendor/neko/client.js",
         "system/apps/notes/frontend/node_modules/lib/index.js",
         "system/apps/notes/frontend/dist/app.js",
