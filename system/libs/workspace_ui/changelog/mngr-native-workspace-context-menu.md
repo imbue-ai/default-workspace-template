@@ -2,6 +2,6 @@ A page's own rows in the element menu (`extraRows`) can now be check rows (`isCh
 
 A row kind, a field of a row, or a tone added to the element menu fails the build until the framework-free renderer draws it, and a row kind added to the shared Menu fails the build until it is given to the element menu or named as left out.
 
-`installElementContextMenu` leaves some right-clicks to the Imbue Studio desktop app's native menu when the app says it draws one, through the handshake's new `drawsContextMenus` (read by `readHandshake` into `ShellHandshake`) or the new `hasNativeMenu` option. Those are a right-click on text being edited, on the selection under the pointer, on a link the page has no rows of its own for, and any with Shift held.
+`installElementContextMenu` leaves some right-clicks to the Imbue Studio desktop app's native menu when the app says it draws one, through the handshake's new `drawsContextMenus` (read by `readHandshake` into `ShellHandshake`) or the new `hasNativeMenu` option. Those are a right-click on text being edited, on a selection the user made under the pointer (not the word macOS selects under the right-click itself), on a link the page has no rows of its own for, and any with Shift held.
 
 An image's menu gains "Copy image", which puts the image on the clipboard as a PNG. It is offered for a loaded image whose pixels the page can read: one of the page's own origin or inline in it, or one loaded with CORS.

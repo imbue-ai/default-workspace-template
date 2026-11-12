@@ -343,11 +343,11 @@ export function joinRowGroups(groups: readonly (readonly ContextMenuRow[])[]): C
   return rows;
 }
 
-/** Whether the click landed on the document's selection: inside one of the boxes its ranges are drawn as. */
-function isClickOnSelection(target: ContextMenuTarget): boolean {
-  const selection = target.element.ownerDocument.getSelection();
+/** Whether the point lies on the document's selection as it is now: inside one of the boxes its ranges are drawn
+ *  as. */
+export function isPointOnSelection(ownerDocument: Document, clientX: number, clientY: number): boolean {
+  const selection = ownerDocument.getSelection();
   if (selection === null || selection.isCollapsed) return false;
-  const { clientX, clientY } = target.click;
   for (let index = 0; index < selection.rangeCount; index += 1) {
     const range = selection.getRangeAt(index);
     // A range's boxes are a rendering fact; an environment without layout draws the selection nowhere.
@@ -361,13 +361,14 @@ function isClickOnSelection(target: ContextMenuTarget): boolean {
 
 /**
  * Whether a right-click is one the Imbue Studio desktop app's native menu answers better than the page's
- * (section 11): text being edited, the selection under the pointer, or a link the page has no rows of its own
- * for. The native menu carries what a page cannot offer there (spelling suggestions, Look Up, a paste that asks
- * no permission) and none of the page's rows. An image keeps the page's menu, inside a link or not.
+ * (section 11): text being edited, a selection the user made under the pointer (``isOnSelection``), or a link the
+ * page has no rows of its own for. The native menu carries what a page cannot offer there (spelling suggestions,
+ * Look Up, a paste that asks no permission) and none of the page's rows. An image keeps the page's menu, inside a
+ * link or not.
  */
-export function isNativeMenuTarget(target: ContextMenuTarget, hasOwnRows: boolean): boolean {
+export function isNativeMenuTarget(target: ContextMenuTarget, hasOwnRows: boolean, isOnSelection: boolean): boolean {
   const { element } = target;
-  if (isEditableElement(element) || isClickOnSelection(target)) return true;
+  if (isEditableElement(element) || isOnSelection) return true;
   if (hasOwnRows || imageSrcOf(element) !== null) return false;
   return element.closest("a[href]") !== null;
 }
