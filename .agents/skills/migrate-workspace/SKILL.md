@@ -96,17 +96,21 @@ through this skill's tooling; it is built around a live source.
 
 Grants are keyed to the **host**, so this workspace starts from a deny-all
 baseline no matter what the old one had. File **one** permission request covering
-every verb the whole pass needs, before the user starts using anything -- per the
-`imbue-studio` skill's `type: "workspace"` request:
+every verb the pass itself needs, before the user starts using anything -- per the
+`imbue-studio` skill's `type: "workspace"` request. `minds-workspaces-read` is what
+Step 1's listing took; it is asked for again here only when you do not hold it yet.
+Do **not** ask for `minds-workspaces-destroy` now: nothing before the close-out can
+need it, and the user decides the old workspace's fate only after looking the new
+one over (Step 9 asks for it then, if they choose to remove the old one).
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-lifecycle",
-                                   "minds-workspaces-backups-export", "minds-workspaces-destroy"],
+                                   "minds-workspaces-backups-export"],
                    "target_workspace_id": "<OLD>"},
-       "rationale": "Bring <name> across into this workspace: read it over SSH, start it if it is stopped, and (only if you ask me to at the end) stop or remove it."}'
+       "rationale": "Bring <name> across into this workspace: read it over SSH, start it if it is stopped, and take a backup of it first."}'
 ```
 
 Wait for the approval message. Then start the source if it is stopped
@@ -227,10 +231,25 @@ each file with the user. That is a legitimate outcome, not a failure.
 
 The result is **authoritative but verifiable**. Check it against the source tree
 rather than trusting it blindly: walk the source's own directories for anything
-the diff would not see (files the user created outside the repo, and gitignored
-content under the source's data tree), and resolve every entry the script flagged
+the diff would not see, and resolve every entry the script flagged
 `is_ambiguous` -- those are places the old tree collapsed a distinction the new
-one makes, and only reading the file settles it.
+one makes, and only reading the file settles it. Two kinds of content the diff
+never lists, and a migration regularly needs:
+
+- **Gitignored files inside the checkout** that the user's creations depend on,
+  such as a supervisord drop-in the user generated under
+  `system/supervisord.conf.d/` or a config an app wrote beside itself:
+  `git -C <repo_root> status --ignored --short` on the source names them, and
+  every one has to be decided (brought over, or named as left behind).
+- **Directories outside the checkout.** The user's own clones and worktrees
+  live under their home, not under the repo, and the apps that serve from them
+  break here without them. Inventory the top-level home directories with
+  `du -sh <home>/*/ 2>/dev/null` over the SSH session (`<home>` is the
+  checkout's parent, `/home/user` on a current source), set aside the ones the
+  template owns (the checkout itself, `.mngr`, `.minds`, `.cache` and the like),
+  and bring the rest to the user as part of Step 5's inventory, with their
+  sizes, so they say which come over -- to the same paths here, which is where
+  anything that references them expects them.
 
 ## 5. Inventory and audit -- ask everything now
 
@@ -240,7 +259,7 @@ now, ask now: the user should not be interrupted repeatedly later.
 ```bash
 S="--ssh-host <host> --ssh-port <port> --ssh-user <user>"
 M=".agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py"
-uv run --no-sync $M list-agents        $S --host-dir <host_dir>
+uv run --no-sync $M list-agents        $S --host-dir <host_dir> --accounts-dir <home>/.minds/accounts
 uv run --no-sync $M classify-branches  $S --repo-root <repo_root>
 uv run --no-sync $M list-ports         $S --repo-root <repo_root>
 uv run --no-sync $M list-jobs          $S --repo-root <repo_root>
@@ -257,11 +276,19 @@ Then bring the whole picture to the user in one message:
 
 - **Their creations**, in plain terms: the apps, skills, documents, and data
   coming across, and anything you could not classify.
+- **What lives outside the checkout** (Step 4's home-directory inventory), each
+  with its size, and the gitignored files the creations depend on.
 - **Collisions.** Agent names auto-suffix and are merely reported. **Apps,
   skills, and ports stop and ask** -- an app's program name and listening port
   are real wiring, and two apps cannot share either.
 - **Unmerged branches.** Each carries work that is *not* in the migrated tree.
   Ask what to do with each one and its agent.
+- **The chats**, by account: `list-agents` reports each agent's harness, the
+  account it ran on and the folder it worked in. Say which chats come over on
+  which account, which of them worked in a folder outside the checkout (they are
+  recreated in that folder, so it has to come over first), and which agents are
+  on a harness whose sessions the flow cannot enumerate, so they would come back
+  empty.
 - **Billing-relevant AI decisions** (Step 8's review) and any scheduled job whose
   purpose is unclear.
 
@@ -360,11 +387,34 @@ registering apps and restarting services, and release it when done.
 
 **Data.** Everything under the source's data tree arrives at its new location --
 **including `data/.secrets/anthropic.env`**, so migrated integrations keep working
-by default. Exactly two files are excluded, because they are per-workspace
-identity rather than user content: `restic.env` (a backup repository keyed by
-*that* workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted per
-`agent_id`). Copying either would point this workspace at the old one's
-resources. Use `rsync` over the SSH session with an `--exclude` for each.
+by default. What is excluded is per-workspace identity rather than user content:
+`restic.env` (a backup repository keyed by *that* workspace's own random
+password), `cloudflare_tunnel.env` (a tunnel minted per `agent_id`), and the old
+workspace's published share -- `share.env`, `share_auth_label`,
+`share_gateway_signing_key`, `share_grants.toml` and its lock,
+`share_identities.json`, `share_tls/`, and the visiting-agent registry
+`agent_access/`. Copying the backup or tunnel files would point this workspace at
+the old one's resources; copying the share files would have this workspace
+present the old one's hostname and certificate, with two machines claiming one
+share. This workspace's own share, and who may enter it, is set up from the
+desktop's Share panel. The script owns the list, so take the excludes from it:
+
+```bash
+rsync -a -e "ssh -i /tmp/mind_key -p <port> -o StrictHostKeyChecking=no" \
+    $(uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py \
+        data-excludes --layout <layout>) \
+    "<user>@<host>:<data_root>/" data/
+```
+
+(`<data_root>` is `<repo_root>/data` on a current source and `<repo_root>/runtime`
+on a pre-declutter one.)
+
+**Accounts.** The chat app keeps one folder per signed-in provider account under
+`<home>/.minds/accounts/`; a chat's sign-in lives there, and so do a claude
+chat's transcripts, so the recreated chats need the same folders here. Bring
+them over before the agents, per "Accounts" in
+[references/agent-recreation.md](references/agent-recreation.md), and tell the
+user which account was the old workspace's default.
 
 **Creations.** Each app lands under `system/apps/<package>/` and gets a
 `[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
@@ -444,18 +494,22 @@ resolves here** (`uv run --no-sync routines show <id>`; the script or binary
 exists and runs) before reporting it as scheduled. A rewritten path can still
 name a script that was never migrated.
 
-**Agents.** Stage the session JSONLs off the source, then recreate every agent
-except the source's primary -- dormant, under its old name, with its original
-creation label:
+**Agents.** Stage the session files off the source, then recreate every agent
+except the source's primary -- dormant, under its old name, on its original
+harness and account, in its original folder, with its original creation label:
 
 ```bash
 uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py recreate-agents \
     --agents-json data/.tasks/migrate-workspace/agents.json \
-    --sessions-dir data/.tasks/migrate-workspace/sessions
+    --sessions-dir data/.tasks/migrate-workspace/sessions \
+    --source-repo-root <repo_root>
 ```
 
-See [references/agent-recreation.md](references/agent-recreation.md) for the
-staging, the encoded-project-dir detail, and why the primary is excluded.
+It skips an agent whose account folder or work folder is not here yet and says
+so: the accounts step and the outside-the-checkout directories come first. See
+[references/agent-recreation.md](references/agent-recreation.md) for the
+staging, the account binding, the codex rollouts, and why the primary is
+excluded.
 
 **Branches.** Fetch every `mngr/<name>` branch regardless of state, so no commits
 are lost, and carry the merged/unmerged classification into your report.
@@ -493,9 +547,16 @@ an assumption:
   prints `ok` for each.
 - **The data is present** at its new locations, including the secrets file that
   was supposed to come over.
-- **Every recreated tab renders its history.**
+- **Every recreated tab renders its history**, on the account the chat ran on
+  (the chat app shows it; a chat on the wrong account was recreated before its
+  account folder arrived).
 - **Nothing shifted on the source** during the copy (if the user declined
   quiescence): re-run the baseline diff with `--refresh` and re-sync anything new.
+- **This workspace is backed up.** `uv run --no-sync host-backup-now --timeout 600`
+  here must report `restic_backup_succeeded`; a tick skipped for missing secrets
+  means this workspace has no backups configured, which the user turns on from
+  the desktop (its Backups settings) before the old workspace is stopped, since
+  until then the old one's backups are the only copy.
 
 Open the migrated **apps** as windows in default positions
 (`uv run --no-sync workspace-layout open <name>`).
@@ -529,10 +590,12 @@ mkdir -p data/documents && $EDITOR data/documents/migration-summary.md   # or ju
 ```
 
 It names three things: **what came over**, **what needs attention and why** (each
-unresolved app, each rebuild-only setting, each unmerged branch), and **what was
-deliberately excluded by design** -- the two app-minted secret files, the old
-workspace's services agent, and the template machinery, each with its one-line
-reason. Never let an exclusion read as an oversight.
+unresolved app, each rebuild-only setting, each unmerged branch, and whether this
+workspace's backups are on), and **what was deliberately excluded by design** --
+the backup and tunnel secrets, the old workspace's published share and its
+grantees (this workspace is shared, and admits people, from its own Share
+panel), the old workspace's services agent, and the template machinery, each
+with its one-line reason. Never let an exclusion read as an oversight.
 
 **Record it in the ledger.** Append one line under a `## Migrations` section of
 `docs/VERSION_HISTORY.md` (create the section after `## Workspace` if absent),
@@ -550,9 +613,12 @@ name** and commit it; never `git add -A`.
 things over themselves first rather than relying on the checklist alone:
 
 - **Stop it** (`POST .../<OLD>/stop`) -- the safe default; everything stays
-  recoverable.
+  recoverable. The lifecycle grant from Step 2 covers it.
 - **Destroy it** (`POST .../<OLD>/destroy`) -- only on explicit confirmation, and
-  only after a fresh backup you have confirmed succeeded.
+  only after a fresh backup you have confirmed succeeded. This is the one point
+  that needs `minds-workspaces-destroy`: file the request for it (one verb,
+  the old workspace as its target) when the user chooses this, and end your
+  turn until it is granted.
 
 Leave the workspace **names** alone -- renaming is the user's business and they can
 do it from the app.
