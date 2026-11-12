@@ -9,6 +9,9 @@ display_name = "Routines"
 description = "Everything that runs on a schedule: each routine's health, next run and history, with run-now, on/off, reschedule and fix controls."
 api_schema_path = "/api/schema"
 icon = "icon.svg"
+# Part of every workspace rather than an app built on it: the share panel lists it under System, and the
+# desktop app's home screen does not count it among the workspace's own apps.
+system = true
 critical = false
 # Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
 stop_when_no_windows = true
