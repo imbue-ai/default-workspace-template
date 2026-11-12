@@ -14,7 +14,12 @@ from agents_shared.skill_checks import (
     check_failures,
     unreached_shared_files,
 )
-from agents_shared.skill_exemptions import Exemption, ExemptionReason, with_exemption
+from agents_shared.skill_exemptions import (
+    Exemption,
+    ExemptionAllowance,
+    ExemptionReason,
+    with_exemption,
+)
 
 _LONG_FILLER = "\n".join(f"filler line {index}" for index in range(120))
 
@@ -315,15 +320,55 @@ def test_a_stale_or_malformed_exemption_fails(
     assert expected in error
 
 
-def test_no_exemptions_mode_refuses_a_valid_exemption(tmp_path: Path) -> None:
-    passing = _skill(tmp_path, "edited", "Fine now.\n", _exemption("paths"))
-    failing = _skill(
-        tmp_path, "failing", "Read `system/gone.py`.\n", _exemption("paths")
+@pytest.mark.parametrize("reason", list(ExemptionReason))
+def test_a_new_skill_may_keep_no_exemption(
+    tmp_path: Path, reason: ExemptionReason
+) -> None:
+    passing = _skill(
+        tmp_path, "fixed", "Fine now.\n", _exemption("paths", reason.value)
     )
-    passing_error = validate_skill.validate(passing, allow_exemptions=False)
-    failing_error = validate_skill.validate(failing, allow_exemptions=False)
-    assert passing_error is not None and "passes every check" in passing_error
+    failing = _skill(
+        tmp_path,
+        "failing",
+        "Read `system/gone.py`.\n",
+        _exemption("paths", reason.value),
+    )
+    new_skill = ExemptionAllowance.NEW_SKILL
+    passing_error = validate_skill.validate(passing, allowance=new_skill)
+    failing_error = validate_skill.validate(failing, allowance=new_skill)
+    assert (
+        passing_error is not None and "a new skill passes every check" in passing_error
+    )
     assert failing_error is not None and "[paths]" in failing_error
+
+
+def test_an_edit_clears_the_skills_own_exemption_and_leaves_one_awaiting_its_restructure(
+    tmp_path: Path,
+) -> None:
+    body = "Read `system/gone.py`.\n"
+    own = _skill(tmp_path, "own", body, _exemption("paths", "predates-checks"))
+    built_in = _skill(
+        tmp_path, "built-in", body, _exemption("paths", "awaiting-restructure")
+    )
+    edited = ExemptionAllowance.EDITED_SKILL
+
+    own_error = validate_skill.validate(own, allowance=edited)
+    assert own_error is not None and "[paths]" in own_error
+    assert validate_skill.validate(built_in, allowance=edited) is None
+
+    # The edit still may not fail a check the built-in was not already excused.
+    _write(built_in, "references/orphan.md", "Unlinked.\n")
+    further = validate_skill.validate(built_in, allowance=edited)
+    assert further is not None
+    assert "[reachability]" in further and "[paths]" not in further
+
+    # Fixing what its own exemption covered is not enough: the exemption goes too.
+    _skill(tmp_path, "own", "Fine now.\n", _exemption("paths", "predates-checks"))
+    cleared = validate_skill.validate(own, allowance=edited)
+    assert (
+        cleared is not None
+        and "an edit clears a `predates-checks` exemption" in cleared
+    )
 
 
 def test_writing_an_exemption_changes_only_the_metadata_block() -> None:
@@ -371,7 +416,7 @@ def test_stamping_adds_missing_exemptions_drops_stale_ones_and_skips_third_parti
     }
     failing_body = (failing / "SKILL.md").read_text().split("---\n", 2)[2]
 
-    changes = validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+    changes = validate_skill.stamp_exemptions(tmp_path)
 
     assert changes == [
         "failing: exempt-checks none -> paths (predates-checks)",
@@ -387,9 +432,7 @@ def test_stamping_adds_missing_exemptions_drops_stale_ones_and_skips_third_parti
         assert (skill / "SKILL.md").read_text() == text
     for skill in (failing, fixed, narrower, passing):
         assert validate_skill.validate(skill) is None
-    assert (
-        validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS) == []
-    )
+    assert validate_skill.stamp_exemptions(tmp_path) == []
 
 
 def test_stamping_settles_when_the_exemption_itself_tips_skill_md_over_the_size_cap(
@@ -401,7 +444,7 @@ def test_stamping_settles_when_the_exemption_itself_tips_skill_md_over_the_size_
         skill_md.read_text() + "x" * (MAX_SKILL_MD_BYTES - len(skill_md.read_bytes()))
     )
 
-    validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+    validate_skill.stamp_exemptions(tmp_path)
 
     assert "exempt-checks: size paths\n" in skill_md.read_text()
     assert validate_skill.validate(skill) is None
@@ -418,7 +461,7 @@ def test_stamping_drops_a_size_exemption_that_only_its_own_lines_keep_true(
     )
     assert validate_skill.validate(skill) is None
 
-    changes = validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+    changes = validate_skill.stamp_exemptions(tmp_path)
 
     assert changes == ["borderline: exempt-checks size -> none"]
     assert validate_skill.validate(skill) is None
@@ -438,7 +481,7 @@ def test_stamping_replaces_an_exemption_it_cannot_read_whether_or_not_the_skill_
         _exemption("paths", "because"),
     )
 
-    changes = validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+    changes = validate_skill.stamp_exemptions(tmp_path)
 
     assert changes == [
         "half-written: exempt-checks unreadable -> none",
@@ -463,7 +506,7 @@ def test_stamping_leaves_a_skill_as_it_was_when_a_check_cannot_be_run(
     before = (skill / "SKILL.md").read_bytes()
 
     with pytest.raises(UnicodeDecodeError):
-        validate_skill.stamp_exemptions(tmp_path, ExemptionReason.PREDATES_CHECKS)
+        validate_skill.stamp_exemptions(tmp_path)
 
     assert (skill / "SKILL.md").read_bytes() == before
 
