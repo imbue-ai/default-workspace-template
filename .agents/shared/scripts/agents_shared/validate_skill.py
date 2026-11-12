@@ -561,10 +561,11 @@ def _stamp_skill(skill_dir: Path, tree: SkillTree) -> str | None:
 def stamp_exemptions(repo_root: Path) -> list[str]:
     """Recompute the exemption of every skill the workspace holds to its checks.
 
-    A skill that fails checks gets an exemption naming exactly those, keeping the reason it
-    already had: stamping never hands out ``awaiting-restructure``, which only the skill's
-    maintainers write. A skill that passes loses its exemption. Third-party skills are left
-    alone. Returns a line per skill changed.
+    A skill that fails checks gets an exemption naming exactly those. One that already carried
+    an exemption keeps its reason and a newly exempted one gets ``predates-checks``: stamping
+    never hands out ``awaiting-restructure``, which only the skill's maintainers write. A skill
+    that passes loses its exemption. Third-party skills are left alone. Returns a line per
+    skill changed.
     """
     tree = SkillTree(repo_root)
     listed = third_party_skills(tree.root / ".agents")
