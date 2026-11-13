@@ -386,8 +386,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     down_parser.add_argument(
         "--close-windows",
         action="store_true",
-        help="Close the preview's windows first; without it, an open one refuses the "
-        "teardown.",
+        help="Close the windows still showing the preview or the siblings it booted "
+        "first; without it, an open one refuses the teardown.",
     )
     _add_repo_root_arg(down_parser)
 
