@@ -349,6 +349,19 @@ def launch_role_templates(is_fast: bool) -> tuple[str, ...]:
 
 
 @pure
+def launch_fast_identity(fast_mode: ChatFastModeState, live: ModelIdentity | None) -> ModelIdentity | None:
+    """The selection a just-launched agent is switched to so it runs fast, or None when its chat does not launch fast.
+
+    Only the fast axis is switched, so the model and effort are the agent's own, as far as it has recorded them.
+    """
+    if not fast_mode.launches_fast:
+        return None
+    if live is None:
+        return ModelIdentity(model_id="", effort=None, fast=True)
+    return live.model_copy_update(to_update(live.field_ref().fast, True))
+
+
+@pure
 def explicit_chat_name(requested_name: str) -> str:
     """The name a caller asked a new chat to carry, stripped; empty for none.
 
@@ -3374,6 +3387,34 @@ class AgentManager:
             raise ModelApplyError(result.detail or f"Failed to set the model for agent '{agent_info.name}'")
         self.refresh_model_choice(agent_info.id)
 
+    def apply_launch_fast_mode(self, chat_id: ChatId, agent_info: AgentInfo) -> None:
+        """Turn fast mode on for an agent that has just come up, when the chat launches fast and its harness
+        takes fast mode as a switch rather than from the ``fast`` create template.
+
+        Only the fast axis is switched, so the agent keeps the model and effort it launched on. A
+        refused switch is logged and the agent runs at standard speed; the model bar shows that.
+        """
+        spec = get_harness_spec(agent_info.harness)
+        if not spec.is_launch_fast_switched:
+            return
+        identity = launch_fast_identity(
+            self.get_fast_mode_state(chat_id),
+            read_model_identity(get_model_state_path(agent_info.harness, agent_info.agent_state_dir)),
+        )
+        if identity is None:
+            return
+        result = build_resolver(agent_info).switch(
+            identity,
+            frozenset({ModelAxis.FAST}),
+            lambda line: isinstance(self.send_message_to_agent(AgentId(agent_info.id), line), SendDelivery),
+        )
+        if not result.ok:
+            _loguru_logger.warning(
+                "Chat {}: could not turn fast mode on for agent {}: {}", chat_id, agent_info.id, result.detail
+            )
+            return
+        self.refresh_model_choice(agent_info.id)
+
     def hold_send(self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin) -> HandoffPhase | None:
         """Hold a send while the chat converges; None when the chat is not converging.
 
@@ -3458,6 +3499,7 @@ class AgentManager:
             resolve_account=resolve_account,
             deliver=capabilities.deliver,
             apply_model=self.apply_model_pick,
+            apply_launch_fast_mode=self.apply_launch_fast_mode,
             drain_to_composer=capabilities.drain_to_composer,
             ensure_watcher=capabilities.ensure_watcher,
             get_background_tasks=self._background_tasks_of_chat,
@@ -5378,20 +5420,21 @@ class AgentManager:
         what the user chose the switch by. The messages go through the send path a held send
         takes; a refusal is logged the same way, and only a first message that landed is told of.
         """
-        if model_pick is None and first_message is None and not held_sends:
-            return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
         if agent_info is None or capabilities is None:
-            _loguru_logger.warning(
-                "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
-            )
+            if model_pick is not None or first_message is not None or held_sends:
+                _loguru_logger.warning(
+                    "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
+                )
             return
         if model_pick is not None:
             try:
                 self.apply_model_pick(agent_info, model_pick)
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
+        else:
+            self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
                 capabilities.deliver,

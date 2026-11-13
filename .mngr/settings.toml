@@ -1759,23 +1759,21 @@ transfer = "none"
 output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
 
-# Fast: launches the fast-capable harnesses in fast mode so a new conversation
-# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
-# auto with its fast turns still to run (a new chat's mode is the workspace's
-# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# Fast: launches claude in fast mode so a new conversation feels responsive.
+# The chat app stacks it on a chat whose fast mode is on, or auto with its fast
+# turns still to run (a new chat's mode is the workspace's default,
+# `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# claude's `settings_overrides` is a SettingsPatchField (deep-merge marker on
+# the field), so a bare dotted path merges into the [agent_types.claude] block.
 #
-# The two fast settings are deliberately asymmetric: claude's
-# `settings_overrides` is a SettingsPatchField (deep-merge marker on the
-# field), so a bare dotted path merges into the [agent_types.claude] block.
-# codex's `config_overrides` is a PLAIN dict -- a bare dotted assignment trips
-# the settings-narrowing guard (it would drop the features/tools blocks), so
-# the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
-# inconsistency in either direction. Settings for whichever harness is not
-# resolved are inert, so this template is safe to stack with any --type.
+# Codex is deliberately absent: the chat app turns its fast mode on with a model
+# switch once the agent is up (`is_launch_fast_switched` in the chat app's
+# harness registry). A tier in codex's config is re-sent by the agent terminal
+# whenever it attaches, so it would undo auto mode's later switch to standard
+# speed after any restart.
 [create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
-    'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
 # Automation: the agent a skill routine runs in (system/libs/routines). The
