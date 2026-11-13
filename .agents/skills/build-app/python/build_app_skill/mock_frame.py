@@ -158,9 +158,8 @@ def frame_display_name(display_name: str) -> str:
 
 def find_app(app_name: str, repo_root: Path) -> FramedApp:
     """The registered app scaffolded as ``app_name``; raises MockFrameError when there is none."""
-    # Imported here: both load pydantic, which a refused or --help call need not pay for.
+    # Imported here: it loads pydantic, which a refused or --help call need not pay for.
     from app_manifest.manifest import load_manifest
-    from app_manifest.registry import read_registry
 
     manifest_path = (
         repo_root / "system" / "apps" / app_name.replace("-", "_") / "app.toml"
@@ -169,12 +168,8 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
         manifest = load_manifest(manifest_path, repo_root=repo_root)
     except ManifestLoadError as exc:
         raise MockFrameError(f"no app named {app_name!r} to frame: {exc}") from exc
-    try:
-        rows = read_registry(forward_port.apps_file(repo_root))
-    except RegistryReadError as exc:
-        raise MockFrameError(str(exc)) from exc
-    row = next((row for row in rows if row.name == app_name), None)
-    if row is None:
+    url = _registered_url(app_name, repo_root)
+    if url is None:
         raise MockFrameError(
             f"{app_name!r} is not registered, so there is nothing running to frame; start "
             "it first (the scaffold's --start, or supervisorctl start)"
@@ -183,12 +178,13 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
         name=app_name,
         manifest_path=manifest_path,
         display_name=str(manifest.display_name),
-        url=str(row.url),
+        url=url,
     )
 
 
-def _is_registered(name: str, repo_root: Path) -> bool:
-    """Whether ``name`` has a registry row; raises MockFrameError when the registry cannot be read."""
+def _registered_url(name: str, repo_root: Path) -> str | None:
+    """The URL ``name`` is registered at, or None when it has no registry row; raises MockFrameError when the
+    registry cannot be read."""
     # Imported here: it loads pydantic, which a refused or --help call need not pay for.
     from app_manifest.registry import read_registry
 
@@ -196,7 +192,7 @@ def _is_registered(name: str, repo_root: Path) -> bool:
         rows = read_registry(forward_port.apps_file(repo_root))
     except RegistryReadError as exc:
         raise MockFrameError(str(exc)) from exc
-    return any(row.name == name for row in rows)
+    return next((str(row.url) for row in rows if row.name == name), None)
 
 
 def _register(
@@ -308,7 +304,7 @@ def down(app_name: str, repo_root: Path, *, frames: Frames) -> int:
     still shows the app, which then stays hidden behind it.
     """
     code = frames.down(app_name, repo_root)
-    if code != 0 and _is_registered(frame_name(app_name), repo_root):
+    if code != 0 and _registered_url(frame_name(app_name), repo_root) is not None:
         sys.stderr.write(
             f"mock frame: the {frame_name(app_name)} frame is still up (see above), so "
             f"{app_name!r} stays hidden behind it.\n"
