@@ -1071,6 +1071,23 @@ def _unwind_failed_boot(
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
 
 
+def _wrapper_args(
+    inner_service: str, title: str, inner_path: str, kind: FrameKind, note: str | None
+) -> list[str]:
+    """The preview wrapper's argv for framing ``inner_service`` under ``title``, with ``kind``'s banner and ``note``."""
+    return [
+        "--inner-service",
+        inner_service,
+        "--title",
+        title,
+        "--inner-path",
+        inner_path,
+        "--kind",
+        kind,
+        *(["--note", note] if note else []),
+    ]
+
+
 def _boot_wrapper(
     repo_root: Path,
     name: str,
@@ -1305,17 +1322,9 @@ def up(
                 repo_root,
                 name,
                 wrapper_log_path,
-                [
-                    "--inner-service",
-                    service_name,
-                    "--title",
-                    preview_title,
-                    "--inner-path",
-                    inner_path,
-                    "--kind",
-                    preview_kind,
-                    *(["--note", preview_note] if preview_note else []),
-                ],
+                _wrapper_args(
+                    service_name, preview_title, inner_path, preview_kind, preview_note
+                ),
                 pids,
                 http=http,
                 spawner=spawner,
@@ -1542,18 +1551,7 @@ def frame(
     state_dir = _state_dir(repo_root, name)
     wrapper_log_path = state_dir / WRAPPER_LOG_FILENAME
     state_dir.mkdir(parents=True, exist_ok=True)
-    wrapper_args = [
-        "--inner-service",
-        inner_service,
-        "--title",
-        title,
-        "--inner-path",
-        inner_path,
-        "--kind",
-        kind,
-    ]
-    if note:
-        wrapper_args += ["--note", note]
+    wrapper_args = _wrapper_args(inner_service, title, inner_path, kind, note)
     record = FrameRecord(
         inner_service=inner_service,
         frame_service_name=frame_service_name,
