@@ -385,7 +385,7 @@
 .chat-panel {
   /* The pane card's own surface: a chat fills its pane edge to edge, so anything
      else here would read as a second surface inside the card. */
-  background: var(--c-body-surface-raised);
+  background: var(--c-body-surface);
 }
 
 .chat-panel .app-footer {
@@ -426,7 +426,7 @@
   isolation: isolate;
   /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
      as a hole with two pictures behind it. */
-  background: var(--c-body-surface-raised);
+  background: var(--c-body-surface);
   border-radius: inherit;
   /* No `overflow: hidden` here: every child that needs clipping does its own, so a clip at the
      face's edge would only ever trim what a child casts past it. */

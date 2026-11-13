@@ -38,37 +38,37 @@
 .new-tab-template-rail-fade-start {
   background-image: linear-gradient(
     to right,
-    color-mix(in srgb, var(--c-body-surface-raised) 100%, transparent) 0%,
-    color-mix(in srgb, var(--c-body-surface-raised) 82.58%, transparent) 8.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 66.96%, transparent) 16.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 53.1%, transparent) 25%,
-    color-mix(in srgb, var(--c-body-surface-raised) 40.98%, transparent) 33.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 30.55%, transparent) 41.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 21.76%, transparent) 50%,
-    color-mix(in srgb, var(--c-body-surface-raised) 14.57%, transparent) 58.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 8.92%, transparent) 66.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 4.74%, transparent) 75%,
-    color-mix(in srgb, var(--c-body-surface-raised) 1.94%, transparent) 83.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 0.42%, transparent) 91.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 0%, transparent) 100%
+    color-mix(in srgb, var(--c-body-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-body-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-body-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-body-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-body-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-body-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-body-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-body-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-body-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-body-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-body-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-body-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-body-surface) 0%, transparent) 100%
   );
 }
 
 .new-tab-template-rail-fade-end {
   background-image: linear-gradient(
     to left,
-    color-mix(in srgb, var(--c-body-surface-raised) 100%, transparent) 0%,
-    color-mix(in srgb, var(--c-body-surface-raised) 82.58%, transparent) 8.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 66.96%, transparent) 16.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 53.1%, transparent) 25%,
-    color-mix(in srgb, var(--c-body-surface-raised) 40.98%, transparent) 33.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 30.55%, transparent) 41.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 21.76%, transparent) 50%,
-    color-mix(in srgb, var(--c-body-surface-raised) 14.57%, transparent) 58.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 8.92%, transparent) 66.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 4.74%, transparent) 75%,
-    color-mix(in srgb, var(--c-body-surface-raised) 1.94%, transparent) 83.33%,
-    color-mix(in srgb, var(--c-body-surface-raised) 0.42%, transparent) 91.67%,
-    color-mix(in srgb, var(--c-body-surface-raised) 0%, transparent) 100%
+    color-mix(in srgb, var(--c-body-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-body-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-body-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-body-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-body-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-body-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-body-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-body-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-body-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-body-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-body-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-body-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-body-surface) 0%, transparent) 100%
   );
 }

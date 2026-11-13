@@ -305,7 +305,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
       "nav",
       {
         class: [
-          "chat-rail relative flex h-full flex-none flex-col bg-body-surface-raised",
+          "chat-rail relative flex h-full flex-none flex-col bg-body-surface",
           attrs.isTouch ? "w-full" : "border-r border-default",
           // The drawer leaves a strip of the scrim to click away on, however wide the list was dragged.
           attrs.isInDrawer && !attrs.isTouch ? "max-w-[calc(100vw-3rem)]" : "",

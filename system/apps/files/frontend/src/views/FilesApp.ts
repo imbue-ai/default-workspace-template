@@ -240,7 +240,7 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
       return m(
         "nav.files-sidebar",
         {
-          class: `flex shrink-0 flex-col bg-body-surface-raised ${
+          class: `flex shrink-0 flex-col bg-body-surface ${
             floating ? "fixed inset-y-0 left-0 z-(--z-overlay) max-w-[85vw] shadow-overlay" : "relative"
           }`,
           style: `width:${model.preferences.sidebarWidth}px`,
@@ -439,7 +439,7 @@ function Toolbar(): m.Component<{ app: FilesController }> {
       ]);
       return m(
         "header.files-toolbar",
-        { class: "flex shrink-0 items-center gap-1 bg-body-surface-raised px-3 py-1" },
+        { class: "flex shrink-0 items-center gap-1 bg-body-surface px-3 py-1" },
         [
           app.isNarrow
             ? iconButton("Show sidebar", "panel-left", {
@@ -696,7 +696,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
     view({ attrs: { app } }) {
       const model = app.model;
       const fileDropOnFolder = model.dropTarget !== null && model.dropTarget === model.folder;
-      return m("div.files-app", { class: "flex h-screen min-h-0 bg-body-surface-raised text-body-content" }, [
+      return m("div.files-app", { class: "flex h-screen min-h-0 bg-body-surface text-body-content" }, [
         app.isNarrow ? null : m(Sidebar, { app, floating: false }),
         m("div", { class: `flex min-w-0 flex-1 flex-col ${app.isNarrow ? "" : "border-l border-default"}` }, [
           m(Toolbar, { app }),

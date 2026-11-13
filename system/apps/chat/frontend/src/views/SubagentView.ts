@@ -220,7 +220,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           m(
             "main",
             {
-              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface-raised px-6 py-6",
+              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface px-6 py-6",
               tabindex: 0,
               oncreate: (mainVnode: m.VnodeDOM) => {
                 engine.afterRender(mainVnode.dom as HTMLElement);

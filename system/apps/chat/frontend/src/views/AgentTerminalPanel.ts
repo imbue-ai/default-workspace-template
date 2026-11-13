@@ -89,7 +89,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
             {
               class:
                 "agent-terminal-stopped agent-terminal-switching flex h-full w-full flex-col items-center " +
-                "justify-center gap-3 bg-body-surface-raised",
+                "justify-center gap-3 bg-body-surface",
             },
             [
               m("div", { class: "text-[15px] font-medium text-body-content" }, chat.name),
@@ -105,7 +105,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
           "div",
           {
             class:
-              "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface-raised px-6",
+              "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface px-6",
           },
           [
             m("div", { class: "text-[15px] font-medium text-body-content" }, chat.name),

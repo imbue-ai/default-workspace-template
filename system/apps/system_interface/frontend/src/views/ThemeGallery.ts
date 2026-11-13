@@ -95,7 +95,7 @@ function windowSpecimen(state: GalleryState, isFocused: boolean, title: string):
       "div",
       {
         "data-gallery-page": "",
-        class: "absolute inset-x-0 bottom-0 top-(--desk-title-bar-height) bg-body-surface-raised p-3 type-body",
+        class: "absolute inset-x-0 bottom-0 top-(--desk-title-bar-height) bg-body-surface p-3 type-body",
       },
       "The app's page shows through here.",
     ),

@@ -107,7 +107,7 @@ export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
     "div",
     {
       "data-stopped-app": "",
-      class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface-raised",
+      class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface",
     },
     [
       m("div", { class: "type-title-sm text-body-content" }, label),
@@ -150,7 +150,7 @@ function fullscreenStrip(attrs: WindowAttrs): m.Vnode {
       {
         "data-fullscreen-strip-controls": "",
         class:
-          "hidden h-(--desk-title-bar-height) items-center gap-2 border-b border-default bg-body-surface-raised px-2 " +
+          "hidden h-(--desk-title-bar-height) items-center gap-2 border-b border-default bg-body-surface px-2 " +
           "text-body-content group-focus-within:flex group-hover:flex",
       },
       [

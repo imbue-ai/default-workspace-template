@@ -114,7 +114,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
       // The page kit is the Theming group's own section, so it is named here rather than looked up.
       labels.set("page-kit", "Plain pages");
       const groups: readonly CatalogGroup[] = [...catalog, themingGroup((id) => labels.get(id) ?? id)];
-      return m("div", { class: "style-guide flex h-screen bg-body-surface-raised" }, [
+      return m("div", { class: "style-guide flex h-screen bg-body-surface" }, [
         m(
           "nav",
           {

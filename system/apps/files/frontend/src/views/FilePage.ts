@@ -171,7 +171,7 @@ function body(page: FilePageModel): m.Children {
         spellcheck: false,
         "aria-label": kind === "edit" ? `Editing ${name}` : name,
         class:
-          "block h-full w-full resize-none border-0 bg-body-surface-raised px-6 py-4 font-mono text-(length:--font-size-body) leading-relaxed text-body-content outline-none",
+          "block h-full w-full resize-none border-0 bg-body-surface px-6 py-4 font-mono text-(length:--font-size-body) leading-relaxed text-body-content outline-none",
         oninput: (event: InputEvent) => {
           page.draft = (event.target as HTMLTextAreaElement).value;
         },
@@ -227,7 +227,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
       const canEdit = page.showsText && page.text.status === "ready" && isTextLike(name);
       return m(
         "div.files-file-page",
-        { class: "flex h-screen min-h-0 flex-col bg-body-surface-raised text-body-content" },
+        { class: "flex h-screen min-h-0 flex-col bg-body-surface text-body-content" },
         [
           m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
             m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [

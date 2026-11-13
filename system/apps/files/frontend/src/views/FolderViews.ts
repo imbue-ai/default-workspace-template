@@ -113,7 +113,7 @@ function ListHeader(): m.Component<{ app: FilesController }> {
         "div.files-list-header",
         {
           role: "row",
-          class: `sticky top-0 z-(--z-content) mx-2 grid ${LIST_COLUMNS} gap-3 border-b border-subtle bg-body-surface-raised px-3`,
+          class: `sticky top-0 z-(--z-content) mx-2 grid ${LIST_COLUMNS} gap-3 border-b border-subtle bg-body-surface px-3`,
         },
         HEADERS.map((header) =>
           m(

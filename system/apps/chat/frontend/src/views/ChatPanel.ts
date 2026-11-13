@@ -1001,7 +1001,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(
                   "main",
                   {
-                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface-raised ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
+                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-body-surface ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -1034,7 +1034,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: `app-footer shrink-0 bg-body-surface-raised ${isCompact ? "px-3" : "px-6"}` }, [
+              m("footer", { class: `app-footer shrink-0 bg-body-surface ${isCompact ? "px-3" : "px-6"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
@@ -1064,7 +1064,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: `chat-under-bar shrink-0 bg-body-surface-raised pb-2 ${isCompact ? "px-3" : "px-6"}` },
+            { class: `chat-under-bar shrink-0 bg-body-surface pb-2 ${isCompact ? "px-3" : "px-6"}` },
             m(
               "div",
               {
