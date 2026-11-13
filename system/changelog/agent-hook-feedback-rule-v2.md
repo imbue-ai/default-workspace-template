@@ -1,0 +1,1 @@
+Chat agents now act on hook feedback (a Stop hook blocking the turn, a reminder attached to a tool call) without mentioning it to the user. One line in `AGENTS.md`, next to the rule against naming the machinery.
