@@ -65,7 +65,7 @@ def require_available_theme(catalog: ThemeCatalog, theme: ThemeId | None) -> The
 class WorkspaceColorRefreshRequest(FrozenModel):
     """The body of the workspace color reread: the color Imbue Studio announced, if it named one."""
 
-    hex: str | None = Field(default=None, description="The color to wait for the label to say, as #rrggbb")
+    hex: str | None = Field(default=None, description="The color to wait for the label to say, as a six-digit hex color")
 
 
 class WorkspaceColorRefreshResponse(FrozenModel):

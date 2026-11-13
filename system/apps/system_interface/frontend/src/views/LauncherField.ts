@@ -94,7 +94,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             // The brand's field on the bar: 32px with the 12px corner every control takes, 3px round the
             // plus's 24px slot as the menu rows above it pad theirs, on the page's own surface.
             "launcher-field absolute inset-x-0 bottom-0 flex min-h-8 items-end gap-1.5 rounded-xl " +
-            "border bg-body-surface p-[3px] " +
+            "border bg-body-surface p-0.75 " +
             // Open, the edge itself takes the focus colour, one more pixel of ring making it 2px: no grey
             // inside it, and the box keeps its size.
             (isOpen ? "border-focus ring-1 ring-focus" : "border-default"),
