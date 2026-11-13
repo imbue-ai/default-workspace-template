@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What Studio knows about me</title>
+    <link rel="stylesheet" href="/_static/workspace_theme.css" />
+    <link rel="stylesheet" href="/assets/about_me.css" />
+    <script src="/_static/workspace_theme.js"></script>
+    <script type="module" src="/assets/about_me.js"></script>
+  </head>
+  <body>
+    <main id="about-me">
+      <header>
+        <h1>What Studio knows about me</h1>
+        <p class="explanation">
+          Everything I remember about you and how you like to work. I read this before every chat, so what you change
+          here changes what I know. Add anything you'd like me to know, and edit or delete anything that's wrong.
+        </p>
+      </header>
+
+      <p id="notice" class="notice" role="status" hidden></p>
+
+      <div id="groups"></div>
+
+      <p id="empty-state" class="empty-state" hidden>
+        I don't remember anything about you yet. Add something below, or just tell me about yourself in chat.
+      </p>
+
+      <form id="add-memory" class="add-fact">
+        <label for="add-memory-text">Add something about yourself</label>
+        <div class="add-fact-row">
+          <input
+            id="add-memory-text"
+            type="text"
+            maxlength="500"
+            autocomplete="off"
+            placeholder="For example: I teach recitations for an algorithms class"
+          />
+          <button type="submit" id="add-memory-submit">Add</button>
+        </div>
+      </form>
+
+      <div id="forget-controls" class="forget-controls" hidden>
+        <button type="button" id="forget-all">Forget everything</button>
+        <span id="forget-confirm" class="forget-confirm" hidden>
+          <span>Delete everything I remember about you?</span>
+          <button type="button" id="forget-confirm-yes" data-variant="destructive">Yes, forget it all</button>
+          <button type="button" id="forget-confirm-cancel" data-variant="ghost">Cancel</button>
+        </span>
+      </div>
+
+      <details id="raw-files" class="raw-files" hidden>
+        <summary>View raw files</summary>
+        <h2>MEMORY.md</h2>
+        <pre id="raw-index"></pre>
+        <h2>user-public-profile.md</h2>
+        <pre id="raw-profile"></pre>
+        <h2>sources.json</h2>
+        <pre id="raw-sources"></pre>
+      </details>
+    </main>
+  </body>
+</html>

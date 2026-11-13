@@ -1,0 +1,59 @@
+[project]
+name = "about-me-app"
+version = "0.1.0"
+description = "The What Studio knows about me app: what the web lookup by name remembered about the user, with controls to delete any of it"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    "app-schema",
+    "flask>=3.0",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
+]
+
+[dependency-groups]
+dev = [
+    "app-schema[testing]",
+    "pytest>=9.0",
+    "pytest-timeout>=2.3.0",
+    "inline-snapshot>=0.13",
+    "ruff~=0.12.8",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.87",
+]
+
+[project.scripts]
+about-me-app = "about_me.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+artifacts = [
+    "src/about_me/static/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/about_me"]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["about_me", "workspace_themes", "imbue", "app_manifest", "app_schema"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

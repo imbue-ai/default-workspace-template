@@ -75,6 +75,7 @@ import {
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { isChatConnecting } from "./ConnectingIndicator";
+import { registerReplySender, unregisterReplySender } from "./reply-senders";
 import { isAgentProcessDead } from "./agentLiveness";
 import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
@@ -953,11 +954,25 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     );
   }
 
+  // The chat whose reply buttons send through this composer (see reply-senders), or null while none does.
+  let replyChatId: string | null = null;
+  const replyOwner = {};
+
+  function stopSendingReplies(): void {
+    if (replyChatId === null) return;
+    unregisterReplySender(replyChatId, replyOwner);
+    replyChatId = null;
+  }
+
   return {
+    onremove() {
+      stopSendingReplies();
+    },
     view(vnode) {
       const chatId = vnode.attrs.chatId;
 
       if (!chatId) {
+        stopSendingReplies();
         return null;
       }
 
@@ -1128,11 +1143,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         return { text, finalText, attachments };
       }
 
-      async function handleSend(): Promise<void> {
+      /** Send what the composer holds, or ``reply`` (a reply button's message, see ``sendReply``) in its place,
+       *  leaving the composer's own draft alone. */
+      async function handleSend(reply?: PreparedSend): Promise<void> {
         if (!chatId) {
           return;
         }
-        const prepared = await prepareSend();
+        // No await before the bubble for a reply: its button's message shows as sending on the click itself.
+        const prepared = reply ?? (await prepareSend());
         if (prepared === null) {
           return;
         }
@@ -1280,16 +1298,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
        * the held-send rendering the next snapshot brings replaces it exactly; the queued text
        * draining took off the old agent comes back for the composer.
        */
-      async function handleSwitchAndSend(): Promise<void> {
+      async function handleSwitchAndSend(reply?: PreparedSend): Promise<void> {
         if (!chatId || isSwitchSending(chatId) || switchPreparingChatId === chatId) {
           return;
         }
-        switchPreparingChatId = chatId;
-        let prepared: PreparedSend | null;
-        try {
-          prepared = await prepareSend();
-        } finally {
-          if (switchPreparingChatId === chatId) switchPreparingChatId = null;
+        let prepared: PreparedSend | null = reply ?? null;
+        if (reply === undefined) {
+          switchPreparingChatId = chatId;
+          try {
+            prepared = await prepareSend();
+          } finally {
+            if (switchPreparingChatId === chatId) switchPreparingChatId = null;
+          }
         }
         if (prepared === null) {
           m.redraw();
@@ -1430,6 +1450,21 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return chatId && canSend ? handleSwitchAndSend() : Promise.resolve();
         }
         return handleSend();
+      }
+
+      /**
+       * A reply button's message (markdown.ts), sent as the user's next message exactly as Send would send it had they
+       * typed it: through the armed switch when there is one, else the plain send (which launches a chat awaiting its
+       * first send). The draft and attachments in the composer stay as they are. False when the composer could not
+       * send now, which also keeps the buttons disabled (see the registration below).
+       */
+      function sendReply(text: string): boolean {
+        if (!chatId || isComposerDisabledNow || isSwitchSending(chatId) || switchPreparingChatId === chatId) {
+          return false;
+        }
+        const reply: PreparedSend = { text, finalText: text, attachments: [] };
+        void (switchTarget !== null ? handleSwitchAndSend(reply) : handleSend(reply));
+        return true;
       }
 
       function handleKeydown(event: KeyboardEvent): void {
@@ -1944,6 +1979,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         accountForFirstSend(awaitingFirstSend.account_id) === null;
       const isComposerDisabled = isBlockedBySignedOutAccount || isBlockedByNoProvider;
       isComposerDisabledNow = isComposerDisabled;
+      // The chat's reply buttons send through this composer while it could send what was typed into it; while it
+      // cannot (it is replaced by a notice, or a switch request is out), they are disabled.
+      if (replyChatId !== null && replyChatId !== chatId) stopSendingReplies();
+      if (isComposerDisabled || isSendHeldForSwitch) {
+        stopSendingReplies();
+      } else {
+        replyChatId = chatId;
+        registerReplySender(chatId, replyOwner, sendReply);
+      }
       const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
