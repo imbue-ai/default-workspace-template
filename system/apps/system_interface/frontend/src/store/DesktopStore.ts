@@ -2931,9 +2931,7 @@ export class DesktopStore {
 
   /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
-    const placement = placementOf(this.state.layout, windowId);
-    const isFocused = activeFocusedWindowId(this.state) === windowId;
-    if (!placement.is_detached && !placement.is_minimized && isFocused) this.minimizeWindow(windowId);
+    if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.showWindow(windowId);
   }
 
