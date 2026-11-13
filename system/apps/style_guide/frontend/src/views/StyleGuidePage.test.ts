@@ -2,7 +2,7 @@
 import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ICON_NAMES } from "@imbue/workspace-ui/src/components/icons";
 
@@ -39,13 +39,40 @@ describe("StyleGuidePage", () => {
     for (const target of targets) expect(root.querySelector(`#${target}`), target).not.toBeNull();
   });
 
-  it("draws a swatch for every color token, painted with its own value", () => {
+  it("draws a row for every role, without the computed shades, and every ramp step as a strip", () => {
     const root = mountPage();
-    const colors = tokens.colorGroups.flatMap((group) => group.colors);
-    expect(root.querySelectorAll(".color-swatch")).toHaveLength(colors.length);
+    const roles = tokens.colorGroups
+      .filter((group) => !group.label.startsWith("ramp steps"))
+      .flatMap((group) => group.colors)
+      .filter((color) => !/-(hover|active|inactive)$/.test(color.name) && !/^c-[a-z]+-\d+$/.test(color.variable));
+    expect(root.querySelectorAll(".color-swatch")).toHaveLength(roles.length);
+    expect(root.querySelector("#color-body-surface-hover")).toBeNull();
+    expect(root.querySelectorAll("[data-ramp-step]")).toHaveLength(7 * 12);
     const accent = root.querySelector<HTMLElement>("#color-accent-surface [data-color-sample]");
     expect(accent?.style.backgroundColor).toBe("var(--c-accent-surface)");
     expect(root.querySelector("#color-accent-surface")?.textContent).toContain("bg-accent-surface");
+  });
+
+  it("previews a workspace color by laying the stylesheet it makes in before the theme, and stops on request", async () => {
+    const fetchMock = vi.fn(async () => new Response(":root { --c-primary-key: #0b292b; }", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const theme = document.createElement("link");
+    theme.setAttribute("data-workspace-theme", "mac-classic");
+    document.head.appendChild(theme);
+    try {
+      const root = mountPage();
+      click(root.querySelector('[data-preview-hex="#0b292b"]'));
+      await vi.waitFor(() => expect(document.querySelector("style[data-workspace-color-preview]")).not.toBeNull());
+      const style = document.querySelector("style[data-workspace-color-preview]");
+      expect(fetchMock).toHaveBeenCalledWith("/api/workspace-color/preview?hex=%230b292b");
+      expect(style?.nextElementSibling).toBe(theme);
+      m.redraw.sync();
+      click(root.querySelector("[data-preview-reset]"));
+      expect(document.querySelector("style[data-workspace-color-preview]")).toBeNull();
+    } finally {
+      theme.remove();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("draws every icon of the shared set and every button variant and badge tone", () => {

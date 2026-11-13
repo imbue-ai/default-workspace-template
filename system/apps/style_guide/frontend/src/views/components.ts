@@ -136,8 +136,8 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
     toc: "Buttons",
     title: "Buttons",
     desc: [
-      code("m(Button, { variant, sm, icon, round, selected, readonly, quiet, block })"),
-      " renders a real button. A dialog's confirming action is primary, a lone dismiss stays secondary, a destructive confirm is destructive.",
+      code("m(Button, { variant, sm, lg, icon, round, selected, readonly, quiet, block })"),
+      " renders a real button. A dialog's confirming action is primary, in the workspace color; an action that carries the brand (send) is accent; a lone dismiss stays secondary; a destructive confirm is destructive.",
     ],
     body: () => [
       demoRow(

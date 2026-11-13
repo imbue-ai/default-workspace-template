@@ -19,9 +19,20 @@ import {
   stopIcon,
   warningIcon,
 } from "@imbue/workspace-ui/src/components/icons";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { FIELD_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 import { tokensWithPrefix, type ColorToken, type DeclaredToken, type DesignTokens } from "../models/tokens";
 import { themeValue } from "../models/themeValues";
+import {
+  STUDIO_PALETTE,
+  canonicalHex,
+  previewWorkspaceColor,
+  previewedWorkspaceColor,
+  stopPreviewingWorkspaceColor,
+} from "../models/workspaceColorPreview";
 import { caption, code, subCaption, type CatalogGroup, type CatalogSection } from "./catalog";
 
 /** A type role: its utility (written out in full so the scanner sees it) and the tokens it bundles. */
@@ -191,10 +202,18 @@ function colorRow(color: ColorToken): m.Vnode {
   return m("tr", { id: `color-${color.name}`, class: "color-swatch border-t border-subtle" }, [
     m("td", { class: "py-1 pr-4 align-middle" }, colorSample(color)),
     m("td", { class: "py-1 pr-6 align-middle whitespace-nowrap" }, [
-      m("code", { class: "font-mono type-helper text-body-content select-all" }, color.utility ?? `--${color.variable}`),
+      m(
+        "code",
+        { class: "font-mono type-helper text-body-content select-all" },
+        color.utility ?? `--${color.variable}`,
+      ),
       color.utility === null
         ? null
-        : m("code", { class: "ml-2 font-mono type-helper text-body-content-tertiary select-all" }, `--${color.variable}`),
+        : m(
+            "code",
+            { class: "ml-2 font-mono type-helper text-body-content-tertiary select-all" },
+            `--${color.variable}`,
+          ),
     ]),
     m("td", { class: "w-full min-w-48 py-1 align-middle" }, inlineValue(color.variable, color.value)),
   ]);
@@ -215,7 +234,10 @@ function valueCaptions(name: string, declared: string): m.Children {
   const themed = themeValue(name);
   return themed === null || themed === declared
     ? subCaption(declared)
-    : [subCaption(themed), m("code", { class: "block font-mono type-helper text-body-content-tertiary line-through" }, declared)];
+    : [
+        subCaption(themed),
+        m("code", { class: "block font-mono type-helper text-body-content-tertiary line-through" }, declared),
+      ];
 }
 
 /** What the page wears for a token: the theme's value when it sets one, else the standard one. */
@@ -223,23 +245,129 @@ function wornValue(name: string, declared: string): string {
   return themeValue(name) ?? declared;
 }
 
+/** The ramps, in the order the stylesheet keys them. */
+const RAMPS: readonly string[] = ["neutral", "primary", "accent", "success", "warn", "danger", "wallpaper"];
+const RAMP_STEPS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+/** A role's computed shade or a raw ramp step: the catalog shows those as ramps and in words, not as rows. */
+function isShownAsRow(color: ColorToken): boolean {
+  return !/-(hover|active|inactive)$/.test(color.name) && !/^c-[a-z]+-\d+$/.test(color.variable);
+}
+
+/** The colors to list as rows: the roles, without their computed shades or the raw ramp steps. */
+function roleGroups(tokens: DesignTokens): DesignTokens["colorGroups"] {
+  return tokens.colorGroups
+    .filter((group) => !group.label.startsWith("ramp steps"))
+    .map((group) => ({ ...group, colors: group.colors.filter(isShownAsRow) }))
+    .filter((group) => group.colors.length > 0);
+}
+
+/** The workspace-color picker: Imbue Studio's colors, any other as a hex, and back to the workspace's own. */
+function workspaceColorPicker(): m.Vnode {
+  const current = previewedWorkspaceColor();
+  const pick = (hex: string): void => void previewWorkspaceColor(hex).then(() => m.redraw());
+  return m("div", { id: "workspace-color-preview", class: "mb-6 flex flex-wrap items-center gap-2" }, [
+    m("span", { class: "mr-1 type-label text-body-content-secondary" }, "Preview a workspace color"),
+    STUDIO_PALETTE.map(({ name, hex }) =>
+      m("button", {
+        type: "button",
+        key: hex,
+        "data-preview-hex": hex,
+        "aria-pressed": current === hex ? "true" : "false",
+        "aria-label": name,
+        ...hoverTooltipAttrs(name),
+        class:
+          "h-6 w-6 cursor-pointer rounded-full border border-default " +
+          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus " +
+          (current === hex ? "ring-2 ring-focus ring-offset-2" : ""),
+        // The swatch is Imbue Studio's color itself, not a token: it is what is on offer.
+        style: { backgroundColor: hex },
+        onclick: () => pick(hex),
+      }),
+    ),
+    m(
+      "div",
+      { class: "w-32" },
+      m("input", {
+        class: inputClass({ mono: true }),
+        ...FIELD_PART,
+        "aria-label": "Any color, as a hex",
+        placeholder: "#rrggbb",
+        onchange: (event: Event) => {
+          const hex = canonicalHex((event.target as HTMLInputElement).value);
+          if (hex !== null) pick(hex);
+        },
+      }),
+    ),
+    current === null
+      ? null
+      : m(
+          Button,
+          {
+            variant: "ghost",
+            sm: true,
+            "data-preview-reset": "",
+            onclick: () => {
+              stopPreviewingWorkspaceColor();
+              m.redraw();
+            },
+          },
+          "Back to the workspace's own",
+        ),
+  ]);
+}
+
+/** Each ramp as a strip of its twelve steps, drawn with the values the page wears. */
+function rampStrips(): m.Vnode {
+  return m("div", { id: "color-ramps", class: "mb-8 grid gap-1.5" }, [
+    m("div", { class: "grid grid-cols-[96px_repeat(12,minmax(0,1fr))] gap-1" }, [
+      m("span"),
+      RAMP_STEPS.map((step) =>
+        m("span", { key: step, class: "text-center type-code-small text-body-content-tertiary" }, String(step)),
+      ),
+    ]),
+    RAMPS.map((ramp) =>
+      m(
+        "div",
+        { key: ramp, "data-ramp": ramp, class: "grid grid-cols-[96px_repeat(12,minmax(0,1fr))] items-center gap-1" },
+        [
+          m("span", { class: "type-label text-body-content capitalize" }, ramp),
+          RAMP_STEPS.map((step) =>
+            m("span", {
+              key: step,
+              "data-ramp-step": `${ramp}-${step}`,
+              ...hoverTooltipAttrs(`--c-${ramp}-${step}`),
+              class: "h-8 rounded-md",
+              style: { backgroundColor: `var(--c-${ramp}-${step})` },
+            }),
+          ),
+        ],
+      ),
+    ),
+  ]);
+}
+
 function colorsSection(tokens: DesignTokens): CatalogSection {
   return {
     id: "colors",
     toc: "Colors",
-    title: "Color tokens",
+    title: "Colors",
     desc: [
-      "Every color has one semantic utility over one raw value. Views use the utility (",
+      "A color is one key per ramp, computed into twelve steps on one lightness ladder, so a step reads at the same contrast in every ramp. Views use the roles over the steps (",
       code("text-body-content"),
       ", ",
-      code("bg-fill-hover"),
+      code("bg-primary-surface"),
       ", ",
       code("border-default"),
       "); hand-written CSS uses the ",
       code("--c-*"),
-      " value. Each swatch is drawn with the value the page wears, so under a theme it is that theme's palette.",
+      " value. Hover and active are computed from the surface they shade (",
+      code("hover:bg-primary-surface-hover"),
+      "), never tokens. The workspace color sets the keys: preview any color below, and every swatch, ramp and component on this page follows it.",
     ],
-    body: () =>
+    body: () => [
+      workspaceColorPicker(),
+      rampStrips(),
       m("table", { class: "color-table w-full border-collapse text-left" }, [
         m(
           "thead",
@@ -249,13 +377,14 @@ function colorsSection(tokens: DesignTokens): CatalogSection {
             m("th", { class: "pb-1 type-section text-body-content-tertiary font-normal" }, "Value"),
           ]),
         ),
-        tokens.colorGroups.map((group) =>
+        roleGroups(tokens).map((group) =>
           m("tbody", { class: "color-group", "data-color-group": group.label }, [
             m("tr", m("th", { colspan: 3, class: "pt-4 pb-1 type-label text-body-content capitalize" }, group.label)),
             group.colors.map(colorRow),
           ]),
         ),
       ]),
+    ],
   };
 }
 
