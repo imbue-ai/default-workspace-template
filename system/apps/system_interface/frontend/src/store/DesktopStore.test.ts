@@ -3344,7 +3344,6 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(await store.openAgentChat()).toBe(true);
     expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
     expect(barIds()).toEqual(["win-1", "win-chat"]);
-    // Under another window: raised.
     store.raiseWindow("win-1");
     expect(await store.openAgentChat()).toBe(true);
     expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
