@@ -94,8 +94,8 @@ Exit codes:
        rebooted server never became healthy; or, for ``down``, a window still
        shows the instance (without ``--close-windows``, or one could not be
        closed; nothing is torn down), or a recorded process survived SIGKILL (its
-       state dir is kept so it stays findable); or a bad
-       argument / unreadable state file.
+       state dir is kept so it stays findable); or a bad argument / unreadable
+       state file.
 """
 
 from __future__ import annotations
