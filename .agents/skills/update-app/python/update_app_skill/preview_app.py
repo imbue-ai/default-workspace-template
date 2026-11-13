@@ -295,9 +295,11 @@ def down(
     """Tear the preview down, then the siblings it booted; keep everything a survivor still needs.
 
     A preview with a window still open refuses unless ``close_windows``, which closes
-    it first (``serve_isolated_instance.down``). A preview that another live preview
-    frames (a chat taken down on its own under a shell preview) leaves that preview's
-    registry copy pointing at the live app again.
+    it first (``serve_isolated_instance.down``). The preview's record outlives a
+    sibling that would not come down, since it is the only way a re-run reaches that
+    sibling. A preview that another live preview frames (a chat taken down on its own
+    under a shell preview) leaves that preview's registry copy pointing at the live
+    app again.
     """
     siblings = _recorded_siblings(repo_root, app_name)
     dump = dump_registry if dump_registry is not None else forward_port.dump_registry
@@ -307,7 +309,6 @@ def down(
     if code != 0:
         return code
     _registry_copy_path(repo_root, app_name).unlink(missing_ok=True)
-    _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     _reframe_previews_naming(repo_root, app_name, dump)
     for sibling in siblings:
         code = down(
@@ -319,6 +320,7 @@ def down(
         )
         if code != 0:
             return code
+    _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     return 0
 
 
