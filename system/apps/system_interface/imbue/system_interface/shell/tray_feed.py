@@ -1,5 +1,6 @@
-"""The tray's feed from the chat app (the multiplayer spec, sections 6.4 and 6.5): the speech bubble each message
-raises over its speaker's tray entry, and what every chat is doing, which the agent's card lists.
+"""The tray's feed from the chat app (the multiplayer spec, sections 6.4 and 6.5): every message, which hops its
+speaker's tray entry and raises a speech bubble on the clients of the people it mentions, every notification a chat
+sends the user, a bubble over the agent's entry, and what every chat is doing, which the agent's card lists.
 
 The chat app posts both over loopback. A bubble is broadcast to every window but the speaker's own clients: the
 clients whose records carry the speaker's key, and for the owner the ones under either of their keys, since their

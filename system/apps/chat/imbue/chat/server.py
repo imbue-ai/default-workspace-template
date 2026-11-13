@@ -55,7 +55,9 @@ from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
@@ -151,6 +153,7 @@ from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.mention_parser import MentionTarget
+from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions_endpoints import requester_mention_keys
@@ -167,6 +170,7 @@ from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import AutocompactStateResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
+from imbue.chat.models import ChatNotificationRequest
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import ChatSnapshot
@@ -1086,8 +1090,8 @@ def _act_on_accepted_send(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
     """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
-    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
-    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    7.4): it is posted to the tray, hopping their entry and naming the people a room message mentions, whose clients
+    raise it as a bubble; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
     agent chat a handle is a word the agent reads like any other. A send no proxy stamped (a script's, the
     terminal's) is nobody's speech: it raises no bubble and its mentions act on nothing. Takes the sender's
     ``identity`` rather than reading the request's, since an intake nobody waits on and a room's first message land
@@ -1099,12 +1103,13 @@ def _act_on_accepted_send(
         return
     handler = state.mention_handler
     targets: tuple[MentionTarget, ...] = ()
-    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+    if snapshot.kind is ChatKind.ROOM and handler is not None:
         targets = handler.resolve(text)
     sender = participant_key_of(identity)
     if state.tray_feed is not None:
-        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
-        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned)
+        state.tray_feed.post_bubble(
+            sender, chat_id, snapshot.title, text, message_id, mentioned_people(targets), BubbleKind.MESSAGE
+        )
     if handler is not None and targets:
         sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
         handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
@@ -2164,7 +2169,13 @@ def _bubble_new_chats_first_message(
     if not message or state.tray_feed is None or not identity.is_header_present:
         return
     state.tray_feed.post_bubble(
-        participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
+        participant_key_of(identity),
+        created.chat_id,
+        created.display_name,
+        message,
+        message_id,
+        (),
+        BubbleKind.MESSAGE,
     )
 
 
@@ -2798,6 +2809,34 @@ def _watchers_endpoint(chat_id: str) -> Response:
     return model_response(ChatWatchersResponse(watched_by=tuple(agent_manager.chat_watchers(ChatId(chat_id)))))
 
 
+def _notification_endpoint(chat_id: str) -> Response:
+    """The notification the chat just sent the user, from the notify script inside the workspace (loopback only):
+    raised as a bubble over the agent's tray entry (the multiplayer spec, section 6.5), so everyone in the
+    workspace who is not looking at the chat sees it."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    notification = parse_request_body(ChatNotificationRequest)
+    state = get_state()
+    snapshot = state.agent_manager.get_chat_snapshot(chat_id)
+    if snapshot is None:
+        return _chat_not_found_response(chat_id)
+    if state.tray_feed is not None:
+        text = notification.message if not notification.title else f"{notification.title}: {notification.message}"
+        state.tray_feed.post_bubble(
+            WORKSPACE_AGENT_PARTICIPANT_KEY,
+            snapshot.chat_id,
+            snapshot.title,
+            text,
+            uuid4().hex,
+            (),
+            BubbleKind.NOTIFICATION,
+        )
+    return model_response(OkResponse())
+
+
 # The terminal app's registered name: the chat's terminal back face is served from its origin.
 _TERMINAL_APP_NAME: Final[AppName] = AppName("terminal")
 # The origin ttyd itself is served from since the terminal split into a wrapper and a pty
@@ -3001,6 +3040,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("message", _send_message_endpoint, ("POST",)),
     ("presence", _presence_endpoint, ("POST",)),
     ("watchers", _watchers_endpoint, ("GET",)),
+    ("notification", _notification_endpoint, ("POST",)),
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
@@ -3106,6 +3146,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("POST", "/api/chats/{chat_id}/presence"): RouteModels(request_model=PresenceReport, response_model=OkResponse),
     ("GET", "/api/chats/{chat_id}/watchers"): RouteModels(response_model=ChatWatchersResponse),
+    ("POST", "/api/chats/{chat_id}/notification"): RouteModels(
+        request_model=ChatNotificationRequest, response_model=OkResponse
+    ),
     ("POST", "/api/chats/{chat_id}/model"): RouteModels(
         request_model=SetModelChoiceRequest, response_model=SendMessageResponse, alternate_responses=(_CONVERGING,)
     ),

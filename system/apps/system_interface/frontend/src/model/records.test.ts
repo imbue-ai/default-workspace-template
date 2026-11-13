@@ -459,6 +459,7 @@ describe("the tray's records (the multiplayer spec)", () => {
         text: "hi",
         message_id: "m-1",
         mentions: ["user:user-josh-0001"],
+        kind: "message",
       }),
     ).toEqual({
       speaker: "user:user-bob-4471",
@@ -467,7 +468,19 @@ describe("the tray's records (the multiplayer spec)", () => {
       text: "hi",
       message_id: "m-1",
       mentions: ["user:user-josh-0001"],
+      kind: "message",
     });
+    expect(() =>
+      parseBubble({
+        speaker: "workspace-agent",
+        chat_id: "agent-2",
+        chat_title: "",
+        text: "hi",
+        message_id: "m",
+        mentions: [],
+        kind: "shout",
+      }),
+    ).toThrow(WireShapeError);
     expect(() =>
       parseBubble({
         speaker: "user:x",
@@ -476,6 +489,7 @@ describe("the tray's records (the multiplayer spec)", () => {
         text: "hi",
         message_id: "m",
         mentions: [7],
+        kind: "message",
       }),
     ).toThrow(WireShapeError);
     const mentioning = { id: "lounge", label: "Lounge", path: "/x", mention_param: "message" };

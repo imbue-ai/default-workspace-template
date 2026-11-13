@@ -11,6 +11,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 
@@ -38,6 +39,7 @@ from imbue.chat.harnesses.room.transcript import is_workspace_agent_turn
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.lounge import LoungeKeeper
+from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions import MentionStore
 from imbue.chat.primitives import ChatId
@@ -49,7 +51,6 @@ from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.send_ledger import SendLedger
 from imbue.chat.tray_feed import TrayFeed
-from imbue.chat.tray_feed import first_paragraph
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -209,7 +210,7 @@ class ChatAppState(MutableModel):
                 # The workspace agent posting into a room answers whatever the room asked (section 7.4).
                 if any(is_workspace_agent_turn(event) for event in events):
                     self.agent_manager.clear_chat_awaiting(chat_id)
-                self.bubble_agent_turns(chat_id, agent_id, events)
+                self.post_agents_room_posts(chat_id, agent_id, events)
                 self.agent_manager.report_sign_in_failures(chat_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
@@ -287,35 +288,35 @@ class ChatAppState(MutableModel):
                 watcher.stop()
         return watcher
 
-    def bubble_agent_turns(self, chat_id: ChatId, agent_id: str, events: list[dict[str, Any]]) -> None:
-        """Raise a speech bubble over the agent's tray entry for every turn it closed with text (the multiplayer
-        spec, section 6.5): an assistant turn of the chat's live agent's own session, or the agent's post into a
-        room; a retired agent's late words and a subagent's raise none."""
+    def post_agents_room_posts(self, chat_id: ChatId, agent_id: str, events: list[dict[str, Any]]) -> None:
+        """Post every message the workspace agent posts into a room to the tray (the multiplayer spec, section 6.5),
+        naming the people it mentions, whose clients raise it as a bubble; a retired agent's late words post none.
+        Its turns in an agent chat are not posted: the people there see them, and each text block of a turn arrives
+        as an event of its own."""
         if self.tray_feed is None:
             return
-        spoken: list[tuple[str, str]] = []
-        for event in events:
-            words, event_id = self._agents_words_in(event)
-            paragraph = first_paragraph(words)
-            if paragraph:
-                spoken.append((paragraph, event_id))
-        if not spoken:
+        posts = [
+            (str(event.get("content", "")).strip(), str(event.get("event_id", "")))
+            for event in events
+            if is_workspace_agent_turn(event)
+        ]
+        posts = [(text, event_id) for text, event_id in posts if text]
+        if not posts:
             return
         snapshot = self.agent_manager.get_chat_snapshot(str(chat_id))
         if snapshot is None or snapshot.active_agent.agent_id != agent_id:
             return
-        for text, event_id in spoken:
-            self.tray_feed.post_bubble(WORKSPACE_AGENT_PARTICIPANT_KEY, chat_id, snapshot.title, text, event_id, ())
-
-    def _agents_words_in(self, event: dict[str, Any]) -> tuple[str, str]:
-        """What the workspace agent said in one event and the event's id: its post into a room, or an assistant turn
-        of its own session; nothing for any other event (a subagent's turn, a person's message)."""
-        event_id = str(event.get("event_id", ""))
-        if is_workspace_agent_turn(event):
-            return str(event.get("content", "")), event_id
-        if event.get("type") == "assistant_message" and self.is_main_session_event(event):
-            return str(event.get("text", "")), event_id
-        return "", event_id
+        for text, event_id in posts:
+            targets = self.mention_handler.resolve(text) if self.mention_handler is not None else ()
+            self.tray_feed.post_bubble(
+                WORKSPACE_AGENT_PARTICIPANT_KEY,
+                chat_id,
+                snapshot.title,
+                text,
+                event_id,
+                mentioned_people(targets),
+                BubbleKind.MESSAGE,
+            )
 
     def name_authors(self, events: list[dict[str, Any]]) -> None:
         """Name, from the roster, the author of every turn whose transcript names its author's key but not what

@@ -360,7 +360,12 @@ export interface ChatActivity {
   readonly kind: "agent" | "room";
 }
 
-/** A speech bubble as the shell pushes it (the multiplayer spec, section 6.5): what somebody just said. */
+/** What a ``bubble`` push carries: a message somebody sent, or a chat's notification to the user. */
+export const BUBBLE_KINDS = ["message", "notification"] as const;
+export type BubbleKind = (typeof BUBBLE_KINDS)[number];
+
+/** A ``bubble`` push as the shell sends it (the multiplayer spec, section 6.5): what somebody just said, or what a
+ *  chat just notified the user of. */
 export interface BubbleWire {
   readonly speaker: string;
   readonly chat_id: string;
@@ -368,6 +373,7 @@ export interface BubbleWire {
   readonly text: string;
   readonly message_id: string;
   readonly mentions: readonly string[];
+  readonly kind: BubbleKind;
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -866,6 +872,7 @@ export function parseBubble(raw: unknown): BubbleWire {
     mentions: asArray(record.mentions ?? [], "bubble.mentions").map((mention, index) =>
       asString(mention, `bubble.mentions[${index}]`),
     ),
+    kind: asOneOf(record.kind, BUBBLE_KINDS, "bubble.kind"),
   };
 }
 

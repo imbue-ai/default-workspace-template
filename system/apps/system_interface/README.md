@@ -577,7 +577,7 @@ colour; a dashed envelope for an invited email; a monogram tile for a visiting
 agent; a neutral silhouette for the owner of a workspace that has not shared;
 faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
-once when it arrives and when a bubble of its appears), the viewer's own
+once when it arrives and when it says something), the viewer's own
 picture, and the agent's avatar at 36px in its mood, attending while the pinned
 chat window is focused -- the one creature's docked home, not drawn while this
 client floats the avatar over the windows instead. Hovering
@@ -600,19 +600,21 @@ runs the primary text action with nothing to send, which opens the main chat;
 clicking your own picture does nothing. The shell names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
-somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
-"chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
+somebody sends, every post the agent makes into a room, and every notification a chat
+sends the user (`{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions",
+"kind"}`, `kind` being `message` or `notification`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
 carry the speaker's key; the owner's under either of their keys, the account's or
 the synthetic `owner`, whichever the bubble carries; a window looking at the
 bubble's chat drops it on receipt unless it mentions the viewer); and
 `POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
-connect once reported. A speech bubble is a rounded card hanging above the tray
-with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
-click that opens the chat it was said in; it lives five seconds after its last
-change, a person's new message replaces their bubble, the agent's new message
-within its bubble's lifetime is appended (folding past three lines into "and N
+connect once reported. Every `bubble` hops its speaker's entry, but only a
+`notification` or a message that mentions the viewer raises a speech bubble. A speech
+bubble is a rounded card hanging above the tray with an arrow at the speaker's entry,
+holding what was said, a dismiss X, and a click that opens the chat it was said in; it
+lives five seconds after its last change, a person's new message replaces their bubble,
+the agent's new bubble within its bubble's lifetime is appended (folding past three lines into "and N
 more"), bubbles of different speakers stack upward in arrival order, and a mention
 of the viewer wears an accent border and stays until dismissed or its chat is
 opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).
