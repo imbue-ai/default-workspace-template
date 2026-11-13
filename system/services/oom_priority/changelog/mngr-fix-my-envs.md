@@ -1,0 +1,5 @@
+A local Docker workspace no longer sheds its apps and its own backups when its memory cap fills with file cache.
+
+Under runc the memory guard reads the workspace's headroom from the container's cgroup, and it counted only the inactive file cache as reclaimable. Everything a container reads is charged to its cgroup and stays cached up to the cap, and a file read twice moves to the active list, so a workspace whose hourly backup walks a large tree (a million small files is enough) showed under 10% available while its processes held a sixth of the cap. earlyoom then stopped apps, and the backup itself, every hour, and no backup completed.
+
+The headroom now also counts the active file cache that no process has mapped and the reclaimable slab (the inode and directory-entry caches a tree walk leaves behind), which are what the kernel frees before it kills anything in the cgroup. Mapped file pages are still not counted. Workspaces under gVisor are unaffected: their VM publishes the figure, and a sandbox's file cache stays on the inactive list.

@@ -5,15 +5,25 @@ Under runc the container's ``/proc/meminfo`` is the host kernel's, so an
 earlyoom reading it alone would act at 10% of the whole machine while the
 container's cgroup OOM killer acts at the workspace's cap. The cgroup v2 memory
 controller the container runs in is what it sees at ``/sys/fs/cgroup`` (a
-cgroup namespace), and from it the container can compute for itself what a
+cgroup namespace), and from it the container can compute for itself the file a
 gen-2 slice VM publishes from outside under gVisor: the limit as ``MemTotal``
-and, as ``MemAvailable``, the limit minus the usage plus the inactive file
-cache, the kubelet's eviction signal. Active file cache and reclaimable slab
-are not counted: near the limit they are what the kernel thrashes rather
-than frees, so counting them can hold the figure above earlyoom's SIGKILL
-threshold while the cgroup runs out. The formula mirrors the gen-2
-publisher in mngr (``mngr_imbue_cloud/slices/gen2_scripts/guest.py``); keep the
-two in step.
+and, as ``MemAvailable``, the limit minus the usage plus what the kernel frees
+before it kills anything in the cgroup: the file cache on both LRU lists that
+no process has mapped, and the reclaimable slab (dentries and inodes).
+
+Everything the container reads or walks is charged to this cgroup and stays
+cached until the cgroup reaches its limit, where the kernel drops it on demand.
+A page read twice moves to the active list, so a workspace whose hourly backup
+walks a large tree holds most of its cap on the active list and in the inode
+cache while its processes use a fraction of it: counting the inactive list
+alone would read that as a full cgroup. Mapped file pages are left out: they
+are the running programs' own code, and freeing them is what thrashes.
+
+This is deliberately not the gen-2 publisher's formula
+(``imbue_common.container_meminfo_publisher`` in mngr), which adds the inactive
+file cache alone. That one measures a gVisor sandbox, whose own page cache
+absorbs repeat reads, so the host kernel sees each page once and the cache it
+charges stays on the inactive list.
 
 The file is touched only on a definite answer. A limit that reads ``max`` (an
 uncapped container) removes it, so earlyoom falls back to ``/proc/meminfo``,
@@ -42,8 +52,11 @@ CGROUP_DIR: Final[Path] = Path("/sys/fs/cgroup")
 # Well inside the 5 s staleness earlyoom tolerates, and what the gen-2 VM uses.
 PUBLISH_INTERVAL_SECONDS: Final[float] = 0.25
 
-# The memory.stat field counted as available on top of the free part.
-_AVAILABLE_FILE_CACHE_KEY: Final[str] = "inactive_file"
+# The memory.stat fields the reclaimable figure is built from.
+_INACTIVE_FILE_KEY: Final[str] = "inactive_file"
+_ACTIVE_FILE_KEY: Final[str] = "active_file"
+_MAPPED_FILE_KEY: Final[str] = "file_mapped"
+_RECLAIMABLE_SLAB_KEY: Final[str] = "slab_reclaimable"
 _UNCAPPED_LIMIT: Final[str] = "max"
 
 
@@ -70,22 +83,36 @@ def _read_first_line(path: Path) -> str | None:
     return text.partition("\n")[0].strip()
 
 
-def _read_available_file_cache_bytes(stat_path: Path) -> int | None:
+def _read_reclaimable_bytes(stat_path: Path) -> int | None:
+    """What the kernel frees from the cgroup before it kills in it, or None when ``memory.stat`` cannot be read.
+
+    ``file_mapped`` also counts mapped shmem, which is on neither file list, so
+    taking all of it off the active list can only understate the figure.
+    """
     try:
         lines = stat_path.read_text().splitlines()
     except OSError:
         return None
+    stat_by_key: dict[str, int] = {}
     for line in lines:
         key, _, value = line.partition(" ")
-        if key == _AVAILABLE_FILE_CACHE_KEY and value.strip().isdigit():
-            return int(value)
-    return 0
+        if value.strip().isdigit():
+            stat_by_key[key] = int(value)
+    unmapped_active_file = max(
+        0, stat_by_key.get(_ACTIVE_FILE_KEY, 0) - stat_by_key.get(_MAPPED_FILE_KEY, 0)
+    )
+    return (
+        stat_by_key.get(_INACTIVE_FILE_KEY, 0)
+        + unmapped_active_file
+        + stat_by_key.get(_RECLAIMABLE_SLAB_KEY, 0)
+    )
 
 
 def read_cgroup_memory_headroom(cgroup_dir: Path) -> tuple[int, int] | PublishOutcome:
     """``(limit_bytes, available_bytes)`` for a capped cgroup, else the outcome that stops the round.
 
-    Available is the limit minus the usage plus the inactive file cache, clamped
+    Available is the limit minus the usage plus the reclaimable part of it
+    (unmapped file cache and reclaimable slab), clamped
     to ``[0, limit]``. The outcomes: ``PublishOutcome.NO_CONTROLLER`` when there is no
     ``memory.max`` to read, ``PublishOutcome.UNCAPPED`` when it reads ``max``, and
     ``PublishOutcome.UNREADABLE`` when ``memory.max`` or ``memory.current`` is not a
@@ -99,11 +126,11 @@ def read_cgroup_memory_headroom(cgroup_dir: Path) -> tuple[int, int] | PublishOu
     usage_text = _read_first_line(cgroup_dir / "memory.current")
     if not limit_text.isdigit() or usage_text is None or not usage_text.isdigit():
         return PublishOutcome.UNREADABLE
-    available_file_cache = _read_available_file_cache_bytes(cgroup_dir / "memory.stat")
-    if available_file_cache is None:
+    reclaimable = _read_reclaimable_bytes(cgroup_dir / "memory.stat")
+    if reclaimable is None:
         return PublishOutcome.UNREADABLE
     limit = int(limit_text)
-    available = max(0, min(limit, limit - int(usage_text) + available_file_cache))
+    available = max(0, min(limit, limit - int(usage_text) + reclaimable))
     return limit, available
 
 
