@@ -14,8 +14,10 @@ is the one surface that uses it.
   WebAssembly), the most audio one call may carry, and its licence; and the
   engine each kind of device runs by default: Moonshine Base on a desktop, and
   Moonshine Tiny, the lighter model and the smaller download, on a touch
-  device (a phone or tablet, told by a finger being the primary pointer). A
-  browser's override names any registered engine instead, for a side-by-side
+  device (a phone or tablet, told by a finger being the primary pointer),
+  which also runs it on WebAssembly's quantized weights even where it has
+  WebGPU, a third of the memory of the full-precision ones. A browser's
+  overrides name any registered engine and device instead, for a side-by-side
   evaluation.
 - `src/download.ts` and `src/fileStore.ts`: getting an engine's pinned files:
   from the store the last load kept them in when they check out, else straight
