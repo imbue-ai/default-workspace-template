@@ -53,7 +53,7 @@ provision_drop_inherited_pins
 : "${UV_VERSION:=0.13.4}"
 : "${NODE_VERSION:=24.22.1}"
 : "${CLAUDE_CODE_VERSION:=2.1.307}"
-: "${CODEX_VERSION:=0.161.0}"
+: "${CODEX_VERSION:=0.166.0}"
 : "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.19.4}"
