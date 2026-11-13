@@ -1674,7 +1674,7 @@ export class DesktopStore {
   async openAgentChat(): Promise<boolean> {
     const pinned = avatarPinnedEntryOf(this.state);
     if (pinned === null) return this.startWithText("");
-    this.showTaskbarEntry(pinned.window.id);
+    this.showWindow(pinned.window.id);
     return true;
   }
 
@@ -2927,17 +2927,17 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: minimize the focused window, else show it as ``showTaskbarEntry`` does. */
+  /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     const isFocused = activeFocusedWindowId(this.state) === windowId;
     if (!placement.is_detached && !placement.is_minimized && isFocused) this.minimizeWindow(windowId);
-    else this.showTaskbarEntry(windowId);
+    else this.showWindow(windowId);
   }
 
   /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
    *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
-  private showTaskbarEntry(windowId: string): void {
+  private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       if (placement.is_minimized) this.showWindowGhost(windowId);

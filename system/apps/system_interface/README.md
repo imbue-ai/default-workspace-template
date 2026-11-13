@@ -599,7 +599,8 @@ into its pinned window on this desktop when there is one; clicking the agent
 puts the avatar's pinned window on this desktop on screen on whatever chat it
 holds (restored, raised, or its pulled-out window shown, never put away), and
 only with no such window runs the primary text action with nothing to send,
-which opens the main chat; clicking your own picture does nothing. The shell names no app in any of this.
+which opens the main chat; clicking your own picture does nothing. The shell
+names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
 somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
