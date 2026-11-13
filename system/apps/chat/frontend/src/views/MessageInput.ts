@@ -89,8 +89,10 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { createDictation } from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
+import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
 import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
 import {
@@ -427,6 +429,12 @@ function isDictationOffered(): boolean {
   return isDictationSupported(describeHost());
 }
 
+/** The kind of device this page is on, which picks the engine it dictates with (the spec's D9): touch where a
+ *  finger is the primary pointer. A page with no window to ask has no pointer, and is a desktop. */
+function pageDeviceClass(): DeviceClass {
+  return typeof matchMedia === "function" && matchMedia(TOUCH_MEDIA_QUERY).matches ? "touch" : "desktop";
+}
+
 function isAppleKeyboard(): boolean {
   return typeof navigator !== "undefined" && isApplePlatform(navigator);
 }
@@ -646,7 +654,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (dictation !== null) return dictation;
     // The page's own URL roots the runtime's files; a document-less test has none.
     const pageUrl = typeof location === "undefined" ? "" : location.href;
-    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl), {
+    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass()), {
       onStateChange: (state) => {
         dictationState = state;
         if (state !== "loading") {
