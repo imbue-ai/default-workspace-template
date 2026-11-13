@@ -1220,7 +1220,9 @@ def up(
     # port with nothing left recording its pid, so refuse instead. Its windows stay
     # open: the new instance registers the same names, so they show it.
     if (
-        _tear_down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper)
+        _tear_down_instance(
+            name, repo_root, runner=runner, registry=registry, sleeper=sleeper
+        )
         != 0
     ):
         sys.stderr.write(
@@ -1636,7 +1638,7 @@ def down(
     close_windows: bool = False,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Tear down the instance for ``name`` as ``_tear_down`` does, unless a window still shows it.
+    """Tear down the instance for ``name`` as ``_tear_down_instance`` does, unless a window still shows it.
 
     A window on the user's desktops showing one of its services would be left on a
     dead server, so with one open this refuses and changes nothing, unless
@@ -1649,13 +1651,13 @@ def down(
         name, services, desktops, close_windows=close_windows
     ):
         return 1
-    return _tear_down(
+    return _tear_down_instance(
         name, repo_root, runner=runner, registry=registry, sleeper=sleeper
     )
 
 
 def _recorded_services(repo_root: Path, name: str) -> list[str]:
-    """The services the state for ``name`` records; none without a readable state, which ``_tear_down`` reports."""
+    """The services the state for ``name`` records; none without a readable state, which ``_tear_down_instance`` reports."""
     try:
         state = json.loads(_state_path(repo_root, name).read_text())
     except (OSError, json.JSONDecodeError):
@@ -1698,7 +1700,7 @@ def _windows_block_teardown(
     return False
 
 
-def _tear_down(
+def _tear_down_instance(
     name: str,
     repo_root: Path,
     *,
