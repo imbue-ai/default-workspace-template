@@ -184,10 +184,6 @@ _STOP_INTERVAL_SECONDS = 0.5
 _KILL_ATTEMPTS = 10
 _KILL_INTERVAL_SECONDS = 0.5
 
-# One read of the shell's desktops or one window close, over loopback; the same
-# budget ``workspace-layout`` gives an op.
-_LAYOUT_TIMEOUT_SECONDS = 30.0
-
 # How much of a failed boot's log to quote back on stderr. Enough to carry the
 # traceback or the refusal message that explains the failure, short enough not to
 # bury it.
@@ -433,16 +429,17 @@ class Desktops:
 
     def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
         """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
+        from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
         from workspace_layout.client import ShellLayoutClient
         from workspace_layout.errors import ShellOpError
 
         shell = ShellLayoutClient(
             shell_url=self.shell_url,
             requester=None,
-            timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
+            timeout_seconds=OP_TIMEOUT_SECONDS,
         )
         try:
-            inventory = shell.inventory()
+            inventory = shell.inventory(timeout_seconds=READ_TIMEOUT_SECONDS)
         except ShellOpError as exc:
             raise InstanceError(f"could not read the desktops: {exc}") from exc
         seats = [
@@ -467,6 +464,7 @@ class Desktops:
 
     def close(self, window: OpenWindow) -> None:
         """Close ``window``; raises InstanceError when it cannot be closed."""
+        from workspace_layout.cli import OP_TIMEOUT_SECONDS
         from workspace_layout.client import ShellLayoutClient
         from workspace_layout.errors import ShellOpError
         from workspace_layout.ops import WindowArgs
@@ -480,7 +478,7 @@ class Desktops:
         shell = ShellLayoutClient(
             shell_url=self.shell_url,
             requester=None,
-            timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
+            timeout_seconds=OP_TIMEOUT_SECONDS,
         )
         try:
             shell.close(
