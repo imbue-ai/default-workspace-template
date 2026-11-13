@@ -1,0 +1,8 @@
+System Monitor is rebuilt on the workspace's shared frontend: a Mithril page (`frontend/`, in the npm workspace) made of the shared components and the Imbue brand's color roles and type, in place of the hand-written page with its own copy of the old colors. It follows the workspace's theme and the workspace color for the first time; every view, figure, graph, list, and request is the same as before.
+
+- `app.toml` declares `[theming] mode = "tokens"`, and the app serves the theme files and `/_static/workspace_color.css` from its own origin (`register_workspace_theme_route`), the built page at every view's path (a "not built yet" page until `npm run build` has run) with the page's document policy, and its bundle under `/assets/`.
+- The graphs' inks are roles: CPU is the accent, memory the primary (the workspace color), and the disk a step of the wallpaper ramp, whose lighter steps color the disk breakdown's rows.
+- The tables are the brand's plain rows with subtle dividers in the dense body type, the span picker is the shared segmented control, the temporary files explanation is the shared tooltip, the Details actions and the back link are ghost buttons, and the memory note is a warn notice.
+- A Stop or Quit button is a ghost destructive icon button, and its question is a dialog that names the chat or app; a refusal shows its reason in the dialog until dismissed.
+- A disk walk's rows stay up while the next walk runs.
+- Vitest tests cover each view drawn from a reading, the stop flow (cancel, confirm, refusal), the span switch, the disk walk, the offline note, polling only while visible, and the formatting and graph geometry.

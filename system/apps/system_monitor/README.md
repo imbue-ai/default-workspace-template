@@ -127,4 +127,13 @@ The app describes its own HTTP API at `GET /api/schema` (the manifest's
 `POST /api/disk/scan` (start the walk), and `POST /api/stop` (a Stop button's
 request).
 
+The page is a Mithril frontend (`frontend/`, a member of the npm workspace at
+`system/package.json`) built from the shared components of
+`system/libs/workspace_ui` and the design system's roles, so it follows the
+workspace's theme and color; `npm run build` in `system/` writes it into
+`src/system_monitor/static/`, which the app serves at every view's path (and its
+bundle under `/assets/`), and its tests run with `vitest run`. The graphs' inks
+are roles too: CPU the accent, memory the primary (the workspace color), and the
+disk a step of the wallpaper ramp.
+
 Served on port 8040 by the `system-monitor` program.

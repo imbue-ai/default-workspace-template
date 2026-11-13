@@ -26,6 +26,11 @@ system = true
 launch = "open"
 mode = "focus"
 
+# Built only from the shared components and the design tokens, so every theme and the workspace color style it with
+# no work of its own (docs/system/blueprint/workspace-themes/, section 7).
+[theming]
+mode = "tokens"
+
 # A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is
 # nothing to copy.
 [preview]
