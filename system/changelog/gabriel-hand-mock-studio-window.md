@@ -1,1 +1,3 @@
-The lock records `agents-shared`'s new dependency on `workspace-layout`, which `serve_isolated_instance.py down` uses to find and close the windows still showing an instance.
+- The lock records `agents-shared`'s new dependency on `workspace-layout`, which `serve_isolated_instance.py down` uses to find and close the windows still showing an instance.
+
+- The critical-app test plan's teardown steps use `preview_app.py down --close-windows`, as the careful-flow reference now does.

@@ -342,7 +342,7 @@ All from the repo root with `uv run python3`, `--worktree data/.tasks/critical-l
   stderr, no agent is left behind (`mngr ls`), and the launch's "leftover record" hint
   does not fire.
 - **D2 Launch on the branch.** Commit a trivial change in the worktree, then run the
-  reference's teardown (`preview_app.py down`, `layout.py close`, `git worktree remove`
+  reference's teardown (`preview_app.py down --close-windows`, `git worktree remove`
   without `--force`) and D1's launch again. Pass: the worker exists; `mngr ls --include
   'name == "update-tp1"' --format json` reports `initial_branch: mngr/update-tp1`; the
   worker's `work_dir` is on that branch (`git -C <work_dir> rev-parse --abbrev-ref HEAD`)
@@ -484,7 +484,7 @@ Run them after sections A to F pass, in a clean workspace state (S0.4).
   on the branch, worker `done` (or a stand-in that commits a test and reports), optional
   final preview from the worker's `work_dir`, E1 freshness, E2 apply with the worker's
   bundles, band appears, E4 rollback, re-apply, E3 confirm, teardown (`preview_app.py
-  down`, `layout.py close`, `destroy`, `tk close`). Pass: every step's criteria above,
+  down --close-windows`, `destroy`, `tk close`). Pass: every step's criteria above,
   plus: no `*-preview*` registry rows, no worktree, no worker, no lease, no record at the
   end.
 - **X2 Shell change.** The New Tab page: C3, C11, harden, E5, confirm.
