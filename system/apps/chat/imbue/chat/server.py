@@ -3216,7 +3216,7 @@ def create_application(state: ChatAppState) -> Flask:
         methods=["GET"],
     )
     auth_endpoints.register_routes(application)
-    accounts_endpoints.register_routes(application)
+    accounts_endpoints.register_routes(application, state.auth_flows)
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
     keybindings_endpoints.register_routes(application)

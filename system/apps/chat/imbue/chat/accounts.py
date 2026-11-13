@@ -330,43 +330,68 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     if not path.is_dir():
         raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
     with _index_lock(home):
-        index = read_index(home)
-        # Re-authenticating writes the same folder a second time. The row already exists and
-        # agents hold its id by label, so the id and the seq are kept rather than renumbered;
-        # only the credential on disk changed. The DISPLAY can change, though: re-keying the
-        # bring-your-own-key lane may name a different provider, and leaving the old noun
-        # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
-        existing = next((a for a in index.accounts if a.id == account_id), None)
-        # `Account.lane` is immutable, and this is where that is enforced. Keeping the
-        # stored value and ignoring the argument would let a re-auth on the WRONG lane
-        # commit: the row still says anthropic while codex's config sits in its folder, and
-        # every chat bound there resolves a claude harness against codex credentials.
-        if existing is not None and existing.lane != lane:
-            raise AccountError(
-                f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
-            )
-        # Before the index write, so the account list that write announces to every chat page carries it.
-        stamp_signed_in(account_id, home)
-        if existing is not None:
-            if existing.display != display:
-                existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
-            rows = tuple(existing if a.id == account_id else a for a in index.accounts)
-            _write_index(
-                index.model_copy_update(
-                    to_update(index.field_ref().accounts, rows),
-                    to_update(index.field_ref().mru, account_id),
-                ),
-                home,
-            )
-            return existing
-        account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
+        return _commit_locked(account_id, lane, display, home)
+
+
+def move_in_account(account_id: str, lane: str, display: str, source_home: Path, home: Path | None = None) -> Account:
+    """Move a signed-in folder from the store under `source_home` into this one, and commit it.
+
+    The move and the index write happen under one hold of this store's lock, so `reconcile` never
+    sees the folder without its row. The early sign-in (`early_sign_in.py`) signs in under a
+    store of its own while the workspace boots, and this is how its account reaches the live one.
+    """
+    source = account_dir(account_id, source_home)
+    if not source.is_dir():
+        raise AccountError(f"cannot move in account {account_id}: {source} does not exist")
+    with _index_lock(home):
+        destination = account_dir(account_id, home)
+        if destination.exists():
+            raise AccountError(f"cannot move in account {account_id}: {destination} already exists")
+        # A rename, never a copy: both stores sit under the same home, and a copy would leave a
+        # window in which the credential exists twice.
+        source.rename(destination)
+        return _commit_locked(account_id, lane, display, home)
+
+
+def _commit_locked(account_id: str, lane: str, display: str, home: Path | None) -> Account:
+    """`commit_account`'s index write. Callers must already hold `_index_lock`."""
+    index = read_index(home)
+    # Re-authenticating writes the same folder a second time. The row already exists and
+    # agents hold its id by label, so the id and the seq are kept rather than renumbered;
+    # only the credential on disk changed. The DISPLAY can change, though: re-keying the
+    # bring-your-own-key lane may name a different provider, and leaving the old noun
+    # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
+    existing = next((a for a in index.accounts if a.id == account_id), None)
+    # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+    # stored value and ignoring the argument would let a re-auth on the WRONG lane
+    # commit: the row still says anthropic while codex's config sits in its folder, and
+    # every chat bound there resolves a claude harness against codex credentials.
+    if existing is not None and existing.lane != lane:
+        raise AccountError(
+            f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
+        )
+    # Before the index write, so the account list that write announces to every chat page carries it.
+    stamp_signed_in(account_id, home)
+    if existing is not None:
+        if existing.display != display:
+            existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
+        rows = tuple(existing if a.id == account_id else a for a in index.accounts)
         _write_index(
             index.model_copy_update(
-                to_update(index.field_ref().accounts, (*index.accounts, account)),
+                to_update(index.field_ref().accounts, rows),
                 to_update(index.field_ref().mru, account_id),
             ),
             home,
         )
+        return existing
+    account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
+    _write_index(
+        index.model_copy_update(
+            to_update(index.field_ref().accounts, (*index.accounts, account)),
+            to_update(index.field_ref().mru, account_id),
+        ),
+        home,
+    )
     logger.info("Committed account {} on lane {} (seq {})", account_id, lane, account.seq)
     return account
 

@@ -83,6 +83,10 @@ needs a directory put on `sys.path`, and each stub says which. See
   after a restart docker made on its own; it records the restart as a
   `container_restarted` event through
   `workspace_bare_scripts/record_container_restart.py`).
+- Early sign-in: `start_early_sign_in.sh`, which the Imbue Studio app runs over
+  SSH while a new workspace is built. It starts the chat app's
+  `chat-early-sign-in` the way supervisord starts the chat app (see
+  `system/apps/chat/README.md`).
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the routines runner and its
