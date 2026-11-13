@@ -2861,8 +2861,9 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
-    mode rides only the `fast` create template (see .mngr/settings.toml), never
-    the argv, so a chat launched without it starts at standard speed."""
+    mode rides the `fast` create template (see .mngr/settings.toml) or a switch
+    once the agent is up, never the argv, so a chat launched without either
+    starts at standard speed."""
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
