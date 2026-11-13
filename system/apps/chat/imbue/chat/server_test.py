@@ -2508,13 +2508,22 @@ class _StepRecordingSwitchClient(_RecordingSwitchClient):
         self._steps.append(f"switch:{kwargs}")
 
 
+@pytest.mark.parametrize(
+    "model_pick",
+    [
+        None,
+        # A pick the agent refuses leaves the chat on its default model, still at its launch speed.
+        ModelPick(model_id="no-such-model", effort=None, fast=False),
+    ],
+)
 def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_message(
-    agent_manager: AgentManager, tmp_path: Path
+    model_pick: ModelPick | None, agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     chat_id = ChatId("codex-chat")
     with agent_manager._lock:
+        # The create settles on the pick and account its provisional chat carries.
         agent_manager._provisional_chats[chat_id] = ProvisionalChat(
-            chat_id=chat_id, name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+            chat_id=chat_id, name="Chat 1", account_id="", phase=ProvisionalChatPhase.CREATING, model_pick=model_pick
         )
     agent_manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
     steps: list[str] = []
@@ -2539,7 +2548,7 @@ def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_m
             "test-agent",
             ["true"],
             tmp_path,
-            {},
+            {"display_name": "Chat 1"},
             HarnessType.CODEX,
             first_message=FirstMessage(text="hello", message_id="m-0"),
         )

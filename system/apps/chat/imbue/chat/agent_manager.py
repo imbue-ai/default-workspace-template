@@ -5430,9 +5430,10 @@ class AgentManager:
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
-        what the user chose the switch by. With no pick, a chat that launches fast on a harness
-        switched fast once it is up gets that switch here. The messages go through the send path a held send
-        takes; a refusal is logged the same way, and only a first message that landed is told of.
+        what the user chose the switch by. With no pick, or a refused one, a chat that launches
+        fast on a harness switched fast once it is up gets that switch here. The messages go
+        through the send path a held send takes; a refusal is logged the same way, and only a
+        first message that landed is told of.
         """
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -5442,12 +5443,14 @@ class AgentManager:
                     "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
                 )
             return
+        is_picked = False
         if model_pick is not None:
             try:
                 self.apply_model_pick(agent_info, model_pick)
+                is_picked = True
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
-        else:
+        if not is_picked:
             self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
