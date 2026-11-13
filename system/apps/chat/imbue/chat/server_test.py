@@ -62,6 +62,8 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FirstMessage
+from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
@@ -93,6 +95,7 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -2491,6 +2494,57 @@ def test_launch_fast_mode_switches_only_the_fast_axis_of_a_codex_agent_whose_cha
 
     assert switch_client.calls == expected_calls
     assert messenger.sent == []
+
+
+class _StepRecordingSwitchClient(_RecordingSwitchClient):
+    """A switch client that also notes each switch in a log shared with the deliveries, to order them."""
+
+    def __init__(self, steps: list[str]) -> None:
+        super().__init__()
+        self._steps = steps
+
+    def settings_update(self, **kwargs: Any) -> None:
+        super().settings_update(**kwargs)
+        self._steps.append(f"switch:{kwargs}")
+
+
+def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_message(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    chat_id = ChatId("codex-chat")
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+    agent_manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+    steps: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        steps.append(f"deliver:{text}")
+        return SendOutcome.OK
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    with patch(
+        "imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=_StepRecordingSwitchClient(steps)
+    ):
+        agent_manager._run_creation(
+            chat_id,
+            str(chat_id),
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {},
+            HarnessType.CODEX,
+            first_message=FirstMessage(text="hello", message_id="m-0"),
+        )
+
+    assert steps == ["switch:{'service_tier': 'priority'}", "deliver:hello"]
 
 
 class _FakeCodexConnection:
