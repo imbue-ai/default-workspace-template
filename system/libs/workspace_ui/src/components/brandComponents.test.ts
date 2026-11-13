@@ -5,7 +5,7 @@ import { cardClass } from "./card";
 import { Checkbox, Switch, switchVisual } from "./formControls";
 import { noticeClass } from "./notice";
 
-function render(vnode: m.Vnode): HTMLElement {
+function render(vnode: m.Children): HTMLElement {
   const root = document.createElement("div");
   m.render(root, vnode);
   return root;
