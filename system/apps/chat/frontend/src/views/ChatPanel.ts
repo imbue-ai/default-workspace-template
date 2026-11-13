@@ -41,6 +41,7 @@ import {
   removeMessageSentListener,
   type ToolResultEvent,
   isTranscriptLoaded,
+  placeCachedTranscript,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
@@ -228,12 +229,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       getRows: () => cachedRows,
       getWindowEventIds: () => getEventsForChat(currentChatId ?? "").map((event) => event.event_id),
       getFirstOffset: () => getFirstOffset(currentChatId ?? ""),
-      // Null until the first window has been placed (renderVersion bumps on
-      // placement, including for an empty transcript), so the engine's fill
-      // planner never races the initial snapshot+stream load.
+      // Null until the first snapshot has landed, so the engine's fill planner
+      // never races the initial snapshot+stream load, nor pages from a window
+      // placed from the transcript cache that the snapshot is about to replace.
       getTotalEvents: () => {
         const chatId = currentChatId ?? "";
-        return getRenderVersion(chatId) > 0 ? getTotalEventCount(chatId) : null;
+        return isTranscriptLoaded(chatId) ? getTotalEventCount(chatId) : null;
       },
       getRenderVersion: () => getRenderVersion(currentChatId ?? ""),
       executeFill: (action: FillAction): Promise<void> => {
@@ -645,6 +646,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
+    // What this session last saw of the chat shows at once, until the snapshot replaces it.
+    placeCachedTranscript(chatId);
     loadChat(chatId, isStreamed);
   }
 

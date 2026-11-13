@@ -72,6 +72,7 @@ vi.mock("../models/Response", () => ({
   isConversationNotFound: () => mocks.isConversationNotFound,
   isTranscriptLoaded: () => mocks.isTranscriptLoaded,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
+  placeCachedTranscript: () => false,
 }));
 vi.mock("../shell", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shell")>()),

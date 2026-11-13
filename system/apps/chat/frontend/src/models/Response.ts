@@ -9,6 +9,7 @@ import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { ensureParticipantsKnowAuthors } from "./Participants";
+import { dropCachedTranscript, readCachedTranscript, writeCachedTranscript } from "./transcriptCache";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -343,6 +344,13 @@ class TranscriptStore {
   #total = 0;
   #renderVersion = 0;
 
+  readonly #onChange: () => void;
+
+  /** ``onChange`` runs after every mutation that changed what renders. */
+  constructor(onChange: () => void) {
+    this.#onChange = onChange;
+  }
+
   get events(): TranscriptEvent[] {
     return this.#events;
   }
@@ -396,6 +404,7 @@ class TranscriptStore {
     const changed = mutate();
     if (changed) {
       this.#renderVersion += 1;
+      this.#onChange();
     }
     return changed;
   }
@@ -614,10 +623,44 @@ function isNewestLoadAttempt(chatId: string, attempt: number): boolean {
 function storeFor(chatId: string): TranscriptStore {
   let store = storeByChat[chatId];
   if (store === undefined) {
-    store = new TranscriptStore();
+    store = new TranscriptStore(() => scheduleTranscriptCacheWrite(chatId));
     storeByChat[chatId] = store;
   }
   return store;
+}
+
+// How long the transcript cache write waits for the window to settle, so a streaming turn writes
+// once per pause rather than once per event.
+const CACHE_WRITE_DELAY_MS = 500;
+const cacheWriteTimersByChat = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Cache the chat's window once it settles, when it is a real snapshot that reaches the live end. */
+function scheduleTranscriptCacheWrite(chatId: string): void {
+  if (cacheWriteTimersByChat.has(chatId)) return;
+  cacheWriteTimersByChat.set(
+    chatId,
+    setTimeout(() => {
+      cacheWriteTimersByChat.delete(chatId);
+      const store = storeByChat[chatId];
+      // Only what the server has answered is written back (a window placed from the cache is not),
+      // and only a window at the live end: a tail is what the page shows first.
+      if (store === undefined || !loadedChatIds.has(chatId) || store.hasMoreAfter || store.eventCount === 0) return;
+      writeCachedTranscript(chatId, store.events, store.firstOffset, store.total);
+    }, CACHE_WRITE_DELAY_MS),
+  );
+}
+
+/**
+ * Place the chat's cached tail as its window, for a page that holds nothing of the chat yet, so the
+ * conversation shows while its snapshot is on its way; the snapshot replaces it on landing. The chat
+ * does not count as loaded until then. True when a cached tail was placed.
+ */
+export function placeCachedTranscript(chatId: string): boolean {
+  if (loadedChatIds.has(chatId) || getEventCount(chatId) > 0) return false;
+  const cached = readCachedTranscript(chatId);
+  if (cached === null) return false;
+  storeFor(chatId).reset(cached.events, cached.offset, cached.total);
+  return true;
 }
 
 // Read accessors. These never create a store, so an unknown chat reads as empty
@@ -929,6 +972,7 @@ async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
       const requestError = error as { code?: number; message?: string };
       if (requestError.code === 404) {
         notFoundChatIds.add(chatId);
+        dropCachedTranscript(chatId);
       }
       loadStateByChat.set(chatId, { phase: "error", error: describeRequestError(error) });
     }
