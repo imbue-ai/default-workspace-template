@@ -430,22 +430,27 @@ class Desktops:
 
     shell_url: str = field(default_factory=shell_base_url)
 
-    def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
-        """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
-        from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
+    def _shell(self):
+        """The layout client for the shell at ``shell_url``, asking as the calling agent's chat."""
+        from workspace_layout.cli import OP_TIMEOUT_SECONDS
         from workspace_layout.client import (
             ShellLayoutClient,
             requester_from_environment,
         )
-        from workspace_layout.errors import ShellOpError
 
-        shell = ShellLayoutClient(
+        return ShellLayoutClient(
             shell_url=self.shell_url,
             requester=requester_from_environment(),
             timeout_seconds=OP_TIMEOUT_SECONDS,
         )
+
+    def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
+        """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
+        from workspace_layout.cli import READ_TIMEOUT_SECONDS
+        from workspace_layout.errors import ShellOpError
+
         try:
-            inventory = shell.inventory(timeout_seconds=READ_TIMEOUT_SECONDS)
+            inventory = self._shell().inventory(timeout_seconds=READ_TIMEOUT_SECONDS)
         except ShellOpError as exc:
             raise InstanceError(f"could not read the desktops: {exc}") from exc
         seats = [
@@ -470,11 +475,6 @@ class Desktops:
 
     def close(self, window: OpenWindow) -> None:
         """Close ``window``; raises InstanceError when it cannot be closed."""
-        from workspace_layout.cli import OP_TIMEOUT_SECONDS
-        from workspace_layout.client import (
-            ShellLayoutClient,
-            requester_from_environment,
-        )
         from workspace_layout.errors import ShellOpError
         from workspace_layout.ops import WindowArgs
         from workspace_layout.primitives import ClientId
@@ -484,13 +484,8 @@ class Desktops:
                 f"window {window.window_id} ({window.app}) is on desktop "
                 f"{window.desktop_id}, which no client is on; close it from that desktop"
             )
-        shell = ShellLayoutClient(
-            shell_url=self.shell_url,
-            requester=requester_from_environment(),
-            timeout_seconds=OP_TIMEOUT_SECONDS,
-        )
         try:
-            shell.close(
+            self._shell().close(
                 WindowArgs(
                     window=window.window_id,
                     client=ClientId(window.closing_client_id),
