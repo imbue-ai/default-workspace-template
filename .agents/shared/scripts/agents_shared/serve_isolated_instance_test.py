@@ -28,6 +28,15 @@ from typing import Callable, Sequence
 
 import pytest
 from app_registration import forward_port
+from workspace_layout.answers import InventoryClient, InventoryDocument
+from workspace_layout.primitives import ClientId, DesktopId
+from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.testing import (
+    FAKE_TIME,
+    LoopbackShell,
+    fake_desktop,
+    fake_window,
+)
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
@@ -883,6 +892,69 @@ def test_a_window_on_a_desktop_no_client_is_on_is_not_closed() -> None:
 
     with pytest.raises(mod.InstanceError, match="no client is on"):
         mod.Desktops().close(window)
+
+
+_WINDOW_1 = "win-0000000000000001"
+_WINDOW_2 = "win-0000000000000002"
+_WINDOW_3 = "win-0000000000000003"
+
+
+def _inventory_answer() -> tuple[int, dict[str, object]]:
+    """The shell's inventory: the preview on two desktops (one with a client on it), and another app."""
+    document = InventoryDocument(
+        is_preview=False,
+        workspace_name="ws",
+        desktops=(
+            fake_desktop(
+                "home",
+                [
+                    fake_window(_WINDOW_1, "demo-preview", "/"),
+                    fake_window(_WINDOW_2, "notes", "/"),
+                ],
+            ),
+            fake_desktop("work", [fake_window(_WINDOW_3, "demo-preview", "/")]),
+        ),
+        apps=(),
+        clients=(
+            InventoryClient(
+                id=ClientId("client-home"),
+                active_desktop=DesktopId("home"),
+                last_seen=FAKE_TIME,
+                is_connected=True,
+            ),
+        ),
+    )
+    return 200, document.model_dump(mode="json")
+
+
+def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_desktop() -> (
+    None
+):
+    with LoopbackShell(get_answers={INVENTORY_ROUTE: _inventory_answer()}) as shell:
+        desktops = mod.Desktops(shell_url=shell.url)
+
+        windows = desktops.windows_of(["demo-preview"])
+        desktops.close(windows[0])
+
+    assert windows == [
+        mod.OpenWindow(_WINDOW_1, "demo-preview", "home", "client-home"),
+        mod.OpenWindow(_WINDOW_3, "demo-preview", "work", None),
+    ]
+    assert shell.posted_ops() == [
+        ("close", {"window": _WINDOW_1, "client": "client-home", "desktop": "home"})
+    ]
+
+
+def test_desktops_report_a_refused_close_and_an_unreachable_shell() -> None:
+    window = mod.OpenWindow(_WINDOW_1, "demo-preview", "home", "client-home")
+    with LoopbackShell(op_refusal=(400, {"detail": "pinned"})) as shell:
+        shell_url = shell.url
+        with pytest.raises(
+            mod.InstanceError, match=f"could not close window {_WINDOW_1}"
+        ):
+            mod.Desktops(shell_url=shell_url).close(window)
+    with pytest.raises(mod.InstanceError, match="could not read the desktops"):
+        mod.Desktops(shell_url=shell_url).windows_of(["demo-preview"])
 
 
 @pytest.mark.parametrize(

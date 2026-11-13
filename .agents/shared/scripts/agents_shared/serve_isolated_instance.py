@@ -111,12 +111,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
 from workspace_bare_scripts import run_in_background, venv_links
+from workspace_layout.shell_url import shell_base_url
 
 from agents_shared.preview_wrapper_server import FrameKind
 
@@ -419,21 +421,23 @@ def closing_client(seats: Sequence[ClientSeat], desktop_id: str) -> str | None:
     return connected_first[0].client_id if connected_first else None
 
 
+@dataclass
 class Desktops:
-    """Indirection over the shell's desktops, so tests can record which windows a teardown closes.
+    """Indirection over the shell's desktops at ``shell_url``, so tests can record which windows a teardown closes.
 
     Its methods import the layout client where they use it: it loads pydantic, which
     an instance with no registered service never needs.
     """
 
+    shell_url: str = field(default_factory=shell_base_url)
+
     def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
         """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
         from workspace_layout.client import ShellLayoutClient
         from workspace_layout.errors import ShellOpError
-        from workspace_layout.shell_url import shell_base_url
 
         shell = ShellLayoutClient(
-            shell_url=shell_base_url(),
+            shell_url=self.shell_url,
             requester=None,
             timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
         )
@@ -467,7 +471,6 @@ class Desktops:
         from workspace_layout.errors import ShellOpError
         from workspace_layout.ops import WindowArgs
         from workspace_layout.primitives import ClientId
-        from workspace_layout.shell_url import shell_base_url
 
         if window.closing_client_id is None:
             raise InstanceError(
@@ -475,7 +478,7 @@ class Desktops:
                 f"{window.desktop_id}, which no client is on; close it from that desktop"
             )
         shell = ShellLayoutClient(
-            shell_url=shell_base_url(),
+            shell_url=self.shell_url,
             requester=None,
             timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
         )
