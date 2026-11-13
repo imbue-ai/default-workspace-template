@@ -30,7 +30,8 @@ import pytest
 from app_registration import forward_port
 from workspace_layout.answers import InventoryClient, InventoryDocument
 from workspace_layout.primitives import ClientId, DesktopId
-from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.records import DesktopView
+from workspace_layout.shell_url import ENV_SHELL_URL, INVENTORY_ROUTE
 from workspace_layout.testing import (
     FAKE_TIME,
     LoopbackShell,
@@ -899,21 +900,26 @@ _WINDOW_2 = "win-0000000000000002"
 _WINDOW_3 = "win-0000000000000003"
 
 
-def _inventory_answer() -> tuple[int, dict[str, object]]:
-    """The shell's inventory: the preview on two desktops (one with a client on it), and another app."""
+# The client's desktop, showing the preview and another app.
+_HOME_DESKTOP = fake_desktop(
+    "home",
+    [
+        fake_window(_WINDOW_1, "demo-preview", "/"),
+        fake_window(_WINDOW_2, "notes", "/"),
+    ],
+)
+# A desktop no client is on, also showing the preview.
+_WORK_DESKTOP = fake_desktop("work", [fake_window(_WINDOW_3, "demo-preview", "/")])
+
+
+def _inventory_answer(
+    desktops: Sequence[DesktopView],
+) -> tuple[int, dict[str, object]]:
+    """The shell's inventory of ``desktops``, with one connected client on ``home``."""
     document = InventoryDocument(
         is_preview=False,
         workspace_name="ws",
-        desktops=(
-            fake_desktop(
-                "home",
-                [
-                    fake_window(_WINDOW_1, "demo-preview", "/"),
-                    fake_window(_WINDOW_2, "notes", "/"),
-                ],
-            ),
-            fake_desktop("work", [fake_window(_WINDOW_3, "demo-preview", "/")]),
-        ),
+        desktops=tuple(desktops),
         apps=(),
         clients=(
             InventoryClient(
@@ -930,7 +936,9 @@ def _inventory_answer() -> tuple[int, dict[str, object]]:
 def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_desktop() -> (
     None
 ):
-    with LoopbackShell(get_answers={INVENTORY_ROUTE: _inventory_answer()}) as shell:
+    with LoopbackShell(
+        get_answers={INVENTORY_ROUTE: _inventory_answer([_HOME_DESKTOP, _WORK_DESKTOP])}
+    ) as shell:
         desktops = mod.Desktops(shell_url=shell.url)
 
         windows = desktops.windows_of(["demo-preview"])
@@ -1574,6 +1582,31 @@ def test_main_up_takes_named_ports_and_copies(tmp_path: Path) -> None:
 def test_main_routes_down(tmp_path: Path) -> None:
     code = mod.main(["down", "--name", _NAME, "--repo-root", str(tmp_path)])
     assert code == 0  # no state -> idempotent no-op
+
+
+def test_main_down_refuses_under_the_shells_open_window_until_told_to_close_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(forward_port.ENV_APPS_FILE, str(tmp_path / "apps.toml"))
+    state_dir = _write_state(tmp_path, [], ["demo-preview"])
+    argv = ["down", "--name", _NAME, "--repo-root", str(tmp_path)]
+    with LoopbackShell(
+        get_answers={INVENTORY_ROUTE: _inventory_answer([_HOME_DESKTOP])}
+    ) as shell:
+        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
+
+        refused = mod.main(argv)
+        assert shell.posted_ops() == []
+        assert state_dir.exists()
+
+        closed = mod.main([*argv, "--close-windows"])
+
+    assert refused == 1
+    assert closed == 0
+    assert shell.posted_ops() == [
+        ("close", {"window": _WINDOW_1, "client": "client-home", "desktop": "home"})
+    ]
+    assert not state_dir.exists()
 
 
 # wrapper page
