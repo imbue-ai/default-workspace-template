@@ -22,15 +22,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from workspace_layout.answers import InventoryClient, InventoryDocument
-from workspace_layout.primitives import ClientId, DesktopId
-from workspace_layout.shell_url import ENV_SHELL_URL, INVENTORY_ROUTE
-from workspace_layout.testing import (
-    FAKE_TIME,
-    LoopbackShell,
-    fake_desktop,
-    fake_window,
-)
+from workspace_layout.answers import DesktopsListing
+from workspace_layout.shell_url import DESKTOPS_ROUTE, ENV_SHELL_URL
+from workspace_layout.testing import LoopbackShell, fake_desktop, fake_window
 
 from update_app_skill import preview_app as mod
 
@@ -44,6 +38,7 @@ _LIFECYCLE_TIMEOUT_SECONDS = 180
 _DISK_TEMP_ROOT = Path("/var/tmp")
 
 _PREVIEW_WINDOW = "win-0000000000000001"
+_PREVIEW_WINDOW_CLOSE_ROUTE = f"{DESKTOPS_ROUTE}/home/windows/{_PREVIEW_WINDOW}/close"
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -119,27 +114,17 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
 def shell_showing_the_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[LoopbackShell]:
-    """A shell with the preview's window open on the desktop its one connected client is on."""
-    inventory = InventoryDocument(
-        is_preview=False,
-        workspace_name="ws",
+    """A shell with the preview's window open on a desktop."""
+    listing = DesktopsListing(
         desktops=(
             fake_desktop(
                 "home", [fake_window(_PREVIEW_WINDOW, "fixture-preview", "/")]
             ),
-        ),
-        apps=(),
-        clients=(
-            InventoryClient(
-                id=ClientId("client-home"),
-                active_desktop=DesktopId("home"),
-                last_seen=FAKE_TIME,
-                is_connected=True,
-            ),
-        ),
+        )
     )
     with LoopbackShell(
-        get_answers={INVENTORY_ROUTE: (200, inventory.model_dump(mode="json"))}
+        get_answers={DESKTOPS_ROUTE: (200, listing.model_dump(mode="json"))},
+        post_answers={_PREVIEW_WINDOW_CLOSE_ROUTE: (204, "")},
     ) as shell:
         monkeypatch.setenv(ENV_SHELL_URL, shell.url)
         yield shell
@@ -214,12 +199,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     assert refused_code == 1
     assert is_live_after_refusal
     assert down_code == 0
-    assert shell_showing_the_preview.posted_ops() == [
-        (
-            "close",
-            {"window": _PREVIEW_WINDOW, "client": "client-home", "desktop": "home"},
-        )
-    ]
+    assert shell_showing_the_preview.posted == [(_PREVIEW_WINDOW_CLOSE_ROUTE, {})]
     with pytest.raises(urllib.error.URLError):
         _get(url)
     assert (

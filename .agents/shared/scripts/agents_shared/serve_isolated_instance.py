@@ -58,7 +58,8 @@ Usage:
         [--host-env <ENVVAR>] \\
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
-        [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
+        [--preview-service-name <name> --preview-title <label> [--inner-path /path] \\
+         [--preview-kind change|mock] [--preview-note <line>]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
     uv run --no-sync serve_isolated_instance.py down --name <slug> [--close-windows] [--repo-root PATH]
@@ -116,12 +117,21 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
+from urllib.parse import quote
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
 from workspace_bare_scripts import run_in_background, venv_links
-from workspace_layout.shell_url import shell_base_url
+from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
+from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.shell_url import DESKTOPS_ROUTE, shell_base_url
+from workspace_layout.transport import (
+    HTTP_SUCCESS_RANGE,
+    exchange_with_shell,
+    quote_answer,
+    refusal_detail,
+)
 
 from agents_shared.preview_wrapper_server import FrameKind
 
@@ -396,111 +406,71 @@ class OpenWindow(NamedTuple):
     window_id: str
     app: str
     desktop_id: str
-    # A client already on that desktop, which the close names; None when no client is on it.
-    closing_client_id: str | None
 
 
-class ClientSeat(NamedTuple):
-    """One client of the shell: its id, the desktop it is on, and whether it is connected."""
-
-    client_id: str
-    active_desktop: str | None
-    is_connected: bool
-
-
-def closing_client(seats: Sequence[ClientSeat], desktop_id: str) -> str | None:
-    """A client already on ``desktop_id``, a connected one first; None when no client is on it.
-
-    A close names a client and the window's desktop, and the shell switches that
-    client to the desktop when it was on another one, so only a client already
-    there closes the window without moving anyone's view.
-    """
-    on_desktop = [seat for seat in seats if seat.active_desktop == desktop_id]
-    connected_first = sorted(on_desktop, key=lambda seat: not seat.is_connected)
-    return connected_first[0].client_id if connected_first else None
+def _windows_in(listing: dict[str, Any] | str, apps: Sequence[str]) -> list[OpenWindow]:
+    """The windows of ``apps`` a ``GET /api/desktops`` answer lists; raises InstanceError when it is not a listing."""
+    if not isinstance(listing, dict):
+        raise InstanceError(
+            f"the shell's desktops are not a desktops listing: {quote_answer(listing)}"
+        )
+    try:
+        return [
+            OpenWindow(str(window["id"]), str(window["app"]), str(desktop["id"]))
+            for desktop in listing["desktops"]
+            for window in desktop["windows"]
+            if window["app"] in apps
+        ]
+    except (KeyError, TypeError) as exc:
+        raise InstanceError(
+            f"the shell's desktops are not a desktops listing ({exc!r}): {quote_answer(listing)}"
+        ) from exc
 
 
 @dataclass
 class Desktops:
     """Indirection over the shell's desktops at ``shell_url``, so tests can record which windows a teardown closes.
 
-    Its methods import the layout client where they use it: it loads pydantic, which
-    an instance with no registered service never needs.
+    It closes a window through the shell's own close route, which closes it for every
+    client and names none, so no one's view moves to another desktop.
     """
 
     shell_url: str = field(default_factory=shell_base_url)
 
     def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
         """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
-        from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
-        from workspace_layout.client import (
-            ShellLayoutClient,
-            requester_from_environment,
+        listing = self._exchange(
+            "GET", DESKTOPS_ROUTE, "read the desktops", READ_TIMEOUT_SECONDS
         )
-        from workspace_layout.errors import ShellOpError
-
-        shell = ShellLayoutClient(
-            shell_url=self.shell_url,
-            requester=requester_from_environment(),
-            timeout_seconds=OP_TIMEOUT_SECONDS,
-        )
-        try:
-            inventory = shell.inventory(timeout_seconds=READ_TIMEOUT_SECONDS)
-        except ShellOpError as exc:
-            raise InstanceError(f"could not read the desktops: {exc}") from exc
-        seats = [
-            ClientSeat(
-                str(client.id),
-                None if client.active_desktop is None else str(client.active_desktop),
-                client.is_connected,
-            )
-            for client in inventory.clients
-        ]
-        return [
-            OpenWindow(
-                str(window.id),
-                str(window.app),
-                str(desktop.id),
-                closing_client(seats, str(desktop.id)),
-            )
-            for desktop in inventory.desktops
-            for window in desktop.windows
-            if str(window.app) in apps
-        ]
+        return _windows_in(listing, apps)
 
     def close(self, window: OpenWindow) -> None:
-        """Close ``window``; raises InstanceError when it cannot be closed."""
-        from workspace_layout.cli import OP_TIMEOUT_SECONDS
-        from workspace_layout.client import (
-            ShellLayoutClient,
-            requester_from_environment,
+        """Close ``window``; raises InstanceError when it cannot be closed (a pinned window is refused)."""
+        self._exchange(
+            "POST",
+            f"{DESKTOPS_ROUTE}/{quote(window.desktop_id, safe='')}/windows/"
+            f"{quote(window.window_id, safe='')}/close",
+            f"close window {window.window_id} ({window.app})",
+            OP_TIMEOUT_SECONDS,
         )
-        from workspace_layout.errors import ShellOpError
-        from workspace_layout.ops import WindowArgs
-        from workspace_layout.primitives import ClientId
 
-        if window.closing_client_id is None:
-            raise InstanceError(
-                f"window {window.window_id} ({window.app}) is on desktop "
-                f"{window.desktop_id}, which no client is on; close it from that desktop"
-            )
-        shell = ShellLayoutClient(
-            shell_url=self.shell_url,
-            requester=requester_from_environment(),
-            timeout_seconds=OP_TIMEOUT_SECONDS,
-        )
+    def _exchange(
+        self, method: str, route: str, what: str, timeout_seconds: float
+    ) -> dict[str, Any] | str:
         try:
-            shell.close(
-                WindowArgs(
-                    window=window.window_id,
-                    client=ClientId(window.closing_client_id),
-                    desktop=window.desktop_id,
-                )
+            status, answer = exchange_with_shell(
+                method,
+                f"{self.shell_url}{route}",
+                None if method == "GET" else {},
+                timeout_seconds,
             )
-        except ShellOpError as exc:
+        except ShellUnreachableError as exc:
+            raise InstanceError(f"could not {what}: {exc}") from exc
+        if status not in HTTP_SUCCESS_RANGE:
             raise InstanceError(
-                f"could not close window {window.window_id} ({window.app}): {exc}"
-            ) from exc
+                f"could not {what}: the shell answered {status}: {refusal_detail(answer)}"
+            )
+        return answer
 
 
 class ProbeResult(NamedTuple):
@@ -1169,6 +1139,8 @@ def up(
     service_name: str | None = None,
     preview_service_name: str | None = None,
     preview_title: str | None = None,
+    preview_kind: FrameKind = FrameKind.CHANGE,
+    preview_note: str | None = None,
     inner_path: str = "/",
     theming_mode: str | None = None,
     project: str | None = None,
@@ -1190,7 +1162,8 @@ def up(
     the ``main`` port to serve 200. With ``service_name`` it also registers the
     instance as a service (served at its own origin); with the preview names +
     title it additionally boots the labeled wrapper frame, opening the inner
-    service at ``inner_path``. ``theming_mode`` is the served app's ``[theming]``
+    service at ``inner_path``, with the banner ``preview_kind`` names and
+    ``preview_note`` under it. ``theming_mode`` is the served app's ``[theming]``
     mode, recorded on the inner service's row so the workspace themes it as it
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
@@ -1218,6 +1191,14 @@ def up(
         # The wrapper refuses such a path at once, and the health wait would
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
+        return 1
+    if not preview_requested and (
+        preview_kind is not FrameKind.CHANGE or preview_note is not None
+    ):
+        sys.stderr.write(
+            "up: --preview-kind and --preview-note label a preview frame, which needs "
+            "--preview-service-name and --preview-title.\n"
+        )
         return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
@@ -1331,6 +1312,9 @@ def up(
                     preview_title,
                     "--inner-path",
                     inner_path,
+                    "--kind",
+                    preview_kind,
+                    *(["--note", preview_note] if preview_note else []),
                 ],
                 pids,
                 http=http,
@@ -2019,6 +2003,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="The path the preview frame opens the inner service on (default: /).",
     )
     up_parser.add_argument(
+        "--preview-kind",
+        type=FrameKind,
+        choices=list(FrameKind),
+        default=FrameKind.CHANGE,
+        help="What the preview frame's banner calls the page: 'change' (a proposed "
+        "change to an app, the default) or 'mock' (a UI sketch, not a finished app).",
+    )
+    up_parser.add_argument(
+        "--preview-note",
+        default=None,
+        help="A line under the preview frame's banner, e.g. what is not real yet.",
+    )
+    up_parser.add_argument(
         "--project",
         default=None,
         help="Boot the launch argv from this standalone project's own venv (a user "
@@ -2086,6 +2083,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             service_name=args.service_name,
             preview_service_name=args.preview_service_name,
             preview_title=args.preview_title,
+            preview_kind=args.preview_kind,
+            preview_note=args.preview_note,
             inner_path=args.inner_path,
             theming_mode=args.theming_mode,
             project=args.project,

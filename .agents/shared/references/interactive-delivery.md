@@ -75,7 +75,7 @@ specifics, but the shape below holds for all of them.
    uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up --name <slug> \
        --cwd <the page's directory> --port main --service-name <slug>-page \
        --preview-service-name <slug> --preview-title "<what it shows>" --inner-path /<page>.html \
-       -- python3 -m http.server {port:main} --bind {host}
+       --preview-kind mock -- python3 -m http.server {port:main} --bind {host}
    uv run --no-sync workspace-layout open <slug>
    ```
 

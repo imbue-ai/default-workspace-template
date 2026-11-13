@@ -28,17 +28,10 @@ from typing import Callable, Sequence
 
 import pytest
 from app_registration import forward_port
-from workspace_layout.agent_identity import AGENT_REQUESTER_APP_NAME, ENV_MINDS_CHAT_ID
-from workspace_layout.answers import InventoryClient, InventoryDocument
-from workspace_layout.primitives import ClientId, DesktopId
+from workspace_layout.answers import DesktopsListing
 from workspace_layout.records import DesktopView
-from workspace_layout.shell_url import ENV_SHELL_URL, INVENTORY_ROUTE
-from workspace_layout.testing import (
-    FAKE_TIME,
-    LoopbackShell,
-    fake_desktop,
-    fake_window,
-)
+from workspace_layout.shell_url import DESKTOPS_ROUTE, ENV_SHELL_URL
+from workspace_layout.testing import LoopbackShell, fake_desktop, fake_window
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
@@ -578,6 +571,40 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     assert isinstance(state["wrapper_port"], int)
 
 
+def test_up_preview_labels_the_frame_as_a_change_unless_told_it_is_a_mock(
+    tmp_path: Path,
+) -> None:
+    change = _FakeSpawner()
+    mock = _FakeSpawner()
+    (tmp_path / "change").mkdir()
+    (tmp_path / "mock").mkdir()
+
+    assert _up_preview(tmp_path / "change", spawner=change) == 0
+    assert (
+        _up_preview(
+            tmp_path / "mock",
+            spawner=mock,
+            preview_kind=FrameKind.MOCK,
+            preview_note="Nothing here sends.",
+        )
+        == 0
+    )
+
+    assert _wrapper_arg(change.detached_spawns[1], "--kind") == "change"
+    assert "--note" not in change.detached_spawns[1]
+    assert _wrapper_arg(mock.detached_spawns[1], "--kind") == "mock"
+    assert _wrapper_arg(mock.detached_spawns[1], "--note") == "Nothing here sends."
+
+
+def test_up_refuses_a_frame_label_without_a_preview_frame(tmp_path: Path) -> None:
+    spawner = _FakeSpawner()
+
+    code = _up(tmp_path, spawner=spawner, preview_kind=FrameKind.MOCK)
+
+    assert code == 1
+    assert not spawner.detached_spawns
+
+
 def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> None:
     """One preview puts one app in the launcher and the window list, reading as the app
     it previews. The inner service keeps its origin (the frame reaches it by
@@ -765,7 +792,7 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
 
 
 def _preview_window(window_id: str = "win-1") -> mod.OpenWindow:
-    return mod.OpenWindow(window_id, "demo-preview", "home", "client-1")
+    return mod.OpenWindow(window_id, "demo-preview", "home")
 
 
 def test_down_refuses_and_changes_nothing_while_a_window_shows_the_instance(
@@ -866,32 +893,12 @@ def test_down_of_an_instance_with_no_services_never_reads_the_desktops(
     assert not state_dir.exists()
 
 
-def test_a_window_closes_through_a_client_already_on_its_desktop() -> None:
-    """Naming a client on another desktop would switch that client's view to the window's."""
-    seats = [
-        mod.ClientSeat("elsewhere", "work", True),
-        mod.ClientSeat("idle-here", "home", False),
-        mod.ClientSeat("live-here", "home", True),
-    ]
-
-    assert mod.closing_client(seats, "home") == "live-here"
-    assert mod.closing_client(seats[:2], "home") == "idle-here"
-    assert mod.closing_client(seats, "unvisited") is None
-
-
-def test_a_window_on_a_desktop_no_client_is_on_is_not_closed() -> None:
-    window = mod.OpenWindow("win-1", "demo-preview", "unvisited", None)
-
-    with pytest.raises(mod.InstanceError, match="no client is on"):
-        mod.Desktops().close(window)
-
-
 _WINDOW_1 = "win-0000000000000001"
 _WINDOW_2 = "win-0000000000000002"
 _WINDOW_3 = "win-0000000000000003"
 
 
-# The client's desktop, showing the preview and another app.
+# One desktop showing the preview and another app, and a second showing the preview.
 _HOME_DESKTOP = fake_desktop(
     "home",
     [
@@ -899,63 +906,49 @@ _HOME_DESKTOP = fake_desktop(
         fake_window(_WINDOW_2, "notes", "/"),
     ],
 )
-# A desktop no client is on, also showing the preview.
 _WORK_DESKTOP = fake_desktop("work", [fake_window(_WINDOW_3, "demo-preview", "/")])
 
 
-def _inventory_answer(
+def _desktops_answer(
     desktops: Sequence[DesktopView],
 ) -> tuple[int, dict[str, object]]:
-    """The shell's inventory of ``desktops``, with one connected client on ``home``."""
-    document = InventoryDocument(
-        is_preview=False,
-        workspace_name="ws",
-        desktops=tuple(desktops),
-        apps=(),
-        clients=(
-            InventoryClient(
-                id=ClientId("client-home"),
-                active_desktop=DesktopId("home"),
-                last_seen=FAKE_TIME,
-                is_connected=True,
-            ),
-        ),
-    )
-    return 200, document.model_dump(mode="json")
+    return 200, DesktopsListing(desktops=tuple(desktops)).model_dump(mode="json")
 
 
-def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_desktop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The close names the calling agent's chat as its requester, as ``workspace-layout close`` does."""
-    monkeypatch.setenv(ENV_MINDS_CHAT_ID, "chat-1")
+def _close_route(desktop_id: str, window_id: str) -> str:
+    return f"{DESKTOPS_ROUTE}/{desktop_id}/windows/{window_id}/close"
+
+
+def test_desktops_find_an_apps_windows_and_close_one_through_the_shells_close_route() -> (
+    None
+):
+    """The close route names no client, so it moves no one's view, whichever desktop the window is on."""
     with LoopbackShell(
-        get_answers={INVENTORY_ROUTE: _inventory_answer([_HOME_DESKTOP, _WORK_DESKTOP])}
+        get_answers={DESKTOPS_ROUTE: _desktops_answer([_HOME_DESKTOP, _WORK_DESKTOP])},
+        post_answers={_close_route("work", _WINDOW_3): (204, "")},
     ) as shell:
         desktops = mod.Desktops(shell_url=shell.url)
 
         windows = desktops.windows_of(["demo-preview"])
-        desktops.close(windows[0])
+        desktops.close(windows[1])
 
     assert windows == [
-        mod.OpenWindow(_WINDOW_1, "demo-preview", "home", "client-home"),
-        mod.OpenWindow(_WINDOW_3, "demo-preview", "work", None),
+        mod.OpenWindow(_WINDOW_1, "demo-preview", "home"),
+        mod.OpenWindow(_WINDOW_3, "demo-preview", "work"),
     ]
-    assert shell.posted_ops() == [
-        ("close", {"window": _WINDOW_1, "client": "client-home", "desktop": "home"})
-    ]
-    assert [body["requester"] for route, body in shell.posted] == [
-        {"app": AGENT_REQUESTER_APP_NAME, "marker": "chat-1"}
-    ]
+    assert shell.posted == [(_close_route("work", _WINDOW_3), {})]
+    assert shell.posted_ops() == []
 
 
 def test_desktops_report_a_refused_close_and_an_unreachable_shell() -> None:
-    window = mod.OpenWindow(_WINDOW_1, "demo-preview", "home", "client-home")
-    with LoopbackShell(op_refusal=(400, {"detail": "pinned"})) as shell:
+    window = mod.OpenWindow(_WINDOW_1, "demo-preview", "home")
+    with LoopbackShell(
+        post_answers={
+            _close_route("home", _WINDOW_1): (409, {"detail": "the window is pinned"})
+        }
+    ) as shell:
         shell_url = shell.url
-        with pytest.raises(
-            mod.InstanceError, match=f"could not close window {_WINDOW_1}"
-        ):
+        with pytest.raises(mod.InstanceError, match="the window is pinned"):
             mod.Desktops(shell_url=shell_url).close(window)
     with pytest.raises(mod.InstanceError, match="could not read the desktops"):
         mod.Desktops(shell_url=shell_url).windows_of(["demo-preview"])
@@ -1575,21 +1568,20 @@ def test_main_down_refuses_under_the_shells_open_window_until_told_to_close_it(
     state_dir = _write_state(tmp_path, [], ["demo-preview"])
     argv = ["down", "--name", _NAME, "--repo-root", str(tmp_path)]
     with LoopbackShell(
-        get_answers={INVENTORY_ROUTE: _inventory_answer([_HOME_DESKTOP])}
+        get_answers={DESKTOPS_ROUTE: _desktops_answer([_HOME_DESKTOP])},
+        post_answers={_close_route("home", _WINDOW_1): (204, "")},
     ) as shell:
         monkeypatch.setenv(ENV_SHELL_URL, shell.url)
 
         refused = mod.main(argv)
-        assert shell.posted_ops() == []
+        assert shell.posted == []
         assert state_dir.exists()
 
         closed = mod.main([*argv, "--close-windows"])
 
     assert refused == 1
     assert closed == 0
-    assert shell.posted_ops() == [
-        ("close", {"window": _WINDOW_1, "client": "client-home", "desktop": "home"})
-    ]
+    assert shell.posted == [(_close_route("home", _WINDOW_1), {})]
     assert not state_dir.exists()
 
 
@@ -1925,7 +1917,7 @@ def test_down_closes_the_window_of_a_frame_kept_only_as_a_record(
     assert _frame(tmp_path, registry=registry) == 0
     assert _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None)) == 1
     desktops = _RecordingDesktops(
-        open_windows=[mod.OpenWindow("win-1", _FRAME_NAME, "home", "client-1")]
+        open_windows=[mod.OpenWindow("win-1", _FRAME_NAME, "home")]
     )
 
     refused = _down(tmp_path, name=_FRAME_NAME, desktops=desktops)
