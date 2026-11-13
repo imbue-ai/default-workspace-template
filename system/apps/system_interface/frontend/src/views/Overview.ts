@@ -224,8 +224,8 @@ export function Overview(): m.Component<OverviewAttrs> {
             "data-window-id": tile.window.id,
             class:
               "overview-tile-frame relative flex flex-col overflow-hidden rounded-lg bg-body-surface-raised shadow-overlay " +
-              "ring-white/0 transition-[box-shadow,transform] duration-(--dur-fast) " +
-              "group-hover:scale-[1.02] group-hover:ring-4 group-hover:ring-white/70",
+              "ring-transparent transition-[box-shadow,transform] duration-(--dur-fast) " +
+              "group-hover:scale-[1.02] group-hover:ring-4 group-hover:ring-inverse-content-secondary",
             style: { width: `${width}px`, opacity: tile.isMinimized ? String(MINIMIZED_TILE_OPACITY) : "" },
           },
           [
@@ -253,7 +253,7 @@ export function Overview(): m.Component<OverviewAttrs> {
           "span",
           {
             class:
-              "flex max-w-full items-center gap-1.5 rounded-full bg-black/30 px-2.5 py-0.5 text-(length:--font-size-helper) text-white",
+              "flex max-w-full items-center gap-1.5 rounded-full bg-inverse-surface/30 px-2.5 py-0.5 text-(length:--font-size-helper) text-inverse-content",
           },
           [
             m(
@@ -262,7 +262,7 @@ export function Overview(): m.Component<OverviewAttrs> {
               m.trust(appGlyph(tile.app, CAPTION_GLYPH_SIZE)),
             ),
             m("span", { class: "truncate" }, tile.title),
-            tile.isMinimized ? m("span", { class: "text-white/60" }, "· minimized") : null,
+            tile.isMinimized ? m("span", { class: "text-inverse-content-tertiary" }, "· minimized") : null,
           ],
         ),
       ],
@@ -284,7 +284,7 @@ export function Overview(): m.Component<OverviewAttrs> {
           {
             key: window.id,
             "data-overview-mini-window": window.id,
-            class: "absolute flex flex-col overflow-hidden rounded-xs bg-white/95 shadow-raised",
+            class: "absolute flex flex-col overflow-hidden rounded-xs bg-body-surface-raised/95 shadow-raised",
             style: {
               left: `${rect.x}px`,
               top: `${rect.y}px`,
@@ -294,7 +294,7 @@ export function Overview(): m.Component<OverviewAttrs> {
           },
           m(
             "div",
-            { class: "flex h-2 shrink-0 items-center border-b border-black/10 px-0.5 [&>svg]:size-1.5" },
+            { class: "flex h-2 shrink-0 items-center border-b border-subtle px-0.5 [&>svg]:size-1.5" },
             m.trust(appGlyph(app, MINI_WINDOW_GLYPH_SIZE)),
           ),
         ),
@@ -367,7 +367,7 @@ export function Overview(): m.Component<OverviewAttrs> {
           ? m("span", {
               "data-overview-drop-gap": String(drag.gap),
               class:
-                "pointer-events-none absolute top-0 w-0.5 rounded-full bg-white " +
+                "pointer-events-none absolute top-0 w-0.5 rounded-full bg-inverse-content " +
                 (drag.gap === index ? "-left-2.5" : "-right-2.5"),
               style: { height: `${size.height}px` },
             })
@@ -384,7 +384,7 @@ export function Overview(): m.Component<OverviewAttrs> {
               "overview-thumbnail group relative cursor-pointer overflow-hidden rounded-(--desk-overview-thumbnail-radius) " +
               "border-0 bg-cover bg-center bg-(image:--desk-default-wallpaper) p-0 shadow-raised outline-offset-2 " +
               "transition-[transform,opacity] duration-(--dur-fast) hover:scale-[1.04] " +
-              (isActive ? "outline-3 outline-white " : "outline-0 ") +
+              (isActive ? "outline-3 outline-inverse-content " : "outline-0 ") +
               (drag?.desktopId === desktop.id ? "opacity-40" : ""),
             style: {
               width: `${size.width}px`,
@@ -406,8 +406,8 @@ export function Overview(): m.Component<OverviewAttrs> {
               type: "text",
               value: renameDraft?.text ?? desktop.name,
               class:
-                "w-36 rounded-md border-0 bg-white/90 px-1.5 py-0.5 text-center text-(length:--font-size-helper) " +
-                "text-black outline-none",
+                "w-36 rounded-md border-0 bg-body-surface-raised/90 px-1.5 py-0.5 text-center text-(length:--font-size-helper) " +
+                "text-body-content outline-none",
               oncreate: (created: m.VnodeDOM) => {
                 const input = created.dom as HTMLInputElement;
                 input.focus();
@@ -435,9 +435,9 @@ export function Overview(): m.Component<OverviewAttrs> {
                 "data-overview-desktop-name": desktop.id,
                 class:
                   "max-w-40 truncate rounded-md border-0 bg-transparent px-1.5 py-0.5 text-(length:--font-size-helper) " +
-                  "hover:bg-white/10 " +
+                  "hover:bg-inverse-content/10 " +
                   (isReorderable ? "cursor-text " : "cursor-default ") +
-                  (isActive ? "font-semibold text-white" : "text-white/80"),
+                  (isActive ? "font-semibold text-inverse-content" : "text-inverse-content-secondary"),
                 ...hoverTooltipAttrs(isReorderable ? "Double-click to rename" : null, "above"),
                 ondblclick: () => {
                   if (isReorderable) attrs.onBeginRename(desktop.id);
@@ -491,7 +491,8 @@ export function Overview(): m.Component<OverviewAttrs> {
           "data-overview": "",
           role: "dialog",
           "aria-label": "Desktop overview",
-          class: "overview absolute inset-0 flex flex-col bg-black/35 backdrop-blur-md",
+          // A modal's scrim over the dimmed desktop, so the text and marks drawn straight on it wear the inverse roles.
+          class: "overview absolute inset-0 flex flex-col bg-overlay-scrim backdrop-blur-md",
           style: { zIndex: OVERVIEW_SCRIM_Z_INDEX },
           onclick: close,
         },
@@ -512,7 +513,10 @@ export function Overview(): m.Component<OverviewAttrs> {
             attrs.tiles.length === 0
               ? m(
                   "span",
-                  { "data-overview-no-windows": "", class: "text-(length:--font-size-body) text-white/80" },
+                  {
+                    "data-overview-no-windows": "",
+                    class: "text-(length:--font-size-body) text-inverse-content-secondary",
+                  },
                   `No windows open on ${attrs.desktop.name}`,
                 )
               : attrs.tiles.map((tile) => windowTile(attrs, tile)),
@@ -522,7 +526,8 @@ export function Overview(): m.Component<OverviewAttrs> {
             {
               "data-overview-desktops": "",
               role: "presentation",
-              class: "flex min-h-0 flex-1 items-center justify-center gap-4 border-t border-white/15 bg-black/20 px-6",
+              class:
+                "flex min-h-0 flex-1 items-center justify-center gap-4 border-t border-inverse-content/15 bg-inverse-surface/20 px-6",
               onclick: close,
             },
             [
@@ -540,7 +545,8 @@ export function Overview(): m.Component<OverviewAttrs> {
                   m(
                     "span",
                     {
-                      class: "flex items-center justify-center text-white/80 hover:text-white",
+                      class:
+                        "flex items-center justify-center text-inverse-content-secondary hover:text-inverse-content",
                       style: { width: `${size.width * PLUS_WIDTH_SHARE}px`, height: `${size.height}px` },
                     },
                     m.trust(icon("plus", { size: PLUS_GLYPH_SIZE })),
@@ -559,14 +565,14 @@ export function Overview(): m.Component<OverviewAttrs> {
                     "div",
                     {
                       "data-overview-left-behind": "",
-                      class: "ml-2 flex items-center gap-4 border-l border-white/25 pl-6",
+                      class: "ml-2 flex items-center gap-4 border-l border-inverse-content/25 pl-6",
                     },
                     [
                       m(
                         "span",
                         {
                           class:
-                            "shrink-0 text-(length:--font-size-helper) tracking-wide text-white/60 uppercase [writing-mode:vertical-rl] rotate-180",
+                            "shrink-0 text-(length:--font-size-helper) tracking-wide text-inverse-content-tertiary uppercase [writing-mode:vertical-rl] rotate-180",
                         },
                         "Left behind",
                       ),

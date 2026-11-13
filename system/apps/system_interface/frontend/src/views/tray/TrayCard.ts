@@ -6,6 +6,7 @@
 
 import m from "mithril";
 import { cardClass } from "@imbue/workspace-ui/src/components/card";
+import { MENU_ROW_FOCUS } from "@imbue/workspace-ui/src/components/menu";
 
 /** How long the pointer rests on an entry before its card opens. */
 export const CARD_HOVER_DELAY_MS = 180;
@@ -15,6 +16,13 @@ export const CARD_LEAVE_GRACE_MS = 120;
 export const CARD_WIDTH_PX = 216;
 /** The gap between a card and the top of the entry it hangs over. */
 const CARD_GAP_PX = 6;
+
+/** A row in a card -- a chat, a desktop, an action: a press across the card's width that tints under the pointer
+ *  and takes the menu row's inset focus ring. Not the menu row itself, whose slab is inset for a card that pads
+ *  only vertically; this card pads all round. The caller adds the text colour. */
+export const TRAY_CARD_ROW_CLASS =
+  "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left " +
+  `hover:bg-fill-hover ${MENU_ROW_FOCUS}`;
 
 /** Which card is open: a person's (by roster key) or the agent's. */
 export type OpenCard = { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" };

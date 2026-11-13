@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { Bubble, BubbleStack } from "../../model/Bubbles";
 import { foldedLabel } from "../../model/Bubbles";
@@ -82,16 +83,21 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
                 m("div", { key: lineIndex, class: "whitespace-pre-wrap break-words", "data-bubble-line": "" }, line),
               ),
               bubble.foldedCount > 0
-                ? m("div", { class: "text-(length:--font-size-helper) text-body-content-tertiary" }, foldedLabel(bubble.foldedCount))
+                ? m(
+                    "div",
+                    { class: "text-(length:--font-size-helper) text-body-content-tertiary" },
+                    foldedLabel(bubble.foldedCount),
+                  )
                 : null,
             ]),
             m(
-              "button",
+              Button,
               {
-                type: "button",
+                variant: "ghost",
+                icon: true,
+                xs: true,
+                extra: "shrink-0",
                 "data-bubble-dismiss": "",
-                class:
-                  "flex shrink-0 cursor-pointer items-center rounded border-0 bg-transparent p-0.5 text-body-content-tertiary hover:bg-fill-hover hover:text-body-content",
                 "aria-label": "Dismiss",
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
