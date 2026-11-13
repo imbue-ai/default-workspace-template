@@ -6,6 +6,7 @@ merged diff.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 from typing import Collection, NamedTuple, Sequence
 
@@ -413,3 +414,102 @@ def plan_apply(
         app_pyproject=app_pyproject,
         provisioner=provisioner,
     )
+
+
+# The ``setup_system.sh`` defaults that pin an agent harness's version.
+HARNESS_VERSION_PIN_VARS = (
+    "CLAUDE_CODE_VERSION",
+    "CODEX_VERSION",
+    "PI_VERSION",
+    "PI_SUBAGENTS_VERSION",
+    "PI_WEB_ACCESS_VERSION",
+    "OPENCODE_VERSION",
+)
+MNGR_SETTINGS_PATH = ".mngr/settings.toml"
+_PIN_DEFAULT_LINE = re.compile(r'^:\s*"\$\{(\w+):=([^}]*)\}"', re.MULTILINE)
+# Antigravity's version authority is the ``AGY_VERSION`` its installer pins. The installer is
+# ``agy_install.sh``; a tree from before its rename carries ``agy_install-<version>.sh``.
+AGY_INSTALLER_NAME = re.compile(r"^system/scripts/agy_install(-[^/]+)?\.sh$")
+_AGY_VERSION_LINE = re.compile(r'^(AGY_VERSION)="([^"]*)"', re.MULTILINE)
+# Code a harness loads into its process when it starts.
+_HARNESS_EXTENSION_DIRS = (".pi/extensions/",)
+
+
+class HarnessPinFiles(NamedTuple):
+    """The files one tree pins its agent harnesses' versions in, as text (empty where absent)."""
+
+    setup_system: str
+    mngr_settings: str
+    agy_installer: str
+
+
+class AgentRestartVerdict(NamedTuple):
+    """Whether running agents must restart to pick up what the update changed, and the changes that say so."""
+
+    is_needed: bool
+    triggers: tuple[str, ...]
+
+
+def harness_version_pins(setup_system_text: str) -> dict[str, str]:
+    """The harness version defaults ``setup_system.sh`` sets, by variable."""
+    pins = dict(_PIN_DEFAULT_LINE.findall(setup_system_text))
+    return {var: pins[var] for var in HARNESS_VERSION_PIN_VARS if var in pins}
+
+
+def agy_installer_pin(agy_installer_text: str) -> dict[str, str]:
+    """The ``AGY_VERSION`` the Antigravity installer pins, by variable."""
+    return dict(_AGY_VERSION_LINE.findall(agy_installer_text))
+
+
+def agent_type_versions(mngr_settings_text: str) -> dict[str, str]:
+    """The ``version`` each ``[agent_types.*]`` table of ``.mngr/settings.toml`` pins."""
+    agent_types = tomllib.loads(mngr_settings_text).get("agent_types", {})
+    return {
+        name: str(table["version"])
+        for name, table in agent_types.items()
+        if isinstance(table, dict) and "version" in table
+    }
+
+
+def _changed_values(
+    label: str, before: dict[str, str], after: dict[str, str]
+) -> list[str]:
+    return [
+        f"{label.format(key)}: {before.get(key, 'unset')} -> {after.get(key, 'unset')}"
+        for key in sorted(before.keys() | after.keys())
+        if before.get(key) != after.get(key)
+    ]
+
+
+def agent_restart_verdict(
+    changed_paths: Sequence[str],
+    before: HarnessPinFiles,
+    after: HarnessPinFiles,
+) -> AgentRestartVerdict:
+    """Whether an update changes what a running agent's harness loaded when it started.
+
+    Covers what can be read off the diff: a harness version pin (Antigravity's in its
+    installer) and a harness extension tree. Harness config whose loading the diff cannot
+    place is the worker guide's to judge.
+    """
+    triggers = [
+        *_changed_values(
+            "{}",
+            harness_version_pins(before.setup_system)
+            | agy_installer_pin(before.agy_installer),
+            harness_version_pins(after.setup_system)
+            | agy_installer_pin(after.agy_installer),
+        ),
+        *_changed_values(
+            "agent_types.{}.version",
+            agent_type_versions(before.mngr_settings),
+            agent_type_versions(after.mngr_settings),
+        ),
+        *(
+            f"harness extension: {path}"
+            for path in changed_paths
+            # A Python file there is the extensions' test, which no harness loads.
+            if path.startswith(_HARNESS_EXTENSION_DIRS) and not path.endswith(".py")
+        ),
+    ]
+    return AgentRestartVerdict(is_needed=bool(triggers), triggers=tuple(triggers))

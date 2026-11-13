@@ -43,6 +43,7 @@ from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
@@ -740,6 +741,47 @@ def chat_status_for_agent(
     if is_busy:
         return ChatStatus.BACKGROUND
     return ChatStatus.IDLE
+
+
+UNREADABLE_CHAT_BUSY_REASON: Final[str] = "in a state the chat app cannot read"
+
+
+@pure
+def restart_busy_reason(
+    lifecycle_state: str,
+    activity_state: ActivityState | None,
+    is_active_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued_messages: bool,
+    has_harness_background_task: bool,
+) -> str | None:
+    """What a chat is in the middle of that a restart would cut short, in plain words; None when it is idle.
+
+    Idle needs the harness to have ended its turn (WAITING, with no ``active`` turn marker), not just a
+    transcript that reads idle: between an assistant message and the tool call after it the transcript
+    shows no turn in flight. The marker covers a turn the observe-reported lifecycle has not caught up with.
+
+    A turn that ended on the harness's own background work (RUNNING_BACKGROUND, or a harness task marker
+    from a chat on an older turn-end hook, which reports WAITING) is not idle either: that work dies with
+    the process and nothing reports it. A ``run_in_background.py`` command does not count: its runner
+    outlives the restart and sends the chat the command's report.
+    """
+    if is_permission_pending:
+        return "waiting on a dialog"
+    if is_connecting:
+        return "receiving a message"
+    if has_queued_messages:
+        return "holding queued messages"
+    if (
+        lifecycle_state not in (WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE)
+        or is_active_marker_present
+        or (activity_state is not None and is_working_activity_state(activity_state))
+    ):
+        return "working"
+    if lifecycle_state == BACKGROUND_LIFECYCLE_STATE or has_harness_background_task:
+        return "waiting on background work"
+    return None
 
 
 @pure
@@ -2831,6 +2873,38 @@ class AgentManager:
         """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking (and on disk, for the next restart)."""
         self._oom_prioritizer.record_message(chat_id)
         self._message_stamps.record(chat_id)
+
+    def restart_busy_reason_for_chat(self, chat_id: ChatId) -> str | None:
+        """What the chat's active agent is in the middle of (``restart_busy_reason``); None when it is idle.
+
+        A chat or agent this manager cannot resolve counts as busy: an unattended restart must
+        know the agent has ended its turn, not merely fail to see that it has not.
+        """
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent_id = chat.active_agent_id if chat is not None else None
+            tracker = self._activity_tracker_by_agent.get(agent_id) if agent_id else None
+        if chat is None or not agent_id:
+            return UNREADABLE_CHAT_BUSY_REASON
+        # The observe-reported lifecycle trails a turn's start; the marker flips at once.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
+        # A task the turn-end hook just recorded may not have reached the poller's cache yet.
+        self._recompute_background_tasks(chat.chat_id)
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                return UNREADABLE_CHAT_BUSY_REASON
+            return restart_busy_reason(
+                agent.state,
+                agent.activity_state,
+                is_active_marker_present,
+                bool(self._pending_permission_ids_by_agent.get(agent.id)),
+                bool(self._connecting_message_ids_by_agent.get(agent.id)),
+                bool(agent.queued_messages),
+                any(
+                    task.source is TaskSource.HARNESS for task in self._background_tasks_by_chat.get(chat.chat_id, ())
+                ),
+            )
 
     def has_pending_permission(self, chat_id: ChatId) -> bool:
         """Whether a permission request the chat's active agent filed is still awaiting the user's verdict."""
@@ -5795,6 +5869,19 @@ class AgentManager:
         if chat is not None and is_active_agent and self._chat_stream_ender is not None:
             self._chat_stream_ender(str(chat.chat_id))
 
+    def _is_active_marker_present(self, agent_id: str, tracker: HarnessActivityTracker | None) -> bool:
+        """Whether the agent's turn-in-flight marker is on disk; a filesystem stat, so call it outside the lock.
+
+        The tracker declares which file that is; a harness that keeps no marker (codex -- its daemon
+        is the turn authority), or an agent with no tracker, reads False and the lifecycle state
+        stands alone.
+        """
+        active_marker_filename = tracker.active_marker_filename if tracker is not None else None
+        return (
+            active_marker_filename is not None
+            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
+        )
+
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
 
@@ -6667,14 +6754,8 @@ class AgentManager:
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
         # The turn-in-flight marker flips promptly at turn start/end, whereas the observe-reported
-        # lifecycle state can miss a short turn -- so read it for a timely signal (stat outside the
-        # lock). The tracker declares which file that is; ``None`` = the harness keeps no marker
-        # (codex -- its daemon is the turn authority) and the lifecycle state stands alone.
-        active_marker_filename = tracker.active_marker_filename
-        is_active_marker_present = (
-            active_marker_filename is not None
-            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
-        )
+        # lifecycle state can miss a short turn -- so read it for a timely signal.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
         live_compaction = self._resolve_live_compaction(
             agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
         )
