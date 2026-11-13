@@ -362,6 +362,20 @@ def launch_fast_identity(fast_mode: ChatFastModeState, live: ModelIdentity | Non
 
 
 @pure
+def is_first_message_after_create(harness: HarnessType, is_picked: bool, launches_fast: bool) -> bool:
+    """Whether a new chat's first message follows its create rather than riding it as ``--message``.
+
+    ``mngr create --message`` starts the first turn itself, so whatever has to be set before that
+    turn makes the message follow the create: a model pick, or fast mode on a harness that takes it
+    as a switch once the agent is up. A room's message follows it too: typed into the reader's pane
+    it would be the workspace agent's words, not the sender's.
+    """
+    if is_picked or harness is HarnessType.ROOM:
+        return True
+    return launches_fast and get_harness_spec(harness).is_launch_fast_switched
+
+
+@pure
 def explicit_chat_name(requested_name: str) -> str:
     """The name a caller asked a new chat to carry, stripped; empty for none.
 
@@ -4970,12 +4984,10 @@ class AgentManager:
             else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
-        # With a pick the message follows the create rather than riding it: the model has to be
-        # set before the first turn, and ``mngr create --message`` starts that turn itself. A room's follows it
-        # too: typed into the reader's pane it would be the workspace agent's words, not the sender's.
         first_message = (
             FirstMessage(text=launch_message, message_id=message_id or uuid4().hex, on_delivered=on_message_delivered)
-            if launch_message and (model_pick is not None or harness is HarnessType.ROOM)
+            if launch_message
+            and is_first_message_after_create(harness, model_pick is not None, fast_mode.launches_fast)
             else None
         )
         create_labels = [
