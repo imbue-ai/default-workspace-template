@@ -91,17 +91,20 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
           "data-launcher-field": "",
           ...partAttrs("launcher-field"),
           class:
-            // Fully round, and padded so its mark lands under the mark of the menu row above it: a
-            // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
-            // A heavier edge than a panel seam: this is a control you type into, and it has to read
-            // as one against a bar of the same colour. Open is a ring OUTSIDE that edge rather than
-            // a recolouring of it, so the box does not change weight as it opens.
-            "border border-default bg-body-surface-raised pr-2.5 pl-3.5 " +
-            (isOpen ? "ring-2 ring-accent-surface" : ""),
+            // The brand's field on the bar: 32px with the 12px corner every control takes, 3px round the
+            // plus's 24px slot as the menu rows above it pad theirs, on the page's own surface.
+            "launcher-field absolute inset-x-0 bottom-0 flex min-h-8 items-end gap-1.5 rounded-xl " +
+            "border bg-body-surface p-[3px] " +
+            // Open, the edge itself takes the focus colour, one more pixel of ring making it 2px: no grey
+            // inside it, and the box keeps its size.
+            (isOpen ? "border-focus ring-1 ring-focus" : "border-default"),
         },
         [
-          m("span", { class: "flex h-8.5 shrink-0 items-center text-body-content-tertiary" }, m.trust(glyph("plus", FIELD_MARK_SIZE))),
+          m(
+            "span",
+            { class: "flex size-6 shrink-0 items-center justify-center text-body-content-tertiary" },
+            m.trust(glyph("plus", FIELD_MARK_SIZE)),
+          ),
           m("textarea", {
             rows: 1,
             "aria-label": LAUNCHER_PLACEHOLDER,
@@ -109,7 +112,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             value: query,
             class:
               // Body text rather than a row's: this is a line being written, not an entry in a list.
-              "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.75 leading-5 " +
+              "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-0.5 leading-5 " +
               "text-(length:--font-size-body) text-body-content outline-none placeholder:text-body-content-secondary",
             oncreate: (created: m.VnodeDOM) => fit(created.dom as HTMLTextAreaElement, vnode.attrs),
             // A row that ran closed the menu under a focused field: the focus goes with it, so the next keys do not
@@ -161,7 +164,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             ? null
             : m(
                 "span",
-                { class: "flex h-8.5 shrink-0 items-center" },
+                { class: "flex size-6 shrink-0 items-center justify-center" },
                 m(
                   Button,
                   {
@@ -181,7 +184,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
       // places hold whatever the text's length. The slot is a flex item in the taskbar's flow.
       return m(
         "div",
-        { class: "launcher-field-slot relative h-9 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0" },
+        { class: "launcher-field-slot relative h-8 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0" },
         field,
       );
     },
