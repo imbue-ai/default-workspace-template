@@ -597,16 +597,21 @@ def test_up_preview_labels_the_frame_as_a_change_unless_told_it_is_a_mock(
 
 
 @pytest.mark.parametrize(
-    "label",
-    [{"preview_kind": FrameKind.MOCK}, {"preview_note": "Nothing here sends."}],
+    "preview_kind, preview_note",
+    [(FrameKind.MOCK, None), (FrameKind.CHANGE, "Nothing here sends.")],
     ids=["kind", "note"],
 )
 def test_up_refuses_a_frame_label_without_a_preview_frame(
-    tmp_path: Path, label: dict[str, object]
+    tmp_path: Path, preview_kind: FrameKind, preview_note: str | None
 ) -> None:
     spawner = _FakeSpawner()
 
-    code = _up(tmp_path, spawner=spawner, **label)
+    code = _up(
+        tmp_path,
+        spawner=spawner,
+        preview_kind=preview_kind,
+        preview_note=preview_note,
+    )
 
     assert code == 1
     assert not spawner.detached_spawns
