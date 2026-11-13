@@ -119,6 +119,27 @@ function makeStore(
   return store;
 }
 
+/** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
+ *  ``reports``; opened to show ``soloWindowId`` alone when given. */
+function makePopOutStore(
+  soloWindowId: string | null = null,
+  isSoloReopened = false,
+): {
+  store: DesktopStore;
+  calls: unknown[];
+  reports: unknown[];
+} {
+  const calls: unknown[] = [];
+  const reports: unknown[] = [];
+  const popOut: PopOutBridge = {
+    requestPopOut: (request) => calls.push(["request", request]),
+    beginWindowDrag: (request) => calls.push(["drag", request]),
+    endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
+    reportDetachedWindows: (windows) => reports.push(windows),
+  };
+  return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
+}
+
 /** A started store; the apps come from the inventory (``api.apps``), no socket message needed. */
 async function startedStore(redraw: () => void = () => undefined): Promise<DesktopStore> {
   const store = makeStore(redraw);
@@ -2069,27 +2090,6 @@ describe("links Imbue Studio hands over", () => {
 });
 
 describe("pulled-out windows", () => {
-  /** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
-   *  ``reports``; opened to show ``soloWindowId`` alone when given. */
-  function makePopOutStore(
-    soloWindowId: string | null = null,
-    isSoloReopened = false,
-  ): {
-    store: DesktopStore;
-    calls: unknown[];
-    reports: unknown[];
-  } {
-    const calls: unknown[] = [];
-    const reports: unknown[] = [];
-    const popOut: PopOutBridge = {
-      requestPopOut: (request) => calls.push(["request", request]),
-      beginWindowDrag: (request) => calls.push(["drag", request]),
-      endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
-      reportDetachedWindows: (windows) => reports.push(windows),
-    };
-    return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
-  }
-
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
 
   /** The stored placement of ``windowId`` on the home desktop, as the shell holds it. */
@@ -3909,15 +3909,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
       updated_at: "2026-10-29T00:00:00Z",
       placements: [placementRecord("win-chat", { is_detached: true })],
     });
-    const popOutRequests: unknown[] = [];
-    const store = makeStore(() => undefined, {
-      popOut: {
-        requestPopOut: (request) => popOutRequests.push(request),
-        beginWindowDrag: () => undefined,
-        endWindowDrag: () => undefined,
-        reportDetachedWindows: () => undefined,
-      },
-    });
+    const { store, calls } = makePopOutStore();
     await store.start(NO_LINK);
     store.setCanPopOut(true);
     socket.deliver().onRosterUpdated([josh, alice]);
@@ -3925,7 +3917,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     const callsBefore = api.calls.length;
 
     expect(await store.openAgentChat()).toBe(false);
-    expect(popOutRequests).toEqual([]);
+    expect(calls).toEqual([]);
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
   });
