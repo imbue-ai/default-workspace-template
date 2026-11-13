@@ -470,18 +470,7 @@ def test_a_re_run_down_reaches_a_sibling_that_would_not_come_down_the_first_time
     )
     monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
     instances = _RecordingInstances(tmp_path)
-    assert (
-        boot.up(
-            "system_interface",
-            worktree,
-            tmp_path,
-            with_apps=["chat"],
-            instance_key="agent-1",
-            instances=instances,
-            dump_registry=_dump_registry,
-        )
-        == 0
-    )
+    _up_shell_with_chat(tmp_path, worktree, instances)
     instances.failing_names.add("chat-preview")
 
     assert mod.down("system_interface", tmp_path, instances=instances) == 1
