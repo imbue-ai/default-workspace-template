@@ -6,11 +6,11 @@
  * and why it sits in the composer's under-bar next to the model. In the phone layout the model
  * menu carries it as a row instead, and it shows here only while the terminal face is up.
  *
- * It is the shared switch's drawing (`switchVisual`), the button around it carrying the switch's role.
+ * It is the shared switch, its label before the drawing; style.css sets the row around it.
  */
 import m from "mithril";
 
-import { switchVisual } from "@imbue/workspace-ui/src/components/formControls";
+import { Switch } from "@imbue/workspace-ui/src/components/formControls";
 
 export interface TerminalViewToggleAttrs {
   on: boolean;
@@ -20,17 +20,6 @@ export interface TerminalViewToggleAttrs {
 export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
   view(vnode) {
     const { on, onToggle } = vnode.attrs;
-    return m(
-      "button",
-      {
-        type: "button",
-        role: "switch",
-        class: "terminal-view-toggle",
-        "aria-checked": on ? "true" : "false",
-        "aria-label": "Source view",
-        onclick: () => onToggle(),
-      },
-      [m("span", { class: "terminal-view-toggle-label" }, "Source view"), switchVisual(on)],
-    );
+    return m(Switch, { on, onToggle, label: "Source view", extra: "terminal-view-toggle" });
   },
 };

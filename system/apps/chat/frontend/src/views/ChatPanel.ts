@@ -104,7 +104,7 @@ const EMPTY_CONVERSATION_STATUS_CLASS =
   "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-body-content-secondary";
 
 const TERMINAL_OUTPUT_CLASS =
-  "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
+  "type-code bg-inverse-surface text-inverse-content p-4 rounded-lg overflow-auto w-full max-h-96";
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where

@@ -32,6 +32,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { switchVisual } from "@imbue/workspace-ui/src/components/formControls";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
@@ -141,10 +142,10 @@ function convergingPickLabel(chat: ChatSnapshot): string | null {
 /** Past this many rows, a query rather than a scroll is the way to a model. */
 const MODEL_SEARCH_CAP = 100;
 
-/** The slider's filled portion, deepening with effort. It stops at 40% lightness: darker than
- *  that reads as near-black rather than as a deep green. */
+/** The slider's filled portion, deepening with effort along the accent ramp. It stops at step 9:
+ *  darker than that reads as near-black rather than as a deep accent. */
 function effortFillColor(fraction: number): string {
-  return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
+  return `color-mix(in oklch, var(--c-accent-6), var(--c-accent-9) ${Math.round(100 * fraction)}%)`;
 }
 
 /** The chip with no provider signed in: it says so, and a press opens the provider chooser with ``intent``. */
@@ -1147,15 +1148,23 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // do not fit beside a phone's composer.
       const opener = isCompact
         ? m(
-            "button",
-            {
-              type: "button",
-              class: `composer-settings-button ${css.SETTINGS_BUTTON}`,
-              "data-composer-settings": "",
-              "aria-label": "Chat settings",
-              ...menu.triggerAttrs(),
-            },
-            slidersGlyph(),
+            "span",
+            { class: css.SETTINGS_BUTTON_SLOT },
+            m(
+              Button,
+              {
+                variant: "ghost",
+                icon: true,
+                lg: true,
+                // Lit while its card is up.
+                selected: menu.isOpen(),
+                extra: "composer-settings-button",
+                "data-composer-settings": "",
+                "aria-label": "Chat settings",
+                ...menu.triggerAttrs(),
+              },
+              slidersGlyph(),
+            ),
           )
         : trigger;
 

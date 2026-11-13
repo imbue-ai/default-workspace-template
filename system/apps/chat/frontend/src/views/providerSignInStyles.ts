@@ -17,6 +17,8 @@
  * if it does not, add it there rather than here.
  */
 
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
+
 /** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
  *  fixed width and padding -- the panel carries the width and pads its own regions. */
 export const MODAL =
@@ -62,12 +64,14 @@ export const TITLE = "m-0 type-heading text-body-content";
 
 export const ROW_STACK = "flex flex-col gap-2";
 
-/** A lane row: the whole provider, as something to walk into. Raised off the panel and
- *  outlined on hover, because the row IS the affordance -- there is no other control on it. */
-export const CHOOSER_ROW =
-  "flex w-full items-center gap-2 rounded-lg border border-default bg-body-surface-raised p-3 text-left " +
-  "shadow-raised transition-[border-color,box-shadow] duration-(--dur-base) hover:border-accent-surface " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus cursor-pointer";
+/** A lane row: the whole provider, as something to walk into. The shared interactive card,
+ *  because the row IS the affordance -- there is no other control on it. */
+export const CHOOSER_ROW = cardClass({
+  interactive: true,
+  extra:
+    "flex w-full items-center gap-2 p-3 text-left " +
+    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+});
 /** Reserved even when a lane has no mark, so every label lines up. */
 export const CHOOSER_ROW_MARK = "flex w-11 shrink-0 items-center justify-center";
 export const CHOOSER_ROW_TEXT = "min-w-0 flex-1";
@@ -135,6 +139,8 @@ export const RELAY_ACTIONS = "mt-4 flex flex-wrap gap-2";
 
 /** Secondary prose under a field or step. */
 export const HINT = "mt-1.5 type-helper leading-snug text-body-content-tertiary";
+/** A hint that says what went wrong: the same line in the danger colour. */
+export const HINT_ERROR = "mt-1.5 type-helper leading-snug text-danger-surface";
 export const HINT_ACTION = "underline underline-offset-2 hover:text-body-content cursor-pointer";
 
 /** Shown when a clipboard write was refused, so the value is still reachable by hand. */
@@ -161,22 +167,24 @@ export const STATUS_DETAIL = "mt-1.5 max-w-[340px] type-body leading-snug text-b
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-helper text-body-content-tertiary";
 
-/** A signed-in account: the chooser row's frame without its affordances, because the row is a
- *  listed fact rather than somewhere to navigate. Its actions carry the interactivity. */
-export const ACCOUNT_ROW =
-  "flex w-full items-center gap-2 rounded-lg border border-default bg-body-surface-raised p-3 text-left shadow-raised";
+/** A signed-in account: the shared card without its affordances, because the row is a listed
+ *  fact rather than somewhere to navigate. Its actions carry the interactivity. */
+const ACCOUNT_ROW_LAYOUT = "flex w-full items-center gap-2 p-3 text-left";
+export const ACCOUNT_ROW = cardClass({ extra: ACCOUNT_ROW_LAYOUT });
 /** The same row when the chooser was opened to pick an account: the whole row picks it, as a
- *  lane row walks into its lane, while its own actions stay on top and keep their clicks. */
+ *  lane row walks into its lane, while its own actions stay on top and keep their clicks. Its
+ *  edge deepens under the pointer as an interactive card's does, but only while the pick is
+ *  enabled, so it is not the interactive card itself. */
 export const ACCOUNT_ROW_PICKABLE =
   `${ACCOUNT_ROW} relative transition-[border-color] duration-(--dur-base) ` +
-  "has-[.account-pick:enabled]:hover:border-accent-surface " +
+  "has-[.account-pick:enabled]:hover:border-default-hover " +
   "has-[.account-pick:focus-visible]:outline-2 has-[.account-pick:focus-visible]:outline-offset-2 " +
   "has-[.account-pick:focus-visible]:outline-focus";
 /** The pick target. Its `after` box stretches over the whole row, so a click anywhere on the
  *  row that is not one of the actions lands here. */
 export const ACCOUNT_PICK =
   "account-pick flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left outline-none " +
-  "after:absolute after:inset-0 after:rounded-lg after:content-[''] disabled:cursor-default";
+  "after:absolute after:inset-0 after:rounded-2xl after:content-[''] disabled:cursor-default";
 /** Raises an action above the pick target's stretched box. */
 export const ACCOUNT_ACTION = "relative";
 export const ACCOUNT_NEUTRAL_NOTE = "shrink-0 type-helper text-body-content-secondary";

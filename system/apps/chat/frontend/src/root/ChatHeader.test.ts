@@ -128,8 +128,8 @@ describe("the chat header", () => {
   });
 
   it.each([
-    { device: "a touchscreen", isTouch: true, height: "h-11", otherHeight: "h-9", buttonSize: "size-9" },
-    { device: "a mouse", isTouch: false, height: "h-9", otherHeight: "h-11", buttonSize: "size-7" },
+    { device: "a touchscreen", isTouch: true, height: "h-11", otherHeight: "h-9", buttonSize: "w-9" },
+    { device: "a mouse", isTouch: false, height: "h-9", otherHeight: "h-11", buttonSize: "w-7" },
   ])("is $height with $buttonSize buttons under $device", ({ isTouch, height, otherHeight, buttonSize }) => {
     root = document.createElement("div");
     document.body.appendChild(root);
