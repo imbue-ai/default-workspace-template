@@ -22,28 +22,31 @@ type, borders, states (`hover:`, `focus-visible:`, `disabled:`) included. Do not
 add a new `.feature-*` class to an app's `style.css` for something a utility string can
 say at the call site.
 
-- **Colors** come from the semantic utility layer (`text-body-content`,
-  `text-body-content-secondary`, `text-body-content-tertiary`, `bg-body-surface`, `bg-body-surface-raised`, `bg-fill-hover`,
-  `border-default`, `text-accent-surface`, `bg-danger-subtle-surface`, …) — see the
-  `@theme inline` block in the library's `base.css`. Raw palette values live once, as
-  `--c-*` on `:root`; hand-written CSS references those directly
-  (`var(--c-accent-surface)`), never a hex.
+- **Colors** come from the role utilities (`text-body-content`,
+  `text-body-content-secondary`, `text-body-content-tertiary`, `bg-body-surface`, `bg-body-surface-raised`,
+  `bg-primary-surface`, `bg-fill-hover`, `border-default`, `bg-danger-subtle-surface`, …) — see the
+  `@theme inline` block in the library's `base.css`. A color is one key per ramp (`--c-primary-key`, which the
+  workspace color sets), twelve computed steps per ramp (`--c-neutral-1` to `-12`), and the roles over them; hover
+  and active are computed (`hover:bg-primary-surface-hover`), never tokens. A color no role names is a ramp step
+  (`bg-success-8`). Hand-written CSS references the `--c-*` values directly (`var(--c-accent-surface)`), never a
+  hex.
   - One name per token, with no aliases. Design work imported from elsewhere
     gets translated into these names on the way in, not registered under its own
     (the chat frontend's `views/style-modules.test.ts` asserts every colour and `type-*` role the
     shared class-string modules use actually resolves — Tailwind v4 emits
     nothing for an unknown utility, so a stray name fails silently).
-- **Type roles** are the `type-*` utilities (`type-heading-lg`, `type-heading`,
-  `type-label`, `type-body`, `type-helper`, `type-section`, and `type-tag`, 10px,
-  for a word badge such as "Read-only" set beside other text) — use a role before
-  hand-setting font-size/weight. For an off-role size, reference the token:
-  `text-(length:--font-size-body)`; dense chrome (the rail, menus, launcher
-  tables) sits on `--font-size-row` (13px).
+- **Type roles** are the brand's `type-*` utilities: `type-heading-lg` and `type-heading` (Besley, the one
+  headline a window exists to show), `type-title-page`, `type-title`, `type-title-sm` (the title of a card, a
+  request, or a row), `type-body`, `type-body-dense` (menus, segmented controls, list rows: 13px), `type-label`
+  and `type-label-large` (Atkinson Hyperlegible Mono, for a static label only), `type-helper`, `type-section`,
+  `type-code`, `type-code-small`, `type-tag` and `type-badge`. Use a role before hand-setting font-size/weight;
+  for an off-role size, reference the token: `text-(length:--font-size-body-dense)`.
 - **Spacing** uses the stock scale (`p-N`/`gap-N`/`m-N`; 4px per step). Steps in
   use: 0.5/1/1.5/2/3/4/5/6/8. Off-grid pixel values are allowed where the design
   needs them (`h-[34px]`), as deliberate exceptions.
-- **Radius/elevation**: `rounded-sm/md/lg/xl` (4/6/8/16) and `shadow-raised` /
-  `shadow-overlay`.
+- **Radius/elevation**: `rounded-sm/md/lg/xl/2xl` (4/6/8/12/16): 12 for a control (a button, a field, a menu
+  row), 16 for the surface that holds them (a card, a menu, a dialog), 6 for a pill. Two elevations,
+  `shadow-raised` and `shadow-overlay`.
 **Shared, reusable primitives live in the library's `src/components/`**
 (`system/libs/workspace_ui`); feature screens and feature-specific helpers stay
 in the owning app's `src/views/`. A primitive is a generic building block
@@ -52,7 +55,7 @@ recipes, the tooltip mechanism, the icon set); when a look starts being reused
 across features, it belongs here.
 
 - **Buttons are the `Button` component** in the library's `src/components/Button.ts`:
-  `m(Button, {variant, sm, xs, icon, round, selected, readonly, quiet, block,
+  `m(Button, {variant, sm, lg, xs, icon, round, selected, readonly, quiet, block,
 extra, ...attrs}, children)` renders a real `<button type="button">`, applies
   the shared recipe, and passes through every attr it doesn't consume
   (`onclick`, `disabled`, `aria-*`, `oncreate`, ...). A caller's `class` never
@@ -60,12 +63,14 @@ extra, ...attrs}, children)` renders a real `<button type="button">`, applies
   (`buttonClass()`) is exported from the same file for the rare place a
   component can't go: an element that must stay a real anchor (the login
   modal's OAuth link) or DOM built outside mithril (the lightbox). A dialog's
-  confirming action is `variant: "primary"`; a lone dismiss/cancel keeps the
+  confirming action is `variant: "primary"` (the workspace color); an action that carries the brand (send) is
+  `"accent"`, which stays rare; a lone dismiss/cancel keeps the
   `secondary` default; a destructive confirm is `"destructive"` (ghost form:
   `"ghost-destructive"`).
 - **Other shared recipes** (a look used by more than one file) live one file
   per primitive under the library's `src/components/`: `inputClass()` in
-  `Input.ts`, `badgeClass()` in `Badge.ts`, and the `MODAL_*_CLASS` shell beside
+  `Input.ts`, `badgeClass()` in `Badge.ts`, `noticeClass()` in `notice.ts`, `cardClass()` in `card.ts`, the
+  `Checkbox`, `Switch` and form label and error classes in `formControls.ts`, and the `MODAL_*_CLASS` shell beside
   the Modal component in `Modal.ts` (shared type-size fragments:
   `typography.ts`). Feature-local sharing is an
   exported constant next to the owning view. Extend these rather than

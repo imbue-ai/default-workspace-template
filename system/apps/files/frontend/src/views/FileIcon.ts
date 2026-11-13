@@ -132,8 +132,8 @@ function tagSvg(family: FileFamily, badge: string, withLetters: boolean): string
   const letters =
     badge === ""
       ? ""
-      : `<text x="32" y="47.4" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="700" ` +
-        `font-size="${fontSize}" letter-spacing="0.3" fill="#fff">${escapeText(badge)}</text>`;
+      : `<text x="32" y="47.4" text-anchor="middle" font-weight="700" ` +
+        `font-size="${fontSize}" letter-spacing="0.3" style="font-family:var(--font-sans);fill:var(--c-body-surface-raised)">${escapeText(badge)}</text>`;
   return `<g transform="rotate(${TAG_TILT_DEGREES} 32 44.5)">${rect}${letters}</g>`;
 }
 
