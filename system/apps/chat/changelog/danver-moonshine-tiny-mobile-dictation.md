@@ -1,0 +1,1 @@
+Dictation on a phone or tablet (a page whose primary pointer is a finger) runs Moonshine Tiny, the lighter speech model, in place of Moonshine Base: a third of the download and under half the time per utterance, so the words keep up with the speaker. A desktop keeps Moonshine Base. A browser's `workspace-voice:engine` override still picks any registered engine on either.

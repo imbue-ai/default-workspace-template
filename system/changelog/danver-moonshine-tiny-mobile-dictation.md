@@ -1,0 +1,1 @@
+`THIRD_PARTY_NOTICES.md` names Moonshine Tiny beside Moonshine Base as a speech model the chat's dictation downloads: the one a phone or tablet runs (see the chat's and the voice library's own entries).
