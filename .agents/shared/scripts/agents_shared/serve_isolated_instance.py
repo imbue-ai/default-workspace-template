@@ -1,6 +1,6 @@
 """Spin up an isolated, throwaway instance of a service on a spare port.
 
-This is the shared substrate under three service flows:
+This is the shared substrate under four service flows:
 
 - ``update-app`` boots a copy of a service against a *copy* of its data
   (``DATA_DIR`` pointed at a scratch dir) so an edit can be exercised -- writes,
@@ -12,6 +12,9 @@ This is the shared substrate under three service flows:
   through ``preview_app.py``, and ``refresh``-es it in place as the lead edits.
 - ``build-app`` shows a new app that is still a mock inside the labeled frame,
   around the app's own live program, through ``mock_frame.py``.
+- A hand-built page (a detached prototype, such as an HTML mock) is served by
+  ``python3 -m http.server`` and shown in the same labeled frame, as the
+  interactive-delivery reference gives it.
 
 The two ``update-app`` flows are the same motion: launch the service on a free
 port, with environment overrides that isolate its writable state, wait until it
