@@ -79,6 +79,9 @@ specifics, but the shape below holds for all of them.
    uv run --no-sync workspace-layout open <slug>
    ```
 
+   The server reads the page on every request, so after an edit only the window
+   needs reloading: `uv run --no-sync workspace-layout refresh --app <slug>`.
+
    Once it is retired, close its window and tear it down:
 
    ```bash
