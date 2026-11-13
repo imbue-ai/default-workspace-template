@@ -858,6 +858,34 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
 
+def test_a_chat_seen_this_session_shows_its_conversation_without_waiting_on_its_transcript(
+    tmp_path: Path, page: Page
+) -> None:
+    """A chat page opened again in the same session draws the conversation it last held, not the loading shape: so
+    even when its transcript request fails, the conversation is on screen rather than an error in its place."""
+    with _running_e2e_server(tmp_path) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        expect(_shown_chat_of_root(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(
+            timeout=15000
+        )
+        chat_frame = _chat_frame(page)
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('transcript-cache:{FIXTURE_AGENT_ID}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+
+        page.route(
+            "**/api/chats/*/events",
+            lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),
+        )
+        page.reload()
+
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-list-error")).to_have_count(0)
+
+
 # layout ops
 
 
