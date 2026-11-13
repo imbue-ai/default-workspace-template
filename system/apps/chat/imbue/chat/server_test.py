@@ -68,11 +68,13 @@ from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
+from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
@@ -2460,6 +2462,35 @@ def test_fast_mode_changes_on_a_codex_chat_whose_effort_was_never_picked(tmp_pat
 
     assert response.status_code == 200
     assert codex_client.calls == [{"service_tier": None}]
+
+
+@pytest.mark.parametrize(
+    ("harness", "mode", "expected_calls"),
+    [
+        (HarnessType.CODEX, FastModeMode.ON, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.AUTO, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.OFF, []),
+        # claude launches fast through the ``fast`` create template, so nothing is switched.
+        (HarnessType.CLAUDE, FastModeMode.ON, []),
+    ],
+)
+def test_launch_fast_mode_switches_only_the_fast_axis_of_a_codex_agent_whose_chat_launches_fast(
+    harness: HarnessType, mode: FastModeMode, expected_calls: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    agent_id = "agent-00000000000000000000000000000017"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=harness)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.set_fast_mode_state(ChatId(agent_id), ChatFastModeState(mode=mode))
+    switch_client = _RecordingSwitchClient()
+    try:
+        with patch("imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=switch_client):
+            manager.apply_launch_fast_mode(ChatId(agent_id), agent_info)
+    finally:
+        manager.stop()
+
+    assert switch_client.calls == expected_calls
+    assert messenger.sent == []
 
 
 class _FakeCodexConnection:
