@@ -955,6 +955,23 @@ def test_desktops_report_a_refused_close_and_an_unreachable_shell() -> None:
 
 
 @pytest.mark.parametrize(
+    "answer",
+    [
+        (200, "<html>Bad gateway</html>"),
+        (200, {"desktops": [{"id": "home"}]}),
+    ],
+    ids=["text-page", "desktop-without-windows"],
+)
+def test_desktops_refuse_an_answer_that_is_not_a_desktops_listing(
+    answer: tuple[int, object],
+) -> None:
+    """``down`` reads this refusal as unknown desktops, warns, and tears down regardless."""
+    with LoopbackShell(get_answers={DESKTOPS_ROUTE: answer}) as shell:
+        with pytest.raises(mod.InstanceError, match="not a desktops listing"):
+            mod.Desktops(shell_url=shell.url).windows_of(["demo-preview"])
+
+
+@pytest.mark.parametrize(
     "launch, has_exited_before_teardown",
     [(["sleep", "30"], False), (["sh", "-c", "exit 1"], True)],
     ids=["still-running", "crashed-during-boot"],
