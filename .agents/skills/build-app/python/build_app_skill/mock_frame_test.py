@@ -353,6 +353,31 @@ def test_down_restores_the_app_even_when_the_frame_will_not_come_down(
     assert _row(registry) == plain_row
 
 
+def test_down_keeps_the_app_hidden_while_a_refused_frame_is_still_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A teardown refused under a window it could not close leaves the frame showing the app."""
+    registry = _registered_app(tmp_path, monkeypatch)
+    frames = _RecordingFrames(down_code=1)
+    assert (
+        mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 0
+    )
+    framed_row = _row(registry)
+    forward_port.register(
+        registry,
+        mock_frame.frame_name(_APP),
+        "http://127.0.0.1:9",
+        is_icon_declined=True,
+    )
+
+    code = mock_frame.down(_APP, tmp_path, frames=frames)
+
+    assert code == 1
+    assert _row(registry) == framed_row
+    assert framed_row["internal"] is True
+
+
 def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

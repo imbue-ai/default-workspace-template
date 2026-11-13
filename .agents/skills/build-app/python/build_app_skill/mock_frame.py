@@ -187,6 +187,18 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
     )
 
 
+def _is_registered(name: str, repo_root: Path) -> bool:
+    """Whether ``name`` has a registry row; raises MockFrameError when the registry cannot be read."""
+    # Imported here: it loads pydantic, which a refused or --help call need not pay for.
+    from app_manifest.registry import read_registry
+
+    try:
+        rows = read_registry(forward_port.apps_file(repo_root))
+    except RegistryReadError as exc:
+        raise MockFrameError(str(exc)) from exc
+    return any(row.name == name for row in rows)
+
+
 def _register(
     app: FramedApp, repo_root: Path, overrides: forward_port.ManifestOverrides | None
 ) -> None:
@@ -291,9 +303,17 @@ def down(app_name: str, repo_root: Path, *, frames: Frames) -> int:
     """Close the mock window, remove the frame, and make the app an ordinary app again.
 
     The frame comes down even when the app itself is gone (removed while still a mock);
-    its registration is then left alone, since registering it would add it back.
+    its registration is then left alone, since registering it would add it back. A
+    frame still registered after a failed teardown (a window that could not be closed)
+    still shows the app, which then stays hidden behind it.
     """
     code = frames.down(app_name, repo_root)
+    if code != 0 and _is_registered(frame_name(app_name), repo_root):
+        sys.stderr.write(
+            f"mock frame: the {frame_name(app_name)} frame is still up (see above), so "
+            f"{app_name!r} stays hidden behind it.\n"
+        )
+        return code
     try:
         app = find_app(app_name, repo_root)
     except MockFrameError as exc:
