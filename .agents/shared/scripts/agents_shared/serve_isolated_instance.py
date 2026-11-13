@@ -433,12 +433,15 @@ class Desktops:
     def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
         """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
         from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
-        from workspace_layout.client import ShellLayoutClient
+        from workspace_layout.client import (
+            ShellLayoutClient,
+            requester_from_environment,
+        )
         from workspace_layout.errors import ShellOpError
 
         shell = ShellLayoutClient(
             shell_url=self.shell_url,
-            requester=None,
+            requester=requester_from_environment(),
             timeout_seconds=OP_TIMEOUT_SECONDS,
         )
         try:
@@ -468,7 +471,10 @@ class Desktops:
     def close(self, window: OpenWindow) -> None:
         """Close ``window``; raises InstanceError when it cannot be closed."""
         from workspace_layout.cli import OP_TIMEOUT_SECONDS
-        from workspace_layout.client import ShellLayoutClient
+        from workspace_layout.client import (
+            ShellLayoutClient,
+            requester_from_environment,
+        )
         from workspace_layout.errors import ShellOpError
         from workspace_layout.ops import WindowArgs
         from workspace_layout.primitives import ClientId
@@ -480,7 +486,7 @@ class Desktops:
             )
         shell = ShellLayoutClient(
             shell_url=self.shell_url,
-            requester=None,
+            requester=requester_from_environment(),
             timeout_seconds=OP_TIMEOUT_SECONDS,
         )
         try:

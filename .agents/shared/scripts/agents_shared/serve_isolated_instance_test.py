@@ -28,6 +28,7 @@ from typing import Callable, Sequence
 
 import pytest
 from app_registration import forward_port
+from workspace_layout.agent_identity import AGENT_REQUESTER_APP_NAME, ENV_MINDS_CHAT_ID
 from workspace_layout.answers import InventoryClient, InventoryDocument
 from workspace_layout.primitives import ClientId, DesktopId
 from workspace_layout.records import DesktopView
@@ -933,9 +934,11 @@ def _inventory_answer(
     return 200, document.model_dump(mode="json")
 
 
-def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_desktop() -> (
-    None
-):
+def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_desktop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The close names the calling agent's chat as its requester, as ``workspace-layout close`` does."""
+    monkeypatch.setenv(ENV_MINDS_CHAT_ID, "chat-1")
     with LoopbackShell(
         get_answers={INVENTORY_ROUTE: _inventory_answer([_HOME_DESKTOP, _WORK_DESKTOP])}
     ) as shell:
@@ -950,6 +953,9 @@ def test_desktops_find_an_apps_windows_and_close_one_through_the_client_on_its_d
     ]
     assert shell.posted_ops() == [
         ("close", {"window": _WINDOW_1, "client": "client-home", "desktop": "home"})
+    ]
+    assert [body["requester"] for route, body in shell.posted] == [
+        {"app": AGENT_REQUESTER_APP_NAME, "marker": "chat-1"}
     ]
 
 
