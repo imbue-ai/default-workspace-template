@@ -46,6 +46,12 @@ belong in tested code rather than agent prose:
     update could break", which scopes the worker's impact analysis and its
     validation.
 
+``agent-restart-verdict``
+    Whether the update changes what a running agent's harness loaded when it started (a
+    harness version pin, Antigravity's in its installer included, or a harness extension
+    tree), so the lead must restart the agents after the apply, and which changes say so.
+    The worker's §4d rule reads it.
+
 ``footprint-ranges``
     Name the two commit ranges the worker reads each app's footprint over:
     what the workspace itself changed, and what the update changes in the tree
@@ -63,6 +69,19 @@ belong in tested code rather than agent prose:
     first -- the commits the worker reverts before it merges, since until then git
     counts the content they removed as merged. ``apply`` refuses a merge ref that
     still carries one, by the same rule.
+
+``restart-agents``
+    After a successful apply of an update that changes what an agent process loads at
+    start, restart every chat that has ended its turn (not the pass's own, not its
+    worker, not one the pass's resume started after the update landed, not a room), through
+    the chat app, and report as JSON which were restarted, which were left running because they
+    were busy (``busy_with`` says with what), and which failed.
+
+``restart-self``
+    Detach a helper that restarts the pass's own chat once its last turn ends, then sends
+    it a note (a ``<background-task-report>``, one line to the user) asking it to confirm
+    the restart, or, when the restart does not happen, a note saying so. The helper
+    drops ``MNGR_AGENT_ID`` so the restart's stop does not kill it.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -132,8 +151,9 @@ verdict and record the Imbue Studio app, bootstrap and the system interface read
 ``update_history_bridge``, ``update_apply`` (the apply and recover
 orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
 ``resume-chats``), ``update_app_pause`` (``run-status stop-apps`` /
-``resume-apps``) and ``update_resume_note`` (the note a resumed chat is
-sent).
+``resume-apps``), ``update_resume_note`` (the note a resumed chat is
+sent) and ``update_agent_restarts`` (restarting agents onto what an update
+installed).
 """
 
 from __future__ import annotations
@@ -150,6 +170,19 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
+from update_self_skill.run_in_background import (
+    OWN_OOM_SCORE_ADJ_PATH,
+    move_to_runner_oom_band,
+    own_chat_id,
+)
+from update_self_skill.update_agent_restarts import (
+    ChatListUnavailableError,
+    compose_self_restart_note,
+    read_restart_report,
+    restart_idle_agents,
+    restart_self_when_idle,
+    start_self_restart,
+)
 from update_self_skill.update_app_pause import start_programs, stop_programs
 from update_self_skill.update_apply import (
     UpdateRollbackHistory,
@@ -189,7 +222,13 @@ from update_self_skill.update_chat_pause import (
     send_note,
     stop_runner,
 )
-from update_self_skill.update_classification import classify_merge
+from update_self_skill.update_classification import (
+    AGY_INSTALLER_NAME,
+    MNGR_SETTINGS_PATH,
+    HarnessPinFiles,
+    agent_restart_verdict,
+    classify_merge,
+)
 from update_self_skill.update_environment import default_sweep_homes
 from update_self_skill.update_history_bridge import (
     DEFAULT_STATE_PATH,
@@ -197,7 +236,7 @@ from update_self_skill.update_history_bridge import (
     bridge_history,
     drop_history_bridge,
 )
-from update_self_skill.update_layout import FRONTEND_BUNDLES
+from update_self_skill.update_layout import FRONTEND_BUNDLES, PROVISIONER_SCRIPT
 from update_self_skill.update_runtime import (
     ApplyPreconditionError,
     HttpClient,
@@ -217,6 +256,10 @@ from update_self_skill.update_target import (
 # references/, scripts/, python/). Used by ``bootstrap-skill`` to extract the target
 # ref's own copy of the flow.
 SKILL_DIR_REL = ".agents/skills/update-self"
+
+# The runnable entry point beside this package: the module itself cannot be run by path.
+# own-process: outlives-caller -- restart-self's helper restarts the chat that started it, so it must outlive that chat's processes
+ENTRY_STUB_PATH = Path(__file__).resolve().parents[2] / "scripts" / "update_self.py"
 
 
 def _git(args: Sequence[str], repo_root: Path) -> str:
@@ -378,6 +421,53 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
                 "has_local_footprint": result.has_local_footprint,
             },
             indent=2,
+        )
+    )
+    return 0
+
+
+def _file_at(ref: str, path: str, repo_root: Path) -> str:
+    """``path`` as it is at ``ref``; empty when it does not exist there."""
+    if not _git(["ls-tree", "--name-only", ref, "--", path], repo_root):
+        return ""
+    return subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def _harness_pin_files_at(ref: str, repo_root: Path) -> HarnessPinFiles:
+    """The files ``ref``'s tree pins its harnesses' versions in, whichever name its Antigravity
+    installer goes by there."""
+    agy_installers = [
+        path
+        for path in _list_names(
+            _git(["ls-tree", "--name-only", ref, "--", "system/scripts/"], repo_root)
+        )
+        if AGY_INSTALLER_NAME.match(path)
+    ]
+    return HarnessPinFiles(
+        setup_system=_file_at(ref, PROVISIONER_SCRIPT, repo_root),
+        mngr_settings=_file_at(ref, MNGR_SETTINGS_PATH, repo_root),
+        agy_installer=_file_at(ref, agy_installers[0], repo_root)
+        if agy_installers
+        else "",
+    )
+
+
+def _cmd_agent_restart_verdict(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args)
+    verdict = agent_restart_verdict(
+        _list_names(_git(["diff", "--name-only", args.before, args.after], repo_root)),
+        _harness_pin_files_at(args.before, repo_root),
+        _harness_pin_files_at(args.after, repo_root),
+    )
+    print(
+        json.dumps(
+            {"needed": verdict.is_needed, "triggers": list(verdict.triggers)}, indent=2
         )
     )
     return 0
@@ -570,6 +660,83 @@ def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
         args.target, "HEAD", _repo_root(args), Runner()
     ):
         print(rollback)
+    return 0
+
+
+def _chat_id_or_complain(args: argparse.Namespace) -> str:
+    chat_id = args.chat_id or own_chat_id(os.environ)
+    if not chat_id:
+        print(
+            "error: no chat id: pass --chat-id or run as an agent (MINDS_CHAT_ID or MNGR_AGENT_ID).",
+            file=sys.stderr,
+        )
+    return chat_id
+
+
+def _cmd_restart_agents(args: argparse.Namespace) -> int:
+    chat_id = _chat_id_or_complain(args)
+    if not chat_id:
+        return 1
+    repo_root = _repo_root(args).resolve()
+    status = read_run_status(repo_root)
+    started_after_landing = (
+        set()
+        if status is None
+        else {
+            entry.chat_id
+            for entry in status.stopped_agents
+            if entry.is_started_after_landing
+        }
+    )
+    try:
+        report = restart_idle_agents(
+            repo_root, chat_id, started_after_landing, HttpClient()
+        )
+    except ChatListUnavailableError as exc:
+        print(f"error: no agent was restarted: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2))
+    return 1 if report["failed"] else 0
+
+
+def _cmd_restart_self(args: argparse.Namespace) -> int:
+    chat_id = _chat_id_or_complain(args)
+    if not chat_id:
+        return 1
+    repo_root = _repo_root(args).resolve()
+    if args.wait:
+        # The helper has to outlive the chat it restarts, so it leaves the band of the tool
+        # call that started it, which is shed before the agent.
+        move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
+        return restart_self_when_idle(repo_root, chat_id, HttpClient(), Runner())
+    if not args.reason or args.restart_report is None:
+        print(
+            "error: --reason (what the restart picks up, in one plain line) and --restart-report "
+            "(the file restart-agents' output went to) are required.",
+            file=sys.stderr,
+        )
+        return 1
+    note_path = start_self_restart(
+        repo_root,
+        compose_self_restart_note(
+            args.reason, read_restart_report(Path(args.restart_report))
+        ),
+        os.environ,
+        helper_argv=[
+            sys.executable,
+            str(ENTRY_STUB_PATH),
+            "restart-self",
+            "--wait",
+            "--chat-id",
+            chat_id,
+            "--repo-root",
+            str(repo_root),
+        ],
+    )
+    print(
+        f"This chat restarts once this turn ends, and then receives the note at {note_path}. "
+        "Nothing needs to wait on it."
+    )
     return 0
 
 
@@ -1097,6 +1264,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     classify_parser.set_defaults(func=_cmd_classify_merge)
 
+    restart_verdict_parser = sub.add_parser(
+        "agent-restart-verdict",
+        help="Whether the update changes what running agents' harnesses loaded at start, and what does.",
+        parents=[common],
+    )
+    restart_verdict_parser.add_argument(
+        "--before",
+        required=True,
+        help="The tree the running agents started from: the one the live workspace runs "
+        "(footprint-ranges' update_base).",
+    )
+    restart_verdict_parser.add_argument(
+        "--after",
+        default="HEAD",
+        help="The tree the apply lands (default HEAD).",
+    )
+    restart_verdict_parser.set_defaults(func=_cmd_agent_restart_verdict)
+
     ranges_parser = sub.add_parser(
         "footprint-ranges",
         help="Print the local and update commit ranges the worker reads each "
@@ -1128,6 +1313,50 @@ def build_parser() -> argparse.ArgumentParser:
         "--target", required=True, help="The ref this pass merges."
     )
     pending_parser.set_defaults(func=_cmd_pending_rollbacks)
+
+    restart_agents_parser = sub.add_parser(
+        "restart-agents",
+        help="Restart every chat that has ended its turn (not this pass's own, not its worker, not "
+        "one this pass's resume started after the update landed, not a room) onto what the update "
+        "installed, "
+        "and report which were restarted, left running, or failed.",
+        parents=[common],
+    )
+    restart_agents_parser.add_argument(
+        "--chat-id",
+        default="",
+        help="This pass's own chat, which is left alone (default: $MINDS_CHAT_ID, else $MNGR_AGENT_ID).",
+    )
+    restart_agents_parser.set_defaults(func=_cmd_restart_agents)
+
+    restart_self_parser = sub.add_parser(
+        "restart-self",
+        help="Restart this pass's own chat once its turn ends, then send it a note to confirm the "
+        "restart to the user.",
+        parents=[common],
+    )
+    restart_self_parser.add_argument(
+        "--chat-id",
+        default="",
+        help="The chat to restart (default: $MINDS_CHAT_ID, else $MNGR_AGENT_ID).",
+    )
+    restart_self_parser.add_argument(
+        "--reason",
+        default="",
+        help="What the restart picks up, in one plain line (e.g. 'Claude Code 2.1.300'); the note names it.",
+    )
+    restart_self_parser.add_argument(
+        "--restart-report",
+        default=None,
+        help="The file restart-agents printed its report into; one with no report (restart-agents "
+        "failed) makes the note say the other chats were not restarted.",
+    )
+    restart_self_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait and restart in this process (what the detached helper runs) instead of detaching one.",
+    )
+    restart_self_parser.set_defaults(func=_cmd_restart_self)
 
     bootstrap_parser = sub.add_parser(
         "bootstrap-skill",

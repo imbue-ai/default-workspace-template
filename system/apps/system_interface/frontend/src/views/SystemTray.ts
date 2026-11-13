@@ -16,7 +16,7 @@ export interface SystemTrayAttrs {
   readonly roster: readonly RosterParticipant[];
   readonly viewer: string | null;
   readonly now: Date;
-  /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
+  /** The keys of the entries hopping now: they just arrived, or just said something. */
   readonly hopping: ReadonlySet<string>;
   /** The keys of the entries whose desktop somebody else is viewing, ringed in their colour (section 8.3). */
   readonly ringed: ReadonlySet<string>;

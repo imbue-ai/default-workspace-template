@@ -191,8 +191,8 @@ def client_activity_route() -> ResponseReturnValue:
 
 
 def bubbles_route() -> ResponseReturnValue:
-    """A message somebody just said, for the speech bubble over their tray entry: broadcast to every window but the
-    speaker's own clients; loopback only."""
+    """A message somebody just said, or a chat's notification to the user, for the speaker's tray entry and its
+    speech bubble: broadcast to every window but the speaker's own clients; loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal

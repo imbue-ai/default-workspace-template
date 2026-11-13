@@ -95,3 +95,9 @@ def find_mentions(text: str, table: Sequence[MentionTarget]) -> tuple[MentionTar
         if target is not None and target not in found:
             found.append(target)
     return tuple(found)
+
+
+@pure
+def mentioned_people(targets: Sequence[MentionTarget]) -> tuple[ParticipantKey, ...]:
+    """The keys of the people among ``targets``: whose clients raise a message's bubble as a mention."""
+    return tuple(target.key for target in targets if target.is_person and target.key is not None)
