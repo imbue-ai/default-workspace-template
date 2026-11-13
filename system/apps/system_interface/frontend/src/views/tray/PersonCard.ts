@@ -15,7 +15,7 @@ import type { AppRecord, ClientRecord, Desktop, RosterParticipant, WindowRecord 
 import { OWNER_KEY, presenceStateOf, statusLineOf } from "../../model/Roster";
 import { appGlyph } from "../glyphs";
 import { TrayAvatar } from "./TrayAvatar";
-import { TrayCardFrame } from "./TrayCard";
+import { TRAY_CARD_ROW_CLASS, TrayCardFrame } from "./TrayCard";
 import type { TrayCardFrameAttrs } from "./TrayCard";
 
 const CARD_PICTURE_SIZE_PX = 32;
@@ -116,14 +116,18 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
         m(TrayAvatar, { entry, sizePx: CARD_PICTURE_SIZE_PX, isFaded: false }),
         m("div", { class: "flex min-w-0 flex-col" }, [
           m("div", { class: "truncate font-semibold", "data-tray-card-name": "" }, name),
-          m("div", { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" }, [
-            m("span", { class: `inline-block size-2 shrink-0 rounded-full ${statusDotClass(state)}` }),
-            m(
-              "span",
-              { "data-tray-card-status": "" },
-              isVisitingAgent ? `Visiting agent · ${statusLineOf(entry, now)}` : statusLineOf(entry, now),
-            ),
-          ]),
+          m(
+            "div",
+            { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+            [
+              m("span", { class: `inline-block size-2 shrink-0 rounded-full ${statusDotClass(state)}` }),
+              m(
+                "span",
+                { "data-tray-card-status": "" },
+                isVisitingAgent ? `Visiting agent · ${statusLineOf(entry, now)}` : statusLineOf(entry, now),
+              ),
+            ],
+          ),
           // Nobody granted them by name: their email's domain is what lets them in, so a granter looking for
           // them in the share panel finds the domain, not a row of their own.
           entry.is_admitted_by_domain
@@ -171,8 +175,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                   key: desktop.id,
                   type: "button",
                   "data-tray-card-desktop": desktop.id,
-                  class:
-                    "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-body-content hover:bg-fill-hover",
+                  class: `${TRAY_CARD_ROW_CLASS} text-body-content`,
                   onclick: () => attrs.onOpenDesktop(desktop.id),
                 },
                 [
@@ -210,8 +213,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                   {
                     type: "button",
                     "data-tray-card-new-desktop": "",
-                    class:
-                      "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-body-content-secondary hover:bg-fill-hover",
+                    class: `${TRAY_CARD_ROW_CLASS} text-body-content-secondary`,
                     onclick: attrs.onNewDesktop,
                   },
                   [

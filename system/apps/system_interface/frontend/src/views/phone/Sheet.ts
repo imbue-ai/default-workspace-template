@@ -74,7 +74,7 @@ export function Sheet(): m.Component<SheetAttrs> {
       return m("div", { class: "phone-sheet-layer absolute inset-0 z-(--z-sticky)" }, [
         m("div", {
           "data-phone-sheet-scrim": name,
-          class: "phone-sheet-scrim absolute inset-0 animate-[phone-fade_var(--dur-slow)_ease-out] bg-black/30",
+          class: "phone-sheet-scrim absolute inset-0 animate-[phone-fade_var(--dur-slow)_ease-out] bg-overlay-scrim",
           onclick: onDismiss,
         }),
         m(

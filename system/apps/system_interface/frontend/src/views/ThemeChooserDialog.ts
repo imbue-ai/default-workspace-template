@@ -8,6 +8,7 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { Checkbox } from "@imbue/workspace-ui/src/components/formControls";
 import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
@@ -15,6 +16,10 @@ import type { AppRecord, Desktop } from "../model/records";
 import { availableTheme, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { appIconMarkupForApp } from "./components/appIcon";
 import { glyph as genericGlyph } from "./glyphs";
+
+/** A choice is a card: the chosen one wears the focus colour round its edge. */
+const TILE_CLASS =
+  "flex w-28 shrink-0 flex-col items-center gap-1 p-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
 
 export interface ThemeChooserDialogAttrs {
   readonly desktop: Desktop;
@@ -123,10 +128,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         type: "button",
         "data-theme": value ?? "workspace-default",
         ...TILE_PART,
-        class:
-          "flex w-28 shrink-0 flex-col items-center gap-1 rounded-md border bg-transparent p-2 " +
-          (isDisabled ? "cursor-not-allowed opacity-50 " : "cursor-pointer ") +
-          (isSelected ? "border-accent-surface ring-2 ring-accent-surface" : "border-default"),
+        class: cardClass({
+          interactive: !isDisabled,
+          selected: isSelected,
+          extra: `${TILE_CLASS}${isDisabled ? " cursor-not-allowed opacity-50" : ""}`,
+        }),
         "aria-pressed": isSelected ? "true" : "false",
         "aria-disabled": isDisabled ? "true" : undefined,
         title: unavailableReason ?? undefined,
@@ -153,9 +159,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         type: "button",
         "data-make-theme": "",
         ...TILE_PART,
-        class:
-          "flex w-28 shrink-0 cursor-pointer flex-col items-center gap-1 rounded-md border border-dashed " +
-          "border-default bg-transparent p-2",
+        class: cardClass({ interactive: true, extra: `${TILE_CLASS} border-dashed` }),
         onclick: onMakeTheme,
       },
       [

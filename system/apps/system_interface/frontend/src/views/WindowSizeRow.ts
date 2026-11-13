@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { CustomRow, SubmenuRow } from "@imbue/workspace-ui/src/components/menu";
 import {
   BOTTOM_HALF_FRAME,
@@ -74,16 +75,15 @@ function zoneGrid(actions: WindowSizeActions, onPlaced: () => void): m.Vnode {
     { class: "grid w-max grid-cols-5 gap-1" },
     WINDOW_ZONES.map((zone) =>
       m(
-        "button",
+        Button,
         {
           key: zone.key,
-          type: "button",
+          variant: "ghost",
+          icon: true,
+          sm: true,
           "data-window-zone": zone.key,
           "aria-label": zone.label,
           title: zone.label,
-          class:
-            "flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-body-content-secondary " +
-            "hover:bg-fill-hover hover:text-body-content focus-visible:outline-2 focus-visible:outline-focus",
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
             placeIn(zone, actions);
