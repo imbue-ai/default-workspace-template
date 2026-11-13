@@ -76,10 +76,15 @@ describe("StyleGuidePage", () => {
     expect(document.querySelector(".modal-title")?.textContent).toBe("Rename project");
   });
 
-  it("shows a toast on request", () => {
+  it("shows a toast on request, and a failure in the danger tint", () => {
     const root = mountPage();
     click(root.querySelector("#show-toast"));
-    expect(document.querySelector("[data-toast]")?.textContent).toContain("the disk is full");
+    click(root.querySelector("#show-failure-toast"));
+    const toasts = Array.from(document.querySelectorAll<HTMLElement>("[data-toast]"));
+    expect(toasts.map((toast) => [toast.textContent, toast.dataset.tone])).toEqual([
+      ["The link is copied.", "default"],
+      ["Couldn't save the file: the disk is full.", "danger"],
+    ]);
   });
 
   it("moves the segmented control's choice on a click", () => {

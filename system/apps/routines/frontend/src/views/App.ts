@@ -116,7 +116,7 @@ export class AppModel {
       if (this.loaded.kind === "loading" || this.loaded.kind === "error") {
         this.loaded = { kind: "error", message };
       } else {
-        this.toasts.show(`Couldn't refresh: ${message}`);
+        this.toasts.show(`Couldn't refresh: ${message}`, "danger");
       }
     }
     this.redraw();
@@ -156,7 +156,7 @@ export class AppModel {
       await action();
       return true;
     } catch (error) {
-      this.toasts.show(`${failure}: ${error instanceof Error ? error.message : String(error)}`);
+      this.toasts.show(`${failure}: ${error instanceof Error ? error.message : String(error)}`, "danger");
       return false;
     } finally {
       this.isBusy = false;

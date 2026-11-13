@@ -1,1 +1,1 @@
-Uses the Imbue brand's color roles, so its colors follow the workspace color and the workspace's theme. Titles of cards and requests are set in the brand's bold sans title, and static labels in its mono. A name the rename dialog refuses marks the field with the error edge.
+Uses the Imbue brand's color roles, so its colors follow the workspace color and the workspace's theme. Titles of cards and requests are set in the brand's bold sans title, and static labels in its mono. A name the rename dialog refuses marks the field with the error edge. Failures show as red toasts.

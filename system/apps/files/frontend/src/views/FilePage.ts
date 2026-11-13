@@ -81,7 +81,7 @@ export class FilePageModel {
       this.text = { status: "ready", saved: content };
       this.size = new Blob([content]).size;
     } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+      this.toasts.show(error instanceof Error ? error.message : String(error), "danger");
     }
     this.isSaving = false;
     m.redraw();
@@ -97,7 +97,7 @@ export class FilePageModel {
       if (await server.exists(target)) throw new Error(`"${name}" is already taken.`);
       await server.movePath(path, target);
     } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+      this.toasts.show(error instanceof Error ? error.message : String(error), "danger");
       m.redraw();
       return;
     }
@@ -108,7 +108,7 @@ export class FilePageModel {
     try {
       await navigator.clipboard.writeText(this.options.path);
     } catch {
-      this.toasts.show("Couldn't copy to the clipboard.");
+      this.toasts.show("Couldn't copy to the clipboard.", "danger");
     }
   }
 
@@ -119,7 +119,7 @@ export class FilePageModel {
     try {
       await server.deletePath(path);
     } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+      this.toasts.show(error instanceof Error ? error.message : String(error), "danger");
       m.redraw();
       return;
     }
@@ -181,7 +181,11 @@ function body(page: FilePageModel): m.Children {
       return m("div", { class: `${centred} flex-col gap-3 text-center` }, [
         m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 128 }),
         m("div", { class: "type-title-sm text-body-content-secondary" }, "No preview available"),
-        m("div", { class: "type-helper text-body-content-tertiary" }, "This file is too large to show, or isn't text."),
+        m(
+          "div",
+          { class: "type-helper text-body-content-tertiary" },
+          "This file is too large to show, or isn't text.",
+        ),
         m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(page, path) }, "Download"),
       ]);
   }
@@ -221,92 +225,104 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
       const name = nameOf(path);
       // The server calls any small file that decodes as text editable; Edit is offered only on one named as text.
       const canEdit = page.showsText && page.text.status === "ready" && isTextLike(name);
-      return m("div.files-file-page", { class: "flex h-screen min-h-0 flex-col bg-body-surface-raised text-body-content" }, [
-        m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
-          m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [
-            m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 20 }),
-            m("span.files-file-name", { class: "truncate text-(length:--font-size-body-dense) font-semibold" }, name),
-            page.isDirty ? m("span.files-file-dirty", { class: "type-helper text-body-content-tertiary" }, "Edited") : null,
-            page.size === null ? null : m("span", { class: "shrink-0 type-helper text-body-content-tertiary" }, formatSize(page.size)),
-          ]),
-          kind === "edit"
-            ? [
-                m(
-                  "a",
-                  {
-                    href: server.pageUrlOf(path, "view"),
-                    class: buttonClass("ghost", { sm: true }),
-                    "data-action": "done",
-                  },
-                  "Done",
-                ),
-                m(
-                  Button,
-                  {
-                    variant: "primary",
-                    sm: true,
-                    "data-action": "save",
-                    disabled: !page.isDirty || page.isSaving,
-                    onclick: () => void page.save(),
-                  },
-                  page.isSaving ? "Saving..." : "Save",
-                ),
-              ]
-            : canEdit
-              ? m(
-                  "a.edit-file",
-                  {
-                    href: server.pageUrlOf(path, "edit"),
-                    class: buttonClass("ghost", { icon: true, sm: true }),
-                    "aria-label": "Edit",
-                    "data-action": "edit",
-                    ...hoverTooltipAttrs("Edit"),
-                  },
-                  m.trust(icon("edit", { size: 16 })),
-                )
-              : null,
-          iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(page, path) }),
-          m("div", { class: "flex shrink-0" }, [
-            iconButton("More", "ellipsis", { "data-action": "more", ...menu.triggerAttrs() }),
-            menu.view([
-              ...(isLiveShared(path)
-                ? []
-                : [
+      return m(
+        "div.files-file-page",
+        { class: "flex h-screen min-h-0 flex-col bg-body-surface-raised text-body-content" },
+        [
+          m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
+            m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [
+              m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 20 }),
+              m(
+                "span.files-file-name",
+                { class: "truncate text-(length:--font-size-body-dense) font-semibold" },
+                name,
+              ),
+              page.isDirty
+                ? m("span.files-file-dirty", { class: "type-helper text-body-content-tertiary" }, "Edited")
+                : null,
+              page.size === null
+                ? null
+                : m("span", { class: "shrink-0 type-helper text-body-content-tertiary" }, formatSize(page.size)),
+            ]),
+            kind === "edit"
+              ? [
+                  m(
+                    "a",
                     {
-                      kind: "action" as const,
-                      key: "rename",
-                      label: "Rename",
-                      icon: "edit" as const,
-                      onSelect: () => void page.rename(),
+                      href: server.pageUrlOf(path, "view"),
+                      class: buttonClass("ghost", { sm: true }),
+                      "data-action": "done",
                     },
-                  ]),
-              {
-                kind: "action",
-                key: "copy-path",
-                label: "Copy Path",
-                icon: "copy",
-                onSelect: () => void page.copyPath(),
-              },
-              { kind: "divider" },
-              {
-                kind: "action",
-                key: "delete",
-                label: "Delete",
-                icon: "trash",
-                tone: "danger",
-                onSelect: () => void page.delete(),
-              },
+                    "Done",
+                  ),
+                  m(
+                    Button,
+                    {
+                      variant: "primary",
+                      sm: true,
+                      "data-action": "save",
+                      disabled: !page.isDirty || page.isSaving,
+                      onclick: () => void page.save(),
+                    },
+                    page.isSaving ? "Saving..." : "Save",
+                  ),
+                ]
+              : canEdit
+                ? m(
+                    "a.edit-file",
+                    {
+                      href: server.pageUrlOf(path, "edit"),
+                      class: buttonClass("ghost", { icon: true, sm: true }),
+                      "aria-label": "Edit",
+                      "data-action": "edit",
+                      ...hoverTooltipAttrs("Edit"),
+                    },
+                    m.trust(icon("edit", { size: 16 })),
+                  )
+                : null,
+            iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(page, path) }),
+            m("div", { class: "flex shrink-0" }, [
+              iconButton("More", "ellipsis", { "data-action": "more", ...menu.triggerAttrs() }),
+              menu.view([
+                ...(isLiveShared(path)
+                  ? []
+                  : [
+                      {
+                        kind: "action" as const,
+                        key: "rename",
+                        label: "Rename",
+                        icon: "edit" as const,
+                        onSelect: () => void page.rename(),
+                      },
+                    ]),
+                {
+                  kind: "action",
+                  key: "copy-path",
+                  label: "Copy Path",
+                  icon: "copy",
+                  onSelect: () => void page.copyPath(),
+                },
+                { kind: "divider" },
+                {
+                  kind: "action",
+                  key: "delete",
+                  label: "Delete",
+                  icon: "trash",
+                  tone: "danger",
+                  onSelect: () => void page.delete(),
+                },
+              ]),
             ]),
           ]),
-        ]),
-        m("main", { class: "min-h-0 flex-1" }, body(page)),
-        m(Toasts, {
-          toasts: page.toasts.current(),
-          placementClass: "fixed bottom-6",
-          onDismiss: (id: number) => page.toasts.dismiss(id),
-        }),
-        page.dialogs.view(),
-      ]);
+          m("main", { class: "min-h-0 flex-1" }, body(page)),
+          m(Toasts, {
+            toasts: page.toasts.current(),
+            placementClass: "fixed bottom-6",
+            onDismiss: (id: number) => page.toasts.dismiss(id),
+          }),
+          page.dialogs.view(),
+        ],
+      );
     },
   };
 }

@@ -6,6 +6,7 @@
 
 import m from "mithril";
 import { Checkbox, FIELD_ERROR_CLASS, Switch } from "@imbue/workspace-ui/src/components/formControls";
+import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
 
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
@@ -463,9 +464,11 @@ function badgesSection(): CatalogSection {
 function statusSection(): CatalogSection {
   return {
     id: "status",
-    toc: "Banners & activity",
-    title: "Banners, activity dots and spinners",
+    toc: "Notices & activity",
+    title: "Notices, banners, activity dots and spinners",
     desc: [
+      code("noticeClass(tone)"),
+      " is a note set in among a page's content, tinted with a matching edge; ",
       code("bannerClass(marker, tone)"),
       " is the full-width strip above a pane's content; ",
       code("activityDotClass"),
@@ -474,6 +477,16 @@ function statusSection(): CatalogSection {
       " the one ring spinner.",
     ],
     body: () => [
+      demoRow(
+        "Notices",
+        m("div", { class: "grid max-w-[480px] gap-2" }, [
+          m("div", { id: "notice-neutral", class: noticeClass("neutral") }, "A one-time tip about something new."),
+          m("div", { id: "notice-info", class: noticeClass("info") }, "This copy is read-only."),
+          m("div", { id: "notice-success", class: noticeClass("success") }, "Everything is backed up."),
+          m("div", { id: "notice-warn", class: noticeClass("warn") }, "Syncing stopped: the folder moved."),
+          m("div", { id: "notice-danger", class: noticeClass("danger") }, "The routine failed its last run."),
+        ]),
+      ),
       demoRow(
         "Banners",
         m("div", { class: "flex w-full max-w-[560px] flex-col gap-2" }, [
@@ -530,10 +543,14 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
           { id: "open-destroy", variant: "ghost-destructive", onclick: () => (demos.openDialog = "destroy") },
           "Open a delete confirmation",
         ),
+        m(Button, { id: "show-toast", onclick: () => demos.toasts.show("The link is copied.") }, "Show a toast"),
         m(
           Button,
-          { id: "show-toast", onclick: () => demos.toasts.show("Couldn't save the file: the disk is full.") },
-          "Show a toast",
+          {
+            id: "show-failure-toast",
+            onclick: () => demos.toasts.show("Couldn't save the file: the disk is full.", "danger"),
+          },
+          "Show a failure",
         ),
       ]),
       demos.openDialog === "modal"

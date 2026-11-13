@@ -199,19 +199,7 @@ const OWN_KEYS = [
 export function Button(): m.Component<ButtonAttrs> {
   return {
     view(vnode) {
-      const {
-        variant = "secondary",
-        sm,
-        lg,
-        xs,
-        icon,
-        round,
-        selected,
-        readonly,
-        quiet,
-        block,
-        extra,
-      } = vnode.attrs;
+      const { variant = "secondary", sm, lg, xs, icon, round, selected, readonly, quiet, block, extra } = vnode.attrs;
       // The passthrough spread comes after `type` (so a caller can still opt
       // into type="submit" if a form ever appears) and after the readonly
       // aria-disabled default (so an explicit caller value wins).

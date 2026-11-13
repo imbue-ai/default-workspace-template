@@ -1,1 +1,1 @@
-Uses the Imbue brand's color roles, so its colors follow the workspace color and the workspace's theme. Titles of cards and requests are set in the brand's bold sans title, and static labels in its mono. Send is the brand's accent action.
+Uses the Imbue brand's color roles, so its colors follow the workspace color and the workspace's theme. Titles of cards and requests are set in the brand's bold sans title, and static labels in its mono. Send is the brand's accent action. One-time tips are the shared neutral notice.

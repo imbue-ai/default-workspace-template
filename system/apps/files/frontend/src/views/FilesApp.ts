@@ -8,6 +8,7 @@
 import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
@@ -231,7 +232,9 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
           model.connectionsError ??
           (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
         connectedBody =
-          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-body-content-tertiary" }, empty);
+          empty === null
+            ? null
+            : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-body-content-tertiary" }, empty);
       }
       return m(
         "nav.files-sidebar",
@@ -330,7 +333,9 @@ function Breadcrumb(): m.Component<{ app: FilesController }> {
         crumbs.map((crumb, index) => {
           const isLast = index === crumbs.length - 1;
           return m.fragment({ key: `${index}:${crumb.path}` }, [
-            index === 0 ? null : m.trust(icon("chevron-right", { size: 12, className: "shrink-0 text-body-content-tertiary" })),
+            index === 0
+              ? null
+              : m.trust(icon("chevron-right", { size: 12, className: "shrink-0 text-body-content-tertiary" })),
             m(
               "button.files-crumb",
               {
@@ -431,18 +436,22 @@ function Toolbar(): m.Component<{ app: FilesController }> {
         ),
         optionsMenu.view(optionRows),
       ]);
-      return m("header.files-toolbar", { class: "flex shrink-0 items-center gap-1 bg-body-surface-raised px-3 py-1" }, [
-        app.isNarrow
-          ? iconButton("Show sidebar", "panel-left", {
-              "data-action": "sidebar",
-              onclick: () => (app.isSidebarOpen = true),
-            })
-          : null,
-        m(Breadcrumb, { app }),
-        viewSwitch,
-        add,
-        options,
-      ]);
+      return m(
+        "header.files-toolbar",
+        { class: "flex shrink-0 items-center gap-1 bg-body-surface-raised px-3 py-1" },
+        [
+          app.isNarrow
+            ? iconButton("Show sidebar", "panel-left", {
+                "data-action": "sidebar",
+                onclick: () => (app.isSidebarOpen = true),
+              })
+            : null,
+          m(Breadcrumb, { app }),
+          viewSwitch,
+          add,
+          options,
+        ],
+      );
     },
   };
 }
@@ -487,14 +496,11 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
     "div.files-sync-notice",
     {
       role: "status",
-      class: "mx-3 mt-3 flex items-start gap-2 rounded-lg bg-warn-subtle-surface/50 px-3 py-2 type-helper",
+      class: noticeClass("warn", "mx-3 mt-3"),
     },
     [
       m.trust(alertDotIcon(14, "mt-0.5 shrink-0 text-warn-surface")),
-      m("div", [
-        m("div", { class: "font-medium text-body-content" }, notice.title),
-        m("div", { class: "text-body-content-secondary" }, notice.detail),
-      ]),
+      m("div", [m("div", { class: "font-medium" }, notice.title), m("div", { class: "type-helper" }, notice.detail)]),
     ],
   );
 }
@@ -536,7 +542,11 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
           m("div", { class: "flex items-center gap-2 px-3 pt-2.5 pb-2" }, [
             m("div", { class: "min-w-0 flex-1" }, [
               m("div.files-uploads-summary", { class: "type-title-sm text-body-content" }, summary),
-              m("div", { class: "type-helper text-body-content-tertiary" }, `${formatSize(loaded)} of ${formatSize(total)}`),
+              m(
+                "div",
+                { class: "type-helper text-body-content-tertiary" },
+                `${formatSize(loaded)} of ${formatSize(total)}`,
+              ),
             ]),
             busy
               ? m(Button, { sm: true, variant: "ghost", onclick: () => uploads.cancelAll() }, "Cancel")
@@ -574,7 +584,9 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
                   ),
                   m(
                     "span",
-                    { class: `shrink-0 ${item.status === "failed" ? "text-danger-surface" : "text-body-content-tertiary"}` },
+                    {
+                      class: `shrink-0 ${item.status === "failed" ? "text-danger-surface" : "text-body-content-tertiary"}`,
+                    },
                     item.status === "uploading"
                       ? `${Math.round((item.loaded / Math.max(item.file.size, 1)) * 100)}%`
                       : item.status === "done"
@@ -689,7 +701,9 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
             {
               [FOLDER_SURFACE_ATTR]: model.folder,
               class: `relative min-h-0 flex-1 ${app.viewMode === "columns" ? "overflow-hidden" : "overflow-y-auto"} ${
-                fileDropOnFolder ? "bg-accent-subtle-surface/50 outline-2 -outline-offset-4 outline-accent-surface outline-dashed" : ""
+                fileDropOnFolder
+                  ? "bg-accent-subtle-surface/50 outline-2 -outline-offset-4 outline-accent-surface outline-dashed"
+                  : ""
               }`,
               onclick: () => {
                 if (model.selection.length > 0) model.clearSelection();
