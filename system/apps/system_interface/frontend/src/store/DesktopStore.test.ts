@@ -5,7 +5,7 @@ import { getPresentUsers, resetPresenceForTesting, setOwnIdentityForTesting } fr
 import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
 import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
 import { getRoster, resetRosterForTesting } from "../model/Roster";
-import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
+import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -2482,6 +2482,27 @@ describe("pulled-out windows", () => {
     expect(storedPlacement("win-1")).toMatchObject({ is_detached: true, is_minimized: false });
   });
 
+  it("shows the avatar's pulled-out pinned window for a click on the agent, and its ghost when hidden", async () => {
+    api.apps = [chatLikeAppRecord("chat")];
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })] }),
+    ];
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    await store.detachWindow("win-chat");
+    expect(calls).toHaveLength(1);
+
+    await store.openAgentChat();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject(["request", { windowId: "win-chat" }]);
+    store.minimizeWindow("win-chat");
+    await store.openAgentChat();
+    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true, is_minimized: false });
+    expect(calls).toHaveLength(2);
+    expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
+  });
+
   it("reports the active desktop's pulled-out windows with their titles whenever the set changes", async () => {
     const { store, reports } = makePopOutStore();
     await store.start(NO_LINK);
@@ -3279,7 +3300,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(last(store.getBubbles())?.speaker).toBe("user:user-dave-9b3c");
   });
 
-  it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
+  it("drafts a mention of a clicked person through the mention launch path into the pinned window", async () => {
     const store = await startedStore();
     const chat = chatLikeAppRecord("chat", {
       launch_paths: [
@@ -3301,8 +3322,48 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
 
     expect(await store.mentionPerson("Bob")).toBe(true);
     expect(api.calls).toContain('launch:home:chat:lounge:{"message":"@Bob "}:window:win-chat');
-    expect(await store.openMainChat()).toBe(true);
-    expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
+  });
+
+  it("brings the avatar's pinned window back on the chat it holds for a click on the agent, never putting it away", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [appRecord("docs"), chatLikeAppRecord("chat")]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true }),
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    const barIds = () => barEntries(store.getState()).map((entry) => entry.window.id);
+
+    // Closed for this client: out of the bar, and the click lists it back on top.
+    await store.closeOrMinimizeWindow("win-chat");
+    expect(barIds()).toEqual(["win-1"]);
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    expect(barIds()).toEqual(["win-1", "win-chat"]);
+    // Under another window: raised.
+    store.raiseWindow("win-1");
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    // Already on top: it stays, where its own taskbar entry's click would minimize it.
+    expect(await store.openAgentChat()).toBe(true);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-chat");
+    // The window keeps its chat: nothing was launched into it.
+    expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-chat")?.path).toBe(
+      "/?chat=agent-2",
+    );
+  });
+
+  it("opens the main chat for a click on the agent when the desktop has no pinned window", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [appRecord("docs"), appRecord("notes"), chatLikeAppRecord("chat")]);
+
+    expect(await store.openAgentChat()).toBe(true);
+    expect(api.calls).toContain("launch:home:chat:new:{}:new");
   });
 
   it("opens the chat about a window's app beside it through the app-chat launch path, and tells the user when there is none", async () => {
