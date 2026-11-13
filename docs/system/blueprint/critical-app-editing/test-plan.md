@@ -234,14 +234,16 @@ stdlib `http.server` for the failure shapes. Run from the repo root.
   "" TERM; exec python3 -m http.server $PORT'`. `down --name tp-trap`: it takes about 15 s
   (the SIGTERM grace), then succeeds via SIGKILL; the port is free afterwards; the state
   dir is gone. `down` again: "no active instance", exit 0.
-- **B9 `down` deregisters both.** `down --name tp-term`: both registry rows gone, both
-  pids gone, the state dir (copies and scratch included) gone, the `-preview` tab pruned
-  from the layout on its own.
+- **B9 `down` deregisters both.** With B4's tab still open, `down --name tp-term`: exit 1,
+  stderr names the tab and `--close-windows`, and the rows, pids and state dir are
+  untouched. `down --name tp-term --close-windows`: the tab closes, both registry rows
+  gone, both pids gone, the state dir (copies and scratch included) gone.
 - **B10 `refresh` with nothing up.** Exit 1 with the "run `up` first" message.
 
 ### C. Previews per app through `preview_app.py`
 
 All from the repo root with `uv run python3`, `--worktree data/.tasks/critical-live/update-tp1`.
+A `down` below run while a preview's tab is still open passes `--close-windows`.
 
 - **C1 Chat preview.** `preview_app.py up --app chat --worktree <wt> --instance-key
   "$MINDS_CHAT_ID"`. Pass: stdout `chat-preview`; the argv the shared script got (visible
