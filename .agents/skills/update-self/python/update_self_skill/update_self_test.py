@@ -9378,6 +9378,132 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert not _refreshed_the_view(runner, apply_repo)
 
 
+# agent_restart_verdict
+
+_SETUP_BEFORE = ': "${TTYD_VERSION:=1.7.7}"\n: "${CLAUDE_CODE_VERSION:=2.1.269}"\n: "${PI_VERSION:=0.87.1}"\n'
+_SETTINGS_BEFORE = '[agent_types.claude]\nparent_type = "claude"\nversion = "2.1.269"\n\n[agent_types.chat]\nparent_type = "claude"\n'
+_AGY_INSTALLER_BEFORE = '#!/usr/bin/env bash\nAGY_VERSION="1.4.3"\n'
+_PINS_BEFORE = update_classification.HarnessPinFiles(
+    setup_system=_SETUP_BEFORE,
+    mngr_settings=_SETTINGS_BEFORE,
+    agy_installer=_AGY_INSTALLER_BEFORE,
+)
+
+
+@pytest.mark.parametrize(
+    "changed_paths, pins_after, expected_triggers",
+    [
+        (
+            ["system/scripts/setup_system.sh", ".mngr/settings.toml"],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+                mngr_settings=_SETTINGS_BEFORE.replace("2.1.269", "2.1.280"),
+            ),
+            (
+                "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+                "agent_types.claude.version: 2.1.269 -> 2.1.280",
+            ),
+        ),
+        (
+            ["system/scripts/agy_install.sh"],
+            _PINS_BEFORE._replace(
+                agy_installer=_AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7")
+            ),
+            ("AGY_VERSION: 1.4.3 -> 1.4.7",),
+        ),
+        (
+            [".pi/extensions/policy_guards.ts", ".pi/extensions/pi_extensions_test.py"],
+            _PINS_BEFORE,
+            ("harness extension: .pi/extensions/policy_guards.ts",),
+        ),
+        # A pin that is not a harness's, hook scripts run fresh on every call, and an installer
+        # edit that keeps its pin installs the same binary.
+        (
+            [
+                "system/scripts/setup_system.sh",
+                "system/scripts/agent_block_pipe_tail_head.sh",
+                "system/scripts/agy_install.sh",
+            ],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("1.7.7", "1.7.8"),
+                agy_installer=_AGY_INSTALLER_BEFORE + "# a comment\n",
+            ),
+            (),
+        ),
+    ],
+    ids=["claude-bump", "agy-bump", "pi-extension", "unrelated"],
+)
+def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
+    changed_paths: list[str],
+    pins_after: update_classification.HarnessPinFiles,
+    expected_triggers: tuple[str, ...],
+) -> None:
+    verdict = update_classification.agent_restart_verdict(
+        changed_paths, _PINS_BEFORE, pins_after
+    )
+
+    assert verdict.triggers == expected_triggers
+    assert verdict.is_needed is bool(expected_triggers)
+
+
+def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
+    # The settings file is absent from the tree the agents started from, so its pin reads as
+    # unset; that tree still names its Antigravity installer by version, as before its rename.
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git_in(tmp_path, "init", "-q")
+    _git_in(tmp_path, "config", "user.email", "test@example.com")
+    _git_in(tmp_path, "config", "user.name", "test")
+    _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
+    _write("system/scripts/agy_install-1.4.3.sh", _AGY_INSTALLER_BEFORE)
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "before")
+    _git_in(
+        tmp_path,
+        "mv",
+        "system/scripts/agy_install-1.4.3.sh",
+        "system/scripts/agy_install.sh",
+    )
+    _write(
+        "system/scripts/agy_install.sh",
+        _AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7"),
+    )
+    _write(
+        update_layout.PROVISIONER_SCRIPT,
+        _SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+    )
+    _write(update_classification.MNGR_SETTINGS_PATH, _SETTINGS_BEFORE)
+    _write(".pi/extensions/policy_guards.ts", "export default () => {};\n")
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "after")
+
+    code = update_self.main(
+        [
+            "agent-restart-verdict",
+            "--before",
+            "HEAD^1",
+            "--after",
+            "HEAD",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "needed": True,
+        "triggers": [
+            "AGY_VERSION: 1.4.3 -> 1.4.7",
+            "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+            "agent_types.claude.version: unset -> 2.1.269",
+            "harness extension: .pi/extensions/policy_guards.ts",
+        ],
+    }
+
+
 # The root venv's fresh-target swap
 
 

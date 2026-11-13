@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,6 +33,9 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
+from update_self_skill import update_agent_restarts
+from update_self_skill import update_runtime
+from update_self_skill.update_layout import APPS_REGISTRY_PATH
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -53,6 +57,7 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
@@ -104,6 +109,7 @@ from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
@@ -3021,6 +3027,139 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     mock_send.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("lifecycle", "body", "expected_status", "is_restart_expected"),
+    [
+        ("WAITING", {"only_if_idle": True}, 200, True),
+        ("RUNNING", {"only_if_idle": True}, 409, False),
+        # Without the flag the route is the plain interrupt it always was.
+        ("RUNNING", None, 200, True),
+    ],
+)
+def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
+    client: FlaskClient,
+    app: Flask,
+    lifecycle: str,
+    body: dict[str, bool] | None,
+    expected_status: int,
+    is_restart_expected: bool,
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", lifecycle)
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == expected_status
+    assert mock_run.called is is_restart_expected
+    if expected_status == 409:
+        assert response.get_json()["busy_with"] == "working"
+
+
+@pytest.mark.parametrize(
+    ("data", "content_type", "expected_status"),
+    [
+        # A script or curl posting without a JSON content type still gets the busy chat left alone.
+        ('{"only_if_idle": true}', "text/plain", 409),
+        ('{"only_if_idle": "sometimes"}', "application/json", 400),
+        ('{"only_if_idle": true, "force": true}', "application/json", 400),
+        ("[]", "application/json", 400),
+        ("not json", "application/json", 400),
+    ],
+)
+def test_an_interrupt_body_is_honoured_whatever_its_content_type_and_a_malformed_one_restarts_nothing(
+    client: FlaskClient, app: Flask, data: str, content_type: str, expected_status: int
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", "RUNNING")
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", data=data, content_type=content_type)
+
+    assert response.status_code == expected_status
+    mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("queued_block", ["first message\nsecond message", ""])
+def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: FlaskClient, queued_block: str) -> None:
+    """Unlike the flush, an empty queue still restarts: the caller asked for the restart itself."""
+    fake_watcher = _fake_queue_watcher(queued_block)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
+    ):
+        response = client.post("/api/chats/agent-123/interrupt", json={"keep_queue": True})
+
+    assert response.status_code == 200
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert [call.args[1] for call in mock_send.call_args_list] == ([queued_block] if queued_block else [])
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_message_chats_interrupt_asks_for_what_the_interrupt_route_takes() -> None:
+    """``message_chat.py --interrupt`` is standard-library only and carries its own copy of the route's
+    request; a rename here would leave it dropping the queue of every chat it restarts."""
+    assert InterruptAgentRequest.model_validate(message_chat.INTERRUPT_REQUEST).keep_queue is True
+
+
+class _TestClientHttp(update_runtime.HttpClient):
+    """update-self's HTTP client, answered by this app's test client instead of a socket."""
+
+    def __init__(self, client: FlaskClient) -> None:
+        self._client = client
+
+    def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.get(urlparse(url).path))
+
+    def post_json(self, url: str, body: Mapping[str, object], timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.post(urlparse(url).path, json=dict(body)))
+
+    @staticmethod
+    def _page_of(response: TestResponse) -> update_runtime.FetchedPage:
+        return update_runtime.FetchedPage(
+            status=response.status_code, body=response.get_data(as_text=True), headers={}
+        )
+
+
+def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(tmp_path: Path) -> None:
+    """update-self's restart pass, run against this app: it restarts the idle chat, leaves the busy ones and
+    the switching one running and says why, and skips its own chat, a stopped chat and a room.
+
+    The pass is standard-library only and reads this app's chat list and interrupt answers from its
+    own copies of their wire names, so this is what fails when the two drift apart."""
+    app, _log_path = _recording_app(tmp_path)
+    manager: AgentManager = state_of(app).agent_manager
+    own, idle, working, backgrounded, stopped, room = (f"agent-{uuid4().hex}" for _ in range(6))
+    _register_agent(app, own, "Chat-own", "WAITING")
+    _register_agent(app, idle, "Chat-idle", "WAITING")
+    _register_agent(app, working, "Chat-working", "RUNNING")
+    _register_agent(app, backgrounded, "Chat-backgrounded", BACKGROUND_LIFECYCLE_STATE)
+    _register_agent(app, stopped, "Chat-stopped", "STOPPED")
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
+    switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    workspace = tmp_path / "workspace"
+    registry = workspace / APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://chat.test"\n')
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        report = update_agent_restarts.restart_idle_agents(workspace, own, set(), _TestClientHttp(app.test_client()))
+
+    assert [entry["chat_id"] for entry in report["restarted"]] == [idle]
+    assert sorted((entry["chat_id"], entry["busy_with"]) for entry in report["left_running"]) == sorted(
+        [
+            (working, "working"),
+            (backgrounded, "waiting on background work"),
+            (switching, "switching to another agent"),
+        ]
+    )
+    assert report["failed"] == []
+    assert mock_run.call_count == 1
+
+
 @pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
 def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, client: FlaskClient, route: str) -> None:
     """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
@@ -5476,6 +5615,27 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     assert response.get_json()["block"] == "queued behind it"
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+@pytest.mark.parametrize("body", [None, {"keep_queue": True}])
+def test_an_interrupt_clears_a_compaction_its_restart_ended(tmp_path: Path, body: dict[str, bool] | None) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    marker = write_compacting_marker(state_dir, "manual")
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == 200
     assert not marker.exists()
     assert agent_id not in manager._compaction_pending_by_agent
 
