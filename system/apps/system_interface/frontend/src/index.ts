@@ -18,7 +18,7 @@ import {
 } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
-import { PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
+import { IS_CHAT_ROOT_FOCUS_ACCEPTED, PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
 import { refreshShellKeybindings } from "./model/keybindings";
 import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
@@ -245,7 +245,7 @@ function bootstrap(): void {
       opensLinks: true,
       opensCustomSchemeLinks: true,
       reportsChatOnScreen: true,
-      reportsProviderChooserOnScreen: true,
+      reportsProviderChooserOnScreen: IS_CHAT_ROOT_FOCUS_ACCEPTED,
     }),
   );
 }

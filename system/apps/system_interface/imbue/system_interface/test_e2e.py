@@ -133,6 +133,10 @@ _GEOMETRY_TOLERANCE_PX = 4
 # imbue/system_interface/test_e2e.py -> the template's root, whose built-in theme folders a themed shell copies.
 _TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
 _BUILTIN_THEMES = ("standard", "mac-classic", "windows-2000")
+# The embed contract the frontends bundle, fetched from the pinned mngr (system/scripts/fetch_mngr_assets.sh).
+_VENDORED_EMBED_CONTRACT = (
+    _TEMPLATE_ROOT / "system/vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/embed_contract.js"
+)
 # Where the theme test sets its window: clear of the shortcuts, with room past its every edge for the resizes.
 _OPEN_SPOT = (260.0, 60.0)
 # How far from a window control's centre, each way, a press must still land on it, however small a theme draws it.
@@ -3270,7 +3274,8 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
         "opensLinks": True,
         "opensCustomSchemeLinks": True,
         "reportsChatOnScreen": True,
-        "reportsProviderChooserOnScreen": True,
+        # Promised only on a contract whose validator lets a focus-chat with no chat through to the shell.
+        "reportsProviderChooserOnScreen": "PROVIDER_CHOOSER_ON_SCREEN" in _VENDORED_EMBED_CONTRACT.read_text(),
     }
 
 

@@ -249,9 +249,12 @@ announces `reportsChatOnScreen` to the chrome, promising the
 `minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
 a window on screen, and `reportsProviderChooserOnScreen`, promising the
 `minds:provider-chooser-on-screen` the chat root sends once its provider
-chooser is drawn there (and that the chat root opens that chooser on a
-workspace with nothing signed in before any chat exists), both of which the
-relay forwards up with the other `minds:` messages. The shell's page
+chooser is drawn there (and that a `minds:focus-chat` with no `chatId` brings
+the chat root up, so the chooser can open on a workspace with nothing signed
+in before any chat exists), both of which the relay forwards up with the
+other `minds:` messages. The second is `true` only when the vendored embed
+contract is v16 or later, since an older one drops a `minds:focus-chat` with
+no `chatId` before the shell sees it. The shell's page
 also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
 to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
 into the workspace) or a

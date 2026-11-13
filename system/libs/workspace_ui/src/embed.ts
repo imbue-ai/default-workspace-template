@@ -56,6 +56,11 @@ export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen" =
   "PROVIDER_CHOOSER_ON_SCREEN" in embedContract
     ? embedContract.PROVIDER_CHOOSER_ON_SCREEN
     : "minds:provider-chooser-on-screen";
+// Whether the vendored contract lets a FOCUS_CHAT without a chatId through (v16, the contract that also defines
+// PROVIDER_CHOOSER_ON_SCREEN). An older one drops that message before any handler sees it, so the chat root could not
+// be raised on entry; the shell promises reportsProviderChooserOnScreen, which covers taking that message, only when
+// this holds.
+export const IS_CHAT_ROOT_FOCUS_ACCEPTED: boolean = "PROVIDER_CHOOSER_ON_SCREEN" in embedContract;
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
 // Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
 // if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
