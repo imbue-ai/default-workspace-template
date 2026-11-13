@@ -27,19 +27,19 @@ of the model, and this is a property of the harness. Haiku has no ``[1m]`` varia
 
 The switch alias and the reported id are different strings, and the suffix shows up in
 both: an agent launched as ``opus[1m]`` reports ``claude-opus-5-5[1m]``. Fast mode is a
-per-model capability (in 2.1.323 the ``fast_mode`` capability is carried by Fable 5.2,
-Mythos 5.2, Opus 5.5, Opus 5 and Opus 4.8, and by nothing else) -- not a property of a
-family or of rank, so do not infer it from either: Fable 5.1 and Mythos 5.1 lack it.
+per-model capability, the ``fast_mode`` capability in the binary's baked-in model catalog
+-- not a property of a family or of rank, so do not infer it from either: Fable 5.2 has
+it and Fable 5.1 does not.
 
-The picker offers exactly four models -- Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5. Every
+The picker offers exactly four models -- the current Fable, Opus, Sonnet and Haiku. Every
 other option is declared with ``in_picker=False``: matchable if a live read reports it,
 never offered. That set is defined by what the four do NOT cover, so an agent sitting on
 a model the picker cannot reach still shows a name instead of falling through to the
 shrug case. Three ways in: an approved org launching Mythos, a chat that was created on
-an older pin and is still sitting on Opus 5, Sonnet 5, Haiku 4.5, Fable 5.1 or Fable 5,
-and a user typing ``/model opus-4-8`` straight into the underlying Claude Code session,
-which the picker neither offers nor prevents. The ``ultra`` effort (ultracode) is
-declared-but-hidden the same way.
+an older pin and is still sitting on a previous-generation model, and a user typing
+``/model opus-4-8`` straight into the underlying Claude Code session, which the picker
+neither offers nor prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the
+same way.
 
 Each option's ``harness_reported_model_id`` is the suffix-free API id
 (``claude-opus-5-5``), matched against a live read. An option launched with the ``[1m]``
@@ -55,10 +55,9 @@ no earlier key shadows a later one.
 
 Hidden options are not decoration: they make the catalog complete against what the
 harness can report, and each says what its model actually does. ``supports_fast`` follows
-the binary (only Mythos 5.2, Opus 5 and Opus 4.8 among them have fast). Efforts stay
-permissive -- per-model effort support is not stated plainly anywhere and the matching
-gate gives a shrug on a level the option does not declare, so guessing narrow trades a
-real risk for nothing.
+the binary's ``fast_mode`` capability. Efforts stay permissive -- per-model effort support
+is not stated plainly anywhere and the matching gate gives a shrug on a level the option
+does not declare, so guessing narrow trades a real risk for nothing.
 """
 
 import json
@@ -130,19 +129,17 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 
 # Everything the four offered models do NOT match, so the catalog is complete against
 # what the harness can report: Mythos (approved orgs only) and every previous-generation
-# model 2.1.323 still carries. These are not offered, but they are not decoration either
-# -- they exist so the catalog describes the whole model surface, and each one should say
-# what its model actually does.
+# model the pinned binary still carries. These are not offered, but they are not decoration
+# either -- they exist so the catalog describes the whole model surface, and each one should
+# say what its model actually does.
 #
-# supports_fast therefore follows the binary rather than being set permissively. In
-# 2.1.323's baked-in model catalog the fast_mode capability is carried by Fable 5.2,
-# Mythos 5.2, Opus 5.5, Opus 5 and Opus 4.8 and by nothing else, so of the hidden entries
-# only Mythos 5.2, Opus 5 and Opus 4.8 declare it -- 4.7 and 4.6 had fast removed, which is
-# also why their legacy claude-opus-4-*-fast ids are dead and cannot arrive with fast on.
-# The field is not cosmetic: resolve_model_choice DROPS a live read's fast flag on a model
-# that does not declare it, so getting this wrong on a model that really has fast makes the
-# bar show fast off while the session runs fast (and bills for it). Mythos 5.2, Opus 5 and
-# 4.8 with fast on are reachable states, hence the three exceptions; the rest are not.
+# supports_fast therefore follows the fast_mode capability in the binary's baked-in model
+# catalog rather than being set permissively, and a test checks every option against it.
+# Opus 4.7 and 4.6 had fast removed, which is also why their legacy claude-opus-4-*-fast
+# ids are dead and cannot arrive with fast on. The field is not cosmetic:
+# resolve_model_choice DROPS a live read's fast flag on a model that does not declare it,
+# so getting this wrong on a model that really has fast makes the bar show fast off while
+# the session runs fast (and bills for it).
 #
 # Efforts do NOT follow the same rule and stay permissive. Per-model effort support is
 # not something the binary states plainly (Opus 4.5 takes low/medium/high, Sonnet 4.5

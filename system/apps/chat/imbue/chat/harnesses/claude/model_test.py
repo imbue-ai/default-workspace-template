@@ -42,8 +42,8 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
 
 
 def test_picker_offers_exactly_four_models() -> None:
-    # Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5 -- in the order claude 2.1.280's own /model
-    # picker ranks them. Everything else in the catalog is display-only.
+    # In the order claude 2.1.280's own /model picker ranks them. Everything else in the
+    # catalog is display-only.
     offered = [(option.id, option.label) for option in CLAUDE_CATALOG.options if option.in_picker]
     assert offered == [
         ("fable[1m]", "Fable 5.2"),
@@ -102,12 +102,11 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 
 
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
-    # Claude 2.1.323's baked-in catalog gives fast_mode to Fable 5.2, Mythos 5.2, Opus 5.5,
-    # Opus 5 and Opus 4.8: 4.7 and 4.6 had it removed, and Fable 5.1 and Mythos 5.1 never had
-    # it, so it follows the model rather than its family or rank. resolve_model_choice drops
-    # a live read's fast flag on a model that does not declare it, so a missing flag here
-    # shows fast off on a session that is running -- and billing -- fast. Not a cosmetic
-    # field on the hidden entries.
+    # fast_mode is per model in the binary's baked-in catalog, not per family or rank: Opus
+    # 4.7 and 4.6 had it removed, and Fable 5.2 has it where Fable 5.1 does not.
+    # resolve_model_choice drops a live read's fast flag on a model that does not declare it,
+    # so a missing flag here shows fast off on a session that is running -- and billing --
+    # fast. Not a cosmetic field on the hidden entries.
     fast = [option.id for option in CLAUDE_CATALOG.options if option.supports_fast]
     assert fast == ["fable[1m]", "opus[1m]", "claude-mythos-5-2", "claude-opus-5", "claude-opus-4-8"]
 
