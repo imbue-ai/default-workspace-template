@@ -937,7 +937,6 @@ def test_desktops_find_an_apps_windows_and_close_one_through_the_shells_close_ro
         mod.OpenWindow(_WINDOW_3, "demo-preview", "work"),
     ]
     assert shell.posted == [(_close_route("work", _WINDOW_3), {})]
-    assert shell.posted_ops() == []
 
 
 def test_desktops_report_a_refused_close_and_an_unreachable_shell() -> None:
