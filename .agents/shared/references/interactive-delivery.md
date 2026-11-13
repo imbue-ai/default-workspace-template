@@ -79,7 +79,11 @@ specifics, but the shape below holds for all of them.
    uv run --no-sync workspace-layout open <slug>
    ```
 
-   Once it is retired: `serve_isolated_instance.py down --name <slug> --close-windows`.
+   Once it is retired, close its window and tear it down:
+
+   ```bash
+   uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <slug> --close-windows
+   ```
 
    Keep this phase **throwaway either way: no commits on the served branch and no
    production state** (nothing production-grade: no production scripts, data
