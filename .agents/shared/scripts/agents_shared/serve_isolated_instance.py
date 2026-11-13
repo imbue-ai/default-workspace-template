@@ -1664,7 +1664,7 @@ def _apps_its_windows_show(repo_root: Path, name: str) -> list[str]:
     """The apps a window of the instance ``name`` shows: the services its state records, and a recorded frame's own.
 
     A frame whose re-frame failed is kept as a record alone, registered as nothing,
-    while a window opened on it can still be up. None without a readable state, which
+    while a window opened on it can still be up. Empty without a readable state, which
     ``_tear_down_instance`` reports.
     """
     try:
