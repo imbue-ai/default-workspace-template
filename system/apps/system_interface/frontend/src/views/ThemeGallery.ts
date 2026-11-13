@@ -10,6 +10,7 @@
 import m from "mithril";
 import { Button, type ButtonVariant } from "@imbue/workspace-ui/src/components/Button";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { Checkbox, Switch } from "@imbue/workspace-ui/src/components/formControls";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
@@ -258,7 +259,7 @@ function tilesAndRows(): m.Children {
         {
           ...TILE_PART,
           type: "button",
-          class: "rounded-2xl border border-default bg-body-surface-raised p-4 text-left",
+          class: cardClass({ interactive: true, extra: "p-4 text-left" }),
         },
         [
           m("div", { class: "type-title-sm" }, "A tile"),
@@ -271,7 +272,7 @@ function tilesAndRows(): m.Children {
           ...TILE_PART,
           type: "button",
           "aria-pressed": "true",
-          class: "rounded-2xl border border-accent-surface bg-body-surface-raised p-4 text-left",
+          class: cardClass({ selected: true, extra: "p-4 text-left" }),
         },
         [
           m("div", { class: "type-title-sm" }, "A chosen tile"),

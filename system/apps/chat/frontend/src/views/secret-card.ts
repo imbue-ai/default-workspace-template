@@ -13,6 +13,7 @@
  */
 
 import m from "mithril";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -211,7 +212,7 @@ export interface SecretCardHandlers {
   onDeclineConfirm: () => void;
 }
 
-const CARD_CLASS = "secret-request max-w-[560px] rounded-lg border bg-body-surface-raised px-3.5 py-3";
+const CARD_CLASS = cardClass({ extra: "secret-request max-w-[560px] px-3.5 py-3" });
 
 const VERDICT_COLOR: Record<SecretResolution, string> = {
   stored: "text-accent-surface",

@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -73,15 +74,23 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         "data-start": option.key,
         ...TILE_PART,
         "aria-disabled": isDisabled ? "true" : undefined,
-        class:
-          "getting-started-tile flex h-full flex-col rounded-2xl border border-default bg-body-surface-raised p-4 text-left " +
-          (isDisabled ? "cursor-not-allowed text-body-content-tertiary" : `${HOVER_SHADOW_SELF} group cursor-pointer text-body-content`),
+        class: isDisabled
+          ? cardClass({
+              extra:
+                "getting-started-tile flex h-full flex-col p-4 text-left cursor-not-allowed text-body-content-tertiary",
+            })
+          : cardClass({
+              extra: `getting-started-tile flex h-full flex-col p-4 text-left ${HOVER_SHADOW_SELF} group cursor-pointer text-body-content`,
+            }),
         onclick: isDisabled ? undefined : pick,
       },
       [
         m(
           "span",
-          { class: "flex shrink-0 items-center" + (isDisabled ? " text-body-content-tertiary" : ` ${HOVER_GLYPH_GROUP}`) },
+          {
+            class:
+              "flex shrink-0 items-center" + (isDisabled ? " text-body-content-tertiary" : ` ${HOVER_GLYPH_GROUP}`),
+          },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-title-sm mt-3 block" }, option.title),
@@ -139,7 +148,9 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   function templatesStatus(message: string): m.Vnode {
     return m(
       "p",
-      { class: "getting-started-templates-status py-1 text-(length:--font-size-body-dense) text-body-content-tertiary" },
+      {
+        class: "getting-started-templates-status py-1 text-(length:--font-size-body-dense) text-body-content-tertiary",
+      },
       message,
     );
   }

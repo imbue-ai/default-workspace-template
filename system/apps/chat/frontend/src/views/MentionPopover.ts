@@ -8,6 +8,8 @@
 import m from "mithril";
 import type { MentionHandle } from "../models/Mentions";
 import { peopleGlyph } from "../glyphs";
+import { menuCardClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { MENU_ITEM_PART, MENU_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** Where a mention is being typed: the ``@`` at ``start``, ``query`` after it, and the row the keys selected. */
 export interface MentionDraft {
@@ -66,9 +68,11 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
   return m(
     "div",
     {
-      class:
-        "message-input-mentions absolute bottom-full left-0 z-20 mb-1 max-h-64 w-72 max-w-full overflow-y-auto " +
-        "rounded-lg border border-default bg-body-surface-raised py-1 shadow-lg",
+      // The shared menu's card and rows: a list to pick from is a menu, whatever keys move through it.
+      class: menuCardClass(
+        "message-input-mentions absolute bottom-full left-0 mb-1 max-h-64 w-72 max-w-full overflow-y-auto",
+      ),
+      ...MENU_PART,
       role: "listbox",
       "data-mention-popover": "",
       // The textarea keeps the focus (and the caret) through a click on a row.
@@ -82,11 +86,11 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
           role: "option",
           "aria-selected": index === attrs.selectedIndex ? "true" : "false",
           "data-mention-handle": handle.handle,
-          class:
-            "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-(length:--font-size-body) " +
-            (index === attrs.selectedIndex
-              ? "bg-fill-active text-body-content"
-              : "text-body-content hover:bg-fill-hover"),
+          ...MENU_ITEM_PART,
+          "data-highlighted": index === attrs.selectedIndex ? "true" : "false",
+          class: menuRowClass({
+            extra: `text-body-content ${index === attrs.selectedIndex ? "bg-fill-hover" : ""}`,
+          }),
           onclick: () => attrs.onPick(handle),
           onmouseenter: () => attrs.onHover(index),
         },

@@ -7,6 +7,7 @@
 import m from "mithril";
 import { Checkbox, FIELD_ERROR_CLASS, Switch } from "@imbue/workspace-ui/src/components/formControls";
 import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
@@ -641,7 +642,7 @@ function surfacesSection(): CatalogSection {
           "div",
           { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" },
           [
-            m("div", { class: "rounded-lg border border-default bg-body-surface-raised p-4 shadow-raised" }, [
+            m("div", { class: cardClass({ extra: "p-4 shadow-raised" }) }, [
               m("p", { class: "type-title-sm text-body-content" }, "A card"),
               m(
                 "p",

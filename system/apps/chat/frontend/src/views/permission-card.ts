@@ -12,6 +12,7 @@
  */
 
 import m from "mithril";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
@@ -220,7 +221,7 @@ export function initShellPermissionResolutions(): void {
  * and the two raw-toggle placements can't drift. */
 
 /** The card shell every state shares. */
-const CARD_CLASS = "permission-request max-w-[560px] rounded-lg border bg-body-surface-raised px-3.5 py-3";
+const CARD_CLASS = cardClass({ extra: "permission-request max-w-[560px] px-3.5 py-3" });
 
 /** The rounded subject badge; the pending body uses the 32px form, the
  *  resolved receipt the 24px one. Size + radius are resolved per call site so

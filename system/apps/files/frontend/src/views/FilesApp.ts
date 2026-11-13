@@ -9,6 +9,7 @@ import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
@@ -535,8 +536,11 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
       return m(
         "section.files-uploads",
         {
-          class:
-            "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-default bg-body-surface-raised shadow-overlay",
+          class: cardClass({
+            floating: true,
+            extra:
+              "fixed right-4 bottom-10 z-(--z-sticky) flex w-[320px] max-w-[calc(100vw-32px)] flex-col overflow-hidden",
+          }),
         },
         [
           m("div", { class: "flex items-center gap-2 px-3 pt-2.5 pb-2" }, [
