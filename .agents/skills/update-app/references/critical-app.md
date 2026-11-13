@@ -463,9 +463,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> --close-windows
    ```
 
-   `down` is idempotent and tears down the siblings it booted. This flow does not pass through
-   `update-creation` step 4, so the worker's teardown is yours. After a `0`,
-   destroy it:
+   `down` is idempotent and tears down the siblings it booted. This flow does
+   not pass through `update-creation` step 4, so the worker's teardown is
+   yours. After a `0`, destroy it:
 
    ```bash
    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
