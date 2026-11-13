@@ -51,7 +51,8 @@ export interface DictationOptions {
   engineId: EngineId;
   /** Where the page serves the voice runtime's files, as an absolute URL ending in a slash. */
   assetBase: string;
-  /** A device to insist on, for side-by-side evaluation; null lets the worker pick. */
+  /** A device to insist on (a touch device's WebAssembly, or an evaluation's override); null lets the worker
+   *  pick. */
   preferredDevice: Device | null;
 }
 

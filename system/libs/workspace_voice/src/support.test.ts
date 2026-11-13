@@ -38,8 +38,13 @@ describe("dictation support", () => {
       preferredDevice: null,
       assetBase: "https://chat.test/assets/voice/",
     });
-    // A phone or tablet gets the lighter engine (the spec's D9).
-    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch").engineId).toBe("moonshine-tiny");
+    // A phone or tablet gets the lighter engine, on WebAssembly's quantized weights even where it has WebGPU (the
+    // spec's D9: a third of the memory, which is what a phone's browser has to spare).
+    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch")).toEqual({
+      engineId: "moonshine-tiny",
+      preferredDevice: "wasm",
+      assetBase: "https://chat.test/assets/voice/",
+    });
     storage.set(ENGINE_STORAGE_KEY, "no-such-engine");
     storage.set(DEVICE_STORAGE_KEY, "wasm");
     expect(pageDictationOptions(read, "/myapp", "https://chat.test/myapp/agent-1", "desktop")).toEqual({
@@ -47,9 +52,13 @@ describe("dictation support", () => {
       preferredDevice: "wasm",
       assetBase: "https://chat.test/myapp/assets/voice/",
     });
-    // The override is for side-by-side evaluation, so it wins on any kind of device.
+    // The overrides are for side-by-side evaluation, so they win on any kind of device.
     storage.set(ENGINE_STORAGE_KEY, "moonshine-base");
-    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch").engineId).toBe("moonshine-base");
+    storage.set(DEVICE_STORAGE_KEY, "webgpu");
+    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch")).toMatchObject({
+      engineId: "moonshine-base",
+      preferredDevice: "webgpu",
+    });
   });
 
   it("spells the shortcut for the platform", () => {

@@ -1,6 +1,7 @@
 /**
  * Whether a page can offer dictation at all (the workspace-voice-input spec, D5: an unsupported device or browser
- * hides the mic), and the shortcut as the platform spells it.
+ * hides the mic), the engine and device it runs for its kind of device (D9), and the shortcut as the platform
+ * spells it.
  */
 
 import { ENGINES, defaultEngineId } from "./engines";
@@ -50,8 +51,9 @@ export interface PageDictationOptions {
 }
 
 /** The dictation a page runs: the registry's default engine for the page's kind of device unless the browser's
- *  override names a registered one, the device the override insists on, and the runtime's files under the page's
- *  base path. */
+ *  override names a registered one; the device the override insists on, else WebAssembly on a touch device
+ *  (its quantized weights take a third of the memory of WebGPU's full-precision ones, which is what a phone's
+ *  browser has to spare) and the worker's own pick elsewhere; and the runtime's files under the page's base path. */
 export function pageDictationOptions(
   storage: Pick<Storage, "getItem">,
   basePath: string,
@@ -63,7 +65,12 @@ export function pageDictationOptions(
     ? engineOverride!
     : defaultEngineId(deviceClass);
   const deviceOverride = storage.getItem(DEVICE_STORAGE_KEY);
-  const preferredDevice = deviceOverride === "webgpu" || deviceOverride === "wasm" ? deviceOverride : null;
+  const preferredDevice: Device | null =
+    deviceOverride === "webgpu" || deviceOverride === "wasm"
+      ? deviceOverride
+      : deviceClass === "touch"
+        ? "wasm"
+        : null;
   return { engineId, preferredDevice, assetBase: new URL(`${basePath}/${VOICE_ASSETS_PATH}`, pageUrl).href };
 }
 
