@@ -338,7 +338,8 @@ LAST_COMPACTION_RECORD_MAX_AGE_SECONDS: Final[float] = 300.0
 
 
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
-# fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
+# fast mode (``chat_fast_mode.py``) calls for it: it launches claude in fast mode. A harness whose spec
+# sets ``is_launch_fast_switched`` (codex) is switched fast once it is up instead (``apply_launch_fast_mode``).
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
 
@@ -493,8 +494,8 @@ def _build_chat_create_command(
     # The project the chat starts out filed in: the one it was created inside
     # when there is one, else whatever the primary agent carries. The chat agent
     # belongs to its workspace by sharing the host; it carries no workspace
-    # label. (Fast-mode launch settings ride the ``fast`` create template, so the
-    # builder takes no fast-mode flag.)
+    # label. (Fast mode rides the ``fast`` create template or a switch after the
+    # create, so the builder takes no fast-mode flag.)
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
@@ -5429,7 +5430,8 @@ class AgentManager:
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
-        what the user chose the switch by. The messages go through the send path a held send
+        what the user chose the switch by. With no pick, a chat that launches fast on a harness
+        switched fast once it is up gets that switch here. The messages go through the send path a held send
         takes; a refusal is logged the same way, and only a first message that landed is told of.
         """
         agent_info = self.get_agent_info_by_id(agent_id)
