@@ -364,10 +364,13 @@ model_reasoning_effort = "medium"
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
-# Some catalog entries (gpt-6-sol) default to the `priority` (fast) tier, and codex's TUI applies
-# a model's default tier to every turn typed in the agent terminal when no tier is configured. So
-# pin standard speed; the `fast` create template's config_overrides__extend replaces it.
-config_overrides.service_tier = "default"
+# Do not pin `service_tier` here. The visible `--remote` TUI sends the configured tier with its
+# `thread/resume`, and the app-server rebuilds an idle thread whose tier differs from it, so the
+# pin would undo every fast-mode switch the chat made before the TUI attached (on create the TUI
+# attaches only after mngr clears its hook-trust screen, often after the first switch). With no
+# tier configured, turns sent over the app-server run at the standard tier until a switch sets
+# one. A turn typed in the agent terminal on a model whose catalog default is the `priority` tier
+# (gpt-6-sol) runs fast and leaves the thread fast; the model bar shows it.
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. The source is the
