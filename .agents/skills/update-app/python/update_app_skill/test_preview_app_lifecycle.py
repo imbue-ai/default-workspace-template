@@ -22,6 +22,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from workspace_layout.answers import InventoryDocument
+from workspace_layout.shell_url import ENV_SHELL_URL, INVENTORY_ROUTE
+from workspace_layout.testing import LoopbackShell
 
 from update_app_skill import preview_app as mod
 
@@ -105,6 +108,19 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
 
 
 @pytest.fixture
+def shell_with_no_windows(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackShell]:
+    """A shell whose desktops show nothing, so ``down`` finds no window to refuse under or close."""
+    inventory = InventoryDocument(
+        is_preview=False, workspace_name="ws", desktops=(), apps=(), clients=()
+    )
+    with LoopbackShell(
+        get_answers={INVENTORY_ROUTE: (200, inventory.model_dump(mode="json"))}
+    ) as shell:
+        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
+        yield shell
+
+
+@pytest.fixture
 def repo_root_on_disk() -> Iterator[Path]:
     with tempfile.TemporaryDirectory(
         prefix="preview-lifecycle-", dir=_DISK_TEMP_ROOT
@@ -114,7 +130,10 @@ def repo_root_on_disk() -> Iterator[Path]:
 
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
-    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    repo_root_on_disk: Path,
+    shell_with_no_windows: LoopbackShell,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = repo_root_on_disk
     live_data = repo_root / "data" / ".apps" / "fixture"
@@ -164,6 +183,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
         down_code = mod.main(["down", "--app", "fixture", *repo_args])
 
     assert down_code == 0
+    assert shell_with_no_windows.posted_ops() == []
     with pytest.raises(urllib.error.URLError):
         _get(url)
     assert (
