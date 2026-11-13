@@ -104,9 +104,10 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
     # Claude 2.1.323's baked-in catalog gives fast_mode to Fable 5.2, Mythos 5.2, Opus 5.5,
     # Opus 5 and Opus 4.8: 4.7 and 4.6 had it removed, and Fable 5.1 and Mythos 5.1 never had
-    # it, so it follows the model rather than its family or rank. resolve_model_choice drops a live read's fast flag on a model that does
-    # not declare it, so a missing flag here shows fast off on a session that is running --
-    # and billing -- fast. Not a cosmetic field on the hidden entries.
+    # it, so it follows the model rather than its family or rank. resolve_model_choice drops
+    # a live read's fast flag on a model that does not declare it, so a missing flag here
+    # shows fast off on a session that is running -- and billing -- fast. Not a cosmetic
+    # field on the hidden entries.
     fast = [option.id for option in CLAUDE_CATALOG.options if option.supports_fast]
     assert fast == ["fable[1m]", "opus[1m]", "claude-mythos-5-2", "claude-opus-5", "claude-opus-4-8"]
 
