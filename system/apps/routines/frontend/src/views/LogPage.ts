@@ -17,7 +17,11 @@ export const LogPage: m.Component<LogPageAttrs> = {
       m("nav", { class: "type-helper" }, [
         m("a", { href: "/", class: "text-body-content-secondary hover:underline" }, "All routines"),
         m("span", { class: "mx-2 text-body-content-tertiary" }, "/"),
-        m("a", { href: routinePathOf(run.routine_id), class: "text-body-content-secondary hover:underline" }, routineTitle),
+        m(
+          "a",
+          { href: routinePathOf(run.routine_id), class: "text-body-content-secondary hover:underline" },
+          routineTitle,
+        ),
         m("span", { class: "mx-2 text-body-content-tertiary" }, "/"),
         m(
           "a",

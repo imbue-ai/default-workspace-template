@@ -70,7 +70,9 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
                   // longer has is the one drawing here that takes it.
                   "rounded-[32%] border-0 bg-transparent p-0 [&>svg]:size-full transition-transform " +
                   "hover:scale-110 " +
-                  (entry.isFocused ? "text-body-content shadow-overlay " : "text-body-content-secondary shadow-raised ")) +
+                  (entry.isFocused
+                    ? "text-body-content shadow-overlay "
+                    : "text-body-content-secondary shadow-raised ")) +
               // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
               // Not the avatar, though: dimming a character reads as unwell rather than as put away.
               (!isAvatar && (entry.isMinimized || entry.isDetached) ? "opacity-70 " : "") +

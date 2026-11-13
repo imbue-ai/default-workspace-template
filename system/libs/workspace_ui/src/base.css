@@ -260,74 +260,468 @@
 @theme inline {
   /* body: bg-body-surface / -secondary / -raised (each + -hover / -active, and -secondary-inactive for a background window's header), text-body-content / -secondary / -tertiary */
   --color-body-surface: var(--c-body-surface);
-  --color-body-surface-hover: oklch(from var(--c-body-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-body-surface-active: oklch(from var(--c-body-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-body-surface-hover: oklch(
+    from var(--c-body-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-active: oklch(
+    from var(--c-body-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-body-surface-secondary: var(--c-body-surface-secondary);
-  --color-body-surface-secondary-hover: oklch(from var(--c-body-surface-secondary) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-body-surface-secondary-active: oklch(from var(--c-body-surface-secondary) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-body-surface-secondary-inactive: color-mix(in srgb, var(--c-body-surface-secondary), black var(--state-inactive));
+  --color-body-surface-secondary-hover: oklch(
+    from var(--c-body-surface-secondary)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-secondary-active: oklch(
+    from var(--c-body-surface-secondary)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-secondary-inactive: color-mix(
+    in srgb,
+    var(--c-body-surface-secondary),
+    black var(--state-inactive)
+  );
   --color-body-surface-raised: var(--c-body-surface-raised);
-  --color-body-surface-raised-hover: oklch(from var(--c-body-surface-raised) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-body-surface-raised-active: oklch(from var(--c-body-surface-raised) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-body-surface-raised-hover: oklch(
+    from var(--c-body-surface-raised)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-raised-active: oklch(
+    from var(--c-body-surface-raised)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-body-content: var(--c-body-content);
   --color-body-content-secondary: var(--c-body-content-secondary);
   --color-body-content-tertiary: var(--c-body-content-tertiary);
   /* overlay: bg-overlay-surface (+ -hover / -active) / bg-overlay-scrim */
   --color-overlay-surface: var(--c-overlay-surface);
-  --color-overlay-surface-hover: oklch(from var(--c-overlay-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-overlay-surface-active: oklch(from var(--c-overlay-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-overlay-surface-hover: oklch(
+    from var(--c-overlay-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-overlay-surface-active: oklch(
+    from var(--c-overlay-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-overlay-scrim: var(--c-overlay-scrim);
   /* inverse: bg-inverse-surface (+ -hover / -active), text-inverse-content / -secondary / -tertiary */
   --color-inverse-surface: var(--c-inverse-surface);
-  --color-inverse-surface-hover: oklch(from var(--c-inverse-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-inverse-surface-active: oklch(from var(--c-inverse-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-inverse-surface-hover: oklch(
+    from var(--c-inverse-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-inverse-surface-active: oklch(
+    from var(--c-inverse-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-inverse-content: var(--c-inverse-content);
   --color-inverse-content-secondary: var(--c-inverse-content-secondary);
   --color-inverse-content-tertiary: var(--c-inverse-content-tertiary);
   /* primary: bg-primary-surface / bg-primary-subtle-surface (each + -hover / -active), text-primary-content / -subtle-content */
   --color-primary-surface: var(--c-primary-surface);
-  --color-primary-surface-hover: oklch(from var(--c-primary-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-primary-surface-active: oklch(from var(--c-primary-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-primary-surface-hover: oklch(
+    from var(--c-primary-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-surface-active: oklch(
+    from var(--c-primary-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-primary-content: var(--c-primary-content);
   --color-primary-subtle-surface: var(--c-primary-subtle-surface);
-  --color-primary-subtle-surface-hover: oklch(from var(--c-primary-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-primary-subtle-surface-active: oklch(from var(--c-primary-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-primary-subtle-surface-hover: oklch(
+    from var(--c-primary-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-subtle-surface-active: oklch(
+    from var(--c-primary-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-primary-subtle-content: var(--c-primary-subtle-content);
   /* accent: bg-accent-surface / bg-accent-subtle-surface (each + -hover / -active), text-accent-content / -subtle-content */
   --color-accent-surface: var(--c-accent-surface);
-  --color-accent-surface-hover: oklch(from var(--c-accent-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-accent-surface-active: oklch(from var(--c-accent-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-accent-surface-hover: oklch(
+    from var(--c-accent-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-surface-active: oklch(
+    from var(--c-accent-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-accent-content: var(--c-accent-content);
   --color-accent-subtle-surface: var(--c-accent-subtle-surface);
-  --color-accent-subtle-surface-hover: oklch(from var(--c-accent-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-accent-subtle-surface-active: oklch(from var(--c-accent-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-accent-subtle-surface-hover: oklch(
+    from var(--c-accent-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-subtle-surface-active: oklch(
+    from var(--c-accent-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-accent-subtle-content: var(--c-accent-subtle-content);
   /* success: bg-success-surface / bg-success-subtle-surface (each + -hover / -active), text-success-content / -subtle-content */
   --color-success-surface: var(--c-success-surface);
-  --color-success-surface-hover: oklch(from var(--c-success-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-success-surface-active: oklch(from var(--c-success-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-success-surface-hover: oklch(
+    from var(--c-success-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-surface-active: oklch(
+    from var(--c-success-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-success-content: var(--c-success-content);
   --color-success-subtle-surface: var(--c-success-subtle-surface);
-  --color-success-subtle-surface-hover: oklch(from var(--c-success-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-success-subtle-surface-active: oklch(from var(--c-success-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-success-subtle-surface-hover: oklch(
+    from var(--c-success-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-subtle-surface-active: oklch(
+    from var(--c-success-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-success-subtle-content: var(--c-success-subtle-content);
   /* warn: bg-warn-surface / bg-warn-subtle-surface (each + -hover / -active), text-warn-content / -subtle-content */
   --color-warn-surface: var(--c-warn-surface);
-  --color-warn-surface-hover: oklch(from var(--c-warn-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-warn-surface-active: oklch(from var(--c-warn-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-warn-surface-hover: oklch(
+    from var(--c-warn-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-surface-active: oklch(
+    from var(--c-warn-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-warn-content: var(--c-warn-content);
   --color-warn-subtle-surface: var(--c-warn-subtle-surface);
-  --color-warn-subtle-surface-hover: oklch(from var(--c-warn-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-warn-subtle-surface-active: oklch(from var(--c-warn-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-warn-subtle-surface-hover: oklch(
+    from var(--c-warn-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-subtle-surface-active: oklch(
+    from var(--c-warn-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-warn-subtle-content: var(--c-warn-subtle-content);
   /* danger: bg-danger-surface / bg-danger-subtle-surface (each + -hover / -active), text-danger-content / -subtle-content */
   --color-danger-surface: var(--c-danger-surface);
-  --color-danger-surface-hover: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-danger-surface-active: oklch(from var(--c-danger-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-danger-surface-hover: oklch(
+    from var(--c-danger-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-surface-active: oklch(
+    from var(--c-danger-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-danger-content: var(--c-danger-content);
   --color-danger-subtle-surface: var(--c-danger-subtle-surface);
-  --color-danger-subtle-surface-hover: oklch(from var(--c-danger-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-danger-subtle-surface-active: oklch(from var(--c-danger-subtle-surface) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-danger-subtle-surface-hover: oklch(
+    from var(--c-danger-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-subtle-surface-active: oklch(
+    from var(--c-danger-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-danger-subtle-content: var(--c-danger-subtle-content);
   /* fills: bg-fill-faint / bg-fill-hover / bg-fill-active */
   --color-fill-faint: var(--c-fill-faint);
@@ -335,14 +729,92 @@
   --color-fill-active: var(--c-fill-active);
   /* borders: border-default / border-subtle / border-focus (and ring-focus, outline-focus), each + -hover / -active */
   --color-default: var(--c-border-default);
-  --color-default-hover: oklch(from var(--c-border-default) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-default-active: oklch(from var(--c-border-default) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-default-hover: oklch(
+    from var(--c-border-default)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-default-active: oklch(
+    from var(--c-border-default)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-subtle: var(--c-border-subtle);
-  --color-subtle-hover: oklch(from var(--c-border-subtle) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-subtle-active: oklch(from var(--c-border-subtle) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-subtle-hover: oklch(
+    from var(--c-border-subtle)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-subtle-active: oklch(
+    from var(--c-border-subtle)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   --color-focus: var(--c-border-focus);
-  --color-focus-hover: oklch(from var(--c-border-focus) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
-  --color-focus-active: oklch(from var(--c-border-focus) calc(pow(max(0, (l * l * l + var(--state-flare)) * pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)), 1 / 3)) c h / alpha);
+  --color-focus-hover: oklch(
+    from var(--c-border-focus)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-focus-active: oklch(
+    from var(--c-border-focus)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
   /* wallpaper: bg-wallpaper-surface / text-wallpaper-mark */
   --color-wallpaper-surface: var(--c-wallpaper-surface);
   --color-wallpaper-mark: var(--c-wallpaper-mark);

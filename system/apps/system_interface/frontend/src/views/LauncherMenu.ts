@@ -184,7 +184,10 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           // A phone names no desktop and places what it shows minimized, so the sheet carries neither mark.
           m(
             "span",
-            { class: "min-w-0 flex-1 truncate" + (row.isMinimized && !attrs.isSheet ? " text-body-content-tertiary" : "") },
+            {
+              class:
+                "min-w-0 flex-1 truncate" + (row.isMinimized && !attrs.isSheet ? " text-body-content-tertiary" : ""),
+            },
             row.title,
           ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),

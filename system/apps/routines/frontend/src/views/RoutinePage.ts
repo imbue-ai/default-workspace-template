@@ -43,7 +43,11 @@ function runRow(run: RunRecord): m.Vnode {
     },
     [
       m("div", { class: "whitespace-nowrap text-body-content" }, run.when_text),
-      m("div", { class: "whitespace-nowrap text-body-content-secondary" }, run.trigger === "MANUAL" ? "manual" : "automatic"),
+      m(
+        "div",
+        { class: "whitespace-nowrap text-body-content-secondary" },
+        run.trigger === "MANUAL" ? "manual" : "automatic",
+      ),
       m("div", { class: `font-semibold whitespace-nowrap ${outcomeClass}` }, run.outcome_text),
       m("div", { class: "whitespace-nowrap text-body-content-secondary" }, run.duration_text),
       m("div", { class: "min-w-0 text-body-content-secondary" }, [
@@ -87,7 +91,11 @@ export const RoutinePage: m.Component<RoutinePageAttrs> = {
         ]),
         m("dt", { class: "text-body-content-tertiary" }, "Last run"),
         m("dd", { class: "text-body-content" }, row.last_run_text),
-        m("dt", { class: "text-body-content-tertiary" }, isBroken ? "Problem" : row.kind === "SKILL" ? "Runs the skill" : "Runs"),
+        m(
+          "dt",
+          { class: "text-body-content-tertiary" },
+          isBroken ? "Problem" : row.kind === "SKILL" ? "Runs the skill" : "Runs",
+        ),
         m(
           "dd",
           { class: "font-mono text-body-content" },

@@ -252,7 +252,8 @@ export function KeyboardSettingsSection(): m.Component {
       if (loadError !== null) {
         return m("p", { class: "type-helper text-danger-surface" }, `The shortcuts could not be loaded: ${loadError}`);
       }
-      if (catalog === null) return m("p", { class: "type-helper text-body-content-secondary" }, "Loading the shortcuts...");
+      if (catalog === null)
+        return m("p", { class: "type-helper text-body-content-secondary" }, "Loading the shortcuts...");
       const loaded = catalog;
       return m("div", { class: "mb-3", "data-keyboard-settings": true }, [
         ...loaded.apps

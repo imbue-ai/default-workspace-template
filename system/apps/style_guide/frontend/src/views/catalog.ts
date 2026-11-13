@@ -50,8 +50,14 @@ export function demoRow(label: string, children: m.Children): m.Vnode {
 /** A section as the catalog draws it. */
 export function renderSection(section: CatalogSection): m.Vnode {
   return m("section", { id: section.id, class: "catalog-section mb-12 scroll-mt-8" }, [
-    m("h2", { class: `type-heading text-body-content ${section.desc === undefined ? "mb-3" : "mb-1"}` }, section.title),
-    section.desc === undefined ? null : m("p", { class: "type-body text-body-content-secondary mb-4 max-w-[640px]" }, section.desc),
+    m(
+      "h2",
+      { class: `type-heading text-body-content ${section.desc === undefined ? "mb-3" : "mb-1"}` },
+      section.title,
+    ),
+    section.desc === undefined
+      ? null
+      : m("p", { class: "type-body text-body-content-secondary mb-4 max-w-[640px]" }, section.desc),
     section.body(),
   ]);
 }

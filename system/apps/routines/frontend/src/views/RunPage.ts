@@ -27,7 +27,11 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
         m("nav", { class: "type-helper" }, [
           m("a", { href: "/", class: "text-body-content-secondary hover:underline" }, "All routines"),
           m("span", { class: "mx-2 text-body-content-tertiary" }, "/"),
-          m("a", { href: routinePathOf(run.routine_id), class: "text-body-content-secondary hover:underline" }, routineTitle),
+          m(
+            "a",
+            { href: routinePathOf(run.routine_id), class: "text-body-content-secondary hover:underline" },
+            routineTitle,
+          ),
         ]),
         m("header", { class: "flex flex-col gap-1" }, [
           m("h1", { class: "type-heading-lg text-body-content" }, `${run.outcome_text}, ${run.when_text}`),
@@ -36,7 +40,9 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
             run.duration_text === "" ? "" : `, took ${run.duration_text}`,
             run.exit_code === null ? "" : `, exit code ${run.exit_code}`,
           ]),
-          run.summary === "" ? null : m("p", { class: "type-body text-body-content", "data-summary": "" }, run.summary),
+          run.summary === ""
+            ? null
+            : m("p", { class: "type-body text-body-content", "data-summary": "" }, run.summary),
           run.warnings.includes("RESTARTED_PREVIOUS_RUN")
             ? m(
                 "p",
@@ -52,7 +58,11 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
                 ? null
                 : m(
                     "li",
-                    m("a", { href: chatUrlOf(run.chat_id), class: "text-accent-surface hover:underline" }, "Open its chat"),
+                    m(
+                      "a",
+                      { href: chatUrlOf(run.chat_id), class: "text-accent-surface hover:underline" },
+                      "Open its chat",
+                    ),
                   ),
               detail.links.map((link) =>
                 m("li", m("a", { href: link.url, class: "text-accent-surface hover:underline" }, link.label)),
@@ -63,11 +73,16 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
             m("h2", { class: "type-section mb-1 text-body-content-tertiary" }, "Log"),
             m(
               "a",
-              { href: logPathOf(run.routine_id, run.run_id), class: "type-helper text-body-content-secondary hover:underline" },
+              {
+                href: logPathOf(run.routine_id, run.run_id),
+                class: "type-helper text-body-content-secondary hover:underline",
+              },
               "Whole log",
             ),
           ]),
-          detail.is_log_truncated ? m("p", { class: "type-helper text-body-content-tertiary" }, "Only the end is shown here.") : null,
+          detail.is_log_truncated
+            ? m("p", { class: "type-helper text-body-content-tertiary" }, "Only the end is shown here.")
+            : null,
           m(
             "pre",
             {

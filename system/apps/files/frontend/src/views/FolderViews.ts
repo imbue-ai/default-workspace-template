@@ -32,7 +32,8 @@ function shareBadgeFor(app: FilesController, entry: Entry): IconBadge | undefine
 
 function stateClass(app: FilesController, entry: Entry): string {
   const model = app.model;
-  if (model.dropTarget === entry.path) return "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface";
+  if (model.dropTarget === entry.path)
+    return "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface";
   if (model.isSelected(entry.path)) return "bg-accent-subtle-surface";
   return "hover:bg-fill-hover";
 }
@@ -263,7 +264,9 @@ function columnBody(
         isRenaming
           ? m(RenameField, { app, extraClass: "h-5" })
           : m("span.files-name", { class: "min-w-0 flex-1 truncate text-body-content" }, entry.name),
-        entry.isFolder ? m.trust(icon("chevron-right", { size: 14, className: "shrink-0 text-body-content-tertiary" })) : null,
+        entry.isFolder
+          ? m.trust(icon("chevron-right", { size: 14, className: "shrink-0 text-body-content-tertiary" }))
+          : null,
       ],
     );
   });

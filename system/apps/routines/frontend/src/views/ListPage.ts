@@ -63,7 +63,9 @@ function row(routine: RoutineRow): m.Vnode {
       ]),
       m("div", { class: "type-helper text-body-content-secondary" }, [
         m("div", routine.schedule_text),
-        routine.next_run_text === "" ? null : m("div", { class: "text-body-content-tertiary" }, `Next: ${routine.next_run_text}`),
+        routine.next_run_text === ""
+          ? null
+          : m("div", { class: "text-body-content-tertiary" }, `Next: ${routine.next_run_text}`),
       ]),
       m("div", { class: "flex flex-col items-start gap-1 type-helper text-body-content-secondary" }, [
         healthPill(routine),
@@ -99,7 +101,11 @@ export const ListPage: m.ClosureComponent<ListPageAttrs> = () => {
       return m("div", { class: "mx-auto flex max-w-[1040px] flex-col gap-6 px-4 py-6 sm:px-7" }, [
         m("header", { class: "flex flex-col gap-1" }, [
           m("h1", { class: "type-heading-lg text-body-content" }, "Routines"),
-          m("p", { class: "type-body text-body-content-secondary" }, "Everything in your workspace that runs on its own."),
+          m(
+            "p",
+            { class: "type-body text-body-content-secondary" },
+            "Everything in your workspace that runs on its own.",
+          ),
         ]),
         m(
           "form",

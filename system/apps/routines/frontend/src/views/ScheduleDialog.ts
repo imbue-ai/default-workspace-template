@@ -153,7 +153,10 @@ export function ScheduleDialog(): m.Component<ScheduleDialogAttrs> {
               ],
           m(
             "p",
-            { class: `type-helper mt-4 ${problem === null ? "text-body-content-secondary" : "text-danger-surface"}`, "data-reads": "" },
+            {
+              class: `type-helper mt-4 ${problem === null ? "text-body-content-secondary" : "text-danger-surface"}`,
+              "data-reads": "",
+            },
             problem ?? (sentence === "" ? "" : `${sentence}.`),
           ),
         ],

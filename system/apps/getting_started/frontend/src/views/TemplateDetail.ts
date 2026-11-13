@@ -122,7 +122,8 @@ export function TemplateDetail(): m.Component<TemplateDetailAttrs> {
             m(
               "a",
               {
-                class: "mt-5 inline-flex items-center gap-1.5 type-helper text-body-content-secondary hover:text-body-content",
+                class:
+                  "mt-5 inline-flex items-center gap-1.5 type-helper text-body-content-secondary hover:text-body-content",
                 href: template.repository_url,
                 target: "_blank",
                 rel: "noopener noreferrer",

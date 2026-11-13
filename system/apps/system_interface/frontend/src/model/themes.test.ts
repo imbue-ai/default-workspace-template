@@ -65,7 +65,9 @@ describe("parseThemeCatalog", () => {
   });
 
   it("reads the workspace color's revision the shell names", () => {
-    expect(parseThemeCatalog({ default: null, themes: [], workspace_color: "#0b292b" }).workspaceColor).toBe("#0b292b");
+    expect(parseThemeCatalog({ default: null, themes: [], workspace_color: "#0b292b" }).workspaceColor).toBe(
+      "#0b292b",
+    );
     expect(parseThemeCatalog({ default: null, themes: [], workspace_color: 7 }).workspaceColor).toBeNull();
   });
 

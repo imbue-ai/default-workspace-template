@@ -295,7 +295,10 @@ function workspaceColorLinks(doc: Document): HTMLLinkElement[] {
  */
 export function wearWorkspaceColor(revision: string, doc: Document = document): void {
   const existing = workspaceColorLinks(doc);
-  if (existing.length > 0 && existing.every((link) => link.getAttribute(WORKSPACE_COLOR_LINK_ATTRIBUTE) === revision)) {
+  if (
+    existing.length > 0 &&
+    existing.every((link) => link.getAttribute(WORKSPACE_COLOR_LINK_ATTRIBUTE) === revision)
+  ) {
     return;
   }
   const isChange = currentWorkspaceColor(doc) !== revision;

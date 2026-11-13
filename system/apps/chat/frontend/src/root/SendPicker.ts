@@ -93,7 +93,11 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
             "div",
             { class: "send-picker-rows mt-2 max-h-[40vh] overflow-y-auto", role: "listbox" },
             shown.length === 0
-              ? m("p", { class: "send-picker-no-match type-helper m-0 px-3 py-2 text-body-content-tertiary" }, NO_MATCH_MESSAGE)
+              ? m(
+                  "p",
+                  { class: "send-picker-no-match type-helper m-0 px-3 py-2 text-body-content-tertiary" },
+                  NO_MATCH_MESSAGE,
+                )
               : shown.map((row) =>
                   m(
                     "button",

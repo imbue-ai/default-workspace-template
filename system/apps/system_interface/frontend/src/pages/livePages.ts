@@ -131,7 +131,12 @@ function themeMessage(
   readonly isPreview: boolean;
   readonly workspaceColor: string | null;
 } {
-  return { theme: theme.id, revision: theme.revision, isPreview: !isRemembered, workspaceColor: currentWorkspaceColor() };
+  return {
+    theme: theme.id,
+    revision: theme.revision,
+    isPreview: !isRemembered,
+    workspaceColor: currentWorkspaceColor(),
+  };
 }
 
 /** Stops the started layer hearing theme changes: the newest layer takes this seat, as it takes the store's

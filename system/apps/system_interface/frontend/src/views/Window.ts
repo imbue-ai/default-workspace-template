@@ -105,7 +105,10 @@ export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
     "div",
-    { "data-stopped-app": "", class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface-raised" },
+    {
+      "data-stopped-app": "",
+      class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-body-surface-raised",
+    },
     [
       m("div", { class: "type-title-sm text-body-content" }, label),
       m("div", { class: "text-(length:--font-size-body-dense) text-body-content-tertiary" }, detail),
@@ -153,7 +156,10 @@ function fullscreenStrip(attrs: WindowAttrs): m.Vnode {
       [
         m(
           "span",
-          { "data-fullscreen-hint": "", class: "min-w-0 truncate text-(length:--font-size-body-dense) text-body-content-secondary" },
+          {
+            "data-fullscreen-hint": "",
+            class: "min-w-0 truncate text-(length:--font-size-body-dense) text-body-content-secondary",
+          },
           fullscreenStripHint(immersive),
         ),
         m("span", { class: "flex-1" }),

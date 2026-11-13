@@ -1415,7 +1415,10 @@ export function App(): m.Component<AppAttrs> {
               desktop === null
                 ? m(
                     "div",
-                    { class: "flex h-full items-center justify-center text-(length:--font-size-body-dense) text-body-content-tertiary" },
+                    {
+                      class:
+                        "flex h-full items-center justify-center text-(length:--font-size-body-dense) text-body-content-tertiary",
+                    },
                     state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
                   )
                 : m(Backdrop, {

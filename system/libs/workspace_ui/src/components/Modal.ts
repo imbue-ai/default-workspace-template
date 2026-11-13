@@ -19,7 +19,6 @@ import m from "mithril";
 import { FORM_LABEL_CLASS } from "./formControls";
 import { omitClassAttrs } from "./attrs";
 import { backdropDismissAttrs } from "./modalBackdrop";
-import { TEXT_BODY_SIZE } from "./typography";
 
 /* Modal shell recipe.
  * The dimmed overlay + centered card + header/title + body copy + actions row

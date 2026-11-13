@@ -379,9 +379,10 @@ const ChatRoot: m.Component = {
     return m(
       "div",
       {
-        class: ["chat-root relative flex h-screen w-screen overflow-hidden bg-body-surface", isCompact ? "flex-col" : ""].join(
-          " ",
-        ),
+        class: [
+          "chat-root relative flex h-screen w-screen overflow-hidden bg-body-surface",
+          isCompact ? "flex-col" : "",
+        ].join(" "),
         "data-compact": isCompact ? "true" : "false",
       },
       [
