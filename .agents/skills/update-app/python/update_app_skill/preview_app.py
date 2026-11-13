@@ -34,7 +34,10 @@ shows the preview it refuses, unless ``--close-windows`` closes it first.
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared boot failed (which quotes the boot log).
+       pass's preview is up, or the shared boot failed (which quotes the boot log);
+       or, for ``down``, a window still shows the preview or one of its siblings
+       (without ``--close-windows``, or one could not be closed), or a process
+       survived SIGKILL. A re-run reaches the siblings not yet torn down.
 """
 
 from __future__ import annotations
