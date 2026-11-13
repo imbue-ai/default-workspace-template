@@ -104,6 +104,19 @@ answer is not in your task file or the repo. Your lead answers what it can
 itself; a lead that is itself a worker re-raises the question to its own lead
 and forwards the answer back down.
 
+## Never sleep
+
+Never run `sleep` to wait for something you started, such as a test run, a
+server or an app's own model call. A fixed sleep guesses how long the work
+takes, and every second past the real finish is time your lead and the user
+wait for nothing. Wait on the work itself instead:
+
+- Run it in the foreground when the command ends when the work does.
+- Otherwise start it with `run_in_background` and carry on with other work;
+  its report wakes you when it ends.
+- When neither applies, check its status (a status endpoint, a file, a log
+  line) between other pieces of work, and act as soon as it shows done.
+
 ## Milestone reports (non-blocking)
 
 A **milestone** names one commit on your branch that is already worth using
