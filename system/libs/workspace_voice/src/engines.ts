@@ -1,7 +1,8 @@
 /**
  * The engine registry: every speech engine dictation can run, with the files each needs and where they come from
- * (the workspace-voice-input spec, D2 and D6). The engines are data, ``voice_models.json``, read and checked here
- * once at load; the only code an engine needs is its runtime adapter, which the worker alone imports.
+ * (the workspace-voice-input spec, D2 and D6), and the engine each kind of device runs by default (D9). The
+ * engines are data, ``voice_models.json``, read and checked here once at load; the only code an engine needs is
+ * its runtime adapter, which the worker alone imports.
  *
  * Every file is named by a Hugging Face commit, so the same bytes come down every time, and carries the size and
  * SHA-256 the download is checked against (``download.ts``).
@@ -64,7 +65,12 @@ export interface EngineSpec {
   readonly devices: readonly DeviceClass[];
 }
 
-export const DEFAULT_ENGINE_ID: EngineId = "moonshine-base";
+export interface EngineRegistry {
+  readonly engines: readonly EngineSpec[];
+  /** The engine a page runs on each kind of device unless the browser's override names another: a phone or
+   *  tablet is given the lightest engine that fits it (the spec's D9). */
+  readonly defaults: Readonly<Record<DeviceClass, EngineId>>;
+}
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const COMMIT_HEX = /^[0-9a-f]{40}$/;
@@ -165,16 +171,52 @@ function parseEngine(raw: unknown, what: string): EngineSpec {
   };
 }
 
+function parseDefault(
+  raw: Record<string, unknown>,
+  engines: readonly EngineSpec[],
+  deviceClass: DeviceClass,
+): EngineId {
+  const id = asString(raw[deviceClass], `defaults.${deviceClass}`);
+  const spec = engines.find((engine) => engine.id === id);
+  if (spec === undefined) {
+    throw new EngineRegistryError(
+      `defaults.${deviceClass} names ${JSON.stringify(id)}, which is not a registered engine`,
+    );
+  }
+  if (!spec.devices.includes(deviceClass)) {
+    throw new EngineRegistryError(
+      `defaults.${deviceClass} names ${spec.displayName}, which is not offered on ${deviceClass} devices`,
+    );
+  }
+  return id;
+}
+
 /** The registry as ``voice_models.json`` declares it, checked once; a malformed registry fails the module load. */
-export function parseEngineRegistry(raw: unknown): readonly EngineSpec[] {
+export function parseEngineRegistry(raw: unknown): EngineRegistry {
   if (!isRecord(raw) || !Array.isArray(raw.engines)) throw new EngineRegistryError("the registry must list engines");
   const engines = raw.engines.map((engine, index) => parseEngine(engine, `engines[${index}]`));
   const ids = engines.map((engine) => engine.id);
   if (new Set(ids).size !== ids.length) throw new EngineRegistryError("two engines share an id");
-  return engines;
+  if (!isRecord(raw.defaults)) {
+    throw new EngineRegistryError("the registry's defaults must name an engine for each kind of device");
+  }
+  return {
+    engines,
+    defaults: {
+      desktop: parseDefault(raw.defaults, engines, "desktop"),
+      touch: parseDefault(raw.defaults, engines, "touch"),
+    },
+  };
 }
 
-export const ENGINES: readonly EngineSpec[] = parseEngineRegistry(registry);
+const REGISTRY: EngineRegistry = parseEngineRegistry(registry);
+
+export const ENGINES: readonly EngineSpec[] = REGISTRY.engines;
+
+/** The engine a page on a ``deviceClass`` device runs unless the browser's override names another. */
+export function defaultEngineId(deviceClass: DeviceClass): EngineId {
+  return REGISTRY.defaults[deviceClass];
+}
 
 /** The engine named ``id``; a name the registry does not know is a programming error. */
 export function engineSpec(id: EngineId): EngineSpec {

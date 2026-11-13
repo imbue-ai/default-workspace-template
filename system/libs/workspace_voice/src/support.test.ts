@@ -30,21 +30,26 @@ describe("dictation support", () => {
     expect(isDictationSupported(describeHost({}))).toBe(false);
   });
 
-  it("takes the page's engine and device from the browser's overrides, else the defaults", () => {
+  it("takes the page's engine from the browser's override, else the default for its kind of device", () => {
     const storage = new Map<string, string>();
     const read = { getItem: (key: string) => storage.get(key) ?? null };
-    expect(pageDictationOptions(read, "", "https://chat.test/agent-1")).toEqual({
+    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "desktop")).toEqual({
       engineId: "moonshine-base",
       preferredDevice: null,
       assetBase: "https://chat.test/assets/voice/",
     });
+    // A phone or tablet gets the lighter engine (the spec's D9).
+    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch").engineId).toBe("moonshine-tiny");
     storage.set(ENGINE_STORAGE_KEY, "no-such-engine");
     storage.set(DEVICE_STORAGE_KEY, "wasm");
-    expect(pageDictationOptions(read, "/myapp", "https://chat.test/myapp/agent-1")).toEqual({
+    expect(pageDictationOptions(read, "/myapp", "https://chat.test/myapp/agent-1", "desktop")).toEqual({
       engineId: "moonshine-base",
       preferredDevice: "wasm",
       assetBase: "https://chat.test/myapp/assets/voice/",
     });
+    // The override is for side-by-side evaluation, so it wins on any kind of device.
+    storage.set(ENGINE_STORAGE_KEY, "moonshine-base");
+    expect(pageDictationOptions(read, "", "https://chat.test/agent-1", "touch").engineId).toBe("moonshine-base");
   });
 
   it("spells the shortcut for the platform", () => {
