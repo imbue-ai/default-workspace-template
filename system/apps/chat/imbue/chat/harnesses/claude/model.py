@@ -50,13 +50,15 @@ so the catalog is ordered such that no key precedes a longer key it prefixes: a 
 release comes before its family (``claude-opus-5-5`` before ``claude-opus-5``,
 ``claude-sonnet-5-5`` before ``claude-sonnet-5``, ``claude-fable-5-2`` and
 ``claude-fable-5-1`` before ``claude-fable-5``), and the bare family catch-alls
-(``claude-opus-4``) that would swallow their dated siblings come last. A test pins that no earlier key shadows a later one.
+(``claude-opus-4``) that would swallow their dated siblings come last. A test pins that
+no earlier key shadows a later one.
 
 Hidden options are not decoration: they make the catalog complete against what the
 harness can report, and each says what its model actually does. ``supports_fast`` follows
-the binary (only Mythos 5.2, Opus 5 and Opus 4.8 among them have fast). Efforts stay permissive -- per-model
-effort support is not stated plainly anywhere and the matching gate gives a shrug on a
-level the option does not declare, so guessing narrow trades a real risk for nothing.
+the binary (only Mythos 5.2, Opus 5 and Opus 4.8 among them have fast). Efforts stay
+permissive -- per-model effort support is not stated plainly anywhere and the matching
+gate gives a shrug on a level the option does not declare, so guessing narrow trades a
+real risk for nothing.
 """
 
 import json
