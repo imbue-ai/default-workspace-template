@@ -1494,6 +1494,7 @@ def running_workspace(
     background_tasks_root: Path | None = None,
     # Further registry rows beside the chat's, for apps a test serves itself.
     extra_rows: Sequence[str] = (),
+    is_first_listing_running: bool = False,
     is_chat_pinned: bool = False,
 ) -> Generator[RunningWorkspace, None, None]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
@@ -1508,8 +1509,10 @@ def running_workspace(
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
     shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
     background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
-    without it the chat reads none. ``is_chat_pinned`` registers the chat with its ``[pin]`` as ``app.toml`` declares
-    it, so every desktop holds one chat root window, minimized until something shows it.
+    without it the chat reads none. ``is_first_listing_running`` serves a brand-new workspace whose first read of the
+    agent list has not finished: the chat lists no agent until the test hands it a listing
+    (``AgentManager._adopt_initial_listing``). ``is_chat_pinned`` registers the chat with its ``[pin]`` as
+    ``app.toml`` declares it, so every desktop holds one chat root window, minimized until something shows it.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1630,17 +1633,22 @@ def running_workspace(
             if background_tasks_root is None
             else BackgroundTaskReader(root=background_tasks_root),
         )
-        # The agents carry the signed-in account's label, as a chat the app created would, so the
-        # page's provider row names it.
-        agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
-        with manager._lock:
+        if not is_first_listing_running:
+            # The agents carry the signed-in account's label, as a chat the app created would, so the
+            # page's provider row names it.
+            agent_labels = {"account": account_ids[0]} if is_account_signed_in else {}
+            with manager._lock:
+                for info in agents:
+                    manager._agents[info.id] = AgentStateItem(
+                        id=info.id,
+                        name=info.name,
+                        state="RUNNING",
+                        labels=agent_labels,
+                        work_dir=str(tmp_path / "work"),
+                    )
             for info in agents:
-                manager._agents[info.id] = AgentStateItem(
-                    id=info.id, name=info.name, state="RUNNING", labels=agent_labels, work_dir=str(tmp_path / "work")
-                )
-        for info in agents:
-            manager._ensure_activity_tracking(info.id)
-        manager.note_agent_list_known()
+                manager._ensure_activity_tracking(info.id)
+            manager.note_agent_list_known()
         chat_state = build_test_state(
             config=Config(chat_host="127.0.0.1", chat_port=chat_port),
             agent_manager=manager,

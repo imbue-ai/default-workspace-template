@@ -1947,6 +1947,7 @@ def test_the_provider_chooser_shown_at_entry_closes_reopens_from_the_empty_list_
         chooser.locator('[aria-label="Close"]').click()
         expect(chooser).to_have_count(0, timeout=15000)
 
+        server.chat_state.agent_manager._adopt_initial_listing([])
         welcome_frame = _chat(page, _seed_welcome_chat(page, server))
         expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
         page.wait_for_timeout(1000)
