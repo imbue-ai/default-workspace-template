@@ -38,13 +38,15 @@ The shapes:
   app to open, so one preview adds one app to the launcher and the window list
   rather than two -- and the frame registers ``--preview-title`` as its display
   name, so it reads as the app it previews rather than as its service name.
+  ``--preview-kind mock`` labels the frame a UI sketch rather than a proposed
+  change, and ``--preview-note`` adds a line under its banner.
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
   kills both servers and deregisters both services.
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
-  live program while it is still a mock -- with a banner kind and note of its own.
+  live program while it is still a mock -- with a banner kind and note.
   Nothing else is booted or registered, and ``down`` removes only the frame.
 
 The service must read its port (and, when relevant, its data dir) from the
