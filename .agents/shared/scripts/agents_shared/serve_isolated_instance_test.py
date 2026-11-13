@@ -127,6 +127,28 @@ class _RecordingRegistry(mod.Registry):
         return {entry.service_name: entry for entry in self.registered}
 
 
+@dataclass
+class _RecordingDesktops(mod.Desktops):
+    """Reports ``open_windows`` showing the apps they name; records every close, refusing ids in ``unclosable``."""
+
+    open_windows: list[mod.OpenWindow] = field(default_factory=list)
+    unclosable: frozenset[str] = frozenset()
+    is_unreadable: bool = False
+    reads: int = 0
+    closed: list[str] = field(default_factory=list)
+
+    def windows_of(self, apps: Sequence[str]) -> list[mod.OpenWindow]:
+        self.reads += 1
+        if self.is_unreadable:
+            raise mod.InstanceError("could not reach the shell")
+        return [window for window in self.open_windows if window.app in apps]
+
+    def close(self, window: mod.OpenWindow) -> None:
+        if window.window_id in self.unclosable:
+            raise mod.InstanceError(f"could not close window {window.window_id}")
+        self.closed.append(window.window_id)
+
+
 class _FakeHttp(mod.HttpClient):
     """Returns whatever ``responder(url)`` yields for GETs, with a canned body."""
 
@@ -662,7 +684,9 @@ def test_down_tears_down_servers_and_services(tmp_path: Path) -> None:
     runner = _RecordingRunner()
     registry = _RecordingRegistry()
 
-    code = mod.down(_NAME, tmp_path, runner=runner, registry=registry)
+    code = mod.down(
+        _NAME, tmp_path, runner=runner, registry=registry, desktops=_RecordingDesktops()
+    )
 
     assert code == 0
     assert runner.killed_pgroup(4242)
@@ -694,6 +718,7 @@ def test_down_escalates_to_sigkill_for_a_server_that_traps_sigterm(
         tmp_path,
         runner=runner,
         registry=_RecordingRegistry(),
+        desktops=_RecordingDesktops(),
         sleeper=lambda _seconds: None,
     )
 
@@ -714,6 +739,7 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
         tmp_path,
         runner=runner,
         registry=_RecordingRegistry(),
+        desktops=_RecordingDesktops(),
         sleeper=lambda _seconds: None,
     )
 
@@ -721,6 +747,142 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
     assert runner.signals_sent_to(4242) == [signal.SIGTERM, signal.SIGKILL]
     assert state_dir.exists()
     assert "4242" in capsys.readouterr().err
+
+
+def _preview_window(window_id: str = "win-1") -> mod.OpenWindow:
+    return mod.OpenWindow(window_id, "demo-preview", "home", "client-1")
+
+
+def test_down_refuses_and_changes_nothing_while_a_window_shows_the_instance(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Torn down under an open window, the user would be left looking at a dead server."""
+    state_dir = _write_state(tmp_path, [4242], ["demo-app", "demo-preview"])
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    desktops = _RecordingDesktops(open_windows=[_preview_window()])
+
+    code = mod.down(
+        _NAME, tmp_path, runner=runner, registry=registry, desktops=desktops
+    )
+
+    assert code == 1
+    assert not runner.killed_pgroups
+    assert registry.removed == []
+    assert desktops.closed == []
+    assert state_dir.exists()
+    err = capsys.readouterr().err
+    assert "win-1" in err
+    assert "--close-windows" in err
+
+
+def test_down_with_close_windows_closes_them_then_tears_down(tmp_path: Path) -> None:
+    state_dir = _write_state(tmp_path, [4242], ["demo-app", "demo-preview"])
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    desktops = _RecordingDesktops(
+        open_windows=[_preview_window("win-1"), _preview_window("win-2")]
+    )
+
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        desktops=desktops,
+        close_windows=True,
+    )
+
+    assert code == 0
+    assert desktops.closed == ["win-1", "win-2"]
+    assert runner.killed_pgroup(4242)
+    assert registry.removed == ["demo-app", "demo-preview"]
+    assert not state_dir.exists()
+
+
+def test_down_tears_nothing_down_when_a_window_will_not_close(tmp_path: Path) -> None:
+    state_dir = _write_state(tmp_path, [4242], ["demo-app", "demo-preview"])
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    desktops = _RecordingDesktops(
+        open_windows=[_preview_window("win-1"), _preview_window("win-2")],
+        unclosable=frozenset({"win-2"}),
+    )
+
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        desktops=desktops,
+        close_windows=True,
+    )
+
+    assert code == 1
+    assert desktops.closed == ["win-1"]
+    assert not runner.killed_pgroups
+    assert registry.removed == []
+    assert state_dir.exists()
+
+
+def test_down_tears_down_with_a_warning_when_the_desktops_cannot_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unreadable shell must not make an instance impossible to tear down."""
+    state_dir = _write_state(tmp_path, [4242], ["demo-app", "demo-preview"])
+    runner = _RecordingRunner()
+
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=_RecordingRegistry(),
+        desktops=_RecordingDesktops(is_unreadable=True),
+    )
+
+    assert code == 0
+    assert runner.killed_pgroup(4242)
+    assert not state_dir.exists()
+    assert "could not check for windows" in capsys.readouterr().err
+
+
+def test_down_of_an_instance_with_no_services_never_reads_the_desktops(
+    tmp_path: Path,
+) -> None:
+    state_dir = _write_state(tmp_path, [4242], [])
+    desktops = _RecordingDesktops()
+
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=_RecordingRunner(),
+        registry=_RecordingRegistry(),
+        desktops=desktops,
+    )
+
+    assert code == 0
+    assert desktops.reads == 0
+    assert not state_dir.exists()
+
+
+def test_a_window_closes_through_a_client_already_on_its_desktop() -> None:
+    """Naming a client on another desktop would switch that client's view to the window's."""
+    seats = [
+        mod.ClientSeat("elsewhere", "work", True),
+        mod.ClientSeat("idle-here", "home", False),
+        mod.ClientSeat("live-here", "home", True),
+    ]
+
+    assert mod.closing_client(seats, "home") == "live-here"
+    assert mod.closing_client(seats[:2], "home") == "idle-here"
+    assert mod.closing_client(seats, "unvisited") is None
+
+
+def test_a_window_on_a_desktop_no_client_is_on_is_not_closed() -> None:
+    window = mod.OpenWindow("win-1", "demo-preview", "unvisited", None)
+
+    with pytest.raises(mod.InstanceError, match="no client is on"):
+        mod.Desktops().close(window)
 
 
 @pytest.mark.parametrize(
@@ -950,7 +1112,13 @@ def test_main_routes_refresh(tmp_path: Path) -> None:
 def test_down_without_state_is_a_noop_success(tmp_path: Path) -> None:
     runner = _RecordingRunner()
 
-    code = mod.down(_NAME, tmp_path, runner=runner, registry=_RecordingRegistry())
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=_RecordingRegistry(),
+        desktops=_RecordingDesktops(),
+    )
 
     assert code == 0
     assert not runner.killed_pgroups
@@ -962,7 +1130,13 @@ def test_down_reports_unreadable_state(tmp_path: Path) -> None:
     _state_path(tmp_path).write_text("not json{")
     runner = _RecordingRunner()
 
-    code = mod.down(_NAME, tmp_path, runner=runner, registry=_RecordingRegistry())
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=_RecordingRegistry(),
+        desktops=_RecordingDesktops(),
+    )
 
     assert code == 1
 
@@ -1584,7 +1758,16 @@ def test_a_frame_never_signals_a_pid_a_restart_handed_to_another_process(
     runner.start_times = {first_pid: "7", second_pid: "8"}
 
     assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
-    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+    assert (
+        mod.down(
+            _FRAME_NAME,
+            tmp_path,
+            runner=runner,
+            registry=registry,
+            desktops=_RecordingDesktops(),
+        )
+        == 0
+    )
 
     assert not runner.killed_pgroup(first_pid)
     assert runner.killed_pgroup(second_pid)
@@ -1651,7 +1834,13 @@ def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry
     )
     assert _wrapper_arg(retry_argv, "--note") == recorded.note
     assert (
-        mod.down(_FRAME_NAME, tmp_path, runner=_RecordingRunner(), registry=registry)
+        mod.down(
+            _FRAME_NAME,
+            tmp_path,
+            runner=_RecordingRunner(),
+            registry=registry,
+            desktops=_RecordingDesktops(),
+        )
         == 0
     )
     assert mod.read_frame(_FRAME_NAME, tmp_path) is None
@@ -1686,7 +1875,16 @@ def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
         note="Sample data; refresh does not work yet.",
         inner_path="/",
     )
-    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+    assert (
+        mod.down(
+            _FRAME_NAME,
+            tmp_path,
+            runner=runner,
+            registry=registry,
+            desktops=_RecordingDesktops(),
+        )
+        == 0
+    )
     assert mod.read_frame(_FRAME_NAME, tmp_path) is None
 
 
@@ -1705,7 +1903,13 @@ def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
     spawner = _FakeSpawner()
     assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
 
-    code = mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry)
+    code = mod.down(
+        _FRAME_NAME,
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        desktops=_RecordingDesktops(),
+    )
 
     assert code == 0
     assert runner.killed_pgroup(spawner.detached_pids[0])

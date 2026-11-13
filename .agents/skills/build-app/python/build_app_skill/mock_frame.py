@@ -121,6 +121,8 @@ class Frames:
             repo_root,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
+            desktops=serve_isolated_instance.Desktops(),
+            close_windows=True,
         )
 
 
@@ -285,17 +287,12 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
     return _run_layout(layout, ["refresh", "--app", app_name])
 
 
-def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
+def down(app_name: str, repo_root: Path, *, frames: Frames) -> int:
     """Close the mock window, remove the frame, and make the app an ordinary app again.
 
     The frame comes down even when the app itself is gone (removed while still a mock);
     its registration is then left alone, since registering it would add it back.
     """
-    if layout.run(["close", frame_name(app_name)]) != 0:
-        sys.stderr.write(
-            f"note: the {frame_name(app_name)} window was not closed (see above; most "
-            "often none was open); the frame comes down regardless.\n"
-        )
     code = frames.down(app_name, repo_root)
     try:
         app = find_app(app_name, repo_root)
@@ -380,7 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "refresh":
             return refresh(args.app, repo_root, frames=Frames(), layout=layout)
-        return down(args.app, repo_root, frames=Frames(), layout=layout)
+        return down(args.app, repo_root, frames=Frames())
     except MockFrameError as exc:
         sys.stderr.write(f"mock frame: {exc}\n")
         return 1

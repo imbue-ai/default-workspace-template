@@ -318,24 +318,25 @@ def test_up_without_a_note_keeps_the_frames_note_and_a_first_frame_needs_one(
     ]
 
 
-def test_down_closes_the_mock_window_removes_the_frame_and_restores_the_app(
+def test_down_removes_the_frame_and_restores_the_app(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
     plain_row = _row(registry)
     frames = _RecordingFrames()
-    layout = _RecordingLayout()
-    assert mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=layout) == 0
+    assert (
+        mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 0
+    )
 
-    code = mock_frame.down(_APP, tmp_path, frames=frames, layout=layout)
+    code = mock_frame.down(_APP, tmp_path, frames=frames)
 
     assert code == 0
-    assert layout.ops == [["close", "inbox-status-sketch"]]
     assert frames.downs == [_APP]
     assert _row(registry) == plain_row
 
 
-def test_down_restores_the_app_even_when_no_mock_window_is_open_or_the_frame_will_not_die(
+def test_down_restores_the_app_even_when_the_frame_will_not_come_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
@@ -346,12 +347,7 @@ def test_down_restores_the_app_even_when_no_mock_window_is_open_or_the_frame_wil
         == 0
     )
 
-    code = mock_frame.down(
-        _APP,
-        tmp_path,
-        frames=frames,
-        layout=_RecordingLayout(codes_by_verb={"close": 1}),
-    )
+    code = mock_frame.down(_APP, tmp_path, frames=frames)
 
     assert code == 1
     assert _row(registry) == plain_row
@@ -362,14 +358,15 @@ def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
     frames = _RecordingFrames()
-    layout = _RecordingLayout()
-    assert mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=layout) == 0
+    assert (
+        mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout())
+        == 0
+    )
     forward_port.remove(registry, _APP)
 
-    code = mock_frame.down(_APP, tmp_path, frames=frames, layout=layout)
+    code = mock_frame.down(_APP, tmp_path, frames=frames)
 
     assert code == 0
-    assert layout.ops == [["close", "inbox-status-sketch"]]
     assert frames.downs == [_APP]
     rows = tomllib.loads(registry.read_text()).get("apps", [])
     assert [row["name"] for row in rows] == []

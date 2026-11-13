@@ -58,11 +58,15 @@ Usage:
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
-    uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
+    uv run --no-sync serve_isolated_instance.py down --name <slug> [--close-windows] [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
 registrations, and the user's window all stay put.
+
+``down`` refuses while a window on the user's desktops still shows one of the
+instance's services, since the teardown would leave it on a dead server;
+``--close-windows`` closes those windows first.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
@@ -84,8 +88,10 @@ Exit codes:
     0  Success (instance is up and healthy / rebooted in place / torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
-       rebooted server never became healthy; or, for ``down``, a recorded process
-       survived SIGKILL (its state dir is kept so it stays findable); or a bad
+       rebooted server never became healthy; or, for ``down``, a window still
+       shows the instance (without ``--close-windows``, or one could not be
+       closed; nothing is torn down), or a recorded process survived SIGKILL (its
+       state dir is kept so it stays findable); or a bad
        argument / unreadable state file.
 """
 
@@ -175,6 +181,10 @@ _STOP_INTERVAL_SECONDS = 0.5
 # uninterruptible I/O wait) and no further wait would help.
 _KILL_ATTEMPTS = 10
 _KILL_INTERVAL_SECONDS = 0.5
+
+# One read of the shell's desktops or one window close, over loopback; the same
+# budget ``workspace-layout`` gives an op.
+_LAYOUT_TIMEOUT_SECONDS = 30.0
 
 # How much of a failed boot's log to quote back on stderr. Enough to carry the
 # traceback or the refusal message that explains the failure, short enough not to
@@ -377,6 +387,110 @@ class Registry:
 
     def remove(self, repo_root: Path, service_name: str) -> None:
         forward_port.remove(forward_port.apps_file(repo_root), service_name)
+
+
+class OpenWindow(NamedTuple):
+    """A window on the user's desktops showing one of an instance's services."""
+
+    window_id: str
+    app: str
+    desktop_id: str
+    # A client already on that desktop, which the close names; None when no client is on it.
+    closing_client_id: str | None
+
+
+class ClientSeat(NamedTuple):
+    """One client of the shell: its id, the desktop it is on, and whether it is connected."""
+
+    client_id: str
+    active_desktop: str | None
+    is_connected: bool
+
+
+def closing_client(seats: Sequence[ClientSeat], desktop_id: str) -> str | None:
+    """A client already on ``desktop_id``, a connected one first; None when no client is on it.
+
+    A close names a client and the window's desktop, and the shell switches that
+    client to the desktop when it was on another one, so only a client already
+    there closes the window without moving anyone's view.
+    """
+    on_desktop = [seat for seat in seats if seat.active_desktop == desktop_id]
+    connected_first = sorted(on_desktop, key=lambda seat: not seat.is_connected)
+    return connected_first[0].client_id if connected_first else None
+
+
+class Desktops:
+    """Indirection over the shell's desktops, so tests can record which windows a teardown closes.
+
+    Its methods import the layout client where they use it: it loads pydantic, which
+    an instance with no registered service never needs.
+    """
+
+    def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
+        """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
+        from workspace_layout.client import ShellLayoutClient
+        from workspace_layout.errors import ShellOpError
+        from workspace_layout.shell_url import shell_base_url
+
+        shell = ShellLayoutClient(
+            shell_url=shell_base_url(),
+            requester=None,
+            timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
+        )
+        try:
+            inventory = shell.inventory()
+        except ShellOpError as exc:
+            raise InstanceError(f"could not read the desktops: {exc}") from exc
+        seats = [
+            ClientSeat(
+                str(client.id),
+                None if client.active_desktop is None else str(client.active_desktop),
+                client.is_connected,
+            )
+            for client in inventory.clients
+        ]
+        return [
+            OpenWindow(
+                str(window.id),
+                str(window.app),
+                str(desktop.id),
+                closing_client(seats, str(desktop.id)),
+            )
+            for desktop in inventory.desktops
+            for window in desktop.windows
+            if str(window.app) in apps
+        ]
+
+    def close(self, window: OpenWindow) -> None:
+        """Close ``window``; raises InstanceError when it cannot be closed."""
+        from workspace_layout.client import ShellLayoutClient
+        from workspace_layout.errors import ShellOpError
+        from workspace_layout.ops import WindowArgs
+        from workspace_layout.primitives import ClientId
+        from workspace_layout.shell_url import shell_base_url
+
+        if window.closing_client_id is None:
+            raise InstanceError(
+                f"window {window.window_id} ({window.app}) is on desktop "
+                f"{window.desktop_id}, which no client is on; close it from that desktop"
+            )
+        shell = ShellLayoutClient(
+            shell_url=shell_base_url(),
+            requester=None,
+            timeout_seconds=_LAYOUT_TIMEOUT_SECONDS,
+        )
+        try:
+            shell.close(
+                WindowArgs(
+                    window=window.window_id,
+                    client=ClientId(window.closing_client_id),
+                    desktop=window.desktop_id,
+                )
+            )
+        except ShellOpError as exc:
+            raise InstanceError(
+                f"could not close window {window.window_id} ({window.app}): {exc}"
+            ) from exc
 
 
 class ProbeResult(NamedTuple):
@@ -1102,8 +1216,12 @@ def up(
 
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
-    # port with nothing left recording its pid, so refuse instead.
-    if down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper) != 0:
+    # port with nothing left recording its pid, so refuse instead. Its windows stay
+    # open: the new instance registers the same names, so they show it.
+    if (
+        _tear_down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper)
+        != 0
+    ):
         sys.stderr.write(
             f"up: refusing to boot '{name}' over an instance that could not be "
             f"cleared (see above). Resolve it, or remove "
@@ -1282,7 +1400,7 @@ def up(
             "puts it on the user's screen. Run "
             f"`uv run --no-sync {_SELF_HINT} refresh --name {name}` to pick up a later "
             f"edit on this same port, and `uv run --no-sync {_SELF_HINT} down --name "
-            f"{name}` to tear it down.\n"
+            f"{name} --close-windows` to close its window and tear it down.\n"
         )
     else:
         sys.stdout.write(f"{inner_url}\n")
@@ -1508,6 +1626,78 @@ def frame(
 
 
 def down(
+    name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    registry: Registry,
+    desktops: Desktops,
+    close_windows: bool = False,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
+    """Tear down the instance for ``name`` as ``_tear_down`` does, unless a window still shows it.
+
+    A window on the user's desktops showing one of its services would be left on a
+    dead server, so with one open this refuses and changes nothing, unless
+    ``close_windows``, which closes them first; a window that cannot be closed
+    refuses the same way. When the desktops cannot be read, no window is known to
+    show it, and the teardown goes ahead with a warning.
+    """
+    services = _recorded_services(repo_root, name)
+    if services and _windows_block_teardown(
+        name, services, desktops, close_windows=close_windows
+    ):
+        return 1
+    return _tear_down(
+        name, repo_root, runner=runner, registry=registry, sleeper=sleeper
+    )
+
+
+def _recorded_services(repo_root: Path, name: str) -> list[str]:
+    """The services the state for ``name`` records; none without a readable state, which ``_tear_down`` reports."""
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list(state.get("services") or []) if isinstance(state, dict) else []
+
+
+def _windows_block_teardown(
+    name: str, services: Sequence[str], desktops: Desktops, *, close_windows: bool
+) -> bool:
+    """Close the windows showing ``services`` when ``close_windows``; True while one stays open."""
+    try:
+        windows = desktops.windows_of(services)
+    except InstanceError as exc:
+        sys.stderr.write(
+            f"warning: could not check for windows showing '{name}' ({exc}); tearing "
+            "it down regardless.\n"
+        )
+        return False
+    if not windows:
+        return False
+    if not close_windows:
+        listed = ", ".join(
+            f"{window.window_id} ({window.app}, desktop {window.desktop_id})"
+            for window in windows
+        )
+        sys.stderr.write(
+            f"error: instance '{name}' is NOT torn down: window(s) {listed} still show "
+            "it, and would be left on a dead server. Re-run with --close-windows to "
+            "close them first (the user sees them close).\n"
+        )
+        return True
+    for window in windows:
+        try:
+            desktops.close(window)
+        except InstanceError as exc:
+            sys.stderr.write(f"error: instance '{name}' is NOT torn down: {exc}\n")
+            return True
+    sys.stderr.write(f"closed {len(windows)} window(s) showing '{name}'.\n")
+    return False
+
+
+def _tear_down(
     name: str,
     repo_root: Path,
     *,
@@ -1824,6 +2014,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Idempotent.",
     )
     down_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
+    down_parser.add_argument(
+        "--close-windows",
+        action="store_true",
+        help="Close the windows on the user's desktops that still show the instance "
+        "first; without it, an open one refuses the teardown.",
+    )
     _add_repo_root_arg(down_parser)
 
     refresh_parser = subparsers.add_parser(
@@ -1875,7 +2071,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             venv_linker=VenvLinker(),
         )
     if args.command == "down":
-        return down(args.name, repo_root, runner=Runner(), registry=Registry())
+        return down(
+            args.name,
+            repo_root,
+            runner=Runner(),
+            registry=Registry(),
+            desktops=Desktops(),
+            close_windows=args.close_windows,
+        )
     if args.command == "refresh":
         return refresh(
             args.name,
