@@ -23,6 +23,17 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
+import {
+  SYSTEM_MONITOR_APP_NAME,
+  SYSTEM_MONITOR_PAGES,
+  currentResourceGauge,
+  isResourceGaugeStale,
+  saveSettings as saveResourceGaugeSettings,
+  startCardRefresh,
+  stopCardRefresh,
+  systemMonitorPathOf,
+  type GaugeResource,
+} from "../model/resourceGauge";
 import type {
   AppRecord,
   AppTheming,
@@ -74,6 +85,8 @@ import { Backdrop } from "./Backdrop";
 import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { ResourceGaugeDialog } from "./ResourceGaugeDialog";
+import { ResourceCard } from "./tray/ResourceCard";
 import { LauncherMenu } from "./LauncherMenu";
 import { GRID_SHARE, gridFor, overviewPresentationOf } from "./Overview";
 import type { OverviewAttrs, OverviewGrid, OverviewTile } from "./Overview";
@@ -204,6 +217,8 @@ export function App(): m.Component<AppAttrs> {
   let themeDialogDesktopId: string | null = null;
   /** Whether the keyboard shortcuts dialog is up. */
   let isKeyboardShortcutsDialogOpen = false;
+  /** Whether the resource gauge's settings dialog is up. */
+  let isResourceGaugeDialogOpen = false;
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
   let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
@@ -233,6 +248,9 @@ export function App(): m.Component<AppAttrs> {
   const trayCard = createTrayCardHover((card) => {
     // A person's card reads what they are looking at as it opens (the multiplayer spec, section 6.3).
     if (card?.kind === "person" && store !== null) void store.refreshClients();
+    // The resource card shows exact figures, which the tray's pushes are too coarse for: it fetches while open.
+    if (card?.kind === "resources") startCardRefresh(() => m.redraw());
+    else stopCardRefresh();
     m.redraw();
   });
 
@@ -835,6 +853,7 @@ export function App(): m.Component<AppAttrs> {
           isKeyboardShortcutsDialogOpen = true;
         },
       },
+      ...resourceGaugeSettingsRows("resource-gauge", "Resource gauge..."),
     ];
   }
 
@@ -943,6 +962,22 @@ export function App(): m.Component<AppAttrs> {
         onOpenChat: (chatId) => {
           trayCard.close();
           void current.showChat(chatId);
+        },
+      });
+    }
+    if (open.kind === "resources") {
+      const view = currentResourceGauge();
+      if (view === null) return null;
+      return m(ResourceCard, {
+        ...frame,
+        view,
+        isStale: isResourceGaugeStale(now.getTime()),
+        now,
+        canChangeSettings: isViewerOwner(),
+        onOpen: (resource) => openSystemMonitorOn(current, resource),
+        onOpenSettings: () => {
+          trayCard.close();
+          isResourceGaugeDialogOpen = true;
         },
       });
     }
@@ -1109,6 +1144,44 @@ export function App(): m.Component<AppAttrs> {
       },
       onCancel: () => {
         wallpaperDialogDesktopId = null;
+      },
+    });
+  }
+
+  /** Whether the viewer is the workspace's owner, whose alone the gauge's settings are (the warnings notify them). */
+  function isViewerOwner(): boolean {
+    const identity = getOwnIdentity();
+    return identity === null || identity.owner;
+  }
+
+  /** The row that opens the gauge's settings, for the owner once the gauge has arrived; no row otherwise. */
+  function resourceGaugeSettingsRows(key: string, label: string): MenuRow[] {
+    if (!isViewerOwner() || currentResourceGauge() === null) return [];
+    return [
+      {
+        kind: "action",
+        key,
+        label,
+        onSelect: () => {
+          isResourceGaugeDialogOpen = true;
+        },
+      },
+    ];
+  }
+
+  function openSystemMonitorOn(current: DesktopStore, resource: GaugeResource): void {
+    trayCard.close();
+    void current.showAppPage(SYSTEM_MONITOR_APP_NAME, systemMonitorPathOf(resource), SYSTEM_MONITOR_PAGES);
+  }
+
+  function resourceGaugeDialogView(): m.Children {
+    const view = currentResourceGauge();
+    if (view === null) return null;
+    return m(ResourceGaugeDialog, {
+      settings: view.settings,
+      onSave: (settings) => saveResourceGaugeSettings(settings, () => m.redraw()),
+      onClose: () => {
+        isResourceGaugeDialogOpen = false;
       },
     });
   }
@@ -1322,6 +1395,7 @@ export function App(): m.Component<AppAttrs> {
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
       trayCard.dispose();
+      stopCardRefresh();
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -1539,6 +1613,19 @@ export function App(): m.Component<AppAttrs> {
               onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
               onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
               onHoverEnd: trayCard.leaveEntry,
+              resourceGauge: {
+                view: currentResourceGauge(),
+                isStale: isResourceGaugeStale(now.getTime()),
+                onOpen: (resource) => openSystemMonitorOn(current, resource),
+                onContextMenu: (x, y) => {
+                  const rows = resourceGaugeSettingsRows("resource-gauge-settings", "Resource gauge settings...");
+                  if (rows.length === 0) return;
+                  trayCard.close();
+                  openMenuAt({ kind: "element", rows }, anchorForPoint(x, y));
+                },
+                onHoverStart: (element) => trayCard.enterEntry({ kind: "resources" }, element),
+                onHoverEnd: trayCard.leaveEntry,
+              },
             },
             onEntryClick,
             onEntryContextMenu,
@@ -1559,6 +1646,7 @@ export function App(): m.Component<AppAttrs> {
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
           isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
+          isResourceGaugeDialogOpen ? resourceGaugeDialogView() : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),

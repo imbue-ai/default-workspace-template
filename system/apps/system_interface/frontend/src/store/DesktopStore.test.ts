@@ -4,6 +4,7 @@ import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
 import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
+import { currentResourceGauge, resetResourceGaugeForTesting } from "../model/resourceGauge";
 import { getRoster, resetRosterForTesting } from "../model/Roster";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
@@ -144,6 +145,7 @@ afterEach(() => {
   resetPresenceForTesting();
   resetRosterForTesting();
   resetChatsActivityForTesting();
+  resetResourceGaugeForTesting();
   vi.useRealTimers();
 });
 
@@ -3178,6 +3180,20 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(workingOn().map((chat) => chat.title)).toEqual(["Main chat"]);
     expect(redraws).toBe(before + 2);
     expect(store.getBubbles()).toEqual([]);
+  });
+
+  it("takes the resource gauge the shell pushes and redraws", async () => {
+    let redraws = 0;
+    await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    socket.deliver().onResourceGaugeChanged({
+      settings: { visibility: "always" },
+      readings: { cpu: null, memory: null, disk: null },
+      alerts: [{ resource: "disk", severity: "warning", headline: "Disk space is low", detail: "3.2 GB left" }],
+      recent_stops: [],
+    });
+    expect(currentResourceGauge()?.alerts.map((alert) => alert.headline)).toEqual(["Disk space is low"]);
+    expect(redraws).toBe(before + 1);
   });
 
   it("raises a bubble per speaker, puts it away after its lifetime or on a dismiss, and opens its chat on a click", async () => {

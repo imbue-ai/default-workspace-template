@@ -12,6 +12,8 @@ dependencies = [
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.
     "defusedxml>=0.7",
+    # The tray's resource gauge reads the disk as the System Monitor does, quota included.
+    "disk-headroom",
     # The announcement stream's archive rule, shared with the share gateway's request counts.
     "event-streams",
     # A registration bounds its own request body, a per-request setter Flask 3.1 added.
@@ -21,6 +23,8 @@ dependencies = [
     "imbue-common",
     # The latchkey gateway's address, credentials and headers, read from the environment mngr injects.
     "latchkey-access",
+    # The resource gauge reads memory through the memory guard's reader and CPU from its sampler's file.
+    "oom-priority",
     "pydantic-settings>=2.13.1",
     # The home-screen icon rasterizes the avatar's SVG to PNG; its wheels bundle resvg, so no system library.
     "resvg-py>=0.5.0",

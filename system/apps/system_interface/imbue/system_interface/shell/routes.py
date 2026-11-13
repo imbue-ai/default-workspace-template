@@ -78,6 +78,9 @@ from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.errors import WindowPoppedOutError
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -89,6 +92,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
+from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.theme_routes import register_theme_routes
@@ -454,6 +458,19 @@ def set_tour() -> ResponseReturnValue:
     return model_response(get_state().shell.tour.read())
 
 
+def get_resource_gauge() -> ResponseReturnValue:
+    """The tray's resource gauge: the user's settings, the latest reading of each resource, and the raised warnings."""
+    return model_response(get_state().shell.resource_gauge.view())
+
+
+def set_resource_gauge_settings() -> ResponseReturnValue:
+    """Keep the gauge's settings (when it is shown, and each warning level), answering the gauge as it now stands.
+    The warnings notify the owner, so the settings are the owner's alone."""
+    if not request_identity().owner:
+        return detail_response("only the workspace's owner changes the resource gauge's settings", HTTP_FORBIDDEN)
+    return model_response(get_state().shell.resource_gauge.update_settings(parse_request_body(ResourceGaugeSettings)))
+
+
 def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
@@ -490,6 +507,15 @@ def register_shell_routes(application: Flask) -> None:
     )
     application.add_url_rule(TOUR_ROUTE, view_func=get_tour, methods=["GET"], endpoint="get_tour")
     application.add_url_rule(TOUR_ROUTE, view_func=set_tour, methods=["POST"], endpoint="set_tour")
+    application.add_url_rule(
+        RESOURCE_GAUGE_ROUTE, view_func=get_resource_gauge, methods=["GET"], endpoint="get_resource_gauge"
+    )
+    application.add_url_rule(
+        RESOURCE_GAUGE_SETTINGS_ROUTE,
+        view_func=set_resource_gauge_settings,
+        methods=["POST"],
+        endpoint="set_resource_gauge_settings",
+    )
     application.add_url_rule(
         "/api/apps/<name>/stop",
         view_func=stop_app,
