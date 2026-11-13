@@ -2,6 +2,8 @@ from pathlib import Path
 
 from workspace_themes.contract import CORE_PARTS, THEME_MANIFEST_FILENAME
 from workspace_themes.migration import (
+    FolderMigration,
+    find_merge_warnings,
     is_contract_1_theme,
     migrate_manifest_text,
     migrate_style_text,
@@ -21,6 +23,7 @@ def test_declared_and_referenced_tokens_take_their_contract_2_names() -> None:
         '[data-part="badge"] { color: var(--c-body-content-tertiary); border-color: var(--c-border-default); }\n'
     )
     assert result.dropped == ()
+    assert result.declared == (("--c-bg", "#fff"), ("--c-text-primary", "#000"))
 
 
 def test_a_declared_hover_token_is_dropped_and_a_referenced_one_reads_its_surface() -> (
@@ -79,14 +82,16 @@ def test_a_migrated_folder_validates_and_a_second_run_changes_nothing(
     folder = _contract_1_theme(tmp_path / "paper")
 
     assert is_contract_1_theme(folder)
-    assert migrate_theme_folder(folder) == ("--c-accent-hover",)
+    assert migrate_theme_folder(folder) == FolderMigration(
+        dropped=("--c-accent-hover",)
+    )
     after_first = {
         path.name: path.read_text(encoding="utf-8")
         for path in folder.rglob("*")
         if path.is_file()
     }
     assert not is_contract_1_theme(folder)
-    assert migrate_theme_folder(folder) == ()
+    assert migrate_theme_folder(folder) == FolderMigration()
     assert {
         path.name: path.read_text(encoding="utf-8")
         for path in folder.rglob("*")
@@ -103,3 +108,67 @@ def test_a_migrated_folder_validates_and_a_second_run_changes_nothing(
         ),
     )
     assert problems == []
+
+
+def test_tokens_that_become_one_with_different_colors_are_named() -> None:
+    (warning,) = find_merge_warnings(
+        [("--c-bg-sidebar", "#eee"), ("--c-surface-secondary", "#ddd")]
+    )
+
+    assert warning.startswith(
+        "--c-bg-sidebar (#eee), --c-surface-secondary (#ddd) are one token in contract 2, --c-body-surface-secondary"
+    )
+
+
+def test_tokens_that_become_one_with_the_same_color_say_nothing() -> None:
+    assert (
+        find_merge_warnings(
+            [("--c-bg-sidebar", "#EEE"), ("--c-surface-secondary", "#eee")]
+        )
+        == ()
+    )
+
+
+def test_a_content_color_unlike_the_page_color_is_named() -> None:
+    warnings = find_merge_warnings([("--c-bg", "#d4d0c8"), ("--c-surface", "#ffffff")])
+
+    assert warnings == (
+        "app pages are drawn in the page color now, --c-body-surface (was --c-bg (#d4d0c8)), so --c-surface "
+        "(#ffffff) now colors only fields, cards and menus (--c-body-surface-raised); set --c-body-surface to that "
+        "color if the pages should keep it",
+    )
+
+
+def test_a_content_color_without_a_page_color_is_named() -> None:
+    (warning,) = find_merge_warnings([("--c-bg-chat", "#fafafa")])
+
+    assert "--c-bg, which the theme does not set" in warning
+    assert "--c-bg-chat (#fafafa)" in warning
+
+
+def test_a_content_color_matching_the_page_color_says_nothing() -> None:
+    assert find_merge_warnings([("--c-bg", "#fff"), ("--c-surface", "#fff")]) == ()
+
+
+def test_only_the_content_colors_unlike_the_page_color_are_named() -> None:
+    warnings = find_merge_warnings(
+        [("--c-bg", "#ccc"), ("--c-surface", "#ccc"), ("--c-bg-chat", "#fff")]
+    )
+
+    assert "so --c-bg-chat (#fff) now colors" in warnings[-1]
+    assert "--c-surface (#ccc)" not in warnings[-1]
+
+
+def test_a_folders_warnings_read_every_style_file(tmp_path: Path) -> None:
+    folder = _contract_1_theme(tmp_path / "paper")
+    (folder / "apps" / "files.css").write_text(
+        ":root { --c-bg: #f0e8d8; }\n", encoding="utf-8"
+    )
+    (folder / "tokens.css").write_text(
+        ":root { --c-surface: #ffffff; }\n", encoding="utf-8"
+    )
+
+    (warning,) = migrate_theme_folder(folder).warnings
+
+    assert "--c-bg (#f0e8d8)" in warning
+    assert "--c-surface (#ffffff)" in warning

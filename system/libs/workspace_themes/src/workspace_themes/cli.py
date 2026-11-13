@@ -291,11 +291,15 @@ def migrate_themes(theme_ids: Sequence[str], is_all: bool, repo_root: str) -> No
             raise click.ClickException(
                 f"{folder.name}: no theme folder has this id in {themes_root}"
             )
-        dropped = migrate_theme_folder(folder)
+        migration = migrate_theme_folder(folder)
         note = (
-            f" (dropped {', '.join(dropped)}: hover is computed now)" if dropped else ""
+            f" (dropped {', '.join(dict.fromkeys(migration.dropped))}: hover is computed now)"
+            if migration.dropped
+            else ""
         )
         click.echo(f"{folder.name}: on contract {CONTRACT_VERSION}{note}")
+        for warning in migration.warnings:
+            click.echo(f"{folder.name}: check: {warning}")
 
 
 @main.command("bundle")

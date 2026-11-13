@@ -12,8 +12,8 @@ import json
 import math
 import re
 from pathlib import Path
-from urllib.parse import quote
 from typing import Final
+from urllib.parse import quote
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
