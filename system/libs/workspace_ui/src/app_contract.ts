@@ -191,8 +191,10 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
-  /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
-  onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
+  /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it.
+   *  `workspaceColor`: the workspace color's revision (docs/system/blueprint/brand-design-system/), null from an
+   *  older shell. */
+  onTheme?: (theme: string, revision: string, isPreview: boolean, workspaceColor: string | null) => void;
   /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
   onKeybindingsChanged?: () => void;
   capabilities?: ShellCapabilities;
@@ -261,12 +263,15 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
-function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
+function readTheme(
+  message: Record<string, unknown>,
+): { theme: string; revision: string; isPreview: boolean; workspaceColor: string | null } | null {
   if (typeof message.theme !== "string") return null;
   return {
     theme: message.theme,
     revision: typeof message.revision === "string" ? message.revision : "",
     isPreview: message.isPreview === true,
+    workspaceColor: typeof message.workspaceColor === "string" ? message.workspaceColor : null,
   };
 }
 
@@ -274,7 +279,9 @@ function readTheme(message: Record<string, unknown>): { theme: string; revision:
  * Follow the shell's `shell:theme` without connecting to it: for the page kit, which runs beside whatever
  * `connectToShell` the page makes itself. Answers a function that stops following.
  */
-export function followShellTheme(onTheme: (theme: string, revision: string, isPreview: boolean) => void): () => void {
+export function followShellTheme(
+  onTheme: (theme: string, revision: string, isPreview: boolean, workspaceColor: string | null) => void,
+): () => void {
   const boundWindow = window;
   if (boundWindow.parent === boundWindow) return () => undefined;
 
@@ -285,7 +292,7 @@ export function followShellTheme(onTheme: (theme: string, revision: string, isPr
     const message = data as Record<string, unknown>;
     if (message.type !== SHELL_THEME) return;
     const theme = readTheme(message);
-    if (theme !== null) onTheme(theme.theme, theme.revision, theme.isPreview);
+    if (theme !== null) onTheme(theme.theme, theme.revision, theme.isPreview, theme.workspaceColor);
   }
 
   boundWindow.addEventListener("message", onMessage);
@@ -436,7 +443,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         return;
       case SHELL_THEME: {
         const theme = readTheme(message);
-        if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
+        if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview, theme.workspaceColor);
         return;
       }
       case SHELL_KEYBINDINGS_CHANGED:

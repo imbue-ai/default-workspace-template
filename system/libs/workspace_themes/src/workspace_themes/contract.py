@@ -7,7 +7,7 @@ from typing import Final
 
 from workspace_themes.primitives import ChromeSlot, ThemeId, TitleAlign
 
-CONTRACT_VERSION: Final[int] = 1
+CONTRACT_VERSION: Final[int] = 2
 
 STANDARD_THEME_ID: Final[ThemeId] = ThemeId("standard")
 
@@ -18,6 +18,13 @@ BUNDLE_FILE_NAME: Final[str] = "theme.css"
 # The roots a workspace's themes are found in, relative to the repo root, in the order they are scanned.
 BUILTIN_THEMES_DIRECTORY: Final[str] = "system/themes"
 WORKSPACE_THEMES_DIRECTORY: Final[str] = "themes"
+# Where the shell keeps the workspace color it last read from Imbue Studio's label, for every app to serve.
+WORKSPACE_COLOR_STATE_PATH: Final[str] = "data/.state/workspace_color.json"
+# Where every app serves the keys that color stands for, beside the theme bundle.
+WORKSPACE_COLOR_ROUTE: Final[str] = "/_static/workspace_color.css"
+# The standard wallpaper the shell draws in the workspace color's wallpaper ramp. The workspace color's stylesheet
+# names it at the color's revision (--desk-studio-wallpaper), so a new color redraws it with everything else.
+STUDIO_WALLPAPER_URL: Final[str] = "/wallpapers/bundled/studio"
 # Where icons generated in a workspace for a built-in theme are kept, so the built-in folder stays as shipped.
 GENERATED_ICONS_DIRECTORY: Final[str] = "data/.themes"
 
@@ -88,6 +95,8 @@ CORE_PARTS: Final[tuple[str, ...]] = (
     "button",
     "field",
     "select",
+    "checkbox",
+    "switch",
     "menu",
     "menu-item",
     "menu-separator",
@@ -102,48 +111,114 @@ CORE_PARTS: Final[tuple[str, ...]] = (
     "avatar",
 )
 
-COLOR_TOKENS: Final[tuple[str, ...]] = (
-    "--c-accent",
-    "--c-accent-hover",
-    "--c-accent-light",
-    "--c-bg",
-    "--c-bg-chat",
-    "--c-bg-code",
-    "--c-bg-composer",
-    "--c-bg-sidebar",
-    "--c-bg-user-bubble",
-    "--c-border",
-    "--c-border-code",
-    "--c-border-faint",
-    "--c-border-strong",
-    "--c-bubble-other",
-    "--c-danger",
-    "--c-danger-bg",
-    "--c-danger-border",
-    "--c-danger-hover",
-    "--c-fill-active",
+# A color is one key per ramp; every other color is computed from the keys (docs/system/blueprint/brand-design-system/).
+RAMP_NAMES: Final[tuple[str, ...]] = (
+    "neutral",
+    "primary",
+    "accent",
+    "success",
+    "warn",
+    "danger",
+    "wallpaper",
+)
+RAMP_STEP_COUNT: Final[int] = 12
+# The roles that each wear their ramp's key as a solid surface, with a subtle tint beside it.
+SURFACE_ROLE_NAMES: Final[tuple[str, ...]] = (
+    "primary",
+    "accent",
+    "success",
+    "warn",
+    "danger",
+)
+
+KEY_TOKENS: Final[tuple[str, ...]] = tuple(f"--c-{ramp}-key" for ramp in RAMP_NAMES)
+
+RAMP_TOKENS: Final[tuple[str, ...]] = tuple(
+    f"--c-{ramp}-{step}"
+    for ramp in RAMP_NAMES
+    for step in range(1, RAMP_STEP_COUNT + 1)
+)
+
+ROLE_TOKENS: Final[tuple[str, ...]] = (
+    "--c-body-surface",
+    "--c-body-surface-secondary",
+    "--c-body-surface-raised",
+    "--c-body-content",
+    "--c-body-content-secondary",
+    "--c-body-content-tertiary",
+    "--c-overlay-surface",
+    "--c-overlay-scrim",
+    "--c-inverse-surface",
+    "--c-inverse-content",
+    "--c-inverse-content-secondary",
+    "--c-inverse-content-tertiary",
+    *(
+        f"--c-{role}-{suffix}"
+        for role in SURFACE_ROLE_NAMES
+        for suffix in ("surface", "content", "subtle-surface", "subtle-content")
+    ),
     "--c-fill-faint",
     "--c-fill-hover",
-    "--c-inverse-surface",
-    "--c-inverse-surface-hover",
-    "--c-shadow-overlay",
+    "--c-fill-active",
+    "--c-border-default",
+    "--c-border-subtle",
+    "--c-border-focus",
+    "--c-wallpaper-surface",
+    "--c-wallpaper-mark",
     "--c-shadow-raised",
-    "--c-step-done",
-    "--c-step-pending",
-    "--c-stop-button",
-    "--c-stop-button-hover",
-    "--c-success",
-    "--c-success-bg",
-    "--c-success-border",
-    "--c-surface",
-    "--c-surface-secondary",
-    "--c-text-faint",
-    "--c-text-on-accent",
-    "--c-text-primary",
-    "--c-text-secondary",
-    "--c-warning",
-    "--c-warning-bg",
+    "--c-shadow-overlay",
 )
+
+COLOR_TOKENS: Final[tuple[str, ...]] = (*KEY_TOKENS, *RAMP_TOKENS, *ROLE_TOKENS)
+
+# The dials of the computed hover and active shades, which are never tokens themselves: the contrast step a hover
+# takes, how far toward black that step is measured from, and how much darker a background window's header is.
+STATE_TOKENS: Final[tuple[str, ...]] = (
+    "--state-ratio",
+    "--state-flare",
+    "--state-inactive",
+)
+
+# Contract 1's tokens that contract 2 renamed or dropped, and what each became; None for the computed hover and active shades,
+# which are no longer tokens. The migration rewrites a contract-1 theme with it, and the validator names the new
+# token when a contract-2 theme still sets an old one.
+CONTRACT_1_RENAMES: Final[Mapping[str, str | None]] = {
+    "--c-bg": "--c-body-surface",
+    "--c-bg-sidebar": "--c-body-surface-secondary",
+    "--c-bg-chat": "--c-body-surface-raised",
+    "--c-bg-composer": "--c-body-surface-raised",
+    "--c-bg-code": "--c-body-surface-secondary",
+    "--c-bg-user-bubble": "--c-primary-subtle-surface",
+    "--c-bubble-other": "--c-body-surface-secondary",
+    "--c-surface": "--c-body-surface-raised",
+    "--c-surface-secondary": "--c-body-surface-secondary",
+    "--c-text-primary": "--c-body-content",
+    "--c-text-secondary": "--c-body-content-secondary",
+    "--c-text-faint": "--c-body-content-tertiary",
+    "--c-text-on-accent": "--c-accent-content",
+    "--c-border": "--c-border-default",
+    "--c-border-faint": "--c-border-subtle",
+    "--c-border-strong": "--c-border-default",
+    "--c-border-code": "--c-border-subtle",
+    "--c-accent": "--c-accent-surface",
+    "--c-accent-hover": None,
+    "--c-accent-light": "--c-accent-subtle-surface",
+    "--c-stop-button": "--c-inverse-surface",
+    "--c-stop-button-hover": None,
+    "--c-danger": "--c-danger-surface",
+    "--c-danger-hover": None,
+    "--c-danger-bg": "--c-danger-subtle-surface",
+    "--c-danger-border": "--c-danger-4",
+    "--c-warning": "--c-warn-surface",
+    "--c-warning-bg": "--c-warn-subtle-surface",
+    "--c-success": "--c-success-surface",
+    "--c-success-bg": "--c-success-subtle-surface",
+    "--c-success-border": "--c-success-4",
+    "--c-step-done": "--c-accent-subtle-content",
+    "--c-step-pending": "--c-neutral-6",
+    "--c-inverse-surface-hover": None,
+    "--font-size-row": "--font-size-body-dense",
+}
 
 TYPE_TOKENS: Final[tuple[str, ...]] = (
     "--font-sans",
@@ -151,10 +226,14 @@ TYPE_TOKENS: Final[tuple[str, ...]] = (
     "--font-display",
     "--font-size-heading-lg",
     "--font-size-heading",
+    "--font-size-title-page",
+    "--font-size-title",
     "--font-size-body",
-    "--font-size-row",
+    "--font-size-body-dense",
     "--font-size-helper",
+    "--font-size-section",
     "--weight-regular",
+    "--weight-medium",
     "--weight-semibold",
     "--weight-bold",
 )
@@ -164,6 +243,7 @@ SHAPE_TOKENS: Final[tuple[str, ...]] = (
     "--radius-md",
     "--radius-lg",
     "--radius-xl",
+    "--radius-2xl",
 )
 
 MOTION_TOKENS: Final[tuple[str, ...]] = ("--dur-fast", "--dur-base", "--dur-slow")
@@ -205,6 +285,7 @@ TERMINAL_TOKENS: Final[tuple[str, ...]] = (
 CONTRACT_TOKENS: Final[frozenset[str]] = frozenset(
     (
         *COLOR_TOKENS,
+        *STATE_TOKENS,
         *TYPE_TOKENS,
         *SHAPE_TOKENS,
         *MOTION_TOKENS,
@@ -243,6 +324,7 @@ BARE_CONTROLS_BY_PART: Final[Mapping[str, tuple[str, ...]]] = {
     "button": (":is(button)",),
     "field": (f":is(input):where({_TEXT_INPUT_TYPES})", ":is(textarea)"),
     "select": (":is(select)",),
+    "checkbox": (':is(input):where([type="checkbox"])',),
 }
 
 # The standard title bar (section 4.3; the multiplayer spec, section 9.1): the window menu and Refresh lead, the

@@ -32,6 +32,8 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { switchVisual } from "@imbue/workspace-ui/src/components/formControls";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
@@ -140,10 +142,10 @@ function convergingPickLabel(chat: ChatSnapshot): string | null {
 /** Past this many rows, a query rather than a scroll is the way to a model. */
 const MODEL_SEARCH_CAP = 100;
 
-/** The slider's filled portion, deepening with effort. It stops at 40% lightness: darker than
- *  that reads as near-black rather than as a deep green. */
+/** The slider's filled portion, deepening with effort along the accent ramp. It stops at step 9:
+ *  darker than that reads as near-black rather than as a deep accent. */
 function effortFillColor(fraction: number): string {
-  return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
+  return `color-mix(in oklch, var(--c-accent-6), var(--c-accent-9) ${Math.round(100 * fraction)}%)`;
 }
 
 /** The chip with no provider signed in: it says so, and a press opens the provider chooser with ``intent``. */
@@ -465,7 +467,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         type: "button",
         role: "switch",
         "aria-checked": sourceView.on ? "true" : "false",
-        class: menuRowClass({ extra: "text-primary" }),
+        class: menuRowClass({ extra: "text-body-content" }),
         ...MENU_ITEM_PART,
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
@@ -475,11 +477,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       },
       [
         m("span", { class: css.ROW_LABEL }, "Source view"),
-        m(
-          "span",
-          { class: `ml-auto ${css.switchClass("sm")} ${sourceView.on ? css.SWITCH_ON : css.SWITCH_OFF}` },
-          m("span", { class: css.switchKnobClass("sm", sourceView.on) }),
-        ),
+        m("span", { class: "ml-auto flex" }, switchVisual(sourceView.on)),
       ],
     );
   }
@@ -493,7 +491,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       "button",
       {
         type: "button",
-        class: menuRowClass({ extra: "text-primary" }),
+        class: menuRowClass({ extra: "text-body-content" }),
         ...MENU_ITEM_PART,
         ...hoverTooltipAttrs(opts.tooltip, "above"),
         onclick: (event: MouseEvent) => {
@@ -571,7 +569,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                   // without it this row would read "Auto" while the row that opened the submenu,
                   // stating the same mode, reads "Auto (off now)".
                   isCurrent && mode === "auto" && state.is_switched
-                    ? m("span", { class: "ml-1.5 type-helper text-faint" }, "(off now)")
+                    ? m("span", { class: "ml-1.5 type-helper text-body-content-tertiary" }, "(off now)")
                     : null,
                 ]),
                 m("span", { class: css.FAST_ROW_DETAIL }, fastModeDetail(mode, limit)),
@@ -727,7 +725,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       ),
       m(
         "p",
-        { class: "autocompact-help px-3 py-1.5 type-helper text-faint" },
+        { class: "autocompact-help px-3 py-1.5 type-helper text-body-content-tertiary" },
         "Saves ~50% by compacting right before the cache expires.",
       ),
       m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
@@ -1150,15 +1148,23 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // do not fit beside a phone's composer.
       const opener = isCompact
         ? m(
-            "button",
-            {
-              type: "button",
-              class: `composer-settings-button ${css.SETTINGS_BUTTON}`,
-              "data-composer-settings": "",
-              "aria-label": "Chat settings",
-              ...menu.triggerAttrs(),
-            },
-            slidersGlyph(),
+            "span",
+            { class: css.SETTINGS_BUTTON_SLOT },
+            m(
+              Button,
+              {
+                variant: "ghost",
+                icon: true,
+                lg: true,
+                // Lit while its card is up.
+                selected: menu.isOpen(),
+                extra: "composer-settings-button",
+                "data-composer-settings": "",
+                "aria-label": "Chat settings",
+                ...menu.triggerAttrs(),
+              },
+              slidersGlyph(),
+            ),
           )
         : trigger;
 

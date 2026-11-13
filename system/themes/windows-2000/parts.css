@@ -150,7 +150,7 @@ kbd {
 }
 /* A button that destroys something says so in the danger colour, on the raised gray face. */
 [data-part="button"]:is([data-variant="destructive"], [data-variant="ghost-destructive"]) {
-  color: var(--c-danger);
+  color: var(--c-danger-surface);
 }
 /* Keyboard focus: the dotted focus rectangle inside the face, in the glyph's colour. */
 [data-part="button"]:focus-visible {
@@ -211,8 +211,7 @@ select {
   background: #0a246a;
   color: #ffffff;
   /* The accent is the selection's own colour, so a switch or dot drawn in it turns white with the text. */
-  --c-accent: #ffffff;
-  --c-accent-hover: #ffffff;
+  --c-accent-surface: #ffffff;
 }
 /* Only the text inside turns: a dot drawn in a colour other than the accent keeps it. */
 [data-part="menu-item"]:not([aria-disabled="true"]):is(:hover, [data-highlighted="true"]) * {
@@ -225,7 +224,7 @@ select {
   --font-size-heading-lg: 12px;
   --font-size-heading: 12px;
   --font-size-body: 12px;
-  --font-size-row: 12px;
+  --font-size-body-dense: 12px;
   --font-size-helper: 11px;
   padding: 0 10px 10px;
   border: none;
@@ -299,8 +298,7 @@ select {
   background: #0a246a;
   color: #ffffff;
   /* The accent is the selection's own colour, so a switch or dot drawn in it turns white with the text. */
-  --c-accent: #ffffff;
-  --c-accent-hover: #ffffff;
+  --c-accent-surface: #ffffff;
 }
 /* Only the text inside turns: a status dot drawn in a colour other than the accent keeps it. */
 [data-part="list-row"][aria-current="true"] * {

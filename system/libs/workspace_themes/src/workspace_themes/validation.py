@@ -20,6 +20,7 @@ from workspace_themes.contract import (
     ALLOWED_FILE_SUFFIXES,
     APP_STYLES_DIRECTORY,
     BUNDLE_FILE_NAME,
+    CONTRACT_1_RENAMES,
     CONTRACT_TOKENS,
     CONTRACT_VERSION,
     CORE_PARTS,
@@ -108,10 +109,17 @@ def check_manifest_rules(manifest: ThemeManifest, folder_name: str) -> list[str]
         problems.append(
             f"theme.toml: id {str(manifest.id)!r} must equal the folder's name {folder_name!r}"
         )
-    if manifest.contract != CONTRACT_VERSION:
+    if manifest.contract == CONTRACT_VERSION - 1:
+        problems.append(
+            f"theme.toml: contract {manifest.contract} is not one this workspace reads (it reads {CONTRACT_VERSION}); "
+            f"`workspace-themes migrate {manifest.id}` rewrites it"
+        )
+    elif manifest.contract != CONTRACT_VERSION:
         problems.append(
             f"theme.toml: contract {manifest.contract} is not one this workspace reads (it reads {CONTRACT_VERSION})"
         )
+    else:
+        pass
     if manifest.id == STANDARD_THEME_ID:
         if manifest.base is not None:
             problems.append("theme.toml: the standard theme has no base")
@@ -317,6 +325,17 @@ def _check_metric_value(
     return []
 
 
+@pure
+def _contract_1_hint(name: str) -> str:
+    renamed = CONTRACT_1_RENAMES[name]
+    if renamed is None:
+        return (
+            f"{name} is a contract-1 token; contract 2 computes hover and active from the surface they shade "
+            "(set --state-ratio to change the step, or 1 for none)"
+        )
+    return f"{name} is a contract-1 token; contract 2 calls it {renamed} (workspace-themes migrate rewrites a theme)"
+
+
 def _check_declarations(
     content: Sequence[ast.Node], context: StyleSheetContext
 ) -> list[str]:
@@ -340,6 +359,10 @@ def _check_declarations(
             if name in PIXEL_RANGE_BY_METRIC_TOKEN:
                 problems.extend(
                     _check_metric_value(name, node.value, context, node.source_line)
+                )
+            elif name in CONTRACT_1_RENAMES:
+                problems.append(
+                    f"{context.label}:{node.source_line}: {_contract_1_hint(name)}"
                 )
             elif name not in CONTRACT_TOKENS and not name.startswith(
                 PRIVATE_TOKEN_PREFIX

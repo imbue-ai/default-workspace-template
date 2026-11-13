@@ -18,17 +18,20 @@ describe("readDesignTokens over the shared stylesheet", () => {
   });
 
   it("names each color by its utility and resolves it to the value :root declares", () => {
-    const accent = colors.find((color) => color.utility === "bg-accent");
-    expect(accent).toMatchObject({ name: "accent", variable: "c-accent", value: "#2f6b4f" });
-    expect(colors.find((color) => color.utility === "text-primary")?.variable).toBe("c-text-primary");
-    expect(colors.find((color) => color.utility === "border-default")?.variable).toBe("c-border");
-    expect(colors.find((color) => color.name === "danger-border")?.role).toBe("border");
+    const accent = colors.find((color) => color.utility === "bg-accent-surface");
+    expect(accent).toMatchObject({
+      name: "accent-surface",
+      variable: "c-accent-surface",
+      value: "var(--c-accent-key)",
+    });
+    expect(colors.find((color) => color.name === "body-content")?.variable).toBe("c-body-content");
+    expect(colors.find((color) => color.utility === "border-default")?.variable).toBe("c-border-default");
   });
 
   it("groups the colors under the stylesheet's own headers, in its order", () => {
     const labels = tokens.colorGroups.map((group) => group.label);
-    expect(labels.slice(0, 4)).toEqual(["text", "borders", "surfaces", "fills"]);
-    expect(labels).toContain("status");
+    expect(labels.slice(0, 4)).toEqual(["body", "overlay", "inverse", "primary"]);
+    expect(labels).toContain("danger");
   });
 
   it("reads the scales from :root and the theme block, without the colors", () => {
@@ -43,6 +46,7 @@ describe("readDesignTokens over the shared stylesheet", () => {
       "radius-md",
       "radius-lg",
       "radius-xl",
+      "radius-2xl",
     ]);
     expect(tokensWithPrefix(tokens.theme, "font-").map((token) => token.name)).toEqual([
       "font-sans",

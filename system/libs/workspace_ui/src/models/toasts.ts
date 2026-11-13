@@ -4,9 +4,13 @@
  * draws them.
  */
 
+/** What a toast is about: a plain note, or a status the brand tints (a failure is ``danger``). */
+export type ToastTone = "default" | "info" | "success" | "warn" | "danger";
+
 export interface Toast {
   readonly id: number;
   readonly message: string;
+  readonly tone: ToastTone;
 }
 
 /** How long a toast stays up. */
@@ -22,8 +26,8 @@ export class ToastQueue {
     private readonly durationMs: number = TOAST_DURATION_MS,
   ) {}
 
-  show(message: string): void {
-    const toast: Toast = { id: this.nextId, message };
+  show(message: string, tone: ToastTone = "default"): void {
+    const toast: Toast = { id: this.nextId, message, tone };
     this.nextId += 1;
     this.toasts = [...this.toasts, toast];
     setTimeout(() => this.dismiss(toast.id), this.durationMs);

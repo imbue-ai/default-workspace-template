@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
@@ -18,14 +19,12 @@ export function openWorkspaceShareSettings(): void {
 export const ShareButton: m.Component = {
   view() {
     return m(
-      "button",
+      Button,
       {
-        type: "button",
+        icon: true,
+        round: true,
+        extra: "tray-share shrink-0 border-dashed",
         "data-tray-share": "",
-        class:
-          "tray-share flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-dashed " +
-          "border-strong bg-transparent p-0 text-secondary outline-none hover:bg-fill-hover hover:text-primary " +
-          "focus-visible:ring-2 focus-visible:ring-accent",
         "aria-label": "Share this workspace",
         ...hoverTooltipAttrs("Share this workspace", "above"),
         onclick: openWorkspaceShareSettings,

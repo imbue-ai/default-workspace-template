@@ -98,6 +98,8 @@ from imbue.system_interface.shell.theme_routes import AppThemingRequest
 from imbue.system_interface.shell.theme_routes import AppThemingResponse
 from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
 from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
+from imbue.system_interface.shell.theme_routes import WorkspaceColorRefreshRequest
+from imbue.system_interface.shell.theme_routes import WorkspaceColorRefreshResponse
 from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
 from imbue.system_interface.shell.theme_wire import ThemeCatalogWire
 from imbue.system_interface.shell.tour import TOUR_ROUTE
@@ -211,6 +213,10 @@ SHELL_ROUTE_TABLE: RouteTable = {
     **THEME_STATIC_ROUTE_TABLE,
     ("POST", "/api/apps/{app_name}/theming"): RouteModels(
         request_model=AppThemingRequest, response_model=AppThemingResponse
+    ),
+    # The brand design system: Imbue Studio says the workspace color changed
+    ("POST", "/api/workspace-color/refresh"): RouteModels(
+        request_model=WorkspaceColorRefreshRequest, response_model=WorkspaceColorRefreshResponse
     ),
     # Section 5.6: the embedder-message relay
     ("POST", "/api/embedder-messages"): RouteModels(

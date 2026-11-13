@@ -515,7 +515,7 @@ describe("Escape", () => {
     expect(stage().contains(host)).toBe(true);
     // The band around the stage is the backdrop's own ground; the floating entries stay outside the stage.
     const backdrop = document.querySelector(".backdrop") as HTMLElement;
-    expect(backdrop.getAttribute("style") ?? "").toMatch(/color-mix\(in srgb, \S+ 12%, var\(--c-bg\)\)/);
+    expect(backdrop.getAttribute("style") ?? "").toMatch(/color-mix\(in srgb, \S+ 12%, var\(--c-body-surface\)\)/);
     expect(stage().querySelector(".floating-entries, [data-pinned-entry]")).toBeNull();
 
     // Stop viewing: the stage is the whole backdrop again.
@@ -1005,7 +1005,7 @@ describe("the desktop shortcut rows", () => {
     const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove-from-desktop"]') as HTMLElement;
     expect(row.textContent?.trim()).toBe("Remove from desktop");
     // Taking an icon off the desktop deletes nothing, so it reads as an ordinary verb: no danger tone, no trash.
-    expect(row.outerHTML).not.toContain("text-danger");
+    expect(row.outerHTML).not.toContain("text-danger-surface");
     expect(row.querySelector("svg")).toBeNull();
     chooseRow("remove-from-desktop");
     expect(store.getState().desktops[0].shortcuts).toEqual([]);

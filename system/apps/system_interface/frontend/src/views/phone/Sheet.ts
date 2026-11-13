@@ -74,7 +74,7 @@ export function Sheet(): m.Component<SheetAttrs> {
       return m("div", { class: "phone-sheet-layer absolute inset-0 z-(--z-sticky)" }, [
         m("div", {
           "data-phone-sheet-scrim": name,
-          class: "phone-sheet-scrim absolute inset-0 animate-[phone-fade_var(--dur-slow)_ease-out] bg-black/30",
+          class: "phone-sheet-scrim absolute inset-0 animate-[phone-fade_var(--dur-slow)_ease-out] bg-overlay-scrim",
           onclick: onDismiss,
         }),
         m(
@@ -84,7 +84,7 @@ export function Sheet(): m.Component<SheetAttrs> {
             role: "dialog",
             class:
               "phone-sheet absolute inset-x-0 top-(--desk-phone-sheet-top) bottom-0 flex flex-col " +
-              "animate-[phone-sheet-rise_var(--dur-slow)_ease-out] rounded-t-(--desk-phone-sheet-radius) bg-page " +
+              "animate-[phone-sheet-rise_var(--dur-slow)_ease-out] rounded-t-(--desk-phone-sheet-radius) bg-body-surface " +
               "shadow-overlay",
             oncreate: (created: m.VnodeDOM) => {
               panel = created.dom as HTMLElement;
@@ -98,7 +98,7 @@ export function Sheet(): m.Component<SheetAttrs> {
               m("div", {
                 class:
                   "phone-sheet-grab mx-auto mt-2 mb-1 h-(--desk-phone-grab-height) w-(--desk-phone-grab-width) " +
-                  "rounded-full bg-strong",
+                  "rounded-full bg-default",
               }),
               head,
             ]),

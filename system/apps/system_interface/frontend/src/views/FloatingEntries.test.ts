@@ -140,7 +140,7 @@ describe("FloatingEntries", () => {
     // corner it is cast around.
     const layer = render({ entries: [pinnedEntry({ isMinimized: false })] });
     const entry = layer.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
-    for (const painted of ["border", "p-2", "bg-surface", "bg-surface/90", "rounded-2xl"]) {
+    for (const painted of ["border", "p-2", "bg-body-surface-raised", "bg-body-surface-raised/90", "rounded-2xl"]) {
       expect(entry.classList.contains(painted)).toBe(false);
     }
     for (const kept of ["border-0", "bg-transparent", "p-0", "rounded-[32%]", "shadow-raised"]) {

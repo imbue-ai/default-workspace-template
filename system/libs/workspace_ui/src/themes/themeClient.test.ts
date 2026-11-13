@@ -5,7 +5,9 @@ import {
   THEME_LINK_ATTRIBUTE,
   THEME_REVISION_ATTRIBUTE,
   THEME_STORAGE_KEY,
+  WORKSPACE_COLOR_LINK_ATTRIBUTE,
   currentTheme,
+  currentWorkspaceColor,
   isCurrentThemeRemembered,
   isThemeRef,
   mirrorParentTheme,
@@ -15,6 +17,7 @@ import {
   themeBundleUrl,
   wearTheme,
   wearThemeFromMessage,
+  wearWorkspaceColor,
 } from "./themeClient";
 import { themeBoot, themeBootScript } from "./themeBoot";
 
@@ -316,5 +319,60 @@ describe("the boot script", () => {
 
     expect(both.map((link) => link.getAttribute(THEME_LINK_ATTRIBUTE))).toEqual(["mac-classic", "windows-2000"]);
     expect(themeLinks().map((link) => link.getAttribute(THEME_LINK_ATTRIBUTE))).toEqual(["windows-2000"]);
+  });
+});
+
+describe("the workspace color", () => {
+  function colorLinks(): HTMLLinkElement[] {
+    return Array.from(document.head.querySelectorAll<HTMLLinkElement>(`link[${WORKSPACE_COLOR_LINK_ATTRIBUTE}]`));
+  }
+
+  it("is loaded before the theme, so the theme still wins over its keys", async () => {
+    const worn = wearTheme({ id: "mac-classic", revision: "1" });
+    settleLink(themeLinks()[0], "load");
+    await worn;
+
+    wearWorkspaceColor("#0b292b");
+
+    const [color] = colorLinks();
+    expect(color.getAttribute("href")).toBe("/_static/workspace_color.css?v=%230b292b");
+    expect(color.nextElementSibling).toBe(themeLinks()[0]);
+    expect(currentWorkspaceColor()).toBe("#0b292b");
+    expect(window.localStorage.getItem("workspace-color")).toBe("#0b292b");
+  });
+
+  it("keeps the old stylesheet until the new one loads, and tells the theme's listeners once per change", () => {
+    const heard = vi.fn();
+    onThemeChanged(heard);
+
+    wearWorkspaceColor("imbue");
+    const [first] = colorLinks();
+    settleLink(first, "load");
+    wearWorkspaceColor("imbue");
+    wearWorkspaceColor("#3c3d06");
+    expect(colorLinks()).toHaveLength(2);
+    settleLink(colorLinks()[1], "load");
+
+    expect(colorLinks().map((link) => link.getAttribute(WORKSPACE_COLOR_LINK_ATTRIBUTE))).toEqual(["#3c3d06"]);
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("comes with the theme in a shell:theme message, and an older shell's message leaves it alone", async () => {
+    await wearThemeFromMessage({ theme: "standard", revision: "", workspaceColor: "#cecd0c" });
+    expect(currentWorkspaceColor()).toBe("#cecd0c");
+
+    await wearThemeFromMessage({ theme: "standard", revision: "" });
+    expect(currentWorkspaceColor()).toBe("#cecd0c");
+  });
+
+  it("is linked by the boot script at the revision this origin remembers", () => {
+    window.localStorage.setItem("workspace-color", "#0b292b");
+
+    new Function(themeBootScript())();
+
+    const [color] = colorLinks();
+    expect(color.getAttribute("href")).toBe("/_static/workspace_color.css?v=%230b292b");
+    expect(color.getAttribute("blocking")).toBe("render");
+    expect(currentWorkspaceColor()).toBe("#0b292b");
   });
 });

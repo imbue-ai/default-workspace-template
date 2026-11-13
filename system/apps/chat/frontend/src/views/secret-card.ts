@@ -13,6 +13,7 @@
  */
 
 import m from "mithril";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -211,12 +212,12 @@ export interface SecretCardHandlers {
   onDeclineConfirm: () => void;
 }
 
-const CARD_CLASS = "secret-request max-w-[560px] rounded-lg border bg-composer px-3.5 py-3";
+const CARD_CLASS = cardClass({ extra: "secret-request max-w-[560px] px-3.5 py-3" });
 
 const VERDICT_COLOR: Record<SecretResolution, string> = {
-  stored: "text-accent",
-  declined: "text-secondary",
-  superseded: "text-faint",
+  stored: "text-accent-surface",
+  declined: "text-body-content-secondary",
+  superseded: "text-body-content-tertiary",
 };
 
 function verdictLabel(resolution: SecretResolution): string {
@@ -228,7 +229,10 @@ function verdictLabel(resolution: SecretResolution): string {
 function renderEyebrow(): m.Vnode {
   return m(
     "div",
-    { class: "secret-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" },
+    {
+      class:
+        "secret-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary",
+    },
     [m.trust(icon("key", { size: 13, className: "secret-request-icon shrink-0" })), m("span", "Secret request")],
   );
 }
@@ -251,7 +255,7 @@ function renderVerdict(resolution: SecretResolution): m.Vnode {
 }
 
 function renderTitle(details: SecretRequestDetails): m.Vnode {
-  return m("div", { class: "secret-request-title type-label text-primary" }, `Store ${details.envPath}`);
+  return m("div", { class: "secret-request-title type-title-sm text-body-content" }, `Store ${details.envPath}`);
 }
 
 function renderInputs(details: SecretRequestDetails, state: SecretCardState, handlers: SecretCardHandlers): m.Vnode {
@@ -260,37 +264,41 @@ function renderInputs(details: SecretRequestDetails, state: SecretCardState, han
     { class: "secret-request-inputs mt-2.5 flex flex-col gap-2" },
     details.variables.map((variable) => {
       const isRevealed = state.isRevealedByVariable[variable] ?? false;
-      return m("label", { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-secondary" }, [
-        m("span", { class: "secret-request-variable font-mono" }, variable),
-        m("div", { class: "flex items-center gap-1.5" }, [
-          m("input", {
-            class: inputClass({ mono: true }),
-            ...FIELD_PART,
-            // Masked unless the user asks to check what they typed.
-            type: isRevealed ? "text" : "password",
-            value: state.valueByVariable[variable] ?? "",
-            spellcheck: false,
-            autocomplete: "off",
-            "data-1p-ignore": "",
-            "data-variable": variable,
-            disabled: state.isBusy,
-            oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
-          }),
-          m(
-            Button,
-            {
-              variant: "ghost",
-              sm: true,
-              extra: "secret-request-reveal shrink-0",
-              "aria-pressed": String(isRevealed),
-              "aria-label": `${isRevealed ? "Hide" : "Show"} ${variable}`,
+      return m(
+        "label",
+        { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-body-content-secondary" },
+        [
+          m("span", { class: "secret-request-variable font-mono" }, variable),
+          m("div", { class: "flex items-center gap-1.5" }, [
+            m("input", {
+              class: inputClass({ mono: true }),
+              ...FIELD_PART,
+              // Masked unless the user asks to check what they typed.
+              type: isRevealed ? "text" : "password",
+              value: state.valueByVariable[variable] ?? "",
+              spellcheck: false,
+              autocomplete: "off",
+              "data-1p-ignore": "",
+              "data-variable": variable,
               disabled: state.isBusy,
-              onclick: () => handlers.onRevealToggle(variable),
-            },
-            isRevealed ? "Hide" : "Show",
-          ),
-        ]),
-      ]);
+              oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
+            }),
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "secret-request-reveal shrink-0",
+                "aria-pressed": String(isRevealed),
+                "aria-label": `${isRevealed ? "Hide" : "Show"} ${variable}`,
+                disabled: state.isBusy,
+                onclick: () => handlers.onRevealToggle(variable),
+              },
+              isRevealed ? "Hide" : "Show",
+            ),
+          ]),
+        ],
+      );
     }),
   );
 }
@@ -341,13 +349,17 @@ export function renderSecretCard(
       m("div", { class: "secret-request-receipt mt-2.5 flex items-center gap-2" }, [
         m(
           "div",
-          { class: "secret-request-receipt-title min-w-0 truncate type-label text-primary" },
+          { class: "secret-request-receipt-title min-w-0 truncate type-title-sm text-body-content" },
           details ? details.envPath : "Secret request",
         ),
         renderVerdict(resolution),
       ]),
       note
-        ? m("div", { class: "secret-request-note mt-1.5 text-(length:--font-size-helper) text-secondary" }, note)
+        ? m(
+            "div",
+            { class: "secret-request-note mt-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+            note,
+          )
         : null,
     ]);
   }
@@ -357,7 +369,7 @@ export function renderSecretCard(
       renderEyebrow(),
       m(
         "div",
-        { class: "secret-request-status mt-[9px] text-(length:--font-size-body) text-secondary" },
+        { class: "secret-request-status mt-[9px] text-(length:--font-size-body) text-body-content-secondary" },
         hasResult
           ? "Couldn't read this request. Ask the agent to request it again."
           : "Waiting for the request to register…",
@@ -374,26 +386,33 @@ export function renderSecretCard(
       details.rationale
         ? m(
             "div",
-            { class: "secret-request-reason text-(length:--font-size-helper) leading-[1.45] text-secondary" },
+            {
+              class:
+                "secret-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary",
+            },
             details.rationale,
           )
         : null,
       details.overwrites.length > 0
         ? m(
             "div",
-            { class: "secret-request-overwrites text-(length:--font-size-helper) text-warning" },
+            { class: "secret-request-overwrites text-(length:--font-size-helper) text-warn-surface" },
             `Replaces the existing ${details.overwrites.join(", ")}.`,
           )
         : null,
       m(
         "div",
-        { class: "secret-request-privacy text-(length:--font-size-helper) text-faint" },
+        { class: "secret-request-privacy text-(length:--font-size-helper) text-body-content-tertiary" },
         "Stored on this workspace's disk for its programs to use; the agent never sees the values.",
       ),
     ]),
     state.isDeclining ? renderDeclineForm(state, handlers) : renderInputs(details, state, handlers),
     state.error
-      ? m("div", { class: "secret-request-error mt-2 text-(length:--font-size-helper) text-danger" }, state.error)
+      ? m(
+          "div",
+          { class: "secret-request-error mt-2 text-(length:--font-size-helper) text-danger-surface" },
+          state.error,
+        )
       : null,
     state.isDeclining
       ? null

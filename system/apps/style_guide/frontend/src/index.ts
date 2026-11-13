@@ -27,9 +27,9 @@ function bootstrap(): void {
   const connection = connectToShell({
     onHandshake: (received) => (handshake = received),
     // Redraw once the theme's stylesheet has loaded: the catalog reads the values the page wears.
-    onTheme: (theme, revision, isPreview) => {
-      relayTheme({ theme, revision, isPreview });
-      void wearThemeFromMessage({ theme, revision, isPreview }).then(() => m.redraw());
+    onTheme: (theme, revision, isPreview, workspaceColor) => {
+      relayTheme({ theme, revision, isPreview, workspaceColor });
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }).then(() => m.redraw());
     },
   });
   window.addEventListener("focus", () => connection.focused());

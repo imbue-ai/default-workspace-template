@@ -8,10 +8,16 @@ from workspace_themes.contract import (
     BUILTIN_THEMES_DIRECTORY,
     GENERATED_ICONS_DIRECTORY,
     THEME_MANIFEST_FILENAME,
+    WORKSPACE_COLOR_ROUTE,
+    WORKSPACE_COLOR_STATE_PATH,
 )
 from workspace_themes.data_types import ThemeCatalog
-from workspace_themes.flask_routes import register_theme_static_route
+from workspace_themes.flask_routes import (
+    register_theme_static_route,
+    register_workspace_color_route,
+)
 from workspace_themes.testing import write_standard_theme, write_test_theme
+from workspace_themes.workspace_color import WorkspaceColorRecord, write_workspace_color
 
 
 def test_a_bundle_is_fetched_afresh_when_an_app_it_styles_appears_under_the_same_revision(
@@ -116,3 +122,28 @@ def test_a_style_file_with_a_relative_url_in_a_token_is_sent_rewritten_as_css(
     assert b'url("/_static/themes/paper/assets/mark.svg")' in style.data
     assert style.headers["X-Content-Type-Options"] == "nosniff"
     assert again.status_code == 304
+
+
+def test_every_app_serves_the_kept_workspace_color_as_keys_revalidated_on_each_use(
+    tmp_path: Path,
+) -> None:
+    application = Flask(__name__)
+    register_workspace_color_route(application, tmp_path)
+    client = application.test_client()
+
+    imbue = client.get(WORKSPACE_COLOR_ROUTE)
+    write_workspace_color(
+        tmp_path / WORKSPACE_COLOR_STATE_PATH, WorkspaceColorRecord(hex="#0b292b")
+    )
+    teal = client.get(WORKSPACE_COLOR_ROUTE)
+    unchanged = client.get(
+        WORKSPACE_COLOR_ROUTE,
+        headers={"If-None-Match": teal.headers["ETag"].strip('"')},
+    )
+
+    assert imbue.status_code == 200
+    assert "--c-primary-key" not in imbue.get_data(as_text=True)
+    assert "--c-primary-key: #0b292b;" in teal.get_data(as_text=True)
+    assert teal.mimetype == "text/css"
+    assert teal.headers["Cache-Control"] == "no-cache"
+    assert unchanged.status_code == 304

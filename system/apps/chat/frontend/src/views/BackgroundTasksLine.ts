@@ -73,7 +73,7 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
             type: "button",
             class:
               "background-tasks-line__summary flex w-full items-center gap-1.5 pr-1 text-left " +
-              "text-(length:--font-size-helper) text-secondary hover:text-primary",
+              "text-(length:--font-size-helper) text-body-content-secondary hover:text-body-content",
             "aria-expanded": String(isExpanded),
             onclick: () => {
               isExpanded = !isExpanded;
@@ -89,10 +89,14 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
             m("span", { class: "background-tasks-line__label truncate" }, waitSummary(tasks.length)),
             oldestElapsed === null
               ? null
-              : m("span", { class: "background-tasks-line__elapsed flex-none text-faint" }, `· ${oldestElapsed}`),
+              : m(
+                  "span",
+                  { class: "background-tasks-line__elapsed flex-none text-body-content-tertiary" },
+                  `· ${oldestElapsed}`,
+                ),
             m(
               "span",
-              { class: `flex-none text-faint transition-transform ${isExpanded ? "rotate-180" : ""}` },
+              { class: `flex-none text-body-content-tertiary transition-transform ${isExpanded ? "rotate-180" : ""}` },
               m.trust(icon("chevron-down", { size: 12 })),
             ),
           ],
@@ -108,7 +112,7 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
                   {
                     key: `${task.source}-${task.harness}-${task.id}`,
                     class:
-                      "background-tasks-line__task flex items-center gap-2 text-(length:--font-size-helper) text-secondary",
+                      "background-tasks-line__task flex items-center gap-2 text-(length:--font-size-helper) text-body-content-secondary",
                   },
                   [
                     m(
@@ -118,7 +122,11 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
                     ),
                     elapsed === null
                       ? null
-                      : m("span", { class: "background-tasks-line__task-elapsed flex-none text-faint" }, elapsed),
+                      : m(
+                          "span",
+                          { class: "background-tasks-line__task-elapsed flex-none text-body-content-tertiary" },
+                          elapsed,
+                        ),
                   ],
                 );
               }),

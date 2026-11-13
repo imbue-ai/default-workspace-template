@@ -45,15 +45,15 @@ export const DROPDOWN_OPTION_ATTR = "data-dropdown-option";
 /** The field-shaped trigger. Sized and framed like a text input (see `inputClass`), so a
  *  dropdown and the field beside it read as one form. */
 const TRIGGER_CLASS =
-  "flex w-full items-center justify-between gap-2 rounded-md border border-default bg-surface " +
-  "px-3 py-2 text-left type-body transition-[border-color] duration-(--dur-base) " +
-  "hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 " +
-  "focus-visible:outline-accent cursor-pointer";
+  "flex h-9 w-full items-center justify-between gap-2 rounded-xl border border-default bg-body-surface-raised " +
+  "px-3 text-left type-body transition-[border-color] duration-(--dur-base) " +
+  "hover:border-default-hover focus-visible:border-transparent focus-visible:outline-2 focus-visible:outline-offset-0 " +
+  "focus-visible:outline-focus cursor-pointer";
 const TRIGGER_VALUE_CLASS = "flex min-w-0 items-baseline gap-2";
-const TRIGGER_LABEL_CLASS = "truncate text-primary";
-const TRIGGER_DETAIL_CLASS = "shrink-0 font-mono type-helper text-faint";
-const TRIGGER_EMPTY_CLASS = "text-faint";
-const CARET_CLASS = "shrink-0 text-faint transition-transform";
+const TRIGGER_LABEL_CLASS = "truncate text-body-content";
+const TRIGGER_DETAIL_CLASS = "shrink-0 font-mono type-helper text-body-content-tertiary";
+const TRIGGER_EMPTY_CLASS = "text-body-content-tertiary";
+const CARET_CLASS = "shrink-0 text-body-content-tertiary transition-transform";
 const CARET_OPEN_CLASS = "rotate-180";
 
 /** The sheet under the open list. `dropdown-sheet` is a bare marker with no CSS attached. */
@@ -64,9 +64,9 @@ const LIST_CLASS = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll
  *  picked row keeps its steady accent fill, so only the idle variant hovers. */
 const OPTION_CLASS = `flex h-8 cursor-pointer items-center justify-between gap-3 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
 const OPTION_IDLE_CLASS = "hover:bg-fill-hover";
-const OPTION_PICKED_CLASS = "bg-accent-light";
+const OPTION_PICKED_CLASS = "bg-accent-subtle-surface";
 const OPTION_LABEL_CLASS = "truncate type-body";
-const OPTION_LABEL_PICKED_CLASS = "truncate type-body text-accent";
+const OPTION_LABEL_PICKED_CLASS = "truncate type-body text-accent-surface";
 
 export function Dropdown<V extends string>(): m.Component<DropdownAttrs<V>> {
   // Open iff non-null: where the trigger was when it was pressed, which the list hangs under.

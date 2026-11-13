@@ -2,7 +2,7 @@
  * The desktop's side of what the Imbue Studio chrome says it can do and of immersive mode (the Screen
  * integration spec, section 5): the capabilities announcement feeds the store's capability flags, a
  * ``minds:immersive-changed`` lands in the store, and the store's immersive requests go out through the embed
- * module. Kept apart from the page's bootstrap so a test can drive it over a fake embedder.
+ * module; a ``minds:workspace-color`` asks the shell to re-read the workspace color. Kept apart from the page's bootstrap so a test can drive it over a fake embedder.
  */
 
 import {
@@ -11,7 +11,9 @@ import {
   IMMERSIVE_REQUEST,
   sendToEmbedder,
   setEmbedderMessageHandler,
+  WORKSPACE_COLOR,
 } from "@imbue/workspace-ui/src/embed";
+import { refreshWorkspaceColor } from "../model/api";
 import type { DesktopStore, ImmersiveBridge } from "./DesktopStore";
 
 /** The shell's side of the immersive conversation: every ask goes to the embedding chrome. */
@@ -30,6 +32,11 @@ export function connectEmbedderToStore(store: DesktopStore): void {
     store.setOpensLocalFiles(message.opensLocalFiles === true);
     store.setCanImmerse(message.immersive === true);
     store.setEmbedderPresent(true);
+  });
+  setEmbedderMessageHandler(WORKSPACE_COLOR, (message) => {
+    void refreshWorkspaceColor(typeof message.hex === "string" ? message.hex : null).catch((error: unknown) => {
+      console.warn("Could not refresh the workspace color", error);
+    });
   });
   setEmbedderMessageHandler(IMMERSIVE_CHANGED, (message) => {
     store.onImmersiveChanged({

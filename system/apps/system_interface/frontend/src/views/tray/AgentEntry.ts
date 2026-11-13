@@ -34,7 +34,7 @@ export const AgentEntry: m.Component<AgentEntryAttrs> = {
         "data-mood": attrs.avatar.status.mood,
         class:
           "tray-agent flex shrink-0 cursor-pointer items-center justify-center rounded-2xl border-0 bg-transparent p-0 " +
-          "outline-none focus-visible:ring-2 focus-visible:ring-accent [&>img]:size-full [&>svg]:size-full " +
+          "outline-none focus-visible:ring-2 focus-visible:ring-focus [&>img]:size-full [&>svg]:size-full " +
           (attrs.isHopping ? "tray-hop " : ""),
         style: { width: `${AGENT_PICTURE_SIZE_PX}px`, height: `${AGENT_PICTURE_SIZE_PX}px` },
         "aria-label": attrs.workspaceName === "" ? "The agent" : attrs.workspaceName,

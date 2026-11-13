@@ -12,6 +12,7 @@
  */
 
 import m from "mithril";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
@@ -220,19 +221,19 @@ export function initShellPermissionResolutions(): void {
  * and the two raw-toggle placements can't drift. */
 
 /** The card shell every state shares. */
-const CARD_CLASS = "permission-request max-w-[560px] rounded-lg border bg-composer px-3.5 py-3";
+const CARD_CLASS = cardClass({ extra: "permission-request max-w-[560px] px-3.5 py-3" });
 
 /** The rounded subject badge; the pending body uses the 32px form, the
  *  resolved receipt the 24px one. Size + radius are resolved per call site so
  *  no two utilities fight over one property. */
-const BADGE_BASE = "flex shrink-0 items-center justify-center bg-fill-hover text-secondary";
+const BADGE_BASE = "flex shrink-0 items-center justify-center bg-fill-hover text-body-content-secondary";
 
 /** The verdict's color says the outcome: approved reads in the accent green;
  *  denied reads neutral (a decision, not an error); couldn't-complete warns. */
 const VERDICT_COLOR: Record<PermissionResolution, string> = {
-  granted: "text-accent",
-  denied: "text-secondary",
-  error: "text-warning",
+  granted: "text-accent-surface",
+  denied: "text-body-content-secondary",
+  error: "text-warn-surface",
 };
 
 /** The key that heads every card state's eyebrow. 13px is the size of the
@@ -323,7 +324,10 @@ function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
 function renderEyebrow(): m.Vnode {
   return m(
     "div",
-    { class: "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" },
+    {
+      class:
+        "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary",
+    },
     [renderKeyIcon(), m("span", "Permission request")],
   );
 }
@@ -337,7 +341,7 @@ function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => v
     {
       class:
         "permission-request-raw-toggle cursor-pointer border-none bg-transparent p-0 " +
-        "text-(length:--font-size-helper) text-faint transition-[color] duration-(--dur-base) hover:text-secondary",
+        "text-(length:--font-size-helper) text-body-content-tertiary transition-[color] duration-(--dur-base) hover:text-body-content-secondary",
       type: "button",
       onclick(e: Event) {
         e.preventDefault();
@@ -359,7 +363,7 @@ function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
       "pre",
       {
         class:
-          "overflow-auto rounded-md bg-sidebar p-2 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-secondary",
+          "overflow-auto rounded-md bg-body-surface-secondary p-2 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-body-content-secondary",
       },
       m("code", rawText),
     ),
@@ -413,7 +417,7 @@ export function renderPermissionCard(
         m(
           "div",
           {
-            class: "permission-request-receipt-title min-w-0 truncate type-label text-primary",
+            class: "permission-request-receipt-title min-w-0 truncate type-title-sm text-body-content",
           },
           title ?? GENERIC_PERMISSION_TITLE,
         ),
@@ -429,7 +433,7 @@ export function renderPermissionCard(
       renderEyebrow(),
       m(
         "div",
-        { class: "permission-request-status mt-[9px] text-(length:--font-size-body) text-secondary" },
+        { class: "permission-request-status mt-[9px] text-(length:--font-size-body) text-body-content-secondary" },
         hasResult ? "Couldn't read this request — see the Permissions tab." : "Waiting for the request to register…",
       ),
       rawToggle ? m("div", { class: "permission-request-toggle-row mt-2 flex justify-end" }, rawToggle) : null,
@@ -446,11 +450,16 @@ export function renderPermissionCard(
     m("div", { class: "permission-request-body mt-2.5 flex items-start gap-2.5" }, [
       m("div", { class: `permission-request-badge h-8 w-8 rounded-lg ${BADGE_BASE}` }, renderSubjectMark(details, 16)),
       m("div", { class: "permission-request-info min-w-0 flex-1" }, [
-        bodyTitle !== null ? m("div", { class: "permission-request-title type-label text-primary" }, bodyTitle) : null,
+        bodyTitle !== null
+          ? m("div", { class: "permission-request-title type-title-sm text-body-content" }, bodyTitle)
+          : null,
         details.rationale
           ? m(
               "div",
-              { class: "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-secondary" },
+              {
+                class:
+                  "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary",
+              },
               details.rationale,
             )
           : null,

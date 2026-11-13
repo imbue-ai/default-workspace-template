@@ -36,7 +36,7 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
         "data-viewing-desktop": desktop.id,
         class:
           "tray-viewing -mr-2 flex items-center gap-2 self-stretch rounded-tl-xl pr-(--desk-viewing-outline) " +
-          "pb-(--desk-viewing-outline) pl-3 text-on-accent",
+          "pb-(--desk-viewing-outline) pl-3 text-accent-content",
         style: { backgroundColor: color },
       },
       [
@@ -44,21 +44,23 @@ export const ViewingChip: m.Component<ViewingChipAttrs> = {
           ? null
           : m(
               "span",
-              { class: "flex shrink-0 items-center rounded-full ring-2 ring-white" },
+              { class: "flex shrink-0 items-center rounded-full ring-2 ring-accent-content" },
               m(TrayAvatar, { entry: owner, sizePx: OWNER_PICTURE_SIZE_PX, isFaded: false }),
             ),
-        m("span", { class: "flex min-w-0 items-baseline gap-1 text-(length:--font-size-row) font-medium" }, [
+        m("span", { class: "flex min-w-0 items-baseline gap-1 text-(length:--font-size-body-dense) font-medium" }, [
           m("span", { class: "truncate", "data-viewing-owner": "" }, viewedOwnerName(owner)),
           m("span", { class: "truncate font-normal opacity-75" }, ` · ${desktop.name}`),
         ]),
+        // Not a shared Button: it sits on the owner's colour, which no variant is drawn for, so it tints
+        // itself from the chip's own content colour.
         m(
           "button",
           {
             type: "button",
             "data-stop-viewing": "",
             class:
-              "shrink-0 cursor-pointer rounded-md border-0 bg-white/20 px-2 py-1 text-(length:--font-size-row) " +
-              "font-medium text-on-accent hover:bg-white/30 focus-visible:outline-2 focus-visible:outline-white",
+              "shrink-0 cursor-pointer rounded-md border-0 bg-accent-content/20 px-2 py-1 text-(length:--font-size-body-dense) " +
+              "font-medium text-accent-content hover:bg-accent-content/30 focus-visible:outline-2 focus-visible:outline-accent-content",
             onclick: onStopViewing,
           },
           STOP_VIEWING_LABEL,

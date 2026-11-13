@@ -57,7 +57,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
           "shrink-0 items-center gap-1.5 rounded-md p-1 pr-2 text-(length:--font-size-body) " +
-          "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
+          "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-focus " +
           // The chrome's own two control tints and nothing else: the hover one under the pointer, the
           // active one for the window you are in (and for the entry whose menu is open, which is the
           // same statement about the same chip). No border, no elevation -- a tint is the whole of it.
@@ -66,7 +66,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // the text stays out of it. Faint is a different thing -- the window is out of sight, not
           // merely not in front -- and it lifts under the pointer, which is the one moment the entry
           // is being read rather than scanned.
-          (isDimmed ? "text-faint hover:text-primary " : "text-primary "),
+          (isDimmed ? "text-body-content-tertiary hover:text-body-content " : "text-body-content "),
         // The bubble carries the whole of a title the chip had to cut short.
         ...hoverTooltipAttrs(entry.title, "above"),
         onclick: onClick,
@@ -99,7 +99,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         entry.isDetached
           ? m(
               "span",
-              { class: "flex shrink-0 items-center text-faint", "aria-label": "In its own window" },
+              { class: "flex shrink-0 items-center text-body-content-tertiary", "aria-label": "In its own window" },
               m.trust(icon("external-link", { size: DETACHED_GLYPH_SIZE })),
             )
           : null,

@@ -38,7 +38,7 @@ export const SnapPreview: m.Component<SnapPreviewAttrs> = {
     return m("div", {
       [SNAP_PREVIEW_ATTRIBUTE]: "",
       class:
-        "snap-preview pointer-events-none absolute z-(--z-sticky) rounded-(--desk-window-radius) border-2 border-accent bg-accent/15",
+        "snap-preview pointer-events-none absolute z-(--z-sticky) rounded-(--desk-window-radius) border-2 border-accent-surface bg-accent-surface/15",
       style: snapPreviewStyle(vnode.attrs.rect),
     });
   },

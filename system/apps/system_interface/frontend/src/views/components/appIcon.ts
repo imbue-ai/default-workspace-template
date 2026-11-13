@@ -212,8 +212,15 @@ const GLYPH_INSET = (TILE_SIZE - GLYPH_BOX) / 2;
 // reasoning that a letter an app wears for want of an identity should not claim a louder one --
 // but that neutral is the arcs wallpaper's own colour, so the tile vanished into the backdrop and
 // left the letter and the shadow standing for the app alone.
-const FALLBACK_TILE_BACKGROUND = "#F5D6A0";
-const FALLBACK_TILE_INK = "#492222";
+//
+// That pair is Honey on Courage, which the brand's colour system now carries as the workspace's
+// own steps: the wallpaper ramp's fifth step (Honey's, two steps past the default wallpaper's
+// field) and the primary key (Courage when the workspace has no colour of its own). So the tile
+// follows the workspace colour as everything else does. The hexes stay only as the fallbacks for
+// a drawing decoded on its own, as an image (a theme deriving its icon from this markup), where no
+// page variable reaches. Set as styles, since a presentation attribute cannot hold a `var()`.
+const FALLBACK_TILE_BACKGROUND = "var(--c-wallpaper-5, #F5D6A0)";
+const FALLBACK_TILE_INK = "var(--c-primary-key, #492222)";
 
 /** Numeric length attribute (`24`, `24px`), or null when it says something
  *  this cannot turn into a viewBox. */
@@ -274,17 +281,6 @@ function paintsItsOwnColour(root: Element): boolean {
   return false;
 }
 
-/** Repaint whatever the glyph was taking from the text around it in the tile's ink. */
-function inkCurrentColor(root: Element): void {
-  for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
-    for (const attribute of Array.from(element.attributes)) {
-      if (collapsed(attribute.value).toLowerCase() === "currentcolor") {
-        element.setAttribute(attribute.name, FALLBACK_TILE_INK);
-      }
-    }
-  }
-}
-
 /**
  * A glyph that brought no tile, put on the shell's.
  *
@@ -303,15 +299,16 @@ function tiledMarkup(root: Element, sizePx: number): string {
   outer.setAttribute("fill", "none");
   outer.setAttribute("aria-hidden", "true");
   outer.setAttribute("focusable", "false");
+  // The tile's ink is the colour, so whatever the glyph was taking from the text around it takes the ink.
+  outer.setAttribute("style", `color: ${FALLBACK_TILE_INK}`);
 
   const tile = document_.createElementNS(SVG_NAMESPACE, "rect");
   tile.setAttribute("width", String(TILE_SIZE));
   tile.setAttribute("height", String(TILE_SIZE));
   tile.setAttribute("rx", String(TILE_RADIUS));
-  tile.setAttribute("fill", FALLBACK_TILE_BACKGROUND);
+  tile.setAttribute("style", `fill: ${FALLBACK_TILE_BACKGROUND}`);
   outer.appendChild(tile);
 
-  inkCurrentColor(root);
   root.setAttribute("x", String(GLYPH_INSET));
   root.setAttribute("y", String(GLYPH_INSET));
   root.setAttribute("width", String(GLYPH_BOX));
@@ -410,8 +407,8 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" ` +
     `viewBox="0 0 ${TILE_SIZE} ${TILE_SIZE}" ` +
     `fill="none" aria-hidden="true">` +
-    `<rect width="${TILE_SIZE}" height="${TILE_SIZE}" rx="${TILE_RADIUS}" fill="${FALLBACK_TILE_BACKGROUND}"/>` +
-    `<text x="108" y="114.3" fill="${FALLBACK_TILE_INK}" font-size="108" font-weight="600" ` +
+    `<rect width="${TILE_SIZE}" height="${TILE_SIZE}" rx="${TILE_RADIUS}" style="fill: ${FALLBACK_TILE_BACKGROUND}"/>` +
+    `<text x="108" y="114.3" style="fill: ${FALLBACK_TILE_INK}" font-size="108" font-weight="600" ` +
     `text-anchor="middle" dominant-baseline="central">${initial}</text></svg>`
   );
 }

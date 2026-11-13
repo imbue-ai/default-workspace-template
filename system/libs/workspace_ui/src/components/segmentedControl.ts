@@ -33,11 +33,11 @@ export interface SegmentedControlAttrs<V extends string> {
 const WELL_CLASS = "segmented flex shrink-0 items-center gap-0.5 rounded-lg border border-default p-0.5";
 const SEGMENT_CLASS =
   "flex h-6 cursor-pointer items-center justify-center rounded-md transition-colors duration-(--dur-base) " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
 const GLYPH_SEGMENT_CLASS = "w-7";
-const LABEL_SEGMENT_CLASS = "px-2.5 text-(length:--font-size-row)";
-const CHOSEN_CLASS = "bg-fill-active text-primary";
-const IDLE_CLASS = "text-secondary hover:bg-fill-hover hover:text-primary";
+const LABEL_SEGMENT_CLASS = "px-2.5 text-(length:--font-size-body-dense)";
+const CHOSEN_CLASS = "bg-fill-active text-body-content";
+const IDLE_CLASS = "text-body-content-secondary hover:bg-fill-hover hover:text-body-content";
 
 export function SegmentedControl<V extends string>(): m.Component<SegmentedControlAttrs<V>> {
   return {

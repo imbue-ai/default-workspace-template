@@ -116,7 +116,7 @@ export class AppModel {
       if (this.loaded.kind === "loading" || this.loaded.kind === "error") {
         this.loaded = { kind: "error", message };
       } else {
-        this.toasts.show(`Couldn't refresh: ${message}`);
+        this.toasts.show(`Couldn't refresh: ${message}`, "danger");
       }
     }
     this.redraw();
@@ -156,7 +156,7 @@ export class AppModel {
       await action();
       return true;
     } catch (error) {
-      this.toasts.show(`${failure}: ${error instanceof Error ? error.message : String(error)}`);
+      this.toasts.show(`${failure}: ${error instanceof Error ? error.message : String(error)}`, "danger");
       return false;
     } finally {
       this.isBusy = false;
@@ -254,12 +254,12 @@ export const App: m.Component<AppAttrs> = {
     let body: m.Children;
     switch (loaded.kind) {
       case "loading":
-        body = m("p", { class: "type-body p-6 text-faint", "data-loading": "" }, "Loading.");
+        body = m("p", { class: "type-body p-6 text-body-content-tertiary", "data-loading": "" }, "Loading.");
         break;
       case "error":
         body = m(
           "p",
-          { class: "type-body p-6 text-danger", "data-error": "" },
+          { class: "type-body p-6 text-danger-surface", "data-error": "" },
           `Couldn't read your routines: ${loaded.message}`,
         );
         break;

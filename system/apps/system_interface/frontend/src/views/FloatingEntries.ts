@@ -57,7 +57,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             "aria-label": tooltip,
             class:
               "floating-entry pointer-events-auto absolute flex cursor-pointer items-center justify-center " +
-              "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+              "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-focus " +
               (isAvatar
                 ? "rounded-2xl border-0 bg-transparent p-0 [&>img]:size-full "
                 : // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing and
@@ -70,11 +70,13 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
                   // longer has is the one drawing here that takes it.
                   "rounded-[32%] border-0 bg-transparent p-0 [&>svg]:size-full transition-transform " +
                   "hover:scale-110 " +
-                  (entry.isFocused ? "text-primary shadow-overlay " : "text-secondary shadow-raised ")) +
+                  (entry.isFocused
+                    ? "text-body-content shadow-overlay "
+                    : "text-body-content-secondary shadow-raised ")) +
               // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
               // Not the avatar, though: dimming a character reads as unwell rather than as put away.
               (!isAvatar && (entry.isMinimized || entry.isDetached) ? "opacity-70 " : "") +
-              (isMenuOpen && !isAvatar ? "ring-2 ring-accent" : ""),
+              (isMenuOpen && !isAvatar ? "ring-2 ring-accent-surface" : ""),
             style: rectStyle(rect),
             // Above for the avatar: it floats just over the taskbar, and the shared flip only fires
             // on viewport overflow, so the below placement would land the bubble on the bar.

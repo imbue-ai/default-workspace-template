@@ -81,7 +81,7 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
             "data-tray-ringed": isRinged ? "true" : null,
             class:
               "tray-person relative flex shrink-0 items-center justify-center rounded-full border-0 p-0 " +
-              "outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+              "outline-none focus-visible:ring-2 focus-visible:ring-focus " +
               // The bar's surface under a faded picture, so it never shows the one tucked under it.
               (isFaded ? "bg-(--desk-taskbar-surface) " : "bg-transparent ") +
               (isClickable ? "cursor-pointer " : "cursor-default ") +

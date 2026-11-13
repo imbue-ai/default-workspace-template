@@ -24,6 +24,7 @@
 import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { labelForToolCall, runningCallElapsed, runningToolCall } from "./ActivityIndicator";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -204,13 +205,10 @@ const DETAIL_HEADER_CLASS =
   "tool-chip-detail-header -mx-3 -mt-1.5 mb-1.5 flex items-start gap-1.5 " +
   "rounded-t-md border-b px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
 
-/** The close control: the same ghost treatment as a chip, squared off for an icon.
- *  `-mr-2` sets it nearer the panel's edge than its own padding would -- the gap that
- *  reads as right is the one to the glyph, not to the invisible box around it. */
-const DETAIL_CLOSE_CLASS =
-  "tool-chip-detail-close -mr-2 ml-auto flex shrink-0 cursor-pointer appearance-none items-center rounded " +
-  "border-0 bg-transparent p-1 text-faint transition-colors duration-(--dur-base) hover:bg-fill-hover " +
-  "hover:text-primary";
+/** The close control: the shared smallest ghost icon button. `-mr-1.5` sets it nearer the
+ *  panel's edge than its own padding would -- the gap that reads as right is the one to the
+ *  glyph, not to the invisible box around it. */
+const DETAIL_CLOSE_EXTRA = "tool-chip-detail-close -mr-1.5 ml-auto shrink-0";
 
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
@@ -226,7 +224,7 @@ function renderPane(marker: string, text: string, extra = "", verb?: string): m.
     // Beside the command rather than above it, so a one-line input stays one
     // line, and in the command's own face so the two read as one line rather
     // than as a label stuck to a value.
-    verb ? m("span", { class: "tool-call-verb text-secondary" }, verb) : null,
+    verb ? m("span", { class: "tool-call-verb text-body-content-secondary" }, verb) : null,
     verb ? " " : null,
     m(
       "pre",
@@ -293,7 +291,7 @@ function renderPaneNote(marker: string, state: "loading" | "unavailable", extra 
     "div",
     {
       class:
-        `${marker} tool-call-payload-note py-0.5 text-(length:--font-size-helper) italic text-secondary ${extra}`.trim(),
+        `${marker} tool-call-payload-note py-0.5 text-(length:--font-size-helper) italic text-body-content-secondary ${extra}`.trim(),
     },
     state === "loading" ? "Loading…" : "No longer available",
   );
@@ -331,8 +329,8 @@ export function closeChip(entry: ChipEntry): void {
  *  its own padding so its ink starts on the pane's, as the chip row's does. */
 const OUTPUT_TOGGLE_CLASS =
   "tool-call-output-toggle -ml-1 mt-1 cursor-pointer appearance-none rounded border-0 bg-transparent px-1 " +
-  "py-[2px] text-(length:--font-size-helper) leading-normal text-secondary transition-colors " +
-  "duration-(--dur-base) hover:bg-fill-hover hover:text-primary";
+  "py-[2px] text-(length:--font-size-helper) leading-normal text-body-content-secondary transition-colors " +
+  "duration-(--dur-base) hover:bg-fill-hover hover:text-body-content";
 
 /** The lines of an output, without the empty one a trailing newline leaves behind --
  *  otherwise a 20-line log that ends in a newline reports itself as 21. */
@@ -396,16 +394,18 @@ function renderDetailHeader(entry: ChipEntry): m.Vnode {
     m(
       "span",
       {
-        class: "tool-chip-detail-title min-w-0 text-secondary",
+        class: "tool-chip-detail-title min-w-0 text-body-content-secondary",
         title: entry.kind === "tool" ? entry.call.tool_name : undefined,
       },
       entry.kind === "tool" ? chipTitle(chipText(entry.call)) : entry.label,
     ),
     m(
-      "button",
+      Button,
       {
-        type: "button",
-        class: DETAIL_CLOSE_CLASS,
+        variant: "ghost",
+        xs: true,
+        icon: true,
+        extra: DETAIL_CLOSE_EXTRA,
         "aria-label": "Close",
         title: "Close",
         onclick: () => closeChip(entry),
@@ -458,7 +458,7 @@ function toolDetailSections(chip: ChipCall, toolResult: ToolResultEvent | null, 
     sections.push(
       m(
         "div",
-        { class: "tool-call-payload-note py-0.5 text-(length:--font-size-helper) italic text-secondary" },
+        { class: "tool-call-payload-note py-0.5 text-(length:--font-size-helper) italic text-body-content-secondary" },
         "Nothing was recorded for this call.",
       ),
     );
@@ -524,7 +524,11 @@ function renderRunningChipFace(call: ToolCall, chatId: string): m.Children[] {
     m("span", { class: CHIP_LABEL_CLASS, "aria-live": "polite" }, labelForToolCall(call)),
     elapsed === null
       ? null
-      : m("span", { class: "tool-chip-elapsed shrink-0 tabular-nums text-faint" }, `\u00b7 ${elapsed}`),
+      : m(
+          "span",
+          { class: "tool-chip-elapsed shrink-0 tabular-nums text-body-content-tertiary" },
+          `\u00b7 ${elapsed}`,
+        ),
   ];
 }
 
@@ -561,7 +565,11 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
           // is open.
           const isRunning =
             chip.kind === "tool" && running !== null && chip.call.tool_call_id === running.tool_call_id;
-          const tone = isOpen ? "text-primary" : isRunning ? "text-secondary" : "text-faint";
+          const tone = isOpen
+            ? "text-body-content"
+            : isRunning
+              ? "text-body-content-secondary"
+              : "text-body-content-tertiary";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
           const button = m(
             "button",

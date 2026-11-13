@@ -50,8 +50,12 @@ style, chrome setting, and icon its base has, and sets only what differs.
 - **`tokens.css`**: the tokens under `:root`. Only contract tokens (section 4.1), plus private
   ones named `--theme-*` for values the part styles share. Metric tokens stay inside their
   ranges. A part's rule in `parts.css` may set a token too, for what is drawn inside that part:
-  a selection filled in the accent sets `--c-accent` to a colour that shows on it, as both
-  retro themes do in a selected row.
+  a selection filled in the accent sets `--c-accent-surface` to a colour that shows on it, as both
+  retro themes do in a selected row. Colors are one key per ramp (`--c-primary-key`, ...), twelve
+  computed steps per ramp, and roles over them (`--c-body-surface`, `--c-primary-surface`, ...): set
+  a theme's colors as keys when they follow one hue, or as roles when they do not (both retro
+  themes set roles). Hover and active are never tokens; a theme with flat controls sets
+  `--state-ratio: 1`. `workspace-themes migrate` moves a theme made before contract 2 onto it.
 - **`parts.css`**: the part styles, selected only as `[data-part="..."]`, combined with the
   parts' own attributes (`data-variant`, `data-focused`, `data-control`, ... as section 4.2
   lists them), `aria-*`, pseudo-classes, and `:root[data-ui-theme]`,

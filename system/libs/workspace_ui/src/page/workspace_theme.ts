@@ -5,6 +5,7 @@
  * the theme this origin last wore before the first paint, then whatever the shell names in `shell:theme`.
  */
 
+import "../fonts.css";
 import "./workspace_theme.css";
 import { followShellTheme } from "../app_contract";
 import { STANDARD_THEME_ID } from "../themes/themeBoot";
@@ -18,4 +19,7 @@ const remembered = rememberedTheme();
 // Put on while <head> is still being read, so holding the first frame until it loads costs no flash.
 if (remembered.id !== STANDARD_THEME_ID) void wearTheme(remembered, document, { isRenderBlocking: true });
 
-followShellTheme((theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }));
+followShellTheme(
+  (theme, revision, isPreview, workspaceColor) =>
+    void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }),
+);

@@ -25,14 +25,16 @@ export interface BadgeOptions {
 const BADGE_BASE =
   "badge inline-flex items-center gap-1 px-2 py-0.5 " +
   `${TEXT_HELPER_SIZE} font-normal leading-[1.4] whitespace-nowrap ` +
-  "border rounded-lg";
+  "border rounded-md";
 
+// The brand's status pill: each tone's subtle tint, its text in the tone's subtle content (7:1 on the tint), and
+// an edge one ramp step deeper than the tint.
 const BADGE_TONES: Record<BadgeTone, string> = {
-  neutral: "bg-surface text-secondary border-default",
-  accent: "bg-surface text-accent border-accent",
-  danger: "bg-danger-surface text-danger border-danger-border",
-  warning: "bg-warning-surface text-warning border-transparent",
-  success: "bg-success-surface text-success border-success-border",
+  neutral: "bg-body-surface-raised text-body-content-secondary border-default",
+  accent: "bg-accent-subtle-surface text-accent-subtle-content border-accent-4",
+  danger: "bg-danger-subtle-surface text-danger-subtle-content border-danger-4",
+  warning: "bg-warn-subtle-surface text-warn-subtle-content border-warn-4",
+  success: "bg-success-subtle-surface text-success-subtle-content border-success-4",
 };
 
 export function badgeClass(tone: BadgeTone, options: BadgeOptions = {}): string {

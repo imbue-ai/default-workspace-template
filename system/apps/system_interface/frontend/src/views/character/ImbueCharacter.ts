@@ -41,7 +41,7 @@ const R = 100;
 const FLOOR = R * 1.22;
 const SHADOW_RX = R * 0.7;
 const SHADOW_RY = R * 0.17;
-/** Warm near-black, and the alpha at the middle of the pool. */
+/** Warm near-black (the fallback for `--desk-avatar-shadow-color`), and the alpha at the middle of the pool. */
 const SHADOW_INK = "#20100A";
 const SHADOW_ALPHA = 0.44;
 

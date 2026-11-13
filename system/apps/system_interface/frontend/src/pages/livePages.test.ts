@@ -688,7 +688,7 @@ describe("the contract", () => {
     spy.mockClear();
     void wearTheme({ id: "mac-classic", revision: "r1" });
     expect(spy.mock.calls.map((call) => call[0])).toEqual([
-      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false, workspaceColor: null },
     ]);
 
     spy.mockClear();
@@ -706,9 +706,9 @@ describe("the contract", () => {
     void wearTheme({ id: "mac-classic", revision: "r1" });
     const themeMessages = spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_THEME);
     expect(themeMessages).toEqual([
-      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
-      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
-      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true, workspaceColor: null },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true, workspaceColor: null },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false, workspaceColor: null },
     ]);
   });
 
@@ -727,7 +727,7 @@ describe("the contract", () => {
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
-      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false, workspaceColor: null },
       { type: SHELL_SHOWN },
     ]);
     store.minimizeWindow("win-1");
@@ -746,7 +746,7 @@ describe("the contract", () => {
         opensLocalFiles: false,
         isViewing: false,
       },
-      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false, workspaceColor: null },
       { type: SHELL_HIDDEN },
     ]);
   });

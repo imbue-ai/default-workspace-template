@@ -16,7 +16,7 @@ export interface DeclaredToken {
 /** The utility prefix a color is drawn with in the catalog (and most often used with). */
 export type ColorRole = "text" | "border" | "bg";
 
-/** One color: ``text-primary`` is ``{ utility: "text-primary", name: "primary", variable: "c-text-primary" }``. */
+/** One color: ``text-body-content`` is ``{ utility: "text-body-content", name: "primary", variable: "c-text-primary" }``. */
 export interface ColorToken {
   readonly name: string;
   readonly role: ColorRole;
@@ -80,7 +80,7 @@ function declarations(body: string): DeclaredToken[] {
   return entries(body).flatMap((entry) => (entry.kind === "token" ? [{ name: entry.name, value: entry.value }] : []));
 }
 
-/** A group header's label: the words before its colon ("text: text-primary / ..." reads "text"). */
+/** A group header's label: the words before its colon ("text: text-body-content / ..." reads "text"). */
 function groupLabel(comment: string): string {
   const colon = comment.indexOf(":");
   return (colon === -1 ? comment : comment.slice(0, colon)).trim();

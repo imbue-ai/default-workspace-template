@@ -48,6 +48,7 @@ from workspace_layout.records import Window
 from workspace_layout.records import WindowView
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
+from workspace_themes.contract import WORKSPACE_COLOR_STATE_PATH
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
 from imbue.imbue_common.model_update import to_update
@@ -153,6 +154,7 @@ from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.shell.window_paths import WindowPathStore
+from imbue.system_interface.shell.workspace_color import WorkspaceColorKeeper
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -233,6 +235,7 @@ class ShellState(MutableModel):
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _theme_watch: ThemeCatalogWatch | None = PrivateAttr(default=None)
+    _workspace_color: WorkspaceColorKeeper | None = PrivateAttr(default=None)
     _snapshot_watch: BaseObserver | None = PrivateAttr(default=None)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
@@ -262,6 +265,7 @@ class ShellState(MutableModel):
         )
         theme_watch.start()
         self._theme_watch = theme_watch
+        self.workspace_color.refresh_in_background()
         # The profile snapshot is written from outside the workspace (the Imbue Studio desktop or
         # the web chrome, over exec), so a change announces itself only through this watch: every
         # page then re-fetches its resolved keybindings. The directory is made first so the watch
@@ -286,6 +290,8 @@ class ShellState(MutableModel):
         if self._theme_watch is not None:
             self._theme_watch.stop()
             self._theme_watch = None
+        if self._workspace_color is not None:
+            self._workspace_color.stop()
         if self._snapshot_watch is not None:
             stop_file_watch(self._snapshot_watch)
             self._snapshot_watch = None
@@ -585,10 +591,23 @@ class ShellState(MutableModel):
     def broadcast_desktops_updated(self) -> None:
         self.broadcaster.broadcast_desktops_updated(self.desktop_views(self.list_desktops()))
 
+    @property
+    def workspace_color(self) -> WorkspaceColorKeeper:
+        """The workspace color the shell keeps for every app (docs/system/blueprint/brand-design-system/)."""
+        if self._workspace_color is None:
+            self._workspace_color = WorkspaceColorKeeper(
+                repo_root=self.repo_root,
+                state_path=self.repo_root / WORKSPACE_COLOR_STATE_PATH,
+                on_changed=self.broadcast_themes_changed,
+            )
+        return self._workspace_color
+
     def broadcast_themes_changed(self) -> None:
-        """Send every window the theme catalog and the workspace's default, after either changed."""
+        """Send every window the theme catalog, the workspace's default, and the workspace color, after any changed."""
         self.broadcaster.broadcast_themes_changed(
-            theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
+            theme_catalog_wire_json(
+                self.themes.load(), self.desktops.read_theme_choices(), self.workspace_color.read()
+            )
         )
 
     def broadcast_keybindings_changed(self) -> None:

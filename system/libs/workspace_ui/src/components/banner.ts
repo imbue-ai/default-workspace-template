@@ -6,8 +6,8 @@
 export type BannerTone = "neutral" | "warning";
 
 const BANNER_TONES: Record<BannerTone, string> = {
-  neutral: "border-default bg-surface-secondary text-secondary",
-  warning: "border-warning bg-warning-surface text-primary",
+  neutral: "border-default bg-body-surface-secondary text-body-content-secondary",
+  warning: "border-warn-4 bg-warn-subtle-surface text-body-content",
 };
 
 export function bannerClass(marker: string, tone: BannerTone): string {

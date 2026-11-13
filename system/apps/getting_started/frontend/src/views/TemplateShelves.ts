@@ -96,10 +96,10 @@ export function TemplateCard(): m.Component<TemplateCardAttrs> {
             frameClass: `${HOVER_LIFT_GROUP} rounded-lg`,
             glyphSize: CARD_FALLBACK_GLYPH_SIZE,
           }),
-          m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),
+          m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-body-content" }, template.title),
           template.author === ""
             ? null
-            : m("span", { class: "type-helper block truncate text-faint" }, `by ${template.author}`),
+            : m("span", { class: "type-helper block truncate text-body-content-tertiary" }, `by ${template.author}`),
         ],
       );
     },
@@ -202,10 +202,10 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
         {
           class:
             `new-tab-template-rail-arrow-circle absolute ${edge} flex h-6 w-6 -translate-y-1/2 items-center ` +
-            "justify-center rounded-full text-secondary transition-[background-color,color] " +
-            "duration-(--dur-base) ease-[ease] group-hover:bg-fill-hover group-hover:text-primary " +
+            "justify-center rounded-full text-body-content-secondary transition-[background-color,color] " +
+            "duration-(--dur-base) ease-[ease] group-hover:bg-fill-hover group-hover:text-body-content " +
             "group-active:bg-fill-active group-focus-visible:outline-2 group-focus-visible:outline-offset-2 " +
-            "group-focus-visible:outline-accent",
+            "group-focus-visible:outline-focus",
           style: { top: railArrowTop(artCentre) },
         },
         m.trust(icon(isRight ? "chevron-right" : "chevron-left", { size: RAIL_ARROW_GLYPH_SIZE })),
@@ -253,7 +253,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   function shelfView(shelf: ResolvedShelf, onPick: (template: CatalogTemplate) => void): m.Vnode {
     const paging = railPaging(railExtentByShelf.get(shelf.key) ?? { scrollLeft: 0, clientWidth: 0, scrollWidth: 0 });
     return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
-      m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
+      m("h3", { class: "type-label px-2 text-body-content" }, shelf.title),
       // The row hangs its slivers out past the page column so the arrows sit in the page's margin:
       // -mx-6 back, w-5 slivers and the scroller's px-3 forward leave the cards at the heading's
       // own px-2. -mx-6 is the most the page can give, being exactly the page's padding; past

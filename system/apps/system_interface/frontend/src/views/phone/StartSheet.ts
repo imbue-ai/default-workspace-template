@@ -32,15 +32,15 @@ export const StartSheet: m.Component<StartSheetAttrs> = {
       {
         name: "start",
         onDismiss,
-        head: m("h2", { class: "m-0 px-4 pt-1.5 pb-2.5 text-lg font-bold text-primary" }, START_SHEET_TITLE),
+        head: m("h2", { class: "m-0 px-4 pt-1.5 pb-2.5 text-lg font-bold text-body-content" }, START_SHEET_TITLE),
       },
       [
         m(
           "div",
           {
             class:
-              "mx-3 mb-1.5 flex min-h-11 shrink-0 items-center rounded-xl border border-strong bg-surface px-3 " +
-              "focus-within:border-accent",
+              "mx-3 mb-1.5 flex min-h-11 shrink-0 items-center rounded-xl border border-default bg-body-surface-raised px-3 " +
+              "focus-within:border-accent-surface",
           },
           m("textarea", {
             "data-phone-start-field": "",
@@ -51,7 +51,7 @@ export const StartSheet: m.Component<StartSheetAttrs> = {
             value: query,
             class:
               "max-h-30 min-w-0 flex-1 resize-none bg-transparent py-2.5 leading-5 text-(length:--font-size-body) " +
-              "text-primary outline-none placeholder:text-faint",
+              "text-body-content outline-none placeholder:text-body-content-tertiary",
             oninput: (event: InputEvent) => onQuery((event.target as HTMLTextAreaElement).value),
             onkeydown: (event: KeyboardEvent) => {
               if (event.key !== "Enter" || isLineBreakChord(event) || event.isComposing) return;

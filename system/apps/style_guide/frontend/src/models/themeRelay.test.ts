@@ -20,20 +20,20 @@ describe("the theme relay", () => {
   it("sends the shell's theme on to every relaying frame, as the shell:theme message the page kit follows", () => {
     const relaying = frame(true);
     const other = frame(false);
-    relayTheme({ theme: "windows-2000", revision: "r1", isPreview: true });
+    relayTheme({ theme: "windows-2000", revision: "r1", isPreview: true, workspaceColor: "#0b292b" });
     expect(relaying.post).toHaveBeenCalledWith(
-      { type: "shell:theme", theme: "windows-2000", revision: "r1", isPreview: true },
+      { type: "shell:theme", theme: "windows-2000", revision: "r1", isPreview: true, workspaceColor: "#0b292b" },
       window.location.origin,
     );
     expect(other.post).not.toHaveBeenCalled();
   });
 
   it("sends a frame that loads later the theme the shell last named", () => {
-    relayTheme({ theme: "mac-classic", revision: "r2", isPreview: false });
+    relayTheme({ theme: "mac-classic", revision: "r2", isPreview: false, workspaceColor: null });
     const late = frame(true);
     relayToLoadedFrame(late.element);
     expect(late.post).toHaveBeenCalledWith(
-      { type: "shell:theme", theme: "mac-classic", revision: "r2", isPreview: false },
+      { type: "shell:theme", theme: "mac-classic", revision: "r2", isPreview: false, workspaceColor: null },
       window.location.origin,
     );
   });

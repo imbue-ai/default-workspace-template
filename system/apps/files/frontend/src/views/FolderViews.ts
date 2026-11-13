@@ -32,8 +32,9 @@ function shareBadgeFor(app: FilesController, entry: Entry): IconBadge | undefine
 
 function stateClass(app: FilesController, entry: Entry): string {
   const model = app.model;
-  if (model.dropTarget === entry.path) return "bg-accent-light outline-2 -outline-offset-2 outline-accent";
-  if (model.isSelected(entry.path)) return "bg-accent-light";
+  if (model.dropTarget === entry.path)
+    return "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface";
+  if (model.isSelected(entry.path)) return "bg-accent-subtle-surface";
   return "hover:bg-fill-hover";
 }
 
@@ -73,13 +74,13 @@ export const IconView: m.Component<ViewAttrs> = {
               ? m(RenameField, {
                   app,
                   multiline: true,
-                  extraClass: "resize-none text-center text-(length:--font-size-row) leading-tight",
+                  extraClass: "resize-none text-center text-(length:--font-size-body-dense) leading-tight",
                 })
               : m(
                   "div.files-name",
                   {
                     class:
-                      "line-clamp-2 w-full text-center text-(length:--font-size-row) leading-tight break-words text-primary",
+                      "line-clamp-2 w-full text-center text-(length:--font-size-body-dense) leading-tight break-words text-body-content",
                   },
                   entry.name,
                 ),
@@ -112,7 +113,7 @@ function ListHeader(): m.Component<{ app: FilesController }> {
         "div.files-list-header",
         {
           role: "row",
-          class: `sticky top-0 z-(--z-content) mx-2 grid ${LIST_COLUMNS} gap-3 border-b border-subtle bg-surface px-3`,
+          class: `sticky top-0 z-(--z-content) mx-2 grid ${LIST_COLUMNS} gap-3 border-b border-subtle bg-body-surface px-3`,
         },
         HEADERS.map((header) =>
           m(
@@ -121,7 +122,7 @@ function ListHeader(): m.Component<{ app: FilesController }> {
               type: "button",
               "data-sort": header.key,
               "aria-sort": sort.key === header.key ? (sort.descending ? "descending" : "ascending") : "none",
-              class: `flex h-7 min-w-0 cursor-pointer items-center gap-1 type-helper ${sort.key === header.key ? "text-primary" : "text-secondary hover:text-primary"} ${header.extra}`,
+              class: `flex h-7 min-w-0 cursor-pointer items-center gap-1 type-helper ${sort.key === header.key ? "text-body-content" : "text-body-content-secondary hover:text-body-content"} ${header.extra}`,
               onclick: () => app.model.sortBy(header.key),
             },
             [
@@ -158,10 +159,10 @@ export const ListView: m.Component<ViewAttrs> = {
               m("div", { class: "min-w-0 flex-1" }, [
                 isRenaming
                   ? m(RenameField, { app, extraClass: "type-body" })
-                  : m("div.files-name", { class: "truncate type-body text-primary" }, entry.name),
+                  : m("div.files-name", { class: "truncate type-body text-body-content" }, entry.name),
                 m(
                   "div",
-                  { class: "truncate type-helper text-faint" },
+                  { class: "truncate type-helper text-body-content-tertiary" },
                   [formatModified(entry.mtime, now), sizeText(entry)].filter((part) => part !== "").join(" · "),
                 ),
               ]),
@@ -182,7 +183,7 @@ export const ListView: m.Component<ViewAttrs> = {
             "div.files-row",
             {
               key: entry.path,
-              class: `mx-2 grid ${LIST_COLUMNS} h-7 cursor-default items-center gap-3 rounded-md px-3 text-(length:--font-size-row) ${stateClass(app, entry)}`,
+              class: `mx-2 grid ${LIST_COLUMNS} h-7 cursor-default items-center gap-3 rounded-md px-3 text-(length:--font-size-body-dense) ${stateClass(app, entry)}`,
               ...entryAttrs(app, entry, entries, "list"),
             },
             [
@@ -190,15 +191,15 @@ export const ListView: m.Component<ViewAttrs> = {
                 m(FileIcon, { entry, size: 18, shareBadge: shareBadgeFor(app, entry) }),
                 isRenaming
                   ? m(RenameField, { app, extraClass: "h-6" })
-                  : m("span.files-name", { class: "truncate text-primary" }, entry.name),
+                  : m("span.files-name", { class: "truncate text-body-content" }, entry.name),
               ]),
-              m("div", { class: "truncate text-secondary" }, formatModified(entry.mtime, now)),
+              m("div", { class: "truncate text-body-content-secondary" }, formatModified(entry.mtime, now)),
               m(
                 "div",
-                { class: "truncate text-right text-secondary tabular-nums" },
+                { class: "truncate text-right text-body-content-secondary tabular-nums" },
                 entry.isFolder ? "--" : formatSize(entry.size),
               ),
-              m("div", { class: "truncate text-secondary" }, kindLabelOf(entry.name, entry.isFolder)),
+              m("div", { class: "truncate text-body-content-secondary" }, kindLabelOf(entry.name, entry.isFolder)),
             ],
           );
         }),
@@ -219,7 +220,7 @@ function columnBody(
     return m("div", { class: "flex justify-center py-6" }, m("div.spinner"));
   }
   if (state.status === "error" && entries.length === 0) {
-    return m("div", { class: "px-3 py-4 type-helper text-danger" }, state.error);
+    return m("div", { class: "px-3 py-4 type-helper text-danger-surface" }, state.error);
   }
   if (entries.length === 0) {
     const notice = syncNoticeOf(app.model.connections, folder);
@@ -229,14 +230,14 @@ function columnBody(
         { role: "status", class: "flex flex-col gap-1 px-3 py-4 text-center type-helper" },
         [
           notice.tone === "warning"
-            ? m.trust(alertDotIcon(16, "mx-auto text-warning"))
+            ? m.trust(alertDotIcon(16, "mx-auto text-warn-surface"))
             : m("span.spinner.spinner--sm", { class: "mx-auto" }),
-          m("div", { class: "font-medium text-primary" }, notice.title),
-          m("div", { class: "text-secondary" }, notice.detail),
+          m("div", { class: "font-medium text-body-content" }, notice.title),
+          m("div", { class: "text-body-content-secondary" }, notice.detail),
         ],
       );
     }
-    return m("div", { class: "px-3 py-4 text-center type-helper text-faint" }, "Empty");
+    return m("div", { class: "px-3 py-4 text-center type-helper text-body-content-tertiary" }, "Empty");
   }
   const model = app.model;
   return entries.map((entry) => {
@@ -245,9 +246,9 @@ function columnBody(
     const isOnPath = entry.isFolder && isWithin(model.folder, entry.path) && !model.isSelected(entry.path);
     const highlight =
       model.dropTarget === entry.path
-        ? "bg-accent-light outline-2 -outline-offset-2 outline-accent"
+        ? "bg-accent-subtle-surface outline-2 -outline-offset-2 outline-accent-surface"
         : model.isSelected(entry.path)
-          ? "bg-accent-light"
+          ? "bg-accent-subtle-surface"
           : isOnPath
             ? "bg-fill-active"
             : "hover:bg-fill-hover";
@@ -255,15 +256,17 @@ function columnBody(
       "div.files-row",
       {
         key: entry.path,
-        class: `mx-1 flex h-[22px] shrink-0 cursor-default items-center gap-2 rounded-md px-2 text-(length:--font-size-row) ${highlight}`,
+        class: `mx-1 flex h-[22px] shrink-0 cursor-default items-center gap-2 rounded-md px-2 text-(length:--font-size-body-dense) ${highlight}`,
         ...entryAttrs(app, entry, entries, "column"),
       },
       [
         m(FileIcon, { entry, size: 18, shareBadge: shareBadgeFor(app, entry) }),
         isRenaming
           ? m(RenameField, { app, extraClass: "h-5" })
-          : m("span.files-name", { class: "min-w-0 flex-1 truncate text-primary" }, entry.name),
-        entry.isFolder ? m.trust(icon("chevron-right", { size: 14, className: "shrink-0 text-faint" })) : null,
+          : m("span.files-name", { class: "min-w-0 flex-1 truncate text-body-content" }, entry.name),
+        entry.isFolder
+          ? m.trust(icon("chevron-right", { size: 14, className: "shrink-0 text-body-content-tertiary" }))
+          : null,
       ],
     );
   });
@@ -299,7 +302,7 @@ export function ColumnView(): m.Component<{ app: FilesController }> {
               role: "listbox",
               [FOLDER_SURFACE_ATTR]: folder,
               [DROP_FOLDER_ATTR]: folder,
-              class: `flex w-[240px] shrink-0 flex-col gap-px overflow-y-auto border-r border-subtle py-1 ${model.dropTarget === folder ? "bg-accent-light" : ""}`,
+              class: `flex w-[240px] shrink-0 flex-col gap-px overflow-y-auto border-r border-subtle py-1 ${model.dropTarget === folder ? "bg-accent-subtle-surface" : ""}`,
               onclick: () => {
                 if (model.folder !== folder || model.selection.length > 0) {
                   model.navigate(folder, { history: "replace" });

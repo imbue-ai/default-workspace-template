@@ -230,7 +230,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           {
             ...partAttrs("window-title"),
             class:
-              `window-title ${margin} min-w-0 truncate text-(length:--font-size-row) ` +
+              `window-title ${margin} min-w-0 truncate text-(length:--font-size-body-dense) ` +
               (isFocused ? "font-bold" : "font-medium opacity-70"),
           },
           title,
@@ -250,7 +250,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
               ...partAttrs("window-title"),
               class:
                 "window-title pointer-events-none absolute left-1/2 max-w-[60%] min-w-0 -translate-x-1/2 truncate " +
-                "text-(length:--font-size-row) " +
+                "text-(length:--font-size-body-dense) " +
                 (isFocused ? "font-bold" : "font-medium opacity-70"),
             },
             title,
@@ -273,7 +273,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
               {
                 ...partAttrs("window-title"),
                 class:
-                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-body-dense) " +
                   (isFocused ? "font-bold" : "font-medium opacity-70"),
               },
               title,
@@ -293,7 +293,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             "border-default pr-1 pl-1.5 touch-none select-none " +
             // The open hand says the bar is the handle. The controls carry their own cursor.
             "cursor-grab " +
-            (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
+            (isFocused
+              ? "bg-body-surface-secondary text-body-content"
+              : "bg-body-surface-secondary-inactive text-body-content-secondary"),
           ondblclick: (event: MouseEvent) => {
             if ((event.target as Element).closest("[data-window-control]") !== null) return;
             onDoubleClick();

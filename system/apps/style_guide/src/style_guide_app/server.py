@@ -22,6 +22,7 @@ from typing import Final
 from flask import Flask
 from flask import Response
 from flask import abort
+from flask import request
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
@@ -40,6 +41,9 @@ from imbue.imbue_common.logging import setup_logging
 from style_guide_app.data_types import HealthResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
+from workspace_themes.workspace_color import WorkspaceColorRecord
+from workspace_themes.workspace_color import normalize_hex
+from workspace_themes.workspace_color import workspace_color_css
 
 HOST: Final[str] = os.environ.get("STYLE_GUIDE_APP_HOST", "127.0.0.1")
 PORT: Final[int] = int(os.environ.get("STYLE_GUIDE_APP_PORT", "8060"))
@@ -67,6 +71,10 @@ PAGE_KIT_FILES: Final[dict[str, str]] = {
 }
 
 HTTP_NOT_FOUND: Final[int] = 404
+HTTP_BAD_REQUEST: Final[int] = 400
+# The catalog's workspace-color preview: what /_static/workspace_color.css would hold for a color, so the page can
+# wear any color without changing the workspace's.
+WORKSPACE_COLOR_PREVIEW_PATH: Final[str] = "/api/workspace-color/preview"
 
 _NOT_BUILT_PAGE: Final[str] = (
     '<!doctype html><html><head><meta charset="utf-8"><title>Style Guide</title></head>'
@@ -82,6 +90,9 @@ ROUTE_TABLE: RouteTable = {
         reason="a plain-HTML page wearing the page kit, which the catalog frames"
     ),
     ("GET", "/_static/{filename}"): SchemalessRoute(reason="one file of the page kit the shell builds"),
+    ("GET", WORKSPACE_COLOR_PREVIEW_PATH): SchemalessRoute(
+        reason="the keys a workspace color would stand for, as the stylesheet the catalog previews it with"
+    ),
     **THEME_STATIC_ROUTE_TABLE,
 }
 
@@ -137,6 +148,15 @@ def create_app(static_directory: Path, shell_static_directory: Path = SHELL_STAT
         response = send_file(path.absolute(), mimetype=mimetype)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+    @app.get(WORKSPACE_COLOR_PREVIEW_PATH)
+    def workspace_color_preview() -> ResponseReturnValue:
+        """The workspace color stylesheet a color would make (``?hex=#rrggbb``), for the page to preview."""
+        hex_color = normalize_hex(request.args.get("hex", ""))
+        if hex_color is None:
+            abort(HTTP_BAD_REQUEST)
+        css = workspace_color_css(WorkspaceColorRecord(hex=hex_color))
+        return Response(css, mimetype="text/css", headers={"Cache-Control": "no-cache"})
 
     @app.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:

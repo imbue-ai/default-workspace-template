@@ -1,11 +1,12 @@
 /**
- * The one-time notices' shared chrome: a small bordered card with an accent icon, one sentence
+ * The one-time notices' shared chrome: the shared neutral notice with an accent icon, one sentence
  * and a dismiss button, which a notice places and words itself.
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
 
 export function renderDismissibleNotice(opts: {
   // The notice's own class and any positioning utilities.
@@ -20,13 +21,12 @@ export function renderDismissibleNotice(opts: {
   return m(
     "div",
     {
-      class:
-        `${opts.extraClass} flex max-w-[360px] items-start gap-2 rounded-lg border border-default bg-surface ` +
-        "px-3 py-2 text-(length:--font-size-helper) text-secondary shadow-md",
+      // The shared neutral notice, lifted: it floats over the transcript rather than sitting in it.
+      class: noticeClass("neutral", `${opts.extraClass} max-w-[360px] shadow-raised`),
       role: "status",
     },
     [
-      m("span", { class: "mt-0.5 shrink-0 text-accent" }, m.trust(opts.iconHtml)),
+      m("span", { class: "mt-0.5 shrink-0 text-accent-surface" }, m.trust(opts.iconHtml)),
       m("span", { class: "min-w-0" }, opts.text),
       m(
         Button,

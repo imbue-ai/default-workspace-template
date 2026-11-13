@@ -78,17 +78,17 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
         {
           class:
             "handoff-failed-notice mx-auto mb-3 flex w-full max-w-(--width-message-column) flex-col gap-2 " +
-            "rounded-lg border border-danger-border bg-danger-surface p-3",
+            "rounded-lg border border-danger-4 bg-danger-subtle-surface p-3",
           role: "alert",
         },
         [
-          m("p", { class: "handoff-failed-title type-label text-danger" }, title),
+          m("p", { class: "handoff-failed-title type-title-sm text-danger-surface" }, title),
           m(
             "pre",
             {
               class:
                 "handoff-failed-reason max-h-40 overflow-auto font-mono text-(length:--font-size-helper) " +
-                "whitespace-pre-wrap text-primary",
+                "whitespace-pre-wrap text-body-content",
             },
             handoff.error ??
               (handoff.failed_step === "model" ? "The model could not be set." : "The agent could not be started."),
@@ -135,7 +135,9 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
               "Start a new chat instead",
             ),
           ]),
-          retryError !== null ? m("p", { class: "handoff-retry-error text-sm text-danger" }, retryError) : null,
+          retryError !== null
+            ? m("p", { class: "handoff-retry-error text-sm text-danger-surface" }, retryError)
+            : null,
         ],
       );
     },

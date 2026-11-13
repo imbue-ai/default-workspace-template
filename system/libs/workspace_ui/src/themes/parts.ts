@@ -1,5 +1,5 @@
 /**
- * The parts of contract 1 (docs/system/blueprint/workspace-themes/, section 4.2): the named elements a theme
+ * The parts of the theme contract (docs/system/blueprint/workspace-themes/, section 4.2): the named elements a theme
  * may style, each marked `data-part="<name>"`. A theme selects nothing else, so a class name stays an app's own
  * business. The validator's copy is `CORE_PARTS` in `system/libs/workspace_themes/src/workspace_themes/contract.py`;
  * a test keeps the two lists equal.
@@ -23,6 +23,8 @@ export const PARTS = [
   "button",
   "field",
   "select",
+  "checkbox",
+  "switch",
   "menu",
   "menu-item",
   "menu-separator",
@@ -68,6 +70,8 @@ export function partAttrsMarkup(attrs: Readonly<Record<string, string>>): string
 }
 
 export const FIELD_PART = partAttrs("field");
+export const CHECKBOX_PART = partAttrs("checkbox");
+export const SWITCH_PART = partAttrs("switch");
 export const MENU_PART = partAttrs("menu");
 export const MENU_ITEM_PART = partAttrs("menu-item");
 export const MENU_SEPARATOR_PART = partAttrs("menu-separator");

@@ -12,9 +12,9 @@ function stripFade(direction: string): string {
   const stops = [0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1].map((t) => {
     const alpha = Math.round((1 - t) ** 2 * 1000) / 10;
     const at = `calc(${STRIP_FADE_SOLID_PX}px + (100% - ${STRIP_FADE_SOLID_PX}px) * ${t})`;
-    return `color-mix(in srgb, var(--c-bg-composer) ${alpha}%, transparent) ${at}`;
+    return `color-mix(in srgb, var(--c-body-surface-raised) ${alpha}%, transparent) ${at}`;
   });
-  return `linear-gradient(${direction}, var(--c-bg-composer) 0px, ${stops.join(", ")})`;
+  return `linear-gradient(${direction}, var(--c-body-surface-raised) 0px, ${stops.join(", ")})`;
 }
 
 export interface AttachmentStripAttrs {
@@ -67,9 +67,9 @@ export function AttachmentStrip(): m.Component<AttachmentStripAttrs> {
           type: "button",
           class:
             `message-input-attachments-${side} absolute top-2 z-20 inline-flex h-6 w-6 cursor-pointer items-center ` +
-            "justify-center rounded-md border border-transparent text-secondary " +
-            "transition-[color,background-color,border-color,box-shadow] hover:border-default hover:bg-surface " +
-            "hover:text-primary hover:shadow-[0_2px_6px_rgb(0_0_0/0.12)] " +
+            "justify-center rounded-md border border-transparent text-body-content-secondary " +
+            "transition-[color,background-color,border-color,box-shadow] hover:border-default hover:bg-body-surface-raised " +
+            "hover:text-body-content hover:shadow-overlay " +
             (isLeft ? "-left-2.5" : "-right-2.5"),
           "aria-label": isLeft ? "Scroll attachments left" : "Scroll attachments right",
           onclick: () => page(isLeft ? -1 : 1),

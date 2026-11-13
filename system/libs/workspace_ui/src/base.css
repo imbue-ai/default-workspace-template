@@ -23,91 +23,217 @@
    `@import "tailwindcss" source(none)` and adds its own `@source`; a class name
    assembled by string concatenation is NOT detected -- safelist any such case
    with `@source inline("...")`. */
+@import "./fonts.css";
 @source "./**/*.ts";
 
 /* Colour tokens — two layers.
  * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
- *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
- *    table. Hand-written CSS in this file references these directly.
+ *    ONLY place a value lives. Hand-written CSS references these directly.
  * 2. UTILITY LAYER (@theme inline, below): registers each --c-* under a clean
  *    semantic name, generating the colour utilities the views use
- *    (text-primary, bg-fill-hover, border-default, ...). `inline` makes the
+ *    (text-body-content, bg-fill-hover, border-default, ...). `inline` makes the
  *    generated utility resolve THROUGH var(--c-*) at runtime, so re-declaring
  *    a --c-* value on a subtree reskins it live.
- * The palette itself is the system interface's own (warm neutrals + green
- * accent). */
+ * A colour is one KEY per ramp; everything else is computed from the keys: twelve
+ * ramp steps each, and the roles the views use, each a ramp step or a key. The
+ * keys below are Imbue's own (Courage for the primary); a workspace colour
+ * replaces them through the workspace_color.css every app serves, and a theme
+ * may set keys, ramp steps or roles over both. Hover and active are never tokens:
+ * they are computed from the surface they shade (see "state shading").
+ * The group comments are read by the Style Guide (one per group, before its
+ * declarations). */
 :root {
-  --c-bg: #fafaf8;
-  --c-bg-sidebar: #f3f2ef;
-  /* State fills are translucent rather than opaque hexes so they
-     stack: a control's hover tint over an already-tinted row reads one step
-     deeper, which is what keeps a hover-revealed control's own hover visible.
-     Warmth comes from the surface underneath, not the tint. */
-  --c-fill-hover: rgb(0 0 0 / 0.07);
-  --c-fill-active: rgb(0 0 0 / 0.11);
-  /* One step fainter than hover, for a hover that has to read lighter than a selection drawn with
-     --c-bubble-other (the chat list's rows). */
+  /* keys: one colour per ramp; a role's solid surface IS its key, exactly */
+  --c-neutral-key: oklch(73% 0.016 85);
+  --c-primary-key: #492222;
+  --c-accent-key: #2f6b4f;
+  --c-success-key: #22a06b;
+  --c-warn-key: #b45309;
+  --c-danger-key: #d83a2c;
+  --c-wallpaper-key: #97630c;
+  /* neutral ramp: twelve steps on one shared lightness ladder (1 lightest), at the key's hue, its
+     chroma warmer as it darkens. Every ramp shares the ladder, so a step reads at the same contrast in
+     every ramp: on step 1, step 3 is 1.12:1, 4 is 1.25:1, 8 is 3.4:1, 9 is 5.1:1, 12 is 15.7:1. */
+  --c-neutral-1: oklch(from var(--c-neutral-key) 0.995 calc(c * 0.28) h);
+  --c-neutral-2: oklch(from var(--c-neutral-key) 0.9798 calc(c * 0.69) h);
+  --c-neutral-3: oklch(from var(--c-neutral-key) 0.9556 calc(c * 0.88) h);
+  --c-neutral-4: oklch(from var(--c-neutral-key) 0.92 calc(c * 0.98) h);
+  --c-neutral-5: oklch(from var(--c-neutral-key) 0.8767 calc(c * 1.05) h);
+  --c-neutral-6: oklch(from var(--c-neutral-key) 0.815 calc(c * 1.1) h);
+  --c-neutral-7: oklch(from var(--c-neutral-key) 0.73 calc(c * 1.1) h);
+  --c-neutral-8: oklch(from var(--c-neutral-key) 0.6304 calc(c * 1) h);
+  --c-neutral-9: oklch(from var(--c-neutral-key) 0.532 calc(c * 0.9) h);
+  --c-neutral-10: oklch(from var(--c-neutral-key) 0.4266 calc(c * 0.9) h);
+  --c-neutral-11: oklch(from var(--c-neutral-key) 0.3266 calc(c * 0.85) h);
+  --c-neutral-12: oklch(from var(--c-neutral-key) 0.2512 calc(c * 0.9) h);
+  /* primary ramp: the same ladder, chroma peaking at step 8 */
+  --c-primary-1: oklch(from var(--c-primary-key) 0.995 calc(c * 0.039) h);
+  --c-primary-2: oklch(from var(--c-primary-key) 0.9798 calc(c * 0.149) h);
+  --c-primary-3: oklch(from var(--c-primary-key) 0.9556 calc(c * 0.268) h);
+  --c-primary-4: oklch(from var(--c-primary-key) 0.92 calc(c * 0.416) h);
+  --c-primary-5: oklch(from var(--c-primary-key) 0.8767 calc(c * 0.585) h);
+  --c-primary-6: oklch(from var(--c-primary-key) 0.815 calc(c * 0.788) h);
+  --c-primary-7: oklch(from var(--c-primary-key) 0.73 calc(c * 0.892) h);
+  --c-primary-8: oklch(from var(--c-primary-key) 0.6304 calc(c * 1) h);
+  --c-primary-9: oklch(from var(--c-primary-key) 0.532 calc(c * 0.872) h);
+  --c-primary-10: oklch(from var(--c-primary-key) 0.4266 calc(c * 0.702) h);
+  --c-primary-11: oklch(from var(--c-primary-key) 0.3266 calc(c * 0.536) h);
+  --c-primary-12: oklch(from var(--c-primary-key) 0.2512 calc(c * 0.393) h);
+  /* accent ramp */
+  --c-accent-1: oklch(from var(--c-accent-key) 0.995 calc(c * 0.039) h);
+  --c-accent-2: oklch(from var(--c-accent-key) 0.9798 calc(c * 0.149) h);
+  --c-accent-3: oklch(from var(--c-accent-key) 0.9556 calc(c * 0.268) h);
+  --c-accent-4: oklch(from var(--c-accent-key) 0.92 calc(c * 0.416) h);
+  --c-accent-5: oklch(from var(--c-accent-key) 0.8767 calc(c * 0.585) h);
+  --c-accent-6: oklch(from var(--c-accent-key) 0.815 calc(c * 0.788) h);
+  --c-accent-7: oklch(from var(--c-accent-key) 0.73 calc(c * 0.892) h);
+  --c-accent-8: oklch(from var(--c-accent-key) 0.6304 calc(c * 1) h);
+  --c-accent-9: oklch(from var(--c-accent-key) 0.532 calc(c * 0.872) h);
+  --c-accent-10: oklch(from var(--c-accent-key) 0.4266 calc(c * 0.702) h);
+  --c-accent-11: oklch(from var(--c-accent-key) 0.3266 calc(c * 0.536) h);
+  --c-accent-12: oklch(from var(--c-accent-key) 0.2512 calc(c * 0.393) h);
+  /* success ramp */
+  --c-success-1: oklch(from var(--c-success-key) 0.995 calc(c * 0.039) h);
+  --c-success-2: oklch(from var(--c-success-key) 0.9798 calc(c * 0.149) h);
+  --c-success-3: oklch(from var(--c-success-key) 0.9556 calc(c * 0.268) h);
+  --c-success-4: oklch(from var(--c-success-key) 0.92 calc(c * 0.416) h);
+  --c-success-5: oklch(from var(--c-success-key) 0.8767 calc(c * 0.585) h);
+  --c-success-6: oklch(from var(--c-success-key) 0.815 calc(c * 0.788) h);
+  --c-success-7: oklch(from var(--c-success-key) 0.73 calc(c * 0.892) h);
+  --c-success-8: oklch(from var(--c-success-key) 0.6304 calc(c * 1) h);
+  --c-success-9: oklch(from var(--c-success-key) 0.532 calc(c * 0.872) h);
+  --c-success-10: oklch(from var(--c-success-key) 0.4266 calc(c * 0.702) h);
+  --c-success-11: oklch(from var(--c-success-key) 0.3266 calc(c * 0.536) h);
+  --c-success-12: oklch(from var(--c-success-key) 0.2512 calc(c * 0.393) h);
+  /* warn ramp */
+  --c-warn-1: oklch(from var(--c-warn-key) 0.995 calc(c * 0.039) h);
+  --c-warn-2: oklch(from var(--c-warn-key) 0.9798 calc(c * 0.149) h);
+  --c-warn-3: oklch(from var(--c-warn-key) 0.9556 calc(c * 0.268) h);
+  --c-warn-4: oklch(from var(--c-warn-key) 0.92 calc(c * 0.416) h);
+  --c-warn-5: oklch(from var(--c-warn-key) 0.8767 calc(c * 0.585) h);
+  --c-warn-6: oklch(from var(--c-warn-key) 0.815 calc(c * 0.788) h);
+  --c-warn-7: oklch(from var(--c-warn-key) 0.73 calc(c * 0.892) h);
+  --c-warn-8: oklch(from var(--c-warn-key) 0.6304 calc(c * 1) h);
+  --c-warn-9: oklch(from var(--c-warn-key) 0.532 calc(c * 0.872) h);
+  --c-warn-10: oklch(from var(--c-warn-key) 0.4266 calc(c * 0.702) h);
+  --c-warn-11: oklch(from var(--c-warn-key) 0.3266 calc(c * 0.536) h);
+  --c-warn-12: oklch(from var(--c-warn-key) 0.2512 calc(c * 0.393) h);
+  /* danger ramp */
+  --c-danger-1: oklch(from var(--c-danger-key) 0.995 calc(c * 0.039) h);
+  --c-danger-2: oklch(from var(--c-danger-key) 0.9798 calc(c * 0.149) h);
+  --c-danger-3: oklch(from var(--c-danger-key) 0.9556 calc(c * 0.268) h);
+  --c-danger-4: oklch(from var(--c-danger-key) 0.92 calc(c * 0.416) h);
+  --c-danger-5: oklch(from var(--c-danger-key) 0.8767 calc(c * 0.585) h);
+  --c-danger-6: oklch(from var(--c-danger-key) 0.815 calc(c * 0.788) h);
+  --c-danger-7: oklch(from var(--c-danger-key) 0.73 calc(c * 0.892) h);
+  --c-danger-8: oklch(from var(--c-danger-key) 0.6304 calc(c * 1) h);
+  --c-danger-9: oklch(from var(--c-danger-key) 0.532 calc(c * 0.872) h);
+  --c-danger-10: oklch(from var(--c-danger-key) 0.4266 calc(c * 0.702) h);
+  --c-danger-11: oklch(from var(--c-danger-key) 0.3266 calc(c * 0.536) h);
+  --c-danger-12: oklch(from var(--c-danger-key) 0.2512 calc(c * 0.393) h);
+  /* wallpaper ramp */
+  --c-wallpaper-1: oklch(from var(--c-wallpaper-key) 0.995 calc(c * 0.039) h);
+  --c-wallpaper-2: oklch(from var(--c-wallpaper-key) 0.9798 calc(c * 0.149) h);
+  --c-wallpaper-3: oklch(from var(--c-wallpaper-key) 0.9556 calc(c * 0.268) h);
+  --c-wallpaper-4: oklch(from var(--c-wallpaper-key) 0.92 calc(c * 0.416) h);
+  --c-wallpaper-5: oklch(from var(--c-wallpaper-key) 0.8767 calc(c * 0.585) h);
+  --c-wallpaper-6: oklch(from var(--c-wallpaper-key) 0.815 calc(c * 0.788) h);
+  --c-wallpaper-7: oklch(from var(--c-wallpaper-key) 0.73 calc(c * 0.892) h);
+  --c-wallpaper-8: oklch(from var(--c-wallpaper-key) 0.6304 calc(c * 1) h);
+  --c-wallpaper-9: oklch(from var(--c-wallpaper-key) 0.532 calc(c * 0.872) h);
+  --c-wallpaper-10: oklch(from var(--c-wallpaper-key) 0.4266 calc(c * 0.702) h);
+  --c-wallpaper-11: oklch(from var(--c-wallpaper-key) 0.3266 calc(c * 0.536) h);
+  --c-wallpaper-12: oklch(from var(--c-wallpaper-key) 0.2512 calc(c * 0.393) h);
+  /* body: the page and everything on it as its own surface, the secondary surface a step back (a
+     window's header, a code block, a selected row), and the raised surface a step forward (a field, a
+     card, the composer: what you type into). Its content in three strengths. */
+  --c-body-surface: var(--c-neutral-1);
+  --c-body-surface-secondary: var(--c-neutral-2);
+  --c-body-surface-raised: #ffffff;
+  --c-body-content: var(--c-neutral-12);
+  --c-body-content-secondary: var(--c-neutral-9);
+  --c-body-content-tertiary: var(--c-neutral-8);
+  /* overlay: what floats over the page (a modal, a menu, a popover), and the scrim behind a modal. What
+     sits on it uses the body's content colours. */
+  --c-overlay-surface: var(--c-body-surface-raised);
+  --c-overlay-scrim: rgb(0 0 0 / 0.4);
+  /* inverse: the dark chip (a tooltip, a toast, a count) and its content */
+  --c-inverse-surface: var(--c-neutral-12);
+  --c-inverse-content: var(--c-neutral-1);
+  --c-inverse-content-secondary: rgb(255 255 255 / 0.7);
+  --c-inverse-content-tertiary: rgb(255 255 255 / 0.5);
+  /* roles: each is its key as a solid surface with the content that reads on it, and a subtle
+     surface (step 3: a badge, a banner) with its content (step 10, 7:1 on it), which is also the
+     role's colour as text on the body. */
+  /* primary */
+  --c-primary-surface: var(--c-primary-key);
+  --c-primary-content: #ffffff;
+  --c-primary-subtle-surface: var(--c-primary-3);
+  --c-primary-subtle-content: var(--c-primary-10);
+  /* accent */
+  --c-accent-surface: var(--c-accent-key);
+  --c-accent-content: #ffffff;
+  --c-accent-subtle-surface: var(--c-accent-3);
+  --c-accent-subtle-content: var(--c-accent-10);
+  /* success */
+  --c-success-surface: var(--c-success-key);
+  --c-success-content: #ffffff;
+  --c-success-subtle-surface: var(--c-success-3);
+  --c-success-subtle-content: var(--c-success-10);
+  /* warn */
+  --c-warn-surface: var(--c-warn-key);
+  --c-warn-content: #ffffff;
+  --c-warn-subtle-surface: var(--c-warn-3);
+  --c-warn-subtle-content: var(--c-warn-10);
+  /* danger */
+  --c-danger-surface: var(--c-danger-key);
+  --c-danger-content: #ffffff;
+  --c-danger-subtle-surface: var(--c-danger-3);
+  --c-danger-subtle-content: var(--c-danger-10);
+  /* fills: the resting faint fill (a quiet well, a chip), and the hover and active a transparent
+     control (a ghost button, a row) takes: the page's own neutral steps 3 and 4. */
   --c-fill-faint: rgb(0 0 0 / 0.03);
-  /* The viewer's own chat bubble: a green tint, so your own words read apart from everyone else's. */
-  --c-bg-user-bubble: rgb(20 174 92 / 0.11);
-  /* A bubble that is not yours (another person's or the agent's), and the chat list's selected row:
-     one grey for everything said by someone else and for where you are. */
-  --c-bubble-other: rgb(0 0 0 / 0.05);
-  --c-bg-composer: #ffffff;
-  --c-bg-chat: #ffffff;
-  --c-bg-code: #f0f0f0;
-  --c-text-primary: #202020;
-  --c-text-secondary: #666666;
-  --c-text-faint: #8c8c8c;
-  --c-border: #e4e3df;
-  --c-border-faint: #efeeeb;
-  /* A step up from the default edge, for a control that has to read as one you type into rather than
-     as a panel seam: still lighter than the faintest text, so it draws a box without drawing a rule. */
-  --c-border-strong: #cfcdc7;
-  --c-border-code: #e0e0e0;
-  --c-accent: #2f6b4f;
-  --c-accent-hover: #24573f;
-  --c-accent-light: #e9f2ee;
-  --c-surface: #ffffff;
-  --c-surface-secondary: #f3f2ef;
-  --c-stop-button: #64748b;
-  --c-stop-button-hover: #475569;
-  /* Semantic status colours. */
-  --c-danger: #d83a2c;
-  --c-danger-hover: #b62d22;
-  --c-danger-bg: #fdecea;
-  --c-danger-border: #f4c7c3;
-  --c-warning: #b45309;
-  --c-warning-bg: #fde68a;
-  --c-success: #22a06b;
-  --c-success-bg: #e0f2ea;
-  --c-success-border: #b2decb;
-  /* Progress-timeline bullets. A finished step's check reads green without
-     shouting -- the accent pulled most of the way toward the faint grey, so it
-     carries the same weight as the greyed-out title beside it. A step not
-     started yet sits a shade lighter still, below faint, so the not-yet reads
-     as absence rather than as text. */
-  --c-step-done: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-faint));
-  --c-step-pending: #c2bfb6;
-  /* Foreground on accent/coloured surfaces (e.g. white button text). */
-  --c-text-on-accent: #ffffff;
-  /* Inverse surface — dark ("black") bg with on-accent text. */
-  --c-inverse-surface: #202020;
-  --c-inverse-surface-hover: #383838;
+  --c-fill-hover: var(--c-neutral-3);
+  --c-fill-active: var(--c-neutral-4);
+  /* borders: the default edge (a card, a field, a divider), the subtle seam inside a surface, and focus */
+  --c-border-default: var(--c-neutral-4);
+  --c-border-subtle: var(--c-neutral-3);
+  --c-border-focus: var(--c-primary-surface);
+  /* wallpaper: the default wallpaper's field and the "studio" mark on it */
+  --c-wallpaper-surface: var(--c-wallpaper-3);
+  --c-wallpaper-mark: var(--c-wallpaper-2);
+  /* elevation: two steps, raised and floating, cast in neutral 12 rather than black */
+  --c-shadow-raised: 0 1px 2px 0 rgb(38 33 26 / 0.06), 0 1px 3px 0 rgb(38 33 26 / 0.08);
+  --c-shadow-overlay: 0 2px 6px -1px rgb(38 33 26 / 0.1), 0 8px 24px -4px rgb(38 33 26 / 0.12);
+  /* state shading: hover and active are computed, never tokens. Hover sits a constant contrast ratio
+     from its base, active that ratio squared: with Y = L^3 (OKLCH lightness to luminance),
+     Y' = (Y + flare) * ratio^n - flare and L' = cbrt(Y'). The flare is the glare a screen adds, so near
+     black the step grows on its own and every level reads alike. Darker, unless the base's L is at or
+     below the flip, where it goes lighter; the flip is the lightest L that cannot darken two steps.
+     A theme sets --state-ratio: 1 for flat controls with no hover shade. */
+  --state-ratio: 1.1;
+  --state-flare: 0.15;
+  --state-flip-at: calc(pow(var(--state-flare) * (var(--state-ratio) * var(--state-ratio) - 1), 1 / 3));
+  /* A background window's header: its surface with this much black, held while the window is behind. */
+  --state-inactive: 5%;
   /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
      (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
      text-sm/text-lg utilities, which the views use at their stock values.) */
   --font-size-heading-lg: 24px;
-  --font-size-heading: 18px;
+  --font-size-heading: 20px;
+  --font-size-title-page: 18px;
+  --font-size-title: 16px;
   --font-size-body: 14px;
-  /* Row text: the dense-chrome step between body and helper. */
-  --font-size-row: 13px;
+  /* Dense body: menus, segmented controls, list rows, the chrome's own small text. */
+  --font-size-body-dense: 13px;
   --font-size-helper: 12px;
+  /* A section's all-caps title. */
+  --font-size-section: 11px;
   /* A word badge set beside other text ("Read-only"): the smallest step. */
   --font-size-tag: 10px;
-  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
-     role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
+  /* The mono label's and the section title's weight. */
+  --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
   /* Motion scale — one unit (ms). Durations back the common UI transitions;
@@ -127,71 +253,667 @@
   --z-popover: 10001;
   --z-tooltip: 10002;
   --width-message-column: 672px;
-  /* Elevation values, behind --shadow-raised / --shadow-overlay (see @theme below). */
-  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* The colour-utility layer: clean semantic names over the --c-* values,
- * grouped by role below. Utilities generate on demand: text-primary, bg-page,
- * bg-fill-hover, border-default, bg-danger-surface, ... */
+ * grouped by role below. Utilities generate on demand. */
 @theme inline {
-  /* text: text-primary / -secondary / -faint / -on-accent */
-  --color-primary: var(--c-text-primary);
-  --color-secondary: var(--c-text-secondary);
-  --color-faint: var(--c-text-faint);
-  --color-on-accent: var(--c-text-on-accent);
-  /* borders: border-default / border-subtle / border-strong */
-  --color-default: var(--c-border);
-  --color-subtle: var(--c-border-faint);
-  --color-strong: var(--c-border-strong);
-  /* surfaces: bg-page / -sidebar / -chat / -composer / -code / -user-bubble /
-     -surface / -surface-secondary / -inverse / -inverse-hover */
-  --color-page: var(--c-bg);
-  --color-sidebar: var(--c-bg-sidebar);
-  --color-chat: var(--c-bg-chat);
-  --color-composer: var(--c-bg-composer);
-  --color-code: var(--c-bg-code);
-  --color-user-bubble: var(--c-bg-user-bubble);
-  --color-bubble-other: var(--c-bubble-other);
-  --color-surface: var(--c-surface);
-  --color-surface-secondary: var(--c-surface-secondary);
-  --color-inverse: var(--c-inverse-surface);
-  --color-inverse-hover: var(--c-inverse-surface-hover);
-  /* fills: bg-fill-hover / bg-fill-active / bg-fill-faint (control state tints) */
+  /* body: bg-body-surface / -secondary / -raised (each + -hover / -active, and -secondary-inactive for a background window's header), text-body-content / -secondary / -tertiary */
+  --color-body-surface: var(--c-body-surface);
+  --color-body-surface-hover: oklch(
+    from var(--c-body-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-active: oklch(
+    from var(--c-body-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-secondary: var(--c-body-surface-secondary);
+  --color-body-surface-secondary-hover: oklch(
+    from var(--c-body-surface-secondary)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-secondary-active: oklch(
+    from var(--c-body-surface-secondary)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-secondary-inactive: color-mix(
+    in srgb,
+    var(--c-body-surface-secondary),
+    black var(--state-inactive)
+  );
+  --color-body-surface-raised: var(--c-body-surface-raised);
+  --color-body-surface-raised-hover: oklch(
+    from var(--c-body-surface-raised)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-surface-raised-active: oklch(
+    from var(--c-body-surface-raised)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-body-content: var(--c-body-content);
+  --color-body-content-secondary: var(--c-body-content-secondary);
+  --color-body-content-tertiary: var(--c-body-content-tertiary);
+  /* overlay: bg-overlay-surface (+ -hover / -active) / bg-overlay-scrim */
+  --color-overlay-surface: var(--c-overlay-surface);
+  --color-overlay-surface-hover: oklch(
+    from var(--c-overlay-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-overlay-surface-active: oklch(
+    from var(--c-overlay-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-overlay-scrim: var(--c-overlay-scrim);
+  /* inverse: bg-inverse-surface (+ -hover / -active), text-inverse-content / -secondary / -tertiary */
+  --color-inverse-surface: var(--c-inverse-surface);
+  --color-inverse-surface-hover: oklch(
+    from var(--c-inverse-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-inverse-surface-active: oklch(
+    from var(--c-inverse-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-inverse-content: var(--c-inverse-content);
+  --color-inverse-content-secondary: var(--c-inverse-content-secondary);
+  --color-inverse-content-tertiary: var(--c-inverse-content-tertiary);
+  /* primary: bg-primary-surface / bg-primary-subtle-surface (each + -hover / -active), text-primary-content / -subtle-content */
+  --color-primary-surface: var(--c-primary-surface);
+  --color-primary-surface-hover: oklch(
+    from var(--c-primary-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-surface-active: oklch(
+    from var(--c-primary-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-content: var(--c-primary-content);
+  --color-primary-subtle-surface: var(--c-primary-subtle-surface);
+  --color-primary-subtle-surface-hover: oklch(
+    from var(--c-primary-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-subtle-surface-active: oklch(
+    from var(--c-primary-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-primary-subtle-content: var(--c-primary-subtle-content);
+  /* accent: bg-accent-surface / bg-accent-subtle-surface (each + -hover / -active), text-accent-content / -subtle-content */
+  --color-accent-surface: var(--c-accent-surface);
+  --color-accent-surface-hover: oklch(
+    from var(--c-accent-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-surface-active: oklch(
+    from var(--c-accent-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-content: var(--c-accent-content);
+  --color-accent-subtle-surface: var(--c-accent-subtle-surface);
+  --color-accent-subtle-surface-hover: oklch(
+    from var(--c-accent-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-subtle-surface-active: oklch(
+    from var(--c-accent-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-accent-subtle-content: var(--c-accent-subtle-content);
+  /* success: bg-success-surface / bg-success-subtle-surface (each + -hover / -active), text-success-content / -subtle-content */
+  --color-success-surface: var(--c-success-surface);
+  --color-success-surface-hover: oklch(
+    from var(--c-success-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-surface-active: oklch(
+    from var(--c-success-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-content: var(--c-success-content);
+  --color-success-subtle-surface: var(--c-success-subtle-surface);
+  --color-success-subtle-surface-hover: oklch(
+    from var(--c-success-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-subtle-surface-active: oklch(
+    from var(--c-success-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-success-subtle-content: var(--c-success-subtle-content);
+  /* warn: bg-warn-surface / bg-warn-subtle-surface (each + -hover / -active), text-warn-content / -subtle-content */
+  --color-warn-surface: var(--c-warn-surface);
+  --color-warn-surface-hover: oklch(
+    from var(--c-warn-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-surface-active: oklch(
+    from var(--c-warn-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-content: var(--c-warn-content);
+  --color-warn-subtle-surface: var(--c-warn-subtle-surface);
+  --color-warn-subtle-surface-hover: oklch(
+    from var(--c-warn-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-subtle-surface-active: oklch(
+    from var(--c-warn-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-warn-subtle-content: var(--c-warn-subtle-content);
+  /* danger: bg-danger-surface / bg-danger-subtle-surface (each + -hover / -active), text-danger-content / -subtle-content */
+  --color-danger-surface: var(--c-danger-surface);
+  --color-danger-surface-hover: oklch(
+    from var(--c-danger-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-surface-active: oklch(
+    from var(--c-danger-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-content: var(--c-danger-content);
+  --color-danger-subtle-surface: var(--c-danger-subtle-surface);
+  --color-danger-subtle-surface-hover: oklch(
+    from var(--c-danger-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-subtle-surface-active: oklch(
+    from var(--c-danger-subtle-surface)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-danger-subtle-content: var(--c-danger-subtle-content);
+  /* fills: bg-fill-faint / bg-fill-hover / bg-fill-active */
+  --color-fill-faint: var(--c-fill-faint);
   --color-fill-hover: var(--c-fill-hover);
   --color-fill-active: var(--c-fill-active);
-  --color-fill-faint: var(--c-fill-faint);
-  /* progress-timeline bullets: text-step-done / text-step-pending */
-  --color-step-done: var(--c-step-done);
-  --color-step-pending: var(--c-step-pending);
-  /* accent / interactive */
-  --color-accent: var(--c-accent);
-  --color-accent-hover: var(--c-accent-hover);
-  --color-accent-light: var(--c-accent-light);
-  --color-stop: var(--c-stop-button);
-  --color-stop-hover: var(--c-stop-button-hover);
-  /* status */
-  --color-danger: var(--c-danger);
-  --color-danger-hover: var(--c-danger-hover);
-  --color-danger-surface: var(--c-danger-bg);
-  --color-danger-border: var(--c-danger-border);
-  --color-warning: var(--c-warning);
-  --color-warning-surface: var(--c-warning-bg);
-  --color-success: var(--c-success);
-  --color-success-surface: var(--c-success-bg);
-  --color-success-border: var(--c-success-border);
+  /* borders: border-default / border-subtle / border-focus (and ring-focus, outline-focus), each + -hover / -active */
+  --color-default: var(--c-border-default);
+  --color-default-hover: oklch(
+    from var(--c-border-default)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-default-active: oklch(
+    from var(--c-border-default)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-subtle: var(--c-border-subtle);
+  --color-subtle-hover: oklch(
+    from var(--c-border-subtle)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-subtle-active: oklch(
+    from var(--c-border-subtle)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-focus: var(--c-border-focus);
+  --color-focus-hover: oklch(
+    from var(--c-border-focus)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 1 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  --color-focus-active: oklch(
+    from var(--c-border-focus)
+      calc(
+        pow(
+          max(
+            0,
+            (l * l * l + var(--state-flare)) *
+              pow(var(--state-ratio), 2 * clamp(-1, (var(--state-flip-at) - l) * 1e6 + 1, 1)) - var(--state-flare)
+          ),
+          1 / 3
+        )
+      )
+      c h / alpha
+  );
+  /* wallpaper: bg-wallpaper-surface / text-wallpaper-mark */
+  --color-wallpaper-surface: var(--c-wallpaper-surface);
+  --color-wallpaper-mark: var(--c-wallpaper-mark);
+  /* ramp steps, for a colour no role names (a feature's own palette): bg-neutral-6, text-danger-10, ... */
+  --color-neutral-1: var(--c-neutral-1);
+  --color-neutral-2: var(--c-neutral-2);
+  --color-neutral-3: var(--c-neutral-3);
+  --color-neutral-4: var(--c-neutral-4);
+  --color-neutral-5: var(--c-neutral-5);
+  --color-neutral-6: var(--c-neutral-6);
+  --color-neutral-7: var(--c-neutral-7);
+  --color-neutral-8: var(--c-neutral-8);
+  --color-neutral-9: var(--c-neutral-9);
+  --color-neutral-10: var(--c-neutral-10);
+  --color-neutral-11: var(--c-neutral-11);
+  --color-neutral-12: var(--c-neutral-12);
+  --color-primary-1: var(--c-primary-1);
+  --color-primary-2: var(--c-primary-2);
+  --color-primary-3: var(--c-primary-3);
+  --color-primary-4: var(--c-primary-4);
+  --color-primary-5: var(--c-primary-5);
+  --color-primary-6: var(--c-primary-6);
+  --color-primary-7: var(--c-primary-7);
+  --color-primary-8: var(--c-primary-8);
+  --color-primary-9: var(--c-primary-9);
+  --color-primary-10: var(--c-primary-10);
+  --color-primary-11: var(--c-primary-11);
+  --color-primary-12: var(--c-primary-12);
+  --color-accent-1: var(--c-accent-1);
+  --color-accent-2: var(--c-accent-2);
+  --color-accent-3: var(--c-accent-3);
+  --color-accent-4: var(--c-accent-4);
+  --color-accent-5: var(--c-accent-5);
+  --color-accent-6: var(--c-accent-6);
+  --color-accent-7: var(--c-accent-7);
+  --color-accent-8: var(--c-accent-8);
+  --color-accent-9: var(--c-accent-9);
+  --color-accent-10: var(--c-accent-10);
+  --color-accent-11: var(--c-accent-11);
+  --color-accent-12: var(--c-accent-12);
+  --color-success-1: var(--c-success-1);
+  --color-success-2: var(--c-success-2);
+  --color-success-3: var(--c-success-3);
+  --color-success-4: var(--c-success-4);
+  --color-success-5: var(--c-success-5);
+  --color-success-6: var(--c-success-6);
+  --color-success-7: var(--c-success-7);
+  --color-success-8: var(--c-success-8);
+  --color-success-9: var(--c-success-9);
+  --color-success-10: var(--c-success-10);
+  --color-success-11: var(--c-success-11);
+  --color-success-12: var(--c-success-12);
+  --color-warn-1: var(--c-warn-1);
+  --color-warn-2: var(--c-warn-2);
+  --color-warn-3: var(--c-warn-3);
+  --color-warn-4: var(--c-warn-4);
+  --color-warn-5: var(--c-warn-5);
+  --color-warn-6: var(--c-warn-6);
+  --color-warn-7: var(--c-warn-7);
+  --color-warn-8: var(--c-warn-8);
+  --color-warn-9: var(--c-warn-9);
+  --color-warn-10: var(--c-warn-10);
+  --color-warn-11: var(--c-warn-11);
+  --color-warn-12: var(--c-warn-12);
+  --color-danger-1: var(--c-danger-1);
+  --color-danger-2: var(--c-danger-2);
+  --color-danger-3: var(--c-danger-3);
+  --color-danger-4: var(--c-danger-4);
+  --color-danger-5: var(--c-danger-5);
+  --color-danger-6: var(--c-danger-6);
+  --color-danger-7: var(--c-danger-7);
+  --color-danger-8: var(--c-danger-8);
+  --color-danger-9: var(--c-danger-9);
+  --color-danger-10: var(--c-danger-10);
+  --color-danger-11: var(--c-danger-11);
+  --color-danger-12: var(--c-danger-12);
+  --color-wallpaper-1: var(--c-wallpaper-1);
+  --color-wallpaper-2: var(--c-wallpaper-2);
+  --color-wallpaper-3: var(--c-wallpaper-3);
+  --color-wallpaper-4: var(--c-wallpaper-4);
+  --color-wallpaper-5: var(--c-wallpaper-5);
+  --color-wallpaper-6: var(--c-wallpaper-6);
+  --color-wallpaper-7: var(--c-wallpaper-7);
+  --color-wallpaper-8: var(--c-wallpaper-8);
+  --color-wallpaper-9: var(--c-wallpaper-9);
+  --color-wallpaper-10: var(--c-wallpaper-10);
+  --color-wallpaper-11: var(--c-wallpaper-11);
+  --color-wallpaper-12: var(--c-wallpaper-12);
 }
 
 @theme {
   /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
      default (so body text needs no explicit font-family) and backs font-sans;
      --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  /* The display face: headings, section labels, and the type a theme gives its titles, buttons, and
-     menus (a theme's token, docs/system/blueprint/workspace-themes/). The standard look sets it in the body face. */
-  --font-display: var(--font-sans);
+  --font-sans: "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* The display face: the headings (a theme's token, docs/system/blueprint/workspace-themes/). The standard look
+     sets them in Besley (fonts.css). */
+  --font-display: "Besley Display", Georgia, serif;
   /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
      `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
      references the same scale via the `--spacing(N)` function (e.g.
@@ -199,17 +921,15 @@
      and CSS share one source with no per-step token to define or keep in sync.
      Off-grid strays stay raw as design-system-exceptions. */
   --spacing: 0.25rem;
-  /* Radius scale. sm/md/lg equal Tailwind's own defaults, so overriding them
-     leaves the rounded-* utilities in the views at their stock values (only xl
-     differs from Tailwind's). md is the default control radius; lg carries
-     inputs, cards and modals; xl is for the largest surfaces and for the
-     floating menus (components/menu.ts); pills and circles are Tailwind's
-     stock rounded-full. The 12px pane/chrome frame
-     keeps its own --si-pane-radius (defined in the shell's stylesheet). */
+  /* Radius scale: the brand's, and Tailwind's own values. md is a chip's or a
+     status pill's; lg a small well; xl (12) every control a person presses or
+     types into -- a button, a field, a menu row; 2xl (16) the surfaces that hold
+     them -- a card, a menu, a dialog. Pills and circles are rounded-full. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 16px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
   /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
      lift on interactive cards; --shadow-overlay is the one soft floating
      shadow shared by everything above the page -- menus, pickers, modals,
@@ -223,62 +943,117 @@
 /* Font family comes from the preflight default (re-based onto --font-sans above). */
 body {
   font-size: var(--font-size-body);
-  color: var(--c-text-primary);
-  background-color: var(--c-bg);
+  color: var(--c-body-content);
+  background-color: var(--c-body-surface);
   margin: 0;
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Typography roles.
- * The role-based type system, declared as Tailwind utilities so they
- * compose with variants, sort under the prettier plugin,
- * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
- * is orthogonal — compose with text-primary / text-secondary / text-faint.
- * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
- * font-size/weight. `medium` (500) is a valid weight but is intentionally NOT
- * used on interactive controls (buttons/tabs) — that treatment comes with the
- * Button/Tab primitive. */
+/* Typography roles: the brand's type ramp (docs/system/blueprint/brand-design-system/).
+ * Declared as Tailwind utilities so they compose with variants, sort under the
+ * prettier plugin, and work inside @apply. Each bundles face, size, weight,
+ * leading, and tracking; COLOR is orthogonal -- compose with text-body-content /
+ * -secondary / -tertiary. Faces have fixed jobs: the display face for the one
+ * headline a window exists to show, the sans for anything you read, press, or
+ * that changes (titles included), and the mono for static labels and code. */
 @utility type-heading-lg {
   font-family: var(--font-display);
   font-size: var(--font-size-heading-lg);
-  font-weight: var(--weight-bold);
-  line-height: 1.25;
+  font-weight: var(--weight-regular);
+  line-height: 28px;
+  letter-spacing: -0.01em;
 }
 @utility type-heading {
   font-family: var(--font-display);
   font-size: var(--font-size-heading);
-  font-weight: var(--weight-semibold);
-  line-height: 1.3;
+  font-weight: var(--weight-regular);
+  line-height: 24px;
+  letter-spacing: -0.005em;
 }
-@utility type-label {
+@utility type-title-page {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-title-page);
+  font-weight: var(--weight-bold);
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+@utility type-title {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-title);
+  font-weight: var(--weight-bold);
+  line-height: 22px;
+  letter-spacing: -0.005em;
+}
+/* The title of one item among others: a card, a request, a row, an app in a list. */
+@utility type-title-sm {
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  font-weight: var(--weight-semibold);
-  line-height: 1.4;
+  font-weight: var(--weight-bold);
+  line-height: 20px;
 }
 @utility type-body {
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
   font-weight: var(--weight-regular);
-  line-height: 1.5;
+  line-height: 20px;
+}
+@utility type-body-dense {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-regular);
+  line-height: 18px;
+}
+/* A static label: a shelf's or a field's name, never a title that changes. */
+@utility type-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-medium);
+  line-height: 16px;
+}
+@utility type-label-large {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
 }
 @utility type-helper {
+  font-family: var(--font-sans);
   font-size: var(--font-size-helper);
   font-weight: var(--weight-regular);
-  line-height: 1.4;
+  line-height: 16px;
+  letter-spacing: 0.005em;
+}
+@utility type-section {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-section);
+  font-weight: var(--weight-medium);
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 @utility type-tag {
   font-size: var(--font-size-tag);
   font-weight: var(--weight-regular);
   line-height: 1;
 }
-@utility type-section {
-  font-family: var(--font-display);
+@utility type-badge {
+  font-size: var(--font-size-tag);
+  font-weight: var(--weight-bold);
+  line-height: 12px;
+}
+@utility type-code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body-dense);
+  font-weight: var(--weight-regular);
+  line-height: 20px;
+}
+@utility type-code-small {
+  font-family: var(--font-mono);
   font-size: var(--font-size-helper);
-  font-weight: var(--weight-semibold);
-  line-height: 1.3;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: var(--weight-regular);
+  line-height: 16px;
 }
 
 /* Default border color. Tailwind v4 defaults un-colored
@@ -291,7 +1066,7 @@ body {
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--c-border);
+    border-color: var(--c-border-default);
   }
 }
 
@@ -314,8 +1089,8 @@ body {
   display: block;
   width: var(--spinner-size, 16px);
   height: var(--spinner-size, 16px);
-  border: var(--spinner-width, 2px) solid var(--spinner-track, var(--c-border));
-  border-top-color: var(--spinner-arc, var(--c-accent));
+  border: var(--spinner-width, 2px) solid var(--spinner-track, var(--c-border-default));
+  border-top-color: var(--spinner-arc, var(--c-accent-surface));
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;

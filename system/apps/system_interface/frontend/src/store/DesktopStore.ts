@@ -9,6 +9,7 @@
  * left off, and opens every window on the first desktop, out of every other client's sight.
  */
 
+import { wearWorkspaceColor } from "@imbue/workspace-ui/src/themes/themeClient";
 import type {
   LaunchOutcome,
   LaunchRequest,
@@ -2328,6 +2329,7 @@ export class DesktopStore {
   private takeThemeCatalog(catalog: ThemeCatalog): void {
     this.themeCatalog = catalog;
     this.hasThemeCatalog = true;
+    if (catalog.workspaceColor !== null) wearWorkspaceColor(catalog.workspaceColor);
     this.redraw();
   }
 
