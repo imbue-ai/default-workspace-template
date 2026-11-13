@@ -1655,9 +1655,9 @@ def down(
     refuses the same way. When the desktops cannot be read, no window is known to
     show it, and the teardown goes ahead with a warning.
     """
-    services = _recorded_services(repo_root, name)
-    if services and _close_windows_or_refuse(
-        name, services, desktops, close_windows=close_windows
+    shown_apps = _apps_its_windows_show(repo_root, name)
+    if shown_apps and _close_windows_or_refuse(
+        name, shown_apps, desktops, close_windows=close_windows
     ):
         return 1
     return _tear_down_instance(
@@ -1665,21 +1665,34 @@ def down(
     )
 
 
-def _recorded_services(repo_root: Path, name: str) -> list[str]:
-    """The services the state for ``name`` records; none without a readable state, which ``_tear_down_instance`` reports."""
+def _apps_its_windows_show(repo_root: Path, name: str) -> list[str]:
+    """The apps a window of the instance ``name`` shows: the services its state records, and a recorded frame's own.
+
+    A frame whose re-frame failed is kept as a record alone, registered as nothing,
+    while a window opened on it can still be up. None without a readable state, which
+    ``_tear_down_instance`` reports.
+    """
     try:
         state = json.loads(_state_path(repo_root, name).read_text())
     except (OSError, json.JSONDecodeError):
         return []
-    return list(state.get("services") or []) if isinstance(state, dict) else []
+    if not isinstance(state, dict):
+        return []
+    apps = [str(service) for service in state.get("services") or []]
+    frame_record = state.get(FRAME_STATE_KEY)
+    if isinstance(frame_record, dict):
+        frame_service_name = frame_record.get("frame_service_name")
+        if isinstance(frame_service_name, str) and frame_service_name not in apps:
+            apps.append(frame_service_name)
+    return apps
 
 
 def _close_windows_or_refuse(
-    name: str, services: Sequence[str], desktops: Desktops, *, close_windows: bool
+    name: str, apps: Sequence[str], desktops: Desktops, *, close_windows: bool
 ) -> bool:
-    """Close the windows showing ``services`` when ``close_windows``; True while one stays open."""
+    """Close the windows showing ``apps`` when ``close_windows``; True while one stays open."""
     try:
-        windows = desktops.windows_of(services)
+        windows = desktops.windows_of(apps)
     except InstanceError as exc:
         sys.stderr.write(
             f"warning: could not check for windows showing '{name}' ({exc}); tearing "

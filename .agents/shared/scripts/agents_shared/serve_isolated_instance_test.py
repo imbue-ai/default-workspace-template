@@ -1917,6 +1917,26 @@ def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry
     assert mod.read_frame(_FRAME_NAME, tmp_path) is None
 
 
+def test_down_closes_the_window_of_a_frame_kept_only_as_a_record(
+    tmp_path: Path,
+) -> None:
+    """A failed re-frame registers nothing, yet the mock window opened on it is still up."""
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, registry=registry) == 0
+    assert _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None)) == 1
+    desktops = _RecordingDesktops(
+        open_windows=[mod.OpenWindow("win-1", _FRAME_NAME, "home", "client-1")]
+    )
+
+    refused = _down(tmp_path, name=_FRAME_NAME, desktops=desktops)
+    closed = _down(tmp_path, name=_FRAME_NAME, desktops=desktops, close_windows=True)
+
+    assert refused == 1
+    assert closed == 0
+    assert desktops.closed == ["win-1"]
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+
+
 def test_a_first_frame_that_fails_leaves_no_record(tmp_path: Path) -> None:
     """Nothing was framed, so nothing may read as a frame to boot again."""
     registry = _RecordingRegistry()
