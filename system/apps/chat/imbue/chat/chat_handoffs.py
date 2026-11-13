@@ -429,6 +429,9 @@ class HandoffDeps(FrozenModel):
     # Apply a model pick to a running agent, validated against its option set as the model
     # bar's own pick is; raises ``ModelApplyError`` with the reason the failed page shows.
     apply_model: Callable[[AgentInfo, ModelPick], None]
+    # Turn fast mode on for a successor with no pick, when the chat launches fast and the harness
+    # takes fast mode as a switch rather than from the launch template; never raises.
+    apply_launch_fast_mode: Callable[[ChatId, AgentInfo], None]
     # Interrupt the agent's turn and return its queue as one block (the stop button's path).
     drain_to_composer: Callable[[AgentInfo], str]
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
@@ -856,11 +859,13 @@ class HandoffRunner:
         """Put the successor on the model the user picked, or fail the switch at that step. True when it is set.
 
         Runs before the successor's first message, on an agent that is up and idle, so the pick
-        governs the whole segment; a successor with no pick keeps its harness's default.
+        governs the whole segment; a successor with no pick keeps its harness's default model, and
+        runs fast when the chat launches fast.
         """
-        if handoff.model_pick is None:
-            return True
         successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
+        if handoff.model_pick is None:
+            self._deps.apply_launch_fast_mode(chat_id, successor_info)
+            return True
         try:
             self._deps.apply_model(successor_info, handoff.model_pick)
         except ModelApplyError as e:
