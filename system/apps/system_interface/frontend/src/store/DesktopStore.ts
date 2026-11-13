@@ -1670,8 +1670,10 @@ export class DesktopStore {
 
   /** A click on the agent's tray entry (the multiplayer spec, section 6.2): the avatar's pinned window on the
    *  active desktop is put on screen on whatever chat it holds, never put away; with no such window the main chat
-   *  opens, through the primary text action with nothing to send. */
+   *  opens, through the primary text action with nothing to send. Refused while viewing somebody else's desktop,
+   *  whose pinned window is theirs. False when refused or when nothing opened. */
   async openAgentChat(): Promise<boolean> {
+    if (this.refuseWhileViewing("show the agent's chat")) return false;
     const pinned = avatarPinnedEntryOf(this.state);
     if (pinned === null) return this.startWithText("");
     this.showWindow(pinned.window.id);

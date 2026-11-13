@@ -3889,6 +3889,47 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 
+  it("refuses a click on the agent while viewing, asking the chrome for nothing for the owner's pulled-out chat", async () => {
+    api.apps = [appRecord("docs"), chatLikeAppRecord("chat")];
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    api.writeLayout("alice", "alice-laptop", {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-chat", { is_detached: true })],
+    });
+    const popOutRequests: unknown[] = [];
+    const store = makeStore(() => undefined, {
+      popOut: {
+        requestPopOut: (request) => popOutRequests.push(request),
+        beginWindowDrag: () => undefined,
+        endWindowDrag: () => undefined,
+        reportDetachedWindows: () => undefined,
+      },
+    });
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    socket.deliver().onRosterUpdated([josh, alice]);
+    await store.switchDesktop("alice");
+    const callsBefore = api.calls.length;
+
+    expect(await store.openAgentChat()).toBe(false);
+    expect(popOutRequests).toEqual([]);
+    expect(api.calls.slice(callsBefore)).toEqual([]);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+  });
+
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {
     const shortcut = shortcutRecord("docs", { column: 0, row: 0 });
     const withWindows = desktopRecord("alice", {
