@@ -136,24 +136,19 @@ To hand work off:
    The brief names the app, the requests handed to the worker in the user's
    words, the ones you are building yourself so the worker leaves them alone,
    the files and
-   decisions you already know about, and what done looks like. It asks the
-   worker to build the change to a usable state, verify it against its own
-   instance (never the live app), commit, and send a milestone report each
-   time a usable part is committed. It says more requests may arrive in its
-   chat while it works, and that it may build all its requests together in
-   any order, to get the work done fast. It also tells the worker not to take the
-   service lease, touch the live app or the user's windows, harden, or hand
-   off again. Hardening still happens at turn-end, as described below.
+   decisions you already know about, and what done looks like. It names the
+   build-worker guide (`.agents/shared/build-worker/SKILL.md`), which carries
+   the standing rules for how the worker builds, checks and reports; do not
+   restate them in the brief. Hardening still happens at turn-end, as
+   described below.
    Handing work to a worker does not change its scope. Decide the scope
    yourself, as you would if you were building it in the chat, and state it in
    the brief: what to build, no more and no less, with the context the worker
    needs to build it (the user's words, how the app works now, decisions
    already made). Do not add targets you would not have built yourself;
-   writing out a detailed plan tends to add work nobody asked for. Ask the
-   worker to check the change the way you would in the chat, usually one real
-   run of the main path; failure cases, edge cases and regression checks
-   belong to the hardening pass at turn-end. Checks that the user's existing
-   data survives the change still happen before it goes live.
+   writing out a detailed plan tends to add work nobody asked for. Checks
+   that the user's existing data survives the change still happen before it
+   goes live.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
 4. While the worker runs, keep handling new messages. Build a request
@@ -166,10 +161,11 @@ To hand work off:
    `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
    through steps 2 and 3 of the live loop, and tell the user what is now there.
 
-The worker edits its own worktree, so it needs no service lease. Take yours as
-usual (next section) before you merge its work into the live app.
+Take the service lease as usual (next section) before you merge the worker's
+work into the live app.
 
-If you are that worker, your brief overrides this skill.
+If you are that worker, the build-worker guide
+(`.agents/shared/build-worker/SKILL.md`) and your brief override this skill.
 
 ## One editor at a time: the service lease
 
