@@ -18,19 +18,19 @@
 #
 set -euo pipefail
 
-AGY_VERSION="1.4.7"
+AGY_VERSION="1.5.8"
 TARGET_DIR="${1:-$HOME/.local/bin}"
 BINARY_PATH="$TARGET_DIR/agy"
 
 # Pinned release, per glibc-linux arch (url + sha512 from the manifest).
 case "$(uname -m)" in
     x86_64|amd64)
-        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.7-5900205422411776/linux-x64/cli_linux_x64.tar.gz"
-        sha512="beda760587589f5827b0b516c3ec2c5bd5cd2e91eb0e2533807ba1e990a27dcd63aef0191e0b76fb60feab0d16eaa8210fb79842c34dd4809e257e1712edd152"
+        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.8-4602374149505024/linux-x64/cli_linux_x64.tar.gz"
+        sha512="f08faaee588327dba8722bdc60f26a14f6915a8f2d756ed7959cde0a706d4e62fd9f831ab1a077dace5f947caaa6e851457df5023180bb8d3f54386804a3787f"
         ;;
     arm64|aarch64)
-        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.7-5900205422411776/linux-arm/cli_linux_arm64.tar.gz"
-        sha512="6a9fa0df6300633404571f66ec7924098cc70a9f23ac55c3659139bbcbdd2ea5301fe1ef728d4c064fac65104ea14a2b74421f320a82e5bcf218c482b58e3a16"
+        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.8-4602374149505024/linux-arm/cli_linux_arm64.tar.gz"
+        sha512="7b040bfb8fb96f7550a8a66cd0ac28cb3e6e40e427f1e9810bfe1bf23c417cb9b363e36b2fc8ed645fe1ee518b0106f50f03de7084e95ede4591a893527360d1"
         ;;
     *)
         echo "Fatal: agy pin ${AGY_VERSION} covers only glibc linux amd64/arm64, got $(uname -m)." >&2

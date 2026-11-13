@@ -34,7 +34,7 @@ from imbue.chat.harnesses.model import SwitchResult
 # can add or retire models with no version bump, and `update_policy = "NEVER"` does nothing
 # to stop that.
 #
-# Captured from a signed-in agy 1.4.7 on 2026-10-26: `agy models` for the slugs, and
+# Captured from a signed-in agy 1.5.8 on 2026-11-13: `agy models` for the slugs, and
 # `agy --model <slug> -p /effort --output-format json` for each model's adjustable efforts and
 # the one a bare base slug starts at. Each row is (base slug, name, efforts, default effort).
 # The name is what the statusline records as the model: agy's display name, with the effort
