@@ -91,17 +91,15 @@ export const SLIDER =
   "relative h-[6px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
   "[&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-body-surface-raised " +
-  "[&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)] " +
+  "[&::-moz-range-thumb]:shadow-raised [&::-moz-range-thumb]:ring-1 [&::-moz-range-thumb]:ring-default " +
   "[&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none " +
   "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-body-surface-raised " +
-  "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
+  "[&::-webkit-slider-thumb]:shadow-raised [&::-webkit-slider-thumb]:ring-1 [&::-webkit-slider-thumb]:ring-default";
 
 // The phone layout
-/** The button at the composer's left that opens the card in the phone layout: as tall as the
- *  composer's one-line box, and lit while its card is up. */
-export const SETTINGS_BUTTON =
-  "flex h-11 w-10 shrink-0 items-center justify-center rounded-xl text-body-content-secondary transition-colors " +
-  "hover:bg-fill-hover hover:text-body-content aria-expanded:bg-fill-hover aria-expanded:text-body-content cursor-pointer";
+/** The slot at the composer's left for the button that opens the card in the phone layout: as
+ *  tall as the composer's one-line box, so the shared icon button centres on that line. */
+export const SETTINGS_BUTTON_SLOT = "flex h-11 w-10 shrink-0 items-center justify-center";
 /** The effort segments' row: the label over the segments, since the levels side by side need
  *  the card's whole width. */
 export const EFFORT_SEGMENTS_ROW = "flex flex-col items-stretch gap-2 px-3 pt-1 pb-2";
@@ -217,38 +215,35 @@ const DEFAULT_SEGMENT_SHAPE = `${SEGMENT_SHAPE} h-6 w-10 text-(length:--font-siz
 export const DEFAULT_SEGMENT = `${DEFAULT_SEGMENT_SHAPE} ${SEGMENT_OFF}`;
 export const DEFAULT_SEGMENT_ON = `${DEFAULT_SEGMENT_SHAPE} ${SEGMENT_ON}`;
 
-/** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
- *  row's reserved right padding. It takes the row's LAST lane, the one the tick occupies at
- *  rest. */
-export const ROW_TRASH =
-  "absolute right-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-body-content-tertiary transition-colors hover:text-danger-surface group-hover/conn:inline-flex";
-/** The rename control: a SIBLING of the row button like the bin, one slot further in, so each
- *  control keeps its own lane and none of them ever displaces another. */
-export const ROW_PENCIL =
-  "absolute right-9 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-body-content-tertiary transition-colors hover:text-body-content group-hover/conn:inline-flex";
+/* The row's controls are the shared smallest icon button (20px). Each is a SIBLING of the row
+ * button (buttons cannot nest), so it rides a slot floated over the row's reserved right padding:
+ * the slot places it and shows it on the row's hover, the button carries its look. Placing and
+ * hiding live on the slot because the button's own `inline-flex` would tie with a `hidden` beside
+ * it. */
+const ROW_CONTROL_SLOT = "absolute top-1/2 -translate-y-1/2";
+const ROW_CONTROL_SLOT_ON_HOVER = `${ROW_CONTROL_SLOT} hidden group-hover/conn:inline-flex`;
+/** The sign-out control takes the row's LAST lane, the one the tick occupies at rest. */
+export const ROW_TRASH_SLOT = `${ROW_CONTROL_SLOT_ON_HOVER} right-3`;
+/** The rename control sits one slot further in than the bin, so each control keeps its own lane
+ *  and none of them ever displaces another. */
+export const ROW_PENCIL_SLOT = `${ROW_CONTROL_SLOT_ON_HOVER} right-9`;
 /** The default toggle, in the outermost lane, shown on hover like the pencil and the bin. */
-export const ROW_STAR =
-  "absolute right-15 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-body-content-tertiary transition-colors hover:text-body-content group-hover/conn:inline-flex";
+export const ROW_STAR_SLOT = `${ROW_CONTROL_SLOT_ON_HOVER} right-15`;
 /** The star of the account new chats open on: visible whether or not the row is hovered, since
  *  it is a fact about the account rather than a control that only matters under a pointer.
  *
  *  Its resting lane depends on whether the row also carries a tick: BESIDE the tick, one lane
  *  in, when there is one, and the last lane itself when there is not, so the row's marks always
  *  end flush with it. On hover it steps out to the control lane it shares with the pencil and
- *  the bin either way.
- *
- *  `fill-current` rather than the icon's own `filled`, which drops the stroke and so draws a
- *  star a stroke-width smaller all round than the outline beside it. */
-export function rowStarPinnedClass(hasTick: boolean): string {
-  return (
-    `absolute ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15 top-1/2 inline-flex ` +
-    "h-5 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-accent-surface " +
-    "transition-colors hover:text-body-content [&>svg]:fill-current"
-  );
+ *  the bin either way. */
+export function rowStarPinnedSlotClass(hasTick: boolean): string {
+  return `${ROW_CONTROL_SLOT} inline-flex ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15`;
 }
+/** The pinned star's glyph, in the accent and filled. Set on the glyph rather than the button,
+ *  whose variant owns its text colour. `fill-current` rather than the icon's own `filled`, which
+ *  drops the stroke and so draws a star a stroke-width smaller all round than the outline beside
+ *  it. */
+export const ROW_STAR_PINNED_GLYPH = "[&>svg]:fill-current [&>svg]:text-accent-surface";
 /** The row mid-rename: the field takes the whole row, since every control is hidden while it
  *  is up. The wrapper insets the bordered field from the card's full-bleed edges; the field
  *  keeps the row's height, so nothing shifts on the way in or out. */

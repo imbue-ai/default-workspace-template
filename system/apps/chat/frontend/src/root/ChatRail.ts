@@ -21,6 +21,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
@@ -265,7 +266,10 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   if (status === "done") {
     return m(
       "span",
-      { class: `chat-rail-dot -mx-0.5 flex size-3 items-center text-success-surface ${extraClass}`, "data-status": status },
+      {
+        class: `chat-rail-dot -mx-0.5 flex size-3 items-center text-success-surface ${extraClass}`,
+        "data-status": status,
+      },
       m.trust(icon("check", { size: 12, strokeWidth: 3 })),
     );
   }
@@ -410,13 +414,11 @@ function resizeHandle(): m.Vnode {
 function railHead(attrs: ChatRailAttrs): m.Vnode {
   return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 overflow-hidden p-2" }, [
     m(
-      "button",
+      Button,
       {
-        type: "button",
-        class: [
-          "chat-rail-new flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
-          "text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover hover:text-body-content",
-        ].join(" "),
+        variant: "ghost",
+        sm: true,
+        extra: "chat-rail-new flex-none",
         "aria-label": "New chat",
         onclick: () => attrs.onNew(),
       },
@@ -425,9 +427,9 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
   ]);
 }
 
-/** A button in the phone layout's bars on a touchscreen, the header's and the drawer's, which read as one bar. */
-export const BAR_ICON_BUTTON_CLASS =
-  "flex size-9 flex-none items-center justify-center rounded-lg text-body-content hover:bg-fill-hover";
+/** A button in the phone layout's bars on a touchscreen, the header's and the drawer's, which read as one bar: the
+ *  brand's large icon step. */
+export const BAR_ICON_BUTTON = { variant: "ghost", icon: true, lg: true } as const;
 
 /** The drawer's header: its name, and "New chat" as a plus at the far end. As tall as the phone header it opens
  *  over, so the two read as one bar. */
@@ -438,10 +440,10 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
     [
       m("h1", { class: "type-heading text-body-content" }, "Chats"),
       m(
-        "button",
+        Button,
         {
-          type: "button",
-          class: `chat-rail-new ${BAR_ICON_BUTTON_CLASS}`,
+          ...BAR_ICON_BUTTON,
+          extra: "chat-rail-new flex-none",
           "aria-label": "New chat",
           onclick: () => attrs.onNew(),
         },
@@ -543,7 +545,8 @@ function mentionMark(): m.Vnode {
   return m(
     "span",
     {
-      class: "chat-rail-mention flex-none rounded px-1 text-(length:--font-size-helper) font-semibold text-accent-surface",
+      class:
+        "chat-rail-mention flex-none rounded px-1 text-(length:--font-size-helper) font-semibold text-accent-surface",
       "data-chat-row-mention": "",
       ...hoverTooltipAttrs("You were mentioned here", "above"),
     },

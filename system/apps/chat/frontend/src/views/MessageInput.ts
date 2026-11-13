@@ -852,15 +852,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const remove = isUploading
       ? null
       : m(
-          "button",
+          Button,
           {
-            type: "button",
+            variant: "inverse",
+            xs: true,
+            icon: true,
+            round: true,
             // z-10: above the strip's end fades, so a half-hidden chip's remove button stays usable.
             // Centred on the corner inside the chip's 1px border, not on the border's outer edge.
-            class:
-              "composer-attachment-remove absolute -top-[9px] -right-[9px] z-10 inline-flex h-5 w-5 cursor-pointer " +
-              "items-center justify-center rounded-full bg-inverse-surface text-inverse-content opacity-0 shadow-sm " +
-              "transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100",
+            extra:
+              "composer-attachment-remove absolute -top-[9px] -right-[9px] z-10 opacity-0 shadow-raised " +
+              "group-hover/chip:opacity-100 focus-visible:opacity-100",
             "aria-label": "Remove attachment",
             ...hoverTooltipAttrs("Remove attachment", "above"),
             onclick: () => removeComposerAttachment(chatId, attachment.localId),

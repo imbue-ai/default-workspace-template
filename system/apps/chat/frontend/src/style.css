@@ -229,7 +229,12 @@
   background-color: var(--c-fill-hover);
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg opacity='0.45' fill='none' stroke='%23808080' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2.5'/%3E%3Ccircle cx='8.5' cy='9.5' r='1.6'/%3E%3Cpath d='M21 16l-5-5-9 9'/%3E%3C/g%3E%3C/svg%3E"),
-    linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.6) 50%, transparent 70%);
+    linear-gradient(
+      100deg,
+      transparent 30%,
+      color-mix(in srgb, var(--c-body-surface-raised) 60%, transparent) 50%,
+      transparent 70%
+    );
   background-size:
     36px 36px,
     250% 100%;
@@ -460,18 +465,18 @@
 .terminal-frame-pending {
   visibility: hidden;
 }
-/* A line drawn the way the terminal draws its output: the frame's box and corner, in ttyd's own
-   default theme and type (the terminal app passes ttyd no theme), so the terminal that replaces
-   it lands on the same surface. */
+/* A line drawn the way the terminal draws its output: the frame's box and corner, on the dark
+   inverse surface in the workspace's mono, so the terminal that replaces it lands on a surface
+   close to its own. */
 .terminal-placeholder {
   box-sizing: border-box;
   width: 100%;
   height: 100%;
   padding: 5px;
   border-radius: var(--radius-lg);
-  background: #2b2b2b;
-  color: #d2d2d2;
-  font-family: Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  background: var(--c-inverse-surface);
+  color: var(--c-inverse-content);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.2;
 }
@@ -485,7 +490,7 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelProviderMenuStyles`, at its own size. Its 8px side padding
+   itself is the shared `Switch`, at its own size. Its 8px side padding
    matches the model selector's, so at rest the switch sits as far in from the composer's right
    edge as the model's name does from its left. */
 .terminal-view-toggle {
@@ -625,10 +630,10 @@
    utility is the fallback where background-clip:text is unsupported. */
 .pv-tl-title--current > .pv-tl-title-text,
 .pv-tl-narration {
-  /* #bcbcbc: the highlight, deliberately lighter than --c-body-content-tertiary. A
-     design-system-exception -- it is one end of a moving gradient, not a text
-     role, and at faint the sweep barely reads against the text it crosses. */
-  background: linear-gradient(90deg, var(--c-body-content) 0%, #bcbcbc 40%, var(--c-body-content) 80%);
+  /* The highlight is a neutral ramp step, deliberately lighter than
+     --c-body-content-tertiary: it is one end of a moving gradient, not a text
+     role, and at tertiary the sweep barely reads against the text it crosses. */
+  background: linear-gradient(90deg, var(--c-body-content) 0%, var(--c-neutral-6) 40%, var(--c-body-content) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;

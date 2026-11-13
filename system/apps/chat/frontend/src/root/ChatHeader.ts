@@ -8,9 +8,10 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
+import { BAR_ICON_BUTTON, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -26,9 +27,8 @@ export interface ChatHeaderAttrs {
   isTouch: boolean;
 }
 
-/** The bar's buttons under a mouse, smaller than the touchscreen's ``BAR_ICON_BUTTON_CLASS``. */
-const DENSE_BAR_ICON_BUTTON_CLASS =
-  "flex size-7 flex-none items-center justify-center rounded-md text-body-content hover:bg-fill-hover";
+/** The bar's buttons under a mouse: the brand's small icon step, smaller than the touchscreen's ``BAR_ICON_BUTTON``. */
+const DENSE_BAR_ICON_BUTTON = { variant: "ghost", icon: true, sm: true } as const;
 
 export function ChatHeader(): m.Component<ChatHeaderAttrs> {
   const menu = createMenu({
@@ -51,7 +51,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
       const isRowDeleting = row !== null && isDeleting(row.chatId);
       const hasVerbs = row !== null && !isRowDeleting;
       const triggerAttrs = menu.triggerAttrs();
-      const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
+      const barButton = attrs.isTouch ? BAR_ICON_BUTTON : DENSE_BAR_ICON_BUTTON;
       return m(
         "header",
         {
@@ -62,10 +62,10 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
         },
         [
           m(
-            "button",
+            Button,
             {
-              type: "button",
-              class: `chat-header-list ${buttonClass}`,
+              ...barButton,
+              extra: "chat-header-list flex-none",
               "aria-label": "Chats",
               "data-chat-header-list": "",
               onclick: () => attrs.onOpenList(),
@@ -86,10 +86,10 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
               ),
           hasVerbs
             ? m(
-                "button",
+                Button,
                 {
-                  type: "button",
-                  class: `chat-header-menu-button ${buttonClass}`,
+                  ...barButton,
+                  extra: "chat-header-menu-button flex-none",
                   "aria-label": "Chat actions",
                   "data-chat-header-menu": "",
                   ...triggerAttrs,

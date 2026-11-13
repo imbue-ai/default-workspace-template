@@ -69,7 +69,7 @@ export function AttachmentStrip(): m.Component<AttachmentStripAttrs> {
             `message-input-attachments-${side} absolute top-2 z-20 inline-flex h-6 w-6 cursor-pointer items-center ` +
             "justify-center rounded-md border border-transparent text-body-content-secondary " +
             "transition-[color,background-color,border-color,box-shadow] hover:border-default hover:bg-body-surface-raised " +
-            "hover:text-body-content hover:shadow-[0_2px_6px_rgb(0_0_0/0.12)] " +
+            "hover:text-body-content hover:shadow-overlay " +
             (isLeft ? "-left-2.5" : "-right-2.5"),
           "aria-label": isLeft ? "Scroll attachments left" : "Scroll attachments right",
           onclick: () => page(isLeft ? -1 : 1),

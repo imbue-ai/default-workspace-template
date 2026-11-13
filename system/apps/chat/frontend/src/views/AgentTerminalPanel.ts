@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
 import { isAgentProcessAlive, isAgentProcessDead } from "./agentLiveness";
@@ -130,12 +131,9 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                   ),
             ]),
             m(
-              "button",
+              Button,
               {
-                type: "button",
-                class:
-                  "agent-terminal-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-default px-4 text-(length:--font-size-body-dense) font-medium text-body-content hover:bg-fill-hover",
+                extra: "agent-terminal-start mt-1",
                 onclick: () => {
                   starting = true;
                   startError = null;

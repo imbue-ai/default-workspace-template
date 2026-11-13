@@ -24,6 +24,7 @@
 import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { labelForToolCall, runningCallElapsed, runningToolCall } from "./ActivityIndicator";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -204,13 +205,10 @@ const DETAIL_HEADER_CLASS =
   "tool-chip-detail-header -mx-3 -mt-1.5 mb-1.5 flex items-start gap-1.5 " +
   "rounded-t-md border-b px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
 
-/** The close control: the same ghost treatment as a chip, squared off for an icon.
- *  `-mr-2` sets it nearer the panel's edge than its own padding would -- the gap that
- *  reads as right is the one to the glyph, not to the invisible box around it. */
-const DETAIL_CLOSE_CLASS =
-  "tool-chip-detail-close -mr-2 ml-auto flex shrink-0 cursor-pointer appearance-none items-center rounded " +
-  "border-0 bg-transparent p-1 text-body-content-tertiary transition-colors duration-(--dur-base) hover:bg-fill-hover " +
-  "hover:text-body-content";
+/** The close control: the shared smallest ghost icon button. `-mr-1.5` sets it nearer the
+ *  panel's edge than its own padding would -- the gap that reads as right is the one to the
+ *  glyph, not to the invisible box around it. */
+const DETAIL_CLOSE_EXTRA = "tool-chip-detail-close -mr-1.5 ml-auto shrink-0";
 
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
@@ -402,10 +400,12 @@ function renderDetailHeader(entry: ChipEntry): m.Vnode {
       entry.kind === "tool" ? chipTitle(chipText(entry.call)) : entry.label,
     ),
     m(
-      "button",
+      Button,
       {
-        type: "button",
-        class: DETAIL_CLOSE_CLASS,
+        variant: "ghost",
+        xs: true,
+        icon: true,
+        extra: DETAIL_CLOSE_EXTRA,
         "aria-label": "Close",
         title: "Close",
         onclick: () => closeChip(entry),
