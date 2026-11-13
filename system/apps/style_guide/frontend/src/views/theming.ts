@@ -17,6 +17,8 @@ import { caption, code, type CatalogGroup, type CatalogSection } from "./catalog
 export const PART_SECTIONS: Partial<Record<Part, string>> = {
   button: "buttons",
   field: "fields",
+  checkbox: "fields",
+  switch: "fields",
   select: "pickers",
   menu: "menu",
   "menu-item": "menu",

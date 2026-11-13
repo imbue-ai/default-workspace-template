@@ -911,7 +911,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         )
       : summary === undefined
         ? null
-        : m("span", { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-summary text-body-content-secondary` }, summary);
+        : m(
+            "span",
+            { class: `${ATTACHMENT_DETAIL_CLASS} composer-attachment-summary text-body-content-secondary` },
+            summary,
+          );
     return m(
       "div",
       {
@@ -925,7 +929,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m(
           "span",
           {
-            class: "composer-attachment-icon inline-flex h-4 w-4 flex-none items-center justify-center text-body-content-secondary",
+            class:
+              "composer-attachment-icon inline-flex h-4 w-4 flex-none items-center justify-center text-body-content-secondary",
           },
           isUploading
             ? m("span", { class: "composer-attachment-uploading", "aria-label": "Uploading", role: "img" }, spinner)
@@ -935,7 +940,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m(
             "span",
             {
-              class: "composer-attachment-name truncate text-(length:--font-size-helper) leading-[1.3] text-body-content",
+              class:
+                "composer-attachment-name truncate text-(length:--font-size-helper) leading-[1.3] text-body-content",
             },
             attachment.fileName,
           ),

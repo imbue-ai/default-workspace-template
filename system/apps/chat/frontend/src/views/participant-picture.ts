@@ -51,7 +51,9 @@ const ParticipantPicture: m.ClosureComponent<ParticipantPictureAttrs> = () => {
         {
           class:
             "participant-picture flex shrink-0 select-none items-center justify-center overflow-hidden rounded-full " +
-            (isColored ? "font-semibold text-accent-content " : "bg-fill-hover font-medium text-body-content-secondary ") +
+            (isColored
+              ? "font-semibold text-accent-content "
+              : "bg-fill-hover font-medium text-body-content-secondary ") +
             (attrs.extra ?? ""),
           style,
           title: attrs.name,

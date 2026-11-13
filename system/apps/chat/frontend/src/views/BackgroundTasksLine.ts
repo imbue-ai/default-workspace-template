@@ -89,7 +89,11 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
             m("span", { class: "background-tasks-line__label truncate" }, waitSummary(tasks.length)),
             oldestElapsed === null
               ? null
-              : m("span", { class: "background-tasks-line__elapsed flex-none text-body-content-tertiary" }, `· ${oldestElapsed}`),
+              : m(
+                  "span",
+                  { class: "background-tasks-line__elapsed flex-none text-body-content-tertiary" },
+                  `· ${oldestElapsed}`,
+                ),
             m(
               "span",
               { class: `flex-none text-body-content-tertiary transition-transform ${isExpanded ? "rotate-180" : ""}` },
@@ -118,7 +122,11 @@ export function BackgroundTasksLine(): m.Component<BackgroundTasksLineAttrs> {
                     ),
                     elapsed === null
                       ? null
-                      : m("span", { class: "background-tasks-line__task-elapsed flex-none text-body-content-tertiary" }, elapsed),
+                      : m(
+                          "span",
+                          { class: "background-tasks-line__task-elapsed flex-none text-body-content-tertiary" },
+                          elapsed,
+                        ),
                   ],
                 );
               }),

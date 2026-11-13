@@ -119,7 +119,8 @@ export const RUNS_ON_NAME = "font-semibold text-body-content";
 export const STEP = "mb-4 transition-all duration-(--dur-slow)";
 export const STEP_LAST = "transition-all duration-(--dur-slow)";
 export const STEP_DIMMED = "grayscale opacity-60";
-export const STEP_LABEL = "mb-2 flex items-center gap-2 text-(length:--font-size-body-dense) font-medium text-body-content";
+export const STEP_LABEL =
+  "mb-2 flex items-center gap-2 text-(length:--font-size-body-dense) font-medium text-body-content";
 export const STEP_NUM =
   "inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent-surface " +
   "type-helper font-semibold text-accent-content";

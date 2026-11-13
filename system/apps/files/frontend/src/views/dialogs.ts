@@ -8,6 +8,7 @@ import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { FIELD_ERROR_CLASS } from "@imbue/workspace-ui/src/components/formControls";
 import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 
 import type { Entry } from "../models/server";
@@ -191,8 +192,9 @@ export class Dialogs {
       },
       [
         m("input", {
-          class: inputClass({ extra: "mb-2" }),
+          class: inputClass(),
           value: dialog.draft,
+          "aria-invalid": dialog.error === null ? undefined : "true",
           "aria-label": dialog.isNew ? "Name" : "New name",
           oncreate: ({ dom }: { dom: Element }) => {
             const input = dom as HTMLInputElement;
@@ -207,7 +209,7 @@ export class Dialogs {
             if (event.key === "Enter") submit();
           },
         }),
-        m("p.type-helper.mb-2.min-h-4.text-danger-surface", dialog.error ?? ""),
+        m("p", { class: `${FIELD_ERROR_CLASS} mb-2 min-h-4` }, dialog.error ?? ""),
       ],
     );
   }

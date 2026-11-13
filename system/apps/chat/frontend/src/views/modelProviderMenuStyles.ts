@@ -39,14 +39,16 @@ export const TRIGGER =
   "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-body-content-tertiary transition-colors hover:bg-fill-hover hover:text-body-content-secondary cursor-pointer";
 /** The trigger's shape with nothing to open: a chat with no agent yet names its account. */
-export const PROVISIONAL_CHIP = "flex h-[30px] items-center rounded-lg px-2 type-helper whitespace-nowrap text-body-content-tertiary";
+export const PROVISIONAL_CHIP =
+  "flex h-[30px] items-center rounded-lg px-2 type-helper whitespace-nowrap text-body-content-tertiary";
 /** The separators between the chip's parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-body-content-tertiary/60";
 
 /** The "next" pill: the mark on whatever states the account this chat's next message switches
  *  to. One recipe wherever it is drawn, since it is one mark; each site adds its own spacing
  *  and weight for the text it sits beside. */
-export const NEXT_BADGE = "rounded-full bg-accent-subtle-surface px-1.5 text-(length:--font-size-helper) text-accent-surface";
+export const NEXT_BADGE =
+  "rounded-full bg-accent-subtle-surface px-1.5 text-(length:--font-size-helper) text-accent-surface";
 
 // The rows that are not plain rows
 /** A row that holds a control rather than a value: the same height and padding as the shared
@@ -117,51 +119,14 @@ export const EFFORT_SEGMENT = `${EFFORT_SEGMENT_SHAPE} ${SEGMENT_OFF}`;
 export const EFFORT_SEGMENT_ON = `${EFFORT_SEGMENT_SHAPE} ${SEGMENT_ON}`;
 
 // The switch
-/** The switch comes in two sizes, and a size is a track plus its throw, handed out together:
- *  a track scaled on its own leaves the knob's `translate-x-[...]` throw sized for the old
- *  track, and the knob lands outside it.
- *
- *  Each row is arithmetic: the knob is the track's height less 2px of inset top and bottom,
- *  and the on-position is `width - inset - knob`, which leaves the knob the same 2px from
- *  either end. */
-const SWITCH_SIZES = {
-  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
-  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
-} as const;
-
-export type SwitchSize = keyof typeof SWITCH_SIZES;
-
-/** The track. Colour is the caller's -- `SWITCH_ON` / `SWITCH_OFF` below. */
-export function switchClass(size: SwitchSize): string {
-  return (
-    `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
-    "cursor-pointer " +
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus " +
-    "disabled:cursor-not-allowed disabled:opacity-50"
-  );
-}
-
-/** The knob, already at the position `on` puts it in. */
-export function switchKnobClass(size: SwitchSize, on: boolean): string {
-  const chosen = SWITCH_SIZES[size];
-  return (
-    `inline-flex ${chosen.knob} items-center justify-center rounded-full bg-body-surface-raised shadow-raised ` +
-    `transition-transform ${on ? chosen.on : SWITCH_KNOB_OFF}`
-  );
-}
-
-export const SWITCH_ON = "bg-accent-surface";
-export const SWITCH_OFF = "bg-fill-active";
-/** The same 2px at rest whatever the size, so it is not in the table. */
-const SWITCH_KNOB_OFF = "translate-x-[2px]";
-
 // The submenus' own content
 /** The search field at the head of the model list. The wrapper positions the magnifier over the
  *  field's own left padding; the field itself is the shared `inputClass`, so its frame, focus
  *  ring and placeholder match every other text field in the workspace. The margin is BELOW it,
  *  separating it from the list it filters -- above it the submenu's own padding is the gap. */
 export const SEARCH_WRAP = "relative mx-1.5 mb-1.5";
-export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-body-content-tertiary";
+export const SEARCH_ICON =
+  "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-body-content-tertiary";
 /** Room for the magnifier, and the dense-chrome row size the rest of the submenu sits at. */
 export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-body-dense)";
 /** The list under the search field, the part of the submenu that scrolls. A slim, always-visible

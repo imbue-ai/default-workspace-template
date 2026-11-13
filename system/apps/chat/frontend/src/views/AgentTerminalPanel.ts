@@ -122,7 +122,10 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                 ? null
                 : m(
                     "div",
-                    { class: "agent-terminal-start-error w-0 min-w-full text-(length:--font-size-body-dense) text-danger-surface" },
+                    {
+                      class:
+                        "agent-terminal-start-error w-0 min-w-full text-(length:--font-size-body-dense) text-danger-surface",
+                    },
                     `Could not start agent: ${startError}`,
                   ),
             ]),

@@ -135,7 +135,9 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
               "Start a new chat instead",
             ),
           ]),
-          retryError !== null ? m("p", { class: "handoff-retry-error text-sm text-danger-surface" }, retryError) : null,
+          retryError !== null
+            ? m("p", { class: "handoff-retry-error text-sm text-danger-surface" }, retryError)
+            : null,
         ],
       );
     },

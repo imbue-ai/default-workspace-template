@@ -323,7 +323,10 @@ function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
 function renderEyebrow(): m.Vnode {
   return m(
     "div",
-    { class: "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+    {
+      class:
+        "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary",
+    },
     [renderKeyIcon(), m("span", "Permission request")],
   );
 }
@@ -446,11 +449,16 @@ export function renderPermissionCard(
     m("div", { class: "permission-request-body mt-2.5 flex items-start gap-2.5" }, [
       m("div", { class: `permission-request-badge h-8 w-8 rounded-lg ${BADGE_BASE}` }, renderSubjectMark(details, 16)),
       m("div", { class: "permission-request-info min-w-0 flex-1" }, [
-        bodyTitle !== null ? m("div", { class: "permission-request-title type-title-sm text-body-content" }, bodyTitle) : null,
+        bodyTitle !== null
+          ? m("div", { class: "permission-request-title type-title-sm text-body-content" }, bodyTitle)
+          : null,
         details.rationale
           ? m(
               "div",
-              { class: "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary" },
+              {
+                class:
+                  "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary",
+              },
               details.rationale,
             )
           : null,

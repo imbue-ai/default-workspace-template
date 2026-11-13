@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { Checkbox, FIELD_ERROR_CLASS, Switch } from "@imbue/workspace-ui/src/components/formControls";
 
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
@@ -58,6 +59,8 @@ export class ComponentDemos {
   model = "claude-sonnet";
   showHidden = false;
   showPreview = true;
+  isNotifying = true;
+  isFieldInError = true;
   lastMenuPick = "nothing yet";
   openDialog: OpenDialog = null;
   readonly toasts = new ToastQueue(() => m.redraw());
@@ -217,7 +220,15 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
     title: "Text fields",
     desc: [
       code("inputClass({ mono, withAction })"),
-      " styles an input or a textarea; the accent ring shows on every focus.",
+      " styles an input or a textarea: 36px, a ring in the focus color on every focus, and an error as the edge (",
+      code("aria-invalid"),
+      ") with ",
+      code("FIELD_ERROR_CLASS"),
+      " under it. ",
+      code("Checkbox"),
+      " and ",
+      code("Switch"),
+      " show on in the primary color.",
     ],
     body: () =>
       m("div", { class: "grid max-w-[480px] gap-4" }, [
@@ -276,6 +287,34 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
             { ...FIELD_PART, id: "field-textarea", class: inputClass({ extra: "resize-y" }), rows: 3 },
             "Some text",
           ),
+        ]),
+        m("label", { class: "block" }, [
+          m("span", { class: MODAL_LABEL_CLASS }, "In error"),
+          m("input", {
+            ...FIELD_PART,
+            id: "field-error",
+            class: inputClass(),
+            value: "report/.md",
+            "aria-invalid": demos.isFieldInError ? "true" : undefined,
+            oninput: () => (demos.isFieldInError = false),
+          }),
+          demos.isFieldInError ? m("p", { class: FIELD_ERROR_CLASS }, "A name cannot end in a slash.") : null,
+        ]),
+        m("div", { class: "flex flex-wrap items-center gap-6" }, [
+          m("label", { id: "field-checkbox", class: "flex items-center gap-2 type-body" }, [
+            m(Checkbox, { checked: demos.showHidden, onchange: (checked: boolean) => (demos.showHidden = checked) }),
+            "Show hidden files",
+          ]),
+          m("label", { class: "flex items-center gap-2 type-body text-body-content-tertiary" }, [
+            m(Checkbox, { checked: true, disabled: true, onchange: () => undefined }),
+            "Disabled",
+          ]),
+          m(Switch, {
+            on: demos.isNotifying,
+            label: "Notify me",
+            onToggle: () => (demos.isNotifying = !demos.isNotifying),
+            extra: "type-body",
+          }),
         ]),
       ]),
   };

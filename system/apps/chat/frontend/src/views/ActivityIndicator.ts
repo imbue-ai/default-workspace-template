@@ -215,7 +215,11 @@ function renderStrip(
       label === null ? null : m("span", { class: "agent-activity-indicator__label truncate" }, label),
       elapsed === null
         ? null
-        : m("span", { class: "agent-activity-indicator__elapsed shrink-0 tabular-nums text-body-content-tertiary" }, elapsed),
+        : m(
+            "span",
+            { class: "agent-activity-indicator__elapsed shrink-0 tabular-nums text-body-content-tertiary" },
+            elapsed,
+          ),
     ],
   );
 }

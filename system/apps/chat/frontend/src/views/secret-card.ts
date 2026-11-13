@@ -228,7 +228,10 @@ function verdictLabel(resolution: SecretResolution): string {
 function renderEyebrow(): m.Vnode {
   return m(
     "div",
-    { class: "secret-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+    {
+      class:
+        "secret-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary",
+    },
     [m.trust(icon("key", { size: 13, className: "secret-request-icon shrink-0" })), m("span", "Secret request")],
   );
 }
@@ -260,37 +263,41 @@ function renderInputs(details: SecretRequestDetails, state: SecretCardState, han
     { class: "secret-request-inputs mt-2.5 flex flex-col gap-2" },
     details.variables.map((variable) => {
       const isRevealed = state.isRevealedByVariable[variable] ?? false;
-      return m("label", { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-body-content-secondary" }, [
-        m("span", { class: "secret-request-variable font-mono" }, variable),
-        m("div", { class: "flex items-center gap-1.5" }, [
-          m("input", {
-            class: inputClass({ mono: true }),
-            ...FIELD_PART,
-            // Masked unless the user asks to check what they typed.
-            type: isRevealed ? "text" : "password",
-            value: state.valueByVariable[variable] ?? "",
-            spellcheck: false,
-            autocomplete: "off",
-            "data-1p-ignore": "",
-            "data-variable": variable,
-            disabled: state.isBusy,
-            oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
-          }),
-          m(
-            Button,
-            {
-              variant: "ghost",
-              sm: true,
-              extra: "secret-request-reveal shrink-0",
-              "aria-pressed": String(isRevealed),
-              "aria-label": `${isRevealed ? "Hide" : "Show"} ${variable}`,
+      return m(
+        "label",
+        { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-body-content-secondary" },
+        [
+          m("span", { class: "secret-request-variable font-mono" }, variable),
+          m("div", { class: "flex items-center gap-1.5" }, [
+            m("input", {
+              class: inputClass({ mono: true }),
+              ...FIELD_PART,
+              // Masked unless the user asks to check what they typed.
+              type: isRevealed ? "text" : "password",
+              value: state.valueByVariable[variable] ?? "",
+              spellcheck: false,
+              autocomplete: "off",
+              "data-1p-ignore": "",
+              "data-variable": variable,
               disabled: state.isBusy,
-              onclick: () => handlers.onRevealToggle(variable),
-            },
-            isRevealed ? "Hide" : "Show",
-          ),
-        ]),
-      ]);
+              oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
+            }),
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "secret-request-reveal shrink-0",
+                "aria-pressed": String(isRevealed),
+                "aria-label": `${isRevealed ? "Hide" : "Show"} ${variable}`,
+                disabled: state.isBusy,
+                onclick: () => handlers.onRevealToggle(variable),
+              },
+              isRevealed ? "Hide" : "Show",
+            ),
+          ]),
+        ],
+      );
     }),
   );
 }
@@ -347,7 +354,11 @@ export function renderSecretCard(
         renderVerdict(resolution),
       ]),
       note
-        ? m("div", { class: "secret-request-note mt-1.5 text-(length:--font-size-helper) text-body-content-secondary" }, note)
+        ? m(
+            "div",
+            { class: "secret-request-note mt-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+            note,
+          )
         : null,
     ]);
   }
@@ -374,7 +385,10 @@ export function renderSecretCard(
       details.rationale
         ? m(
             "div",
-            { class: "secret-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary" },
+            {
+              class:
+                "secret-request-reason text-(length:--font-size-helper) leading-[1.45] text-body-content-secondary",
+            },
             details.rationale,
           )
         : null,
@@ -393,7 +407,11 @@ export function renderSecretCard(
     ]),
     state.isDeclining ? renderDeclineForm(state, handlers) : renderInputs(details, state, handlers),
     state.error
-      ? m("div", { class: "secret-request-error mt-2 text-(length:--font-size-helper) text-danger-surface" }, state.error)
+      ? m(
+          "div",
+          { class: "secret-request-error mt-2 text-(length:--font-size-helper) text-danger-surface" },
+          state.error,
+        )
       : null,
     state.isDeclining
       ? null

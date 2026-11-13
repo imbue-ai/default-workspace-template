@@ -32,6 +32,7 @@
  */
 
 import m from "mithril";
+import { switchVisual } from "@imbue/workspace-ui/src/components/formControls";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
@@ -475,11 +476,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       },
       [
         m("span", { class: css.ROW_LABEL }, "Source view"),
-        m(
-          "span",
-          { class: `ml-auto ${css.switchClass("sm")} ${sourceView.on ? css.SWITCH_ON : css.SWITCH_OFF}` },
-          m("span", { class: css.switchKnobClass("sm", sourceView.on) }),
-        ),
+        m("span", { class: "ml-auto flex" }, switchVisual(sourceView.on)),
       ],
     );
   }

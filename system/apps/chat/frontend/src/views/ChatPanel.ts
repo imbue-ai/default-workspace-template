@@ -736,7 +736,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
         m("p", { class: "type-heading text-body-content" }, "No conversation data"),
-        m("p", { class: "text-body-content-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+        m(
+          "p",
+          { class: "text-body-content-secondary" },
+          "This agent has no Claude session. It may have crashed on startup.",
+        ),
         screenLoading
           ? m("p", { class: "text-body-content-secondary" }, "Loading terminal output...")
           : screenContent

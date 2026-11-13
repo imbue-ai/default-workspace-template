@@ -95,6 +95,8 @@ CORE_PARTS: Final[tuple[str, ...]] = (
     "button",
     "field",
     "select",
+    "checkbox",
+    "switch",
     "menu",
     "menu-item",
     "menu-separator",
@@ -322,6 +324,7 @@ BARE_CONTROLS_BY_PART: Final[Mapping[str, tuple[str, ...]]] = {
     "button": (":is(button)",),
     "field": (f":is(input):where({_TEXT_INPUT_TYPES})", ":is(textarea)"),
     "select": (":is(select)",),
+    "checkbox": (':is(input):where([type="checkbox"])',),
 }
 
 # The standard title bar (section 4.3; the multiplayer spec, section 9.1): the window menu and Refresh lead, the

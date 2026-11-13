@@ -444,7 +444,8 @@ export function renderSubagentCard(
  * out and signed in again as a new one), there is nothing to re-authenticate: the account signed
  * in, or picked, is what this chat moves to.
  */
-const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent-surface underline hover:text-accent-surface-hover";
+const REAUTH_ACTION_CLASS =
+  "message-api-error-action cursor-pointer text-accent-surface underline hover:text-accent-surface-hover";
 
 function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
@@ -534,13 +535,17 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
               offer.label,
             ),
           ];
-  return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-body-content-secondary" }, [
-    m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
-    m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-body-content-tertiary" }, [
-      m("summary", { class: "cursor-pointer" }, "See details"),
-      m(MarkdownContent, { content: text, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
-    ]),
-  ]);
+  return m(
+    "div",
+    { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-body-content-secondary" },
+    [
+      m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
+      m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-body-content-tertiary" }, [
+        m("summary", { class: "cursor-pointer" }, "See details"),
+        m(MarkdownContent, { content: text, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+      ]),
+    ],
+  );
 }
 
 /** The grey note shown under a provider-fault API error: the failure is the model
@@ -756,21 +761,25 @@ function appendEventParts(
       // throwing a sign-in screen over whatever the user was doing.
       children.push(
         onLineAsBox(
-          m("div", { class: "message-api-error rounded-md bg-danger-surface/8 px-[0.75em] py-[0.5em] text-danger-surface" }, [
-            m(MarkdownContent, {
-              content: textContent,
-              requestedAt: event.timestamp,
-              expansionKeyPrefix: event.event_id,
-            }),
-            event.is_provider_fault
-              ? m(
-                  "div",
-                  { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-body-content-tertiary" },
-                  providerFaultNote(event.api_error_kind),
-                )
-              : null,
-            event.is_auth_error ? renderReauthAction(chatId) : null,
-          ]),
+          m(
+            "div",
+            { class: "message-api-error rounded-md bg-danger-surface/8 px-[0.75em] py-[0.5em] text-danger-surface" },
+            [
+              m(MarkdownContent, {
+                content: textContent,
+                requestedAt: event.timestamp,
+                expansionKeyPrefix: event.event_id,
+              }),
+              event.is_provider_fault
+                ? m(
+                    "div",
+                    { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-body-content-tertiary" },
+                    providerFaultNote(event.api_error_kind),
+                  )
+                : null,
+              event.is_auth_error ? renderReauthAction(chatId) : null,
+            ],
+          ),
           placement,
         ),
       );

@@ -17,6 +17,7 @@
 import m from "mithril";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { Checkbox } from "@imbue/workspace-ui/src/components/formControls";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById, launchChat } from "../models/Chats";
@@ -315,11 +316,10 @@ function renderPicker(dialog: OpenDialog): m.Children {
       : null,
     option !== null && option.supports_fast
       ? m("label", { class: "switch-dialog-fast flex items-center gap-1.5 text-(length:--font-size-helper)" }, [
-          m("input", {
-            type: "checkbox",
+          m(Checkbox, {
             checked: dialog.fast,
-            onchange: (event: Event) => {
-              dialog.fast = (event.target as HTMLInputElement).checked;
+            onchange: (checked: boolean) => {
+              dialog.fast = checked;
             },
           }),
           "Fast mode",

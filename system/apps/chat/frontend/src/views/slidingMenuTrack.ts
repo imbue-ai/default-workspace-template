@@ -12,6 +12,7 @@
 
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { Checkbox } from "@imbue/workspace-ui/src/components/formControls";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import {
   MENU_ROW_ATTR,
@@ -27,7 +28,11 @@ import { MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/the
  *  that sets none. */
 const SUBMENU_DEFAULT_MAX_HEIGHT = 2 * 5 + 10 * 32;
 
-const TONE_CLASS = { default: "text-body-content", danger: "text-danger-surface", quiet: "text-body-content-tertiary" } as const;
+const TONE_CLASS = {
+  default: "text-body-content",
+  danger: "text-danger-surface",
+  quiet: "text-body-content-tertiary",
+} as const;
 const KEY_VALUE_CLASS = "ml-auto flex min-w-0 items-center gap-1.5";
 const KEY_SUB_CLASS = "type-helper text-body-content-tertiary";
 
@@ -122,7 +127,11 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             m("span", { class: KEY_VALUE_CLASS }, [
               valueText(row.value, row.truncateValue),
               row.sub === undefined ? null : m("span", { class: KEY_SUB_CLASS }, `(${row.sub})`),
-              m("span", { class: "shrink-0 text-body-content-tertiary" }, m.trust(icon("chevron-right", { size: 13 }))),
+              m(
+                "span",
+                { class: "shrink-0 text-body-content-tertiary" },
+                m.trust(icon("chevron-right", { size: 13 })),
+              ),
             ]),
           ],
         );
@@ -148,7 +157,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
         return m(
           "label",
           { class: menuRowClass({ extra: TONE_CLASS.default }), ...MENU_ITEM_PART, ...keyAttrs(row.key, row.tooltip) },
-          [m("input", { type: "checkbox", checked: row.isChecked, onchange: () => row.onToggle() }), row.label],
+          [m(Checkbox, { checked: row.isChecked, onchange: () => row.onToggle() }), row.label],
         );
       case "divider":
         return m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART });

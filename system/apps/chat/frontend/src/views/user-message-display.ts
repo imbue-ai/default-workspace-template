@@ -299,7 +299,9 @@ function renderResentNote(eventId: string): m.Vnode {
     isExpanded
       ? m(
           "p",
-          { class: "message-resent-note-text text-right text-(length:--font-size-helper) text-body-content-secondary" },
+          {
+            class: "message-resent-note-text text-right text-(length:--font-size-helper) text-body-content-secondary",
+          },
           RESENT_NOTE_HELP,
         )
       : null,

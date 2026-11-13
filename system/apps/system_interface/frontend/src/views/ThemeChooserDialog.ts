@@ -8,6 +8,7 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { Checkbox } from "@imbue/workspace-ui/src/components/formControls";
 import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 import type { AppRecord, Desktop } from "../model/records";
@@ -135,7 +136,10 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
           attrs.onPreviewTheme(theme);
         },
       },
-      [themePicture(record, attrs.previewApp), m("span", { class: "type-helper text-center text-body-content" }, label)],
+      [
+        themePicture(record, attrs.previewApp),
+        m("span", { class: "type-helper text-center text-body-content" }, label),
+      ],
     );
   }
 
@@ -157,7 +161,10 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
       [
         m(
           "span",
-          { "aria-hidden": "true", class: "flex h-8 w-8 items-center justify-center text-2xl text-body-content-secondary" },
+          {
+            "aria-hidden": "true",
+            class: "flex h-8 w-8 items-center justify-center text-2xl text-body-content-secondary",
+          },
           "+",
         ),
         m("span", { class: "type-helper text-center text-body-content" }, "Make your own..."),
@@ -180,7 +187,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
   function themeRow(attrs: ThemeChooserDialogAttrs): m.Children {
     const catalog = attrs.themes;
     if (catalog === null) {
-      return m("p", { "data-themes-loading": "", class: "mb-3 type-helper text-body-content-tertiary" }, "Loading themes…");
+      return m(
+        "p",
+        { "data-themes-loading": "", class: "mb-3 type-helper text-body-content-tertiary" },
+        "Loading themes…",
+      );
     }
     const defaultTheme = resolveDesktopTheme(catalog, null);
     const tiles = [
@@ -198,7 +209,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
     return [
       m("div", { class: "mb-2 flex flex-wrap gap-2" }, [...tiles, makeThemeTile(attrs)]),
       attrs.onMakeTheme === null
-        ? m("p", { "data-make-theme-hint": "", class: "mb-2 type-helper text-body-content-secondary" }, MAKE_THEME_IN_CHAT_HINT)
+        ? m(
+            "p",
+            { "data-make-theme-hint": "", class: "mb-2 type-helper text-body-content-secondary" },
+            MAKE_THEME_IN_CHAT_HINT,
+          )
         : null,
       attrs.isDesktopShown
         ? null
@@ -211,12 +226,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
       availableTheme(catalog, theme) === null
         ? null
         : m("label", { class: "mb-3 flex items-center gap-2 type-helper text-body-content" }, [
-            m("input", {
-              type: "checkbox",
-              "data-theme-as-workspace-default": "",
+            m(Checkbox, {
               checked: isWorkspaceDefault,
-              onchange(event: Event) {
-                isWorkspaceDefault = (event.target as HTMLInputElement).checked;
+              input: { "data-theme-as-workspace-default": "" },
+              onchange(checked: boolean) {
+                isWorkspaceDefault = checked;
               },
             }),
             "Make this the workspace default",

@@ -10,6 +10,7 @@
 import m from "mithril";
 import { Button, type ButtonVariant } from "@imbue/workspace-ui/src/components/Button";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { Checkbox, Switch } from "@imbue/workspace-ui/src/components/formControls";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import {
@@ -79,7 +80,10 @@ export function galleryStateOf(
 }
 
 function section(title: string, ...children: m.Children[]): m.Vnode {
-  return m("section", { class: "mb-8" }, [m("h2", { class: "type-section mb-3 text-body-content-secondary" }, title), ...children]);
+  return m("section", { class: "mb-8" }, [
+    m("h2", { class: "type-section mb-3 text-body-content-secondary" }, title),
+    ...children,
+  ]);
 }
 
 function windowSpecimen(state: GalleryState, isFocused: boolean, title: string): m.Vnode {
@@ -155,9 +159,10 @@ function fields(): m.Children {
     m("input", { class: inputClass(), ...FIELD_PART, type: "text", placeholder: "A placeholder" }),
     m("textarea", { class: inputClass(), ...FIELD_PART, rows: 2 }, "A text area"),
     m("label", { class: "flex items-center gap-2 type-body" }, [
-      m("input", { type: "checkbox", checked: true }),
+      m(Checkbox, { checked: true, onchange: () => undefined }),
       "A checkbox",
     ]),
+    m(Switch, { on: true, label: "A switch", onToggle: () => undefined, extra: "type-body" }),
     m("select", { ...partAttrs("select") }, [m("option", "A choice"), m("option", "Another")]),
   ]);
 }
@@ -250,7 +255,11 @@ function tilesAndRows(): m.Children {
     m("div", { class: "grid w-96 grid-cols-2 gap-3" }, [
       m(
         "button",
-        { ...TILE_PART, type: "button", class: "rounded-2xl border border-default bg-body-surface-raised p-4 text-left" },
+        {
+          ...TILE_PART,
+          type: "button",
+          class: "rounded-2xl border border-default bg-body-surface-raised p-4 text-left",
+        },
         [
           m("div", { class: "type-title-sm" }, "A tile"),
           m("div", { class: "type-helper text-body-content-secondary" }, "That opens something."),
@@ -282,7 +291,10 @@ function tilesAndRows(): m.Children {
         m("span", { class: badgeClass("accent"), ...BADGE_PART }, "accent"),
         m(
           "span",
-          { ...partAttrs("tooltip"), class: "rounded-md bg-inverse-surface px-2 py-1 type-helper text-inverse-content" },
+          {
+            ...partAttrs("tooltip"),
+            class: "rounded-md bg-inverse-surface px-2 py-1 type-helper text-inverse-content",
+          },
           "A tooltip",
         ),
       ]),
@@ -333,40 +345,44 @@ export function ThemeGallery(): m.Component<{ state: GalleryState }> {
     view(vnode) {
       const { state } = vnode.attrs;
       const { theme } = state;
-      return m("main", { "data-gallery-ready": theme.id, class: "h-dvh overflow-y-auto bg-body-surface p-8 text-body-content" }, [
-        m("header", { class: "mb-8" }, [
-          m("h1", { class: "type-heading-lg" }, theme.name),
-          m("p", { class: "type-body text-body-content-secondary" }, theme.description),
-          m(
-            "p",
-            { "data-gallery-origin": "", class: "type-helper text-body-content-tertiary" },
-            `${theme.id} · ${theme.source === "builtin" ? "built in" : "made in this workspace"} · revision ${theme.revision}`,
-          ),
-          theme.problems.length === 0
-            ? null
-            : m(
-                "ul",
-                { "data-gallery-problems": "", class: "mt-2 type-helper text-danger-surface" },
-                theme.problems.map((problem) => m("li", problem)),
-              ),
-        ]),
-        section(
-          "Windows",
-          m("div", { class: "flex flex-wrap gap-8" }, [
-            windowSpecimen(state, true, "A focused window"),
-            windowSpecimen(state, false, "A window in the background"),
+      return m(
+        "main",
+        { "data-gallery-ready": theme.id, class: "h-dvh overflow-y-auto bg-body-surface p-8 text-body-content" },
+        [
+          m("header", { class: "mb-8" }, [
+            m("h1", { class: "type-heading-lg" }, theme.name),
+            m("p", { class: "type-body text-body-content-secondary" }, theme.description),
+            m(
+              "p",
+              { "data-gallery-origin": "", class: "type-helper text-body-content-tertiary" },
+              `${theme.id} · ${theme.source === "builtin" ? "built in" : "made in this workspace"} · revision ${theme.revision}`,
+            ),
+            theme.problems.length === 0
+              ? null
+              : m(
+                  "ul",
+                  { "data-gallery-problems": "", class: "mt-2 type-helper text-danger-surface" },
+                  theme.problems.map((problem) => m("li", problem)),
+                ),
           ]),
-        ),
-        section("Buttons", buttons()),
-        section("Fields", fields()),
-        section("Menus and dialogs", m("div", { class: "flex flex-wrap items-start gap-8" }, [menu(), dialog()])),
-        section("The desktop", desktop(state)),
-        section("The taskbar", taskbar(state)),
-        section("Tiles, rows, badges, and tooltips", tilesAndRows()),
-        section("The avatar", avatars()),
-        section("The terminal", terminalPalette()),
-        m("p", { class: "type-helper text-body-content-tertiary" }, `Contract 1 parts: ${PARTS.join(", ")}`),
-      ]);
+          section(
+            "Windows",
+            m("div", { class: "flex flex-wrap gap-8" }, [
+              windowSpecimen(state, true, "A focused window"),
+              windowSpecimen(state, false, "A window in the background"),
+            ]),
+          ),
+          section("Buttons", buttons()),
+          section("Fields", fields()),
+          section("Menus and dialogs", m("div", { class: "flex flex-wrap items-start gap-8" }, [menu(), dialog()])),
+          section("The desktop", desktop(state)),
+          section("The taskbar", taskbar(state)),
+          section("Tiles, rows, badges, and tooltips", tilesAndRows()),
+          section("The avatar", avatars()),
+          section("The terminal", terminalPalette()),
+          m("p", { class: "type-helper text-body-content-tertiary" }, `Contract 1 parts: ${PARTS.join(", ")}`),
+        ],
+      );
     },
   };
 }

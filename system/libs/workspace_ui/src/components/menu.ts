@@ -38,6 +38,7 @@
 import m from "mithril";
 
 import { hoverTooltipAttrs } from "./hoverTooltip";
+import { Checkbox } from "./formControls";
 import { icon, type IconName } from "./icons";
 import {
   isInSafeTriangle,
@@ -790,23 +791,7 @@ export function createMenu(options: MenuOptions): Menu {
         ...hover,
       },
       [
-        m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
-          m("input", {
-            type: "checkbox",
-            checked: row.isChecked,
-            onchange: () => row.onToggle(),
-            class:
-              "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (row.isChecked ? "border-accent-surface bg-accent-surface" : "border-default bg-body-surface-raised"),
-          }),
-          row.isChecked
-            ? m(
-                "span",
-                { class: "pointer-events-none relative text-white" },
-                m.trust(icon("check", { size: 11, strokeWidth: 3 })),
-              )
-            : null,
-        ]),
+        m(Checkbox, { checked: row.isChecked, onchange: () => row.onToggle() }),
         iconBox(row.icon, "text-body-content-tertiary flex w-5 shrink-0 items-center justify-center"),
         row.label,
       ],

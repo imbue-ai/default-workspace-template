@@ -16,6 +16,7 @@
 
 import { partAttrs } from "../themes/parts";
 import m from "mithril";
+import { FORM_LABEL_CLASS } from "./formControls";
 import { omitClassAttrs } from "./attrs";
 import { backdropDismissAttrs } from "./modalBackdrop";
 import { TEXT_BODY_SIZE } from "./typography";
@@ -48,7 +49,7 @@ export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-body-content
 // text-body-content-secondary / text-body-content-tertiary at its own call site.
 export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-body-content";
 
-export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-body-content-secondary`;
+export const MODAL_LABEL_CLASS = `modal-label ${FORM_LABEL_CLASS}`;
 
 export const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
 

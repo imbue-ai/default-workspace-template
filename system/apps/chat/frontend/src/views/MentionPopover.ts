@@ -84,7 +84,9 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
           "data-mention-handle": handle.handle,
           class:
             "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-(length:--font-size-body) " +
-            (index === attrs.selectedIndex ? "bg-fill-active text-body-content" : "text-body-content hover:bg-fill-hover"),
+            (index === attrs.selectedIndex
+              ? "bg-fill-active text-body-content"
+              : "text-body-content hover:bg-fill-hover"),
           onclick: () => attrs.onPick(handle),
           onmouseenter: () => attrs.onHover(index),
         },
@@ -99,7 +101,11 @@ export function mentionPopover(attrs: MentionPopoverAttrs): m.Vnode | null {
               : null,
           ]),
           kindLabel(handle)
-            ? m("span", { class: "shrink-0 text-(length:--font-size-helper) text-body-content-tertiary" }, kindLabel(handle))
+            ? m(
+                "span",
+                { class: "shrink-0 text-(length:--font-size-helper) text-body-content-tertiary" },
+                kindLabel(handle),
+              )
             : null,
         ],
       ),
