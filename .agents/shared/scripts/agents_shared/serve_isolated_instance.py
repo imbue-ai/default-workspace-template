@@ -1656,7 +1656,7 @@ def down(
     show it, and the teardown goes ahead with a warning.
     """
     services = _recorded_services(repo_root, name)
-    if services and _windows_block_teardown(
+    if services and _close_windows_or_refuse(
         name, services, desktops, close_windows=close_windows
     ):
         return 1
@@ -1674,7 +1674,7 @@ def _recorded_services(repo_root: Path, name: str) -> list[str]:
     return list(state.get("services") or []) if isinstance(state, dict) else []
 
 
-def _windows_block_teardown(
+def _close_windows_or_refuse(
     name: str, services: Sequence[str], desktops: Desktops, *, close_windows: bool
 ) -> bool:
     """Close the windows showing ``services`` when ``close_windows``; True while one stays open."""
