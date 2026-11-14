@@ -693,8 +693,10 @@ export class LivePagesLayer implements PageDriver {
       this.cancelFrameFocus();
       return;
     }
-    this.lastWatcherRaiseFrame = this.watchedFrames;
     this.store.raiseWindow(page.windowId);
+    const isRaised = activeFocusedWindowId(this.store.getState()) === page.windowId;
+    // A raise the store refuses starts no hold.
+    if (isRaised) this.lastWatcherRaiseFrame = this.watchedFrames;
   }
 
   /** Whether a focus landing in the page now is its answer to a message the shell just posted it. */

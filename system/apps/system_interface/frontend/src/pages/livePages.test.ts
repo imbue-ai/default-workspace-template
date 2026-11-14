@@ -1561,6 +1561,16 @@ describe("raising the window the document's focus lands in", () => {
     expect(topWindowId()).toBe("win-2");
   });
 
+  it("starts no hold for a raise the store refused, and applies the landing as soon as the store takes it", () => {
+    store.beginWindowMove("win-2", { x: 100, y: 60 });
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(topWindowId()).toBe("win-2");
+    store.endWindowMove({ x: 100, y: 60 });
+    runFrame();
+    expect(topWindowId()).toBe("win-1");
+  });
+
   it("drops the focused window's pending focus grants once the hold sets aside a landing in another window's page", () => {
     blurIntoFrameOf("win-1");
     layer.reconcile();
