@@ -2,14 +2,16 @@
 /**
  * The live-page layer against a real store over the fake shell: pages are created for the shown
  * windows of the active desktop, laid over their windows' content boxes in the interleaved
- * stacking order, inert unless focused, hidden when minimized, parked while the windows in front
- * cover them, destroyed when closed; they are greeted after every load, told shown and hidden,
- * and follow their windows' stored paths in place or by reload; and their own
- * ``shell:location``, ``shell:focused``, ``shell:open``, and ``shell:start-with-text`` reach the
- * store.
+ * stacking order, interactive (inert unless focused on a touch client), hidden when minimized,
+ * parked while the windows in front cover them, destroyed when closed; they are greeted after
+ * every load, told shown and hidden, and follow their windows' stored paths in place or by
+ * reload; their own ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text`` reach the store; and the window whose page the document's focus lands
+ * in is raised.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
@@ -59,6 +61,16 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
+/** The animation frames requested and not yet run: the tests run them by hand. */
+let pendingFrames: Map<number, FrameRequestCallback>;
+let frameSpies: MockInstance[];
+
+/** Run every animation frame requested so far, as the browser's next frame would. */
+function runFrame(): void {
+  const due = [...pendingFrames.values()];
+  pendingFrames.clear();
+  for (const callback of due) callback(0);
+}
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
 function renderChrome(...extraWindowIds: string[]): void {
@@ -216,6 +228,18 @@ beforeEach(async () => {
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
+  pendingFrames = new Map();
+  let lastFrameId = 0;
+  frameSpies = [
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      lastFrameId += 1;
+      pendingFrames.set(lastFrameId, callback);
+      return lastFrameId;
+    }),
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((frameId) => {
+      pendingFrames.delete(frameId);
+    }),
+  ];
   layer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
   layer.start();
   await store.start(NO_LINK);
@@ -225,6 +249,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const spy of frameSpies) spy.mockRestore();
   resetEmbedderRelayForTesting();
   resetThemeClientForTests();
   resetPresenceForTesting();
@@ -330,7 +355,21 @@ describe("creating and positioning", () => {
     expect(isParked(wrapper)).toBe(false);
   });
 
-  it("makes every page but the focused one inert, and all of them during a gesture", () => {
+  it("keeps every page interactive, the unfocused ones too, and makes all of them inert during a gesture", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+    layer.setGestureActive(true);
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("none");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("none");
+    layer.setGestureActive(false);
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+  });
+
+  it("makes every page but the focused one inert on a touch client, and all of them during a gesture", () => {
+    store.setThemeMetrics(METRICS, { isPhone: false, isTouch: true });
     store.restoreWindow("win-2");
     layer.reconcile();
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
@@ -339,6 +378,7 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-2").style.pointerEvents).toBe("none");
     layer.setGestureActive(false);
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("none");
   });
 
   it("makes every page inert while this window views somebody else's desktop, the focused one included", async () => {
@@ -1271,6 +1311,163 @@ describe("the contract", () => {
     load("win-1");
     await store.closeFocusedWindow();
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+});
+
+describe("raising the window the document's focus lands in", () => {
+  const CASCADE_RECT = { left: 50, top: 48, width: 600, height: 560 };
+
+  /** The window the active desktop's stack ends with. */
+  function topWindowId(): string | undefined {
+    const placements = activePlacements(store.getState());
+    return placements[placements.length - 1]?.window_id;
+  }
+
+  /** The window loses focus to ``windowId``'s frame, as it does when the focus comes from the shell's own document. */
+  function blurIntoFrameOf(windowId: string): void {
+    frameOf(windowId).focus();
+    window.dispatchEvent(new Event("blur"));
+  }
+
+  beforeEach(() => {
+    // win-2 focused, win-1 behind it.
+    store.restoreWindow("win-2");
+    layer.reconcile();
+  });
+
+  it("raises the window of an unfocused page the focus landed in, once, from the window's blur", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-1").focus();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    window.dispatchEvent(new Event("blur"));
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(topWindowId()).toBe("win-1");
+    runFrame();
+    runFrame();
+    expect(raise).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises the window of a frame the focus moved into from another frame, on the next frame", () => {
+    frameOf("win-2").focus();
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    // Fires nothing on the shell's document.
+    frameOf("win-1").focus();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(topWindowId()).toBe("win-1");
+  });
+
+  it("raises nothing for the focused window's frame, nor for a frame that is no page of the shell's", () => {
+    frameOf("win-2").focus();
+    window.dispatchEvent(new Event("blur"));
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    const other = document.createElement("iframe");
+    document.body.appendChild(other);
+    other.focus();
+    window.dispatchEvent(new Event("blur"));
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    other.remove();
+  });
+
+  it("does not raise the window the shell just moved the focus away from", () => {
+    frameOf("win-2").focus();
+    runFrame();
+    // Raised by something other than a press (a taskbar entry, an agent's focus): the document's focus stays in
+    // win-2's page until the redraw's reconcile takes it off.
+    store.raiseWindow("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
+  it("raises nothing during a gesture, nor while another window is being moved", () => {
+    layer.setGestureActive(true);
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    layer.setGestureActive(false);
+    host.focus();
+    store.beginWindowMove("win-2", { x: 100, y: 60 });
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing on a viewed desktop, and says nothing about it", async () => {
+    await viewAlicesDesktopAtHalfScale([placementRecord("win-a"), placementRecord("win-b")]);
+    renderChrome("win-a", "win-b");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    blurIntoFrameOf("win-a");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(store.toasts.current()).toEqual([]);
+  });
+
+  it("raises nothing while the overview is up", () => {
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing for a page that is hidden, being pulled out, or covered", () => {
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    store.restoreWindow("win-1");
+    store.raiseWindow("win-2");
+    layer.reconcile();
+
+    layer.setTornOutWindow("win-1");
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    layer.setTornOutWindow(null);
+
+    drawChromeAt("win-1", CASCADE_RECT);
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing on a touch client, whose unfocused pages take no press", () => {
+    store.setThemeMetrics(METRICS, { isPhone: false, isTouch: true });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing for the one page the phone shows", () => {
+    layer.setMountPolicy({ kind: "shown", windowId: "win-1", alsoKeep: [] });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {
+    runFrame();
+    runFrame();
+    expect(pendingFrames.size).toBe(1);
+    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    expect(pendingFrames.size).toBe(1);
+    runFrame();
+    expect(pendingFrames.size).toBe(1);
   });
 });
 

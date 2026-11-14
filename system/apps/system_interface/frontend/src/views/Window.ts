@@ -1,14 +1,13 @@
 /**
- * A window's chrome (desktop-interface plan sections 4.2 and 4.3): the title bar, the content
- * box the live page is laid over (``data-window-content``), the transparent shield over the
- * content of every window but the focused one (a press on it raises the window and is consumed,
- * since a click into a cross-origin page cannot reach the shell) and over every window while a
- * menu or the launcher is open (the press that closes them has to reach the shell), and the eight
- * resize handles (``data-resize-edge``). The root (``data-window-id``) is positioned by the
- * pixels the store hands it and clips nothing: it carries the handles, which overhang the
- * window's border so a press just outside the frame still grabs an edge, around an inner frame
- * that clips its rounded corners and holds the title bar and the content. The chrome is stacked
- * over its own live page, so the root, the frame, and the content box are inert
+ * A window's chrome (desktop-interface plan sections 4.2 and 4.3): the title bar, the content box
+ * the live page is laid over (``data-window-content``), the transparent shield over the content of
+ * every window while a menu or the launcher is open (the press that closes them has to reach the
+ * shell) and, on a touch client, of every window but the focused one (a press on it raises the
+ * window), and the eight resize handles (``data-resize-edge``). The root (``data-window-id``) is
+ * positioned by the pixels the store hands it and clips nothing: it carries the handles, which
+ * overhang the window's border so a press just outside the frame still grabs an edge, around an
+ * inner frame that clips its rounded corners and holds the title bar and the content. The chrome
+ * is stacked over its own live page, so the root, the frame, and the content box are inert
  * (``pointer-events: none``, inherited from the windows layer) and only the title bar, the
  * handles, the shield, and the placeholders take a press. It reads no metric from the DOM and
  * attaches no gesture listener.
@@ -81,8 +80,8 @@ export interface WindowAttrs {
   readonly hasAppChat: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
-  /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
-   *  launcher is open. */
+  /** Whether the shield covers the content: every window while a menu or the launcher is open, and on a touch
+   *  client every unfocused window. */
   readonly isShielded: boolean;
   /** Whether the app behind the window is stopped and nothing brings it back on a request (a row the workspace
    *  cannot start: no supervised program, critical, or inside a critical app's program): its page is replaced by
@@ -237,10 +236,11 @@ export function Window(): m.Component<WindowAttrs> {
                 },
                 [
                   isStopped ? stoppedPlaceholder(app) : null,
-                  // The shield: the press that raises the window (or closes an open menu or the launcher)
-                  // lands here rather than in the page, and bubbles to the window's own handler and on to
-                  // the document. A right-click here is that press and nothing more: handled, so the
-                  // desktop's element menu yields to it (element-reference-menu plan section 12).
+                  // The shield: the press that closes an open menu or the launcher (or, on a touch client,
+                  // raises an unfocused window) lands here rather than in the page, and bubbles to the
+                  // window's own handler and on to the document. A right-click here is that press and nothing
+                  // more: handled, so the desktop's element menu yields to it (element-reference-menu plan
+                  // section 12).
                   attrs.isShielded
                     ? m("div", {
                         "data-window-shield": "",

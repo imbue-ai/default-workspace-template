@@ -50,7 +50,8 @@ export interface BackdropAttrs {
   readonly sizeMenuTrigger: (windowId: string) => m.Attributes;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
-  /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
+  /** Whether a menu or the launcher is open: every window, the focused one too, is shielded, so the press that closes
+   *  it reaches the shell. */
   readonly isOverlayOpen: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
@@ -201,6 +202,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     "div",
                     // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
                     // window's chrome sits over its own page in the stacking order, and the page must get the rest.
+                    // The shield lies over a window's content only while a menu or the launcher is open, and on a
+                    // touch client over every window but the focused one.
                     // While a desktop that is not the viewer's own is viewed, the stage is inert and the layer
                     // wears ``windows-viewing`` (style.css) for the look of it: the owner's windows are looked at,
                     // never arranged.
@@ -244,7 +247,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
-                          isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
+                          isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           isStopped: isAppShownStopped(state, app),
                           immersive: store.getCanImmerse()
                             ? {

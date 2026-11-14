@@ -7,9 +7,12 @@
  * reconcile step positions each page over its window's content box (``placePage`` re-places one
  * page per pointer move of a drag or resize, with no redraw), in the same stacking context as the
  * window chrome so a window's edges and shield stay clickable over a cross-origin page. Every
- * page but the focused one is inert (``pointer-events: none``), and every page is inert for the
- * length of a press on a handle, which is longer than the drag it may become: the pixels a press
- * spends reaching the drag threshold have to be ones the shell can see.
+ * page takes the pointer, so a wheel or a press over any window reaches its page; a touch client
+ * keeps every page but the focused one inert. Every page is inert for the length of a press on a
+ * handle, which is longer than the drag it may become: the pixels a press spends reaching the drag
+ * threshold have to be ones the shell can see. A press into an unfocused window's page never
+ * reaches the shell, so the shell raises that window when the document's focus lands in its frame
+ * (``raiseWindowOfActiveFrame``).
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:theme`` after every handshake and on every change of the theme the shell
@@ -131,7 +134,7 @@ function themeMessage(
 /** Stops the started layer hearing theme changes: the newest layer takes this seat, as it takes the store's
  *  page-driver seat, so a layer replaced by another (a switch to the phone layout) is let go. */
 let stopFollowingTheme: (() => void) | null = null;
-/** Stops the started layer hearing the window lose focus to a frame, for the same reason. */
+/** Stops the started layer watching focus land in a frame, for the same reason. */
 let stopWatchingFrameFocus: (() => void) | null = null;
 
 interface LivePage {
@@ -252,12 +255,25 @@ export class LivePagesLayer implements PageDriver {
     this.store.setPageDriver(this);
     stopFollowingTheme?.();
     stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
-    // The window loses focus when it lands in a frame: for a page that binds no contract, the one sign a person
-    // reached its window (the app-usage-signals spec, section 6.4).
+    // The window loses focus when it lands in a frame from the shell's own document: for a page that binds no
+    // contract, the one sign a person reached its window (the app-usage-signals spec, section 6.4). A move from
+    // one frame to another fires nothing on the shell's document, so every frame reads the active element too.
     stopWatchingFrameFocus?.();
-    const onWindowBlur = (): void => this.noteFocusLandingInActiveFrame();
+    const onWindowBlur = (): void => {
+      this.noteFocusLandingInActiveFrame();
+      this.raiseWindowOfActiveFrame();
+    };
     window.addEventListener("blur", onWindowBlur);
-    stopWatchingFrameFocus = () => window.removeEventListener("blur", onWindowBlur);
+    let frameRequest = 0;
+    const watchActiveFrame = (): void => {
+      frameRequest = requestAnimationFrame(watchActiveFrame);
+      this.raiseWindowOfActiveFrame();
+    };
+    frameRequest = requestAnimationFrame(watchActiveFrame);
+    stopWatchingFrameFocus = () => {
+      window.removeEventListener("blur", onWindowBlur);
+      cancelAnimationFrame(frameRequest);
+    };
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -289,7 +305,7 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** Make every page inert for the length of a press on a handle (the drag it may become begins
-   *  partway through), and give the focused one its pointer back after. */
+   *  partway through), and give the pages their pointer back after. */
   setGestureActive(isActive: boolean): void {
     if (this.isGestureActive === isActive) return;
     this.isGestureActive = isActive;
@@ -455,7 +471,7 @@ export class LivePagesLayer implements PageDriver {
         page,
         box,
         stackIndex: index,
-        isInteractive: !this.isGestureActive && !isViewing && window.id === focused,
+        isInteractive: !this.isGestureActive && !isViewing && (window.id === focused || !state.modes.isTouch),
       });
     });
     const covered = this.coveredWindowIds(drawn, new Set(shown.map(({ page }) => page.windowId)), focused);
@@ -620,6 +636,21 @@ export class LivePagesLayer implements PageDriver {
     if (!(active instanceof HTMLIFrameElement)) return;
     const page = this.pageOfFrame(active);
     if (page !== undefined) this.noteFocusLandingIn(page);
+  }
+
+  /** Raise the unfocused window whose page frame holds the document's focus, which is how a press into the page, never
+   *  seen by the shell, shows. Never during a gesture, in the overview, on a viewed desktop, or on a touch client. */
+  private raiseWindowOfActiveFrame(): void {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLIFrameElement)) return;
+    const page = this.pageOfFrame(active);
+    if (page === undefined || !this.isShown(page) || page.isCovered || this.isGestureActive) return;
+    const state = this.store.getState();
+    if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
+    // A raise the shell made leaves the focus in the old page until the next reconcile takes it off; the solo and
+    // phone layouts mount one shown page, which that reconcile records as the focused one.
+    if (page.windowId === activeFocusedWindowId(state) || page.windowId === this.lastFocusedWindowId) return;
+    this.store.raiseWindow(page.windowId);
   }
 
   /** Report focus landing in a page that binds no contract, at most once per throttle interval per page: the

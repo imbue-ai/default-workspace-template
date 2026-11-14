@@ -7,6 +7,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
@@ -343,6 +344,11 @@ describe("a window's travel", () => {
     travelled = { ...travelled, left };
   }
 
+  /** The frames requested for the travel's follow, whatever else (the live pages' own watcher) requests. */
+  function travelFramesRequested(scheduled: MockInstance): unknown[] {
+    return scheduled.mock.calls.filter(([callback]) => callback.name === "followTravellingWindows");
+  }
+
   /** Two frames: one for the follow to run in, one for what it wrote to be readable. */
   function twoFrames(frame: typeof requestAnimationFrame = requestAnimationFrame): Promise<unknown> {
     return new Promise((resolve) => frame(() => frame(resolve)));
@@ -384,7 +390,7 @@ describe("a window's travel", () => {
     await twoFrames(frame);
     const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
     await twoFrames(frame);
-    expect(scheduled).not.toHaveBeenCalled();
+    expect(travelFramesRequested(scheduled)).toEqual([]);
     scheduled.mockRestore();
   });
 
@@ -401,7 +407,7 @@ describe("a window's travel", () => {
     root.remove();
     await twoFrames(frame);
 
-    expect(scheduled).not.toHaveBeenCalled();
+    expect(travelFramesRequested(scheduled)).toEqual([]);
     scheduled.mockRestore();
   });
 
@@ -1061,6 +1067,59 @@ describe("a press outside what is open", () => {
     pressOn(shield as HTMLElement);
     expect(store.isLauncherOpen()).toBe(false);
     expect(focusedShield()).toBeNull();
+  });
+});
+
+describe("a window behind the focused one", () => {
+  const MOVE_WIN_2 = { kind: "window-move", windowId: "win-2" } as const;
+  const shieldOf = (windowId: string): Element | null =>
+    document.querySelector(`[data-window-id="${windowId}"] [data-window-shield]`);
+  const pageOf = (windowId: string): HTMLElement =>
+    document.querySelector(`iframe[data-live-page="${windowId}"]`)?.parentElement as HTMLElement;
+
+  beforeEach(async () => {
+    unmountViews();
+    await mountApp({ laterWindowIds: ["win-2"] });
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    // Every box measures as empty under jsdom, and a page over a content box with no area is hidden rather than laid out.
+    for (const [windowId, left] of [
+      ["win-1", 100],
+      ["win-2", 500],
+    ] as const) {
+      const content = document.querySelector(`[data-window-id="${windowId}"] [data-window-content]`) as HTMLElement;
+      content.getBoundingClientRect = () => ({ left, top: 60, width: 300, height: 400 }) as DOMRect;
+    }
+    m.redraw.sync();
+  });
+
+  it("has no shield and an interactive page, so a wheel or a press over it reaches the page", () => {
+    expect(document.querySelector('[data-window-id="win-1"][data-focused="false"]')).not.toBeNull();
+    expect(shieldOf("win-1")).toBeNull();
+    expect(shieldOf("win-2")).toBeNull();
+    expect(pageOf("win-1").style.pointerEvents).toBe("auto");
+    expect(pageOf("win-2").style.pointerEvents).toBe("auto");
+  });
+
+  it("is shielded with the focused window while the launcher is open, and not once it closes", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    expect(shieldOf("win-1")).not.toBeNull();
+    expect(shieldOf("win-2")).not.toBeNull();
+    store.closeLauncher();
+    m.redraw.sync();
+    expect(shieldOf("win-1")).toBeNull();
+    expect(shieldOf("win-2")).toBeNull();
+  });
+
+  it("has its page made inert from a press on a handle, and given back when the press ends", () => {
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(MOVE_WIN_2);
+    expect(pageOf("win-1").style.pointerEvents).toBe("none");
+    expect(pageOf("win-2").style.pointerEvents).toBe("none");
+    listener.onPressEnd(MOVE_WIN_2);
+    expect(pageOf("win-1").style.pointerEvents).toBe("auto");
+    expect(pageOf("win-2").style.pointerEvents).toBe("auto");
   });
 });
 
