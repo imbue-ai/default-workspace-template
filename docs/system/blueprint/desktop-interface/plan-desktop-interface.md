@@ -188,7 +188,7 @@ Raising moves a placement to the end of the list and saves.
 A click on a window's chrome raises it.
 A click into a page cannot reach the shell across origins, so the shell raises a window when the document's focus lands in its page's frame.
 On a non-touch client every page takes the pointer, the pages of unfocused windows included: a wheel or trackpad scroll over a background window scrolls its page, and a press there is delivered to the page and raises the window; the first press is not consumed.
-A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window; a page that focuses itself while its window is unfocused raises the window the same way.
+A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window; on a non-touch client a page that focuses itself while its window is unfocused raises the window the same way.
 A touch client keeps the pages of every window but the focused one inert (`pointer-events: none` on their iframes) under a transparent shield: the press lands on the shield, and the shell raises the window and makes its page interactive; the first press is consumed.
 While a menu or the launcher is open the shield covers every window, the focused one too, so the click that dismisses them reaches the shell.
 
@@ -274,7 +274,7 @@ A phone-sized viewport gets the phone layout instead of the desktop, as `plan-ph
 Touch mode is on while the primary pointer is coarse.
 Both are `matchMedia` subscriptions that set `data-phone` and `data-touch` on the root element; every style keys off those attributes, and every behaviour reads the same two flags, so there is one source for each.
 
-Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert pages and the shield of section 4.2 cover every window but the focused one, since touch fires pointer events; a non-touch client has neither.
+Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert pages and the shield of section 4.2 cover every window but the focused one, since touch fires pointer events; a non-touch client has them only for the cases of section 4.2 (an open menu or the launcher, a press on a handle).
 A phone is both; a desktop browser window as small as a phone is phone only; a touch laptop or a tablet is touch only.
 
 ### 4.13 Keyboard
