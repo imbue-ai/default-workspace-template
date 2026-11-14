@@ -101,6 +101,8 @@ const mocks = vi.hoisted(() => {
     // Whether the page offers dictation, and the dictation the composer made: a stand-in whose state the test
     // sets and whose events the test fires, as the engine would.
     isDictationSupported: false,
+    // The kind of device the composer asked dictation for, once per dictation it made.
+    dictationDeviceClasses: [] as string[],
     makeFakeDictation: () => ({
       state: "idle",
       isHeld: false,
@@ -278,13 +280,13 @@ vi.mock("@imbue/workspace-voice/src/dictation", () => ({
 vi.mock("@imbue/workspace-voice/src/support", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@imbue/workspace-voice/src/support")>()),
   isDictationSupported: () => mocks.isDictationSupported,
-  pageDictationOptions: () => ({
-    engineId: "moonshine-base",
-    preferredDevice: null,
-    assetBase: "https://chat.test/assets/voice/",
-  }),
+  pageDictationOptions: (_storage: unknown, _basePath: string, _pageUrl: string, deviceClass: string) => {
+    mocks.dictationDeviceClasses.push(deviceClass);
+    return { engineId: "moonshine-base", preferredDevice: null, assetBase: "https://chat.test/assets/voice/" };
+  },
 }));
 
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
@@ -2455,11 +2457,13 @@ describe("MessageInput dictation", () => {
     mocks.isDictationSupported = true;
     mocks.dictation = null;
     mocks.dictationEvents = null;
+    mocks.dictationDeviceClasses = [];
     localStorage.clear();
   });
 
   afterEach(() => {
     mocks.isDictationSupported = false;
+    vi.unstubAllGlobals();
   });
 
   function composer() {
@@ -2494,6 +2498,17 @@ describe("MessageInput dictation", () => {
     const toolbar = flatten(tree).filter((vnode) => vnode.tag === "button");
     const labels = toolbar.map((vnode) => vnode.attrs?.["aria-label"]);
     expect(labels.indexOf("Dictate")).toBe(labels.indexOf("Send message") - 1);
+  });
+
+  it("dictates with the touch device's engine where a finger is the primary pointer, else the desktop's", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === TOUCH_MEDIA_QUERY }));
+    startDictating(composer().render);
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    startDictating(composer().render);
+    // A page with no window to ask has no pointer, and dictates as a desktop.
+    vi.unstubAllGlobals();
+    startDictating(composer().render);
+    expect(mocks.dictationDeviceClasses).toEqual(["touch", "desktop", "desktop"]);
   });
 
   it("locks the box while listening, shows the words at the caret, and saves only the final ones", () => {
