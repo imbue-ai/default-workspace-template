@@ -23,14 +23,22 @@ across files that would otherwise drift silently:
 3. The chat app's baked model catalog fixture is lifted from one claude build, so it must be
    the one for the pinned version: a bump that forgets to regenerate it would otherwise pass
    every catalog test against the old binary's models.
+4. The ``BUN_*`` runtime settings in ``host_env__extend`` must not stop the installed claude from
+   starting. JavaScriptCore rejects an option name it does not know (``invalid JSC environment
+   variable``), and those names change between Bun releases, so a Claude Code bump could
+   otherwise leave every new chat unable to launch.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import tomlkit
 from imbue.mngr.agents.agent_registry import load_agents_from_plugins
 from imbue.mngr.agents.default_plugins.command_agent import CommandAgent
@@ -126,3 +134,30 @@ def test_dockerfile_carries_no_toolchain_version_pin() -> None:
         r"^(?:ARG|ENV)\s+(\w*_VERSION)\b", _DOCKERFILE_PATH.read_text(), re.MULTILINE
     )
     assert pins == []
+
+
+@pytest.mark.real_claude
+def test_bun_runtime_host_env_does_not_stop_the_installed_claude_from_starting() -> (
+    None
+):
+    """Start the installed claude with every ``BUN_*`` host env entry set; it must still run.
+
+    ``claude --version`` already goes through the runtime's option parsing, which is where an
+    unknown ``BUN_JSC_*`` name is rejected, so this catches a stale name after a version bump.
+    Skipped where claude is not installed (it is baked into workspaces, not into every CI box).
+    """
+    entries = _load_raw_settings()["commands"]["create"]["host_env__extend"]
+    bun_env = dict(entry.split("=", 1) for entry in entries if entry.startswith("BUN_"))
+    claude = shutil.which("claude")
+    if claude is None:
+        pytest.skip("claude is not installed in this environment")
+    result = subprocess.run(
+        [claude, "--version"],
+        env={**os.environ, **bun_env},
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Claude Code" in result.stdout
