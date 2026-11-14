@@ -7,7 +7,7 @@
  * every load, told shown and hidden, and follow their windows' stored paths in place or by
  * reload; their own ``shell:location``, ``shell:focused``, ``shell:open``, and
  * ``shell:start-with-text`` reach the store; and the window whose page the document's focus lands
- * in, in a press, is raised.
+ * in is raised.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1331,10 +1331,6 @@ describe("raising the window the document's focus lands in", () => {
 
   /** A frame in the document that is no page of the shell's. */
   let strayFrame: HTMLIFrameElement | null = null;
-  /** What the browser reports as the shell document's user activation; undefined is a browser that reports none. */
-  let reportedActivation: { isActive: boolean } | undefined;
-  /** How many times the layer has asked the browser. */
-  let activationReads = 0;
 
   /** The window the active desktop's stack ends with. */
   function topWindowId(): string | undefined {
@@ -1350,15 +1346,6 @@ describe("raising the window the document's focus lands in", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    reportedActivation = undefined;
-    activationReads = 0;
-    Object.defineProperty(navigator, "userActivation", {
-      configurable: true,
-      get: () => {
-        activationReads += 1;
-        return reportedActivation;
-      },
-    });
     store.restoreWindow("win-2");
     layer.reconcile();
   });
@@ -1366,7 +1353,6 @@ describe("raising the window the document's focus lands in", () => {
   afterEach(() => {
     strayFrame?.remove();
     strayFrame = null;
-    Reflect.deleteProperty(navigator, "userActivation");
     vi.useRealTimers();
   });
 
@@ -1540,88 +1526,6 @@ describe("raising the window the document's focus lands in", () => {
     pastThePromptSettle();
     blurIntoFrameOf("win-1");
     expect(topWindowId()).toBe("win-1");
-  });
-
-  it("raises for a landing while the shell document has user activation, which a press gives it", () => {
-    reportedActivation = { isActive: true };
-    blurIntoFrameOf("win-1");
-    expect(topWindowId()).toBe("win-1");
-  });
-
-  it("takes a landing while the shell document has no user activation for the page's own doing: no raise, the focus handed back by the next frame", () => {
-    reportedActivation = { isActive: false };
-    const raise = vi.spyOn(store, "raiseWindow");
-    blurIntoFrameOf("win-1");
-    expect(raise).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(frameOf("win-1"));
-    runFrame();
-    expect(raise).not.toHaveBeenCalled();
-    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    expect(document.activeElement).toBe(host);
-  });
-
-  it("takes a landing with no user activation that comes between frames for the page's own doing too", () => {
-    reportedActivation = { isActive: false };
-    frameOf("win-2").focus();
-    runFrame();
-    frameOf("win-1").focus();
-    runFrame();
-    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    expect(document.activeElement).toBe(host);
-  });
-
-  it("raises for a press in a page whose own focus the shell handed back, once the document has user activation", () => {
-    reportedActivation = { isActive: false };
-    blurIntoFrameOf("win-1");
-    runFrame();
-    expect(document.activeElement).toBe(host);
-    reportedActivation = { isActive: true };
-    blurIntoFrameOf("win-1");
-    expect(topWindowId()).toBe("win-1");
-  });
-
-  it("raises on a landing as it does with no activation to read, where the browser reports none", () => {
-    reportedActivation = undefined;
-    blurIntoFrameOf("win-1");
-    expect(topWindowId()).toBe("win-1");
-  });
-
-  it("takes a landing that answers a message the shell just posted for no press, whatever the user activation", () => {
-    reportedActivation = { isActive: true };
-    const raise = vi.spyOn(store, "raiseWindow");
-    load("win-1");
-    blurIntoFrameOf("win-1");
-    runFrame();
-    expect(raise).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(host);
-  });
-
-  it("leaves the focused window's pending focus grants alone when it hands back a landing with no user activation", () => {
-    reportedActivation = { isActive: true };
-    blurIntoFrameOf("win-1");
-    layer.reconcile();
-    expect(topWindowId()).toBe("win-1");
-    const grants = spyOnFrame("win-1");
-    reportedActivation = { isActive: false };
-    frameOf("win-2").focus();
-    runFrame();
-    expect(topWindowId()).toBe("win-1");
-    expect(document.activeElement).toBe(host);
-    vi.advanceTimersByTime(2000);
-    expect(grantsSeen(grants)).toBe(3);
-  });
-
-  it("asks the browser for the user activation only when the focus has landed in an unfocused window's page", () => {
-    reportedActivation = { isActive: true };
-    host.focus();
-    runFrame();
-    frameOf("win-2").focus();
-    runFrame();
-    runFrame();
-    expect(activationReads).toBe(0);
-    frameOf("win-1").focus();
-    runFrame();
-    expect(activationReads).toBeGreaterThan(0);
   });
 
   it("holds a second raise off for a while after one, and applies the landing that came meanwhile once the hold is over", () => {
