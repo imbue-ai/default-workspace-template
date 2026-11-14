@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { chordFromKeydown, keydownMatchesAction, keydownMatchesChords } from "./keybindings";
+import { chordFromKeydown, isImeKeydown, keydownMatchesAction, keydownMatchesChords } from "./keybindings";
 
 function keydown(key: string, modifiers: Partial<KeyboardEventInit> = {}): KeyboardEvent {
   return new KeyboardEvent("keydown", { key, ...modifiers });
@@ -39,5 +39,20 @@ describe("matching", () => {
     expect(keydownMatchesAction(keydown("Enter"), resolved, "send-message")).toBe(true);
     expect(keydownMatchesAction(keydown("Enter"), resolved, "unknown-action")).toBe(false);
     expect(keydownMatchesAction(keydown("Enter"), null, "send-message")).toBe(false);
+  });
+});
+
+describe("isImeKeydown", () => {
+  it("is true for a keystroke made inside a composition", () => {
+    expect(isImeKeydown(keydown("Enter", { isComposing: true }))).toBe(true);
+  });
+
+  it("is true for the keystroke an input method consumed after its composition already ended", () => {
+    expect(isImeKeydown(keydown("Enter", { isComposing: false, keyCode: 229 }))).toBe(true);
+  });
+
+  it("is false for an ordinary keystroke, and for an event that carries neither field", () => {
+    expect(isImeKeydown(keydown("Enter"))).toBe(false);
+    expect(isImeKeydown({})).toBe(false);
   });
 });

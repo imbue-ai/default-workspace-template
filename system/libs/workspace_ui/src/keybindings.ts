@@ -94,3 +94,11 @@ export function keydownMatchesAction(
   if (resolved === null) return false;
   return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? []);
 }
+
+/** The `keyCode` of a keystroke an input method consumed; WebKit fires `compositionend` before the committing keydown, so this is its only sign there. */
+const IME_KEYCODE = 229;
+
+/** Whether the keydown belongs to an input-method composition rather than to the field it landed in. */
+export function isImeKeydown(event: { isComposing?: boolean; keyCode?: number }): boolean {
+  return event.isComposing === true || event.keyCode === IME_KEYCODE;
+}

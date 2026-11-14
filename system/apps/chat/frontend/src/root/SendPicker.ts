@@ -10,6 +10,7 @@ import m from "mithril";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { isImeKeydown } from "@imbue/workspace-ui/src/keybindings";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { ChatRow } from "./rows";
 import { FIELD_PART, MENU_ITEM_PART } from "@imbue/workspace-ui/src/themes/parts";
@@ -75,6 +76,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
               highlightIndex = 0;
             },
             onkeydown: (event: KeyboardEvent) => {
+              if (isImeKeydown(event)) return;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 if (shown.length === 0) return;

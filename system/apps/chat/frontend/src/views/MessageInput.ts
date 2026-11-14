@@ -88,7 +88,7 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
-import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { isImeKeydown, keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { createDictation } from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
 import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
@@ -1433,6 +1433,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (isImeKeydown(event)) return;
         // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
         if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
           event.preventDefault();

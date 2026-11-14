@@ -203,6 +203,34 @@ describe("ChatRail main chat", () => {
   });
 });
 
+describe("ChatRail rename during an input-method composition", () => {
+  it("keeps the field open until an Enter outside the composition commits the typed name", () => {
+    verbs.renameChat.mockClear();
+    const row = chatRowFixture("agent-1", { title: "Plan" });
+    const rail = mount([row]);
+    const rename = rowMenuRows(chatRailAttrsFixture({ rows: [row] }), row).find(
+      (menuRow) => menuRow.kind === "action" && menuRow.key === "rename",
+    );
+    if (rename?.kind !== "action") throw new Error("no Rename row");
+    rename.onSelect();
+    m.redraw.sync();
+    const input = rail.querySelector<HTMLInputElement>(".chat-rail-rename-input")!;
+
+    input.value = "lv'x'ing";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
+    expect(verbs.renameChat).not.toHaveBeenCalled();
+    expect(rail.querySelector(".chat-rail-rename-input")).not.toBeNull();
+
+    input.value = "lvxing";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(verbs.renameChat).toHaveBeenCalledTimes(1);
+    expect(verbs.renameChat).toHaveBeenCalledWith("agent-1", "lvxing");
+  });
+});
+
 describe("ChatRail rooms", () => {
   it("draws a room with the people glyph and its mention mark, and offers it rename, stop or restart, and delete", () => {
     const lounge = chatRowFixture("room-0123456789abcdef", { kind: "room", title: "Lounge", hasMention: true });

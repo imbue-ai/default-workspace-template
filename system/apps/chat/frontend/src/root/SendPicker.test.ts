@@ -85,6 +85,17 @@ describe("SendPicker", () => {
     expect(picker.querySelector(".send-picker-no-match")).not.toBeNull();
   });
 
+  it("leaves Enter to the input method while a composition is open", () => {
+    const onPick = vi.fn();
+    const picker = mount({ onPick, onDismiss: vi.fn() });
+    const input = picker.querySelector<HTMLInputElement>("[data-send-picker-search]")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
+    expect(onPick).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onPick).toHaveBeenCalledWith("agent-1");
+  });
+
   it("says the pick drafts the text when the intake is a draft", () => {
     const picker = mount({ onPick: vi.fn(), onDismiss: vi.fn(), isDraft: true });
     expect(picker.querySelector("[data-send-picker]")!.getAttribute("aria-label")).toBe("Draft into which chat?");
