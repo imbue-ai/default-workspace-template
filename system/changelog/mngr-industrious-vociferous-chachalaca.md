@@ -1,0 +1,1 @@
+The desktop interface plan, its contracts and concepts notes, and the element reference menu plan state that on a non-touch client the pages of background windows take the pointer, and that the shell raises a window when the document's focus lands in its page.
