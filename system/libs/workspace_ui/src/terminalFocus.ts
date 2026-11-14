@@ -26,6 +26,8 @@ const FOCUS_RETRY_DELAYS_MS = [0, 300, 1000];
 export interface FrameFocusOptions {
   /** Asked before each post; a post it answers false for is dropped. */
   readonly isStillWanted?: () => boolean;
+  /** Called right after each post that was made. */
+  readonly onPosted?: () => void;
 }
 
 /** Ask the first iframe under ``container`` to take focus (a ttyd client focuses its terminal; any other page
@@ -35,8 +37,10 @@ export function requestFrameFocus(container: HTMLElement | null, options: FrameF
   const timers = FOCUS_RETRY_DELAYS_MS.map((delay) =>
     setTimeout(() => {
       if (options.isStillWanted?.() === false) return;
-      const frame = container.querySelector("iframe");
-      frame?.contentWindow?.postMessage({ type: "ttyd-focus" }, "*");
+      const target = container.querySelector("iframe")?.contentWindow;
+      if (target === null || target === undefined) return;
+      target.postMessage({ type: "ttyd-focus" }, "*");
+      options.onPosted?.();
     }, delay),
   );
   return () => timers.forEach(clearTimeout);

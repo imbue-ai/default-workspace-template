@@ -117,6 +117,10 @@ const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
 
+/** How many animation frames after the shell posts a page a message it may answer by taking the focus (``shell:shown``,
+ *  ``ttyd-focus``) a focus landing in the page is taken for that answer, and no press. */
+export const SHELL_PROMPT_SETTLE_FRAMES = 3;
+
 // A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
 // invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
 // it keeps the page's size, layout and scroll.
@@ -155,6 +159,9 @@ interface LivePage {
   hasCapabilities: boolean;
   /** When focus landing in the page was last reported, for the throttle; 0 before any. */
   lastFocusReportedAt: number;
+  /** The animation frame the shell last posted the page a message it may answer by taking the focus in; null before
+   *  any. */
+  lastFocusPromptFrame: number | null;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
@@ -225,6 +232,8 @@ export class LivePagesLayer implements PageDriver {
   private lastFocusedWindowId: string | null = null;
   /** Drops the ``ttyd-focus`` posts still pending for the window last focused. */
   private cancelFrameFocus: () => void = () => undefined;
+  /** The animation frames the watcher has run. */
+  private watchedFrames = 0;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
@@ -257,19 +266,20 @@ export class LivePagesLayer implements PageDriver {
     this.store.setPageDriver(this);
     stopFollowingTheme?.();
     stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
-    // The window loses focus when it lands in a frame from the shell's own document: for a page that binds no
-    // contract, the one sign a person reached its window (the app-usage-signals spec, section 6.4). A move from
-    // one frame to another fires nothing on the shell's document, so every frame reads the active element too.
+    // The window loses focus when it lands in a frame: for a page that binds no contract, the one sign a person
+    // reached its window (the app-usage-signals spec, section 6.4).
     stopWatchingFrameFocus?.();
     const onWindowBlur = (): void => {
       this.noteFocusLandingInActiveFrame();
-      this.raiseWindowOfActiveFrame();
+      this.raiseWindowOfActiveFrame(false);
     };
     window.addEventListener("blur", onWindowBlur);
+    // A focus move from one frame to another fires no event on this document, so each animation frame reads it too.
     let frameRequest = 0;
     const watchActiveFrame = (): void => {
       frameRequest = requestAnimationFrame(watchActiveFrame);
-      this.raiseWindowOfActiveFrame();
+      this.watchedFrames += 1;
+      this.raiseWindowOfActiveFrame(true);
     };
     frameRequest = requestAnimationFrame(watchActiveFrame);
     stopWatchingFrameFocus = () => {
@@ -629,6 +639,9 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     this.cancelFrameFocus = requestFrameFocus(page.wrapper, {
       isStillWanted: () => this.isFocusHolder(page.windowId),
+      onPosted: () => {
+        page.lastFocusPromptFrame = this.watchedFrames;
+      },
     });
     // However the window was raised: somebody put it on screen, and a page that binds no contract will say
     // nothing more about what happens in it. A page that has not loaded yet (the shell's boot, a window just
@@ -651,19 +664,30 @@ export class LivePagesLayer implements PageDriver {
     if (page !== undefined) this.noteFocusLandingIn(page);
   }
 
-  /** Raise the unfocused window whose page frame holds the document's focus, which is how a press into the page, never
-   *  seen by the shell, shows. Never during a gesture, in the overview, on a viewed desktop, or on a touch client. */
-  private raiseWindowOfActiveFrame(): void {
+  /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus. */
+  private raiseWindowOfActiveFrame(canHandBack: boolean): void {
     const active = document.activeElement;
     if (!(active instanceof HTMLIFrameElement)) return;
     const page = this.pageOfFrame(active);
     if (page === undefined || !this.isShown(page) || page.isCovered || this.isGestureActive) return;
     const state = this.store.getState();
     if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
-    // A raise the shell made leaves the focus in the old page until the next reconcile takes it off; the solo and
-    // phone layouts mount one shown page, which that reconcile records as the focused one.
+    // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
     if (page.windowId === activeFocusedWindowId(state) || page.windowId === this.lastFocusedWindowId) return;
+    if (this.isAnswerToPrompt(page)) {
+      // The focus cannot be handed back from inside the blur event; the next frame does.
+      if (canHandBack) this.host.focus({ preventScroll: true });
+      return;
+    }
     this.store.raiseWindow(page.windowId);
+  }
+
+  /** Whether a focus landing in the page now is its answer to a message the shell just posted it. */
+  private isAnswerToPrompt(page: LivePage): boolean {
+    return (
+      page.lastFocusPromptFrame !== null &&
+      this.watchedFrames - page.lastFocusPromptFrame <= SHELL_PROMPT_SETTLE_FRAMES
+    );
   }
 
   /** Report focus landing in a page that binds no contract, at most once per throttle interval per page: the
@@ -818,6 +842,7 @@ export class LivePagesLayer implements PageDriver {
       isCloseChordCapable: false,
       hasCapabilities: false,
       lastFocusReportedAt: 0,
+      lastFocusPromptFrame: null,
       greetedDesktopId: null,
       greetedIsViewing: false,
       lastSentVisibility: null,
@@ -951,6 +976,7 @@ export class LivePagesLayer implements PageDriver {
     // Nothing until the page has had its handshake: before its load there is nobody listening.
     if (page.greetedDesktopId === null || page.lastSentVisibility === isVisible) return;
     page.lastSentVisibility = isVisible;
+    if (isVisible) page.lastFocusPromptFrame = this.watchedFrames;
     sendToChildFrame(page.frame, isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
   }
 

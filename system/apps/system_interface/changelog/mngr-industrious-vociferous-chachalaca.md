@@ -4,4 +4,6 @@ The shell raises a window whenever the document's focus lands in its page, so th
 
 The focus requests the shell posts to a window it raises, which a terminal takes into its pty, are dropped as soon as another window becomes the focused one, so raising a window within a second of a terminal no longer lets a late request bring the terminal back to the front.
 
+A terminal that focuses itself when the shell shows it, as after a reload of the interface, a switch back to its desktop or an agent's refresh of its window, no longer comes to the front over the window you are in; the shell takes that focus for the terminal's answer to its own message, not a press, and keeps the focus for itself.
+
 Touch screens keep the cover over background windows, so the first tap there still only raises the window, and every window is covered while a menu or the launcher is open, so the press that closes them never reaches a page. A viewed desktop stays read-only.

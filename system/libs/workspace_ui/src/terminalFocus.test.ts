@@ -50,6 +50,20 @@ describe("requestFrameFocus", () => {
     expect(posted).toHaveBeenCalledTimes(2);
   });
 
+  it("calls onPosted after each post made, and not for a post dropped", () => {
+    let isWanted = true;
+    const onPosted = vi.fn();
+    requestFrameFocus(container, { isStillWanted: () => isWanted, onPosted });
+    vi.advanceTimersByTime(100);
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    isWanted = false;
+    vi.advanceTimersByTime(300);
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    isWanted = true;
+    vi.advanceTimersByTime(1000);
+    expect(onPosted).toHaveBeenCalledTimes(2);
+  });
+
   it("posts nothing, and answers a function that does nothing, for no container", () => {
     const cancel = requestFrameFocus(null);
     vi.advanceTimersByTime(2000);

@@ -45,7 +45,13 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE, PAGE_FRAME_ALLOW, pageFrameAllow } from "./livePages";
+import {
+  LivePagesLayer,
+  DESKTOP_ROOT_ATTRIBUTE,
+  PAGE_FRAME_ALLOW,
+  SHELL_PROMPT_SETTLE_FRAMES,
+  pageFrameAllow,
+} from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -1330,9 +1336,14 @@ describe("raising the window the document's focus lands in", () => {
   }
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     // win-2 focused, win-1 behind it.
     store.restoreWindow("win-2");
     layer.reconcile();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("raises the window of an unfocused page the focus landed in, once, from the window's blur", () => {
@@ -1458,6 +1469,55 @@ describe("raising the window the document's focus lands in", () => {
     blurIntoFrameOf("win-1");
     runFrame();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  /** Run the animation frames the shell takes to be past a prompt. */
+  function pastThePromptSettle(): void {
+    for (let frame = 0; frame <= SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+  }
+
+  it("takes a landing that answers the shell:shown just posted to the page for no press: no raise, the focus handed back by the next frame", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    load("win-1");
+    blurIntoFrameOf("win-1");
+    expect(raise).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    runFrame();
+    expect(raise).not.toHaveBeenCalled();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("takes a landing that answers the latest ttyd-focus posted to the page for no press, however late the post", () => {
+    // win-2's grants go out at three delays; the second is posted 300 ms in, just before the user chooses win-1.
+    vi.advanceTimersByTime(0);
+    pastThePromptSettle();
+    vi.advanceTimersByTime(300);
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-2").focus();
+    runFrame();
+    expect(raise).not.toHaveBeenCalled();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("raises for a landing that comes well after the shell's last message to the page", () => {
+    load("win-1");
+    pastThePromptSettle();
+    blurIntoFrameOf("win-1");
+    expect(topWindowId()).toBe("win-1");
+  });
+
+  it("detects a press in a page the shell handed the focus back from", () => {
+    load("win-1");
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(document.activeElement).toBe(host);
+    pastThePromptSettle();
+    blurIntoFrameOf("win-1");
+    expect(topWindowId()).toBe("win-1");
   });
 
   it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {

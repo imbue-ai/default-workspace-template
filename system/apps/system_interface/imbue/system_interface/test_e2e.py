@@ -400,6 +400,9 @@ window.__navigateTo = (path) => {
 window.__openPath = (path, ifPresent) => connection.openPath(path, ifPresent);
 </script></body></html>"""
 
+# How long a terminal-like page's pty keeps the thread busy after it takes the focus, as a terminal client starting does.
+_PTY_STALL_MS = 120
+
 # The frame a terminal-like page nests: its input takes the focus when the page grants it, and each grant is recorded.
 _PTY_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Pty</title></head><body>
 <input id="pty" value="" />
@@ -411,6 +414,8 @@ window.addEventListener("message", (event) => {
   if (event.data?.type !== "ttyd-focus") return;
   window.__grants.push(performance.timeOrigin + performance.now());
   document.getElementById("pty").focus();
+  const busyUntil = performance.now() + __STALL_MS__;
+  while (performance.now() < busyUntil);
 });
 </script></body></html>"""
 
@@ -439,7 +444,7 @@ def _stub_app(base_url: str, is_terminal_like: bool = False) -> Flask:
         return Response(_stub_page_html(base_url, is_navigable, is_terminal_like), mimetype="text/html")
 
     def _serve_pty_page() -> Response:
-        return Response(_PTY_PAGE, mimetype="text/html")
+        return Response(_PTY_PAGE.replace("__STALL_MS__", str(_PTY_STALL_MS)), mimetype="text/html")
 
     def _launch(path: str) -> Response:
         body = request.get_json()
@@ -680,9 +685,19 @@ def _content_point(page: Page, window_id: str) -> tuple[float, float]:
 
 
 def _pty_frame(page: Page, window_id: str) -> Frame:
-    """The frame a terminal-like window's page nests."""
-    (pty,) = _page_frame(page, window_id).child_frames
-    return pty
+    """The frame a terminal-like window's page nests now, past any frame its reload left detached."""
+    frame = _page_frame(page, window_id)
+
+    def _live_frames() -> list[Frame]:
+        return [child for child in frame.child_frames if not child.is_detached()]
+
+    wait_for(
+        lambda: len(_live_frames()) == 1,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"window {window_id} never nested exactly one frame",
+    )
+    return _live_frames()[0]
 
 
 def _wait_for_focused(page: Page, window_id: str) -> None:
@@ -1794,6 +1809,92 @@ def test_a_late_focus_grant_to_a_raised_terminal_does_not_undo_a_later_raise_of_
         expect(_window(page, plain)).to_have_attribute("data-focused", "true", timeout=15000)
 
         _wait_out_the_focus_grants(page, raised_at)
+        _after_animation_frames(page)
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true")
+        expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
+        _wait_for_stored_top(server, client_id, plain)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_reloading_the_shell_leaves_the_top_window_on_top_over_a_terminal_like_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """A terminal-like page focuses its nested frame when the shell tells it it is shown, which after a reload it does
+    in a window beneath the top one. That focus is the shell's doing and no press: the top window stays on top, and
+    a press in the terminal's window afterwards still raises it."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, is_second_app_terminal_like=True) as server:
+        _land(page, server)
+        terminal, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
+        client_id = _client_id(page)
+        _wait_for_stored_top(server, client_id, plain)
+
+        page.reload()
+        _land(page, server)
+        _pty_frame(page, terminal).wait_for_function("() => window.__grants.length > 0", timeout=15000)
+        _after_animation_frames(page)
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true")
+        expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
+        _wait_for_stored_top(server, client_id, plain)
+
+        page.mouse.click(*_content_point(page, terminal))
+        expect(_window(page, terminal)).to_have_attribute("data-focused", "true", timeout=15000)
+        _wait_for_stored_top(server, client_id, terminal)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_round_trip_through_another_desktop_leaves_the_top_window_on_top_over_a_terminal_like_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """Switching to another desktop and back shows the home desktop's pages again, and a terminal-like page beneath the
+    top window focuses its nested frame as it is told so: the top window stays on top."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, is_second_app_terminal_like=True) as server:
+        _land(page, server)
+        terminal, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
+        client_id = _client_id(page)
+        other_desktop = _create_desktop_shown_on(server, [page])
+        _wait_for_stored_top(server, client_id, plain)
+        grants_before = _pty_frame(page, terminal).evaluate("() => window.__grants.length")
+
+        _switch_to_desktop(page, other_desktop)
+        _expect_on_desktop(page, other_desktop)
+        _switch_to_desktop(page, _HOME_DESKTOP_ID)
+        _expect_on_desktop(page, _HOME_DESKTOP_ID)
+        _pty_frame(page, terminal).wait_for_function(
+            "(before) => window.__grants.length > before", arg=grants_before, timeout=15000
+        )
+        _after_animation_frames(page)
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true")
+        expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
+        _wait_for_stored_top(server, client_id, plain)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_agent_reloading_a_terminal_like_window_beneath_the_top_one_leaves_the_stack_alone(
+    tmp_path: Path, page: Page
+) -> None:
+    """With the focus in the top window's page, where the user is typing, an agent refreshes a terminal-like window
+    beneath it: the reloaded page focuses its nested frame as it is told it is shown, and keeps the thread busy as
+    it starts. That focus is the shell's doing and no press, however late the shell next looks at it: the top window
+    stays on top."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, is_second_app_terminal_like=True) as server:
+        _land(page, server)
+        terminal, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
+        client_id = _client_id(page)
+        page.mouse.click(*_content_point(page, plain))
+        page.wait_for_function(
+            "(id) => document.activeElement?.getAttribute('data-live-page') === id", arg=plain, timeout=15000
+        )
+        _wait_for_stored_top(server, client_id, plain)
+
+        _page_frame(page, terminal).evaluate("() => { window.__beforeRefresh = true; }")
+        _broadcast_op(server.base_url, "refresh", {"window": terminal, "client": client_id})
+        wait_for(
+            lambda: _page_frame(page, terminal).evaluate("() => window.__beforeRefresh === undefined"),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the terminal-like window never reloaded",
+        )
+        _pty_frame(page, terminal).wait_for_function("() => window.__grants.length > 0", timeout=15000)
         _after_animation_frames(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
