@@ -1,6 +1,6 @@
 /**
- * The words for a chat that is switching: what the held bubbles' caption, the activity strip,
- * and the composer's placeholder say in each phase of a handoff (spec 5.1) or a rebind (spec 6).
+ * The words for a chat that is switching: what the switch's line in the conversation, the agent's
+ * stopped face, and the composer's placeholder say in each phase of a handoff (spec 5.1) or a rebind (spec 6).
  */
 
 import type { HandoffState } from "../models/Chats";
@@ -12,6 +12,8 @@ export function handoffPhaseText(handoff: HandoffState, retiringHarness: string)
   const from = harnessLabel(retiringHarness);
   // A handoff names the harness it moves to; a rebind keeps the harness and names the account.
   const to = handoff.kind === "rebind" ? `${from} on ${handoff.target_label}` : harnessLabel(handoff.target_harness);
+  // A chat with nothing to hand over is only starting on the target: wrapping up the agent it leaves is not news.
+  if (handoff.is_fresh_start && handoff.phase !== "failed") return `Starting ${to}…`;
   switch (handoff.phase) {
     case "draining":
       return `Wrapping up with ${from}…`;

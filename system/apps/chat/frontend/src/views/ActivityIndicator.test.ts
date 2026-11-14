@@ -333,16 +333,32 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     });
   };
 
-  it("reports the switch, not the old agent's turn, while the chat moves to another harness", () => {
+  it("leaves a running switch to its line in the conversation, showing neither it nor the old agent's turn", () => {
     agentState.activity_state = "THINKING";
-    handoffState.handoff = handoffStateFixture({ phase: "summarizing" });
-    const strip = render();
-    expect(labelTextOf(strip)).toBe("Claude Code is writing a summary…");
-    expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("HANDOFF_summarizing");
+    for (const phase of ["draining", "summarizing", "switching"] as const) {
+      handoffState.handoff = handoffStateFixture({ phase });
+      expect(render()).toBeNull();
+    }
+    handoffState.handoff = rebindStateFixture();
+    expect(render()).toBeNull();
     // The failed phase has its own notice over the composer; the strip goes back to the agent.
     handoffState.handoff = handoffStateFixture({ phase: "failed" });
     agentState.activity_state = "IDLE";
     expect(render()).toBeNull();
+    handoffState.handoff = null;
+  });
+
+  it("reports the successor's own activity once a handoff has landed, though the chat still delivers to it", () => {
+    agentState.activity_state = "THINKING";
+    handoffState.handoff = null;
+    const ordinary = render();
+    handoffState.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const landed = render();
+    expect(labelTextOf(landed)).toBe(labelTextOf(ordinary));
+    expect((landed?.attrs as Record<string, unknown>)["data-state"]).toBe(
+      (ordinary?.attrs as Record<string, unknown>)["data-state"],
+    );
+    expect(String((landed?.attrs as Record<string, unknown>)["data-state"])).not.toMatch(/^HANDOFF_/);
     handoffState.handoff = null;
   });
 
