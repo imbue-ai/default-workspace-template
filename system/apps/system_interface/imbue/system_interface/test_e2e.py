@@ -1686,6 +1686,29 @@ def test_a_right_click_on_an_unfocused_window_opens_its_pages_own_menu_and_raise
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_on_a_touch_client_the_first_tap_on_an_unfocused_window_only_raises_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A touch client keeps its shield over every window but the focused one: the first tap on a lower window lands on
+    the shield, which raises the window and takes the tap; the next tap reaches the page."""
+    with _second_client(page, e2e_server, has_touch=True) as touch_page:
+        expect(touch_page.locator("html")).to_have_attribute("data-touch", "")
+        first, second = _open_a_second_window_over_the_first(touch_page, e2e_server)
+        expect(_window(touch_page, first).locator("[data-window-shield]")).to_have_count(1)
+        expect(_window(touch_page, second).locator("[data-window-shield]")).to_have_count(0)
+        first_frame = _page_frame(touch_page, first)
+        point = _content_point(touch_page, first)
+
+        touch_page.touchscreen.tap(*point)
+        expect(_window(touch_page, first)).to_have_attribute("data-focused", "true", timeout=15000)
+        expect(_window(touch_page, first).locator("[data-window-shield]")).to_have_count(0)
+        assert first_frame.evaluate("() => window.__presses") == 0
+
+        touch_page.touchscreen.tap(*point)
+        first_frame.wait_for_function("() => window.__presses === 1", timeout=15000)
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_the_wheel_over_an_unfocused_window_scrolls_its_page_without_raising_it(
     e2e_server: E2EServer, page: Page
 ) -> None:
@@ -1699,6 +1722,7 @@ def test_the_wheel_over_an_unfocused_window_scrolls_its_page_without_raising_it(
     page.mouse.move(*_content_point(page, first))
     page.mouse.wheel(0, 300)
     first_frame.wait_for_function("() => window.__wheels > 0 && window.scrollY > 0", timeout=15000)
+    _after_animation_frames(page)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, second)).to_have_attribute("data-focused", "true")
 
@@ -1720,8 +1744,10 @@ def test_the_launcher_shields_every_window_and_its_dismissing_press_does_not_rea
     expect(page.locator("[data-launcher-overlay]")).to_have_count(0)
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
     expect(_window(page, second).locator("[data-window-shield]")).to_have_count(0)
-    page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
-    assert first_frame.evaluate("() => window.__presses") == 0
+    # The page counts a press as it arrives, so a press once the shields are gone is the one the counter shows.
+    page.mouse.click(*_content_point(page, first))
+    first_frame.wait_for_function("() => window.__presses > 0", timeout=15000)
+    assert first_frame.evaluate("() => window.__presses") == 1
 
 
 # The animation frames a page runs in half a second: none while the browser is not rendering it.
