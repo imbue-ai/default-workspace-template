@@ -1855,6 +1855,17 @@ describe("input reports for the heartbeat (the app-usage-signals spec, sections 
     expect(pendingInputReportsForTesting()).toEqual([]);
   });
 
+  it("notes no use for a landing that answers a message the shell just posted to the page, and notes a landing past it", () => {
+    load("win-1");
+    frameOf("win-1").focus();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([]);
+
+    pastThePromptSettle();
+    window.dispatchEvent(new Event("blur"));
+    expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
+  });
+
   it("forgets a page's capabilities on its reload, since a fresh page has declared nothing yet", () => {
     messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
     resetPresenceForTesting();
@@ -1864,6 +1875,7 @@ describe("input reports for the heartbeat (the app-usage-signals spec, sections 
     expect(pendingInputReportsForTesting()).toEqual([]);
 
     load("win-1");
+    pastThePromptSettle();
     window.dispatchEvent(new Event("blur"));
     expect(pendingInputReportsForTesting()).toEqual([{ window_id: "win-1", app: "docs", kind: "focus" }]);
   });

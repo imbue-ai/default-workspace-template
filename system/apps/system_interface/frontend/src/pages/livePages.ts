@@ -663,10 +663,11 @@ export class LivePagesLayer implements PageDriver {
     return !isOnDesktop || activeFocusedWindowId(this.store.getState()) === windowId;
   }
 
-  /** The window lost focus to a frame: when the frame is a contract-less page's, note the landing. */
+  /** The window lost focus to a frame: when the frame is a contract-less page's and the shell did not prompt the
+   *  focus, note the landing. */
   private noteFocusLandingInActiveFrame(): void {
     const page = this.activePage();
-    if (page !== undefined) this.noteFocusLandingIn(page);
+    if (page !== undefined && !this.isAnswerToPrompt(page)) this.noteFocusLandingIn(page);
   }
 
   /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus. */
