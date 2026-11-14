@@ -56,9 +56,6 @@ _NO_NAME_ANSWER: Final[str] = "NONE"
 # The longest name a chat is given; a longer title is cut at a word and ends in ``_SHORTENED_NAME_MARK``.
 _MAX_NAME_LENGTH: Final[int] = 40
 _SHORTENED_NAME_MARK: Final[str] = "..."
-# What the prompt asks for, short of the longest name: models count characters badly. It is about
-# what the chat list shows of a name before cutting it off.
-_REQUESTED_NAME_LENGTH: Final[int] = 30
 # How far a title another chat already has is numbered ("Simple map app 2" ... "Simple map app 9") before
 # the attempt is given up.
 _MAX_NAME_NUMBER: Final[int] = 9
@@ -99,7 +96,8 @@ Reply with exactly one line and nothing else: a short title naming what the chat
 ASCII characters. For a message in a language that uses the Latin alphabet, write the title in that language, \
 dropping accents ("e" for "é"). For a message in any other script (Japanese, Chinese, Korean, Russian, Arabic, \
 Hindi, ...), always write the title in English, never in the message's own script and never romanized.
-- Two to four words, under {_REQUESTED_NAME_LENGTH} characters. The list cuts off anything longer.
+- As terse as possible while still saying what the chat is about: fewer than {_MAX_NAME_LENGTH} characters, and \
+preferably far fewer.
 - However long or detailed the message, name only its one main subject. Leave out the details it lists \
 (the tools, sources, places, people or steps it names), and never string two or more of them together with \
 commas or "and".
@@ -160,8 +158,8 @@ def chat_naming_prompt(message: str) -> str:
         opening, tag_count = _MESSAGE_TAG_PATTERN.subn("", opening)
     return (
         f"<message>\n{opening}\n</message>\n\n"
-        f"Reply with the title of the chat this message opens, in two to four words naming its one main subject, "
-        f"or {_NO_NAME_ANSWER}."
+        f"Reply with the title of the chat this message opens, as terse as possible while still descriptive "
+        f"(fewer than {_MAX_NAME_LENGTH} characters, preferably far fewer), or {_NO_NAME_ANSWER}."
     )
 
 

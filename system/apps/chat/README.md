@@ -586,9 +586,10 @@ call to the new model instead of breaking it:
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
-names the message's one main subject in two to four words, short enough for the
-chat list to show whole, and leaves out the details a long message lists (the
-tools, sources, places or steps it names). A leading label ("Title: ") is
+names the message's one main subject as tersely as it can while still saying
+what the chat is about, in fewer than 40 characters and preferably far fewer,
+and leaves out the details a long message lists (the tools, sources, places or
+steps it names). A leading label ("Title: ") is
 dropped from the answer, and an answer with a colon is refused: a "Short name:
 description" title's two halves restate each other ("Map app: build a simple map
 application"). A title longer than 40 characters is cut at a word and ends in
