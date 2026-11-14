@@ -244,7 +244,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
-                          isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
+                          isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           isStopped: isAppShownStopped(state, app),
                           immersive: store.getCanImmerse()
                             ? {

@@ -2,14 +2,16 @@
 /**
  * The live-page layer against a real store over the fake shell: pages are created for the shown
  * windows of the active desktop, laid over their windows' content boxes in the interleaved
- * stacking order, inert unless focused, hidden when minimized, parked while the windows in front
- * cover them, destroyed when closed; they are greeted after every load, told shown and hidden,
- * and follow their windows' stored paths in place or by reload; and their own
- * ``shell:location``, ``shell:focused``, ``shell:open``, and ``shell:start-with-text`` reach the
- * store.
+ * stacking order, interactive (inert unless focused on a touch client), hidden when minimized,
+ * parked while the windows in front cover them, destroyed when closed; they are greeted after
+ * every load, told shown and hidden, and follow their windows' stored paths in place or by
+ * reload; their own ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text`` reach the store; and the window whose page the document's focus lands
+ * in is raised.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
@@ -43,7 +45,14 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE, PAGE_FRAME_ALLOW, pageFrameAllow } from "./livePages";
+import {
+  LivePagesLayer,
+  DESKTOP_ROOT_ATTRIBUTE,
+  PAGE_FRAME_ALLOW,
+  SHELL_PROMPT_SETTLE_FRAMES,
+  WATCHER_RAISE_HOLD_FRAMES,
+  pageFrameAllow,
+} from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -59,6 +68,16 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
+/** The animation frames requested and not yet run: the tests run them by hand. */
+let pendingFrames: Map<number, FrameRequestCallback>;
+let frameSpies: MockInstance[];
+
+/** Run every animation frame requested so far. */
+function runFrame(): void {
+  const due = [...pendingFrames.values()];
+  pendingFrames.clear();
+  for (const callback of due) callback(0);
+}
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
 function renderChrome(...extraWindowIds: string[]): void {
@@ -102,6 +121,11 @@ function spyOnFrame(windowId: string): ReturnType<typeof vi.fn> {
   const target = frame.contentWindow as Window;
   target.postMessage = spy as unknown as Window["postMessage"];
   return spy;
+}
+
+/** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
+function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
+  return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
 }
 
 function load(windowId: string): void {
@@ -216,6 +240,18 @@ beforeEach(async () => {
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
+  pendingFrames = new Map();
+  let lastFrameId = 0;
+  frameSpies = [
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      lastFrameId += 1;
+      pendingFrames.set(lastFrameId, callback);
+      return lastFrameId;
+    }),
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((frameId) => {
+      pendingFrames.delete(frameId);
+    }),
+  ];
   layer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
   layer.start();
   await store.start(NO_LINK);
@@ -225,6 +261,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const spy of frameSpies) spy.mockRestore();
   resetEmbedderRelayForTesting();
   resetThemeClientForTests();
   resetPresenceForTesting();
@@ -330,7 +367,21 @@ describe("creating and positioning", () => {
     expect(isParked(wrapper)).toBe(false);
   });
 
-  it("makes every page but the focused one inert, and all of them during a gesture", () => {
+  it("keeps every page interactive, the unfocused ones too, and makes all of them inert during a gesture", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+    layer.setGestureActive(true);
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("none");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("none");
+    layer.setGestureActive(false);
+    expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+  });
+
+  it("makes every page but the focused one inert on a touch client, and all of them during a gesture", () => {
+    store.setThemeMetrics(METRICS, { isPhone: false, isTouch: true });
     store.restoreWindow("win-2");
     layer.reconcile();
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
@@ -339,6 +390,7 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-2").style.pointerEvents).toBe("none");
     layer.setGestureActive(false);
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("none");
   });
 
   it("makes every page inert while this window views somebody else's desktop, the focused one included", async () => {
@@ -1271,6 +1323,314 @@ describe("the contract", () => {
     load("win-1");
     await store.closeFocusedWindow();
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+});
+
+describe("raising the window the document's focus lands in", () => {
+  const CASCADE_RECT = { left: 50, top: 48, width: 600, height: 560 };
+
+  /** A frame in the document that is no page of the shell's. */
+  let strayFrame: HTMLIFrameElement | null = null;
+
+  /** The window the active desktop's stack ends with. */
+  function topWindowId(): string | undefined {
+    const placements = activePlacements(store.getState());
+    return placements[placements.length - 1]?.window_id;
+  }
+
+  /** Focus ``windowId``'s frame and fire the window's blur. */
+  function blurIntoFrameOf(windowId: string): void {
+    frameOf(windowId).focus();
+    window.dispatchEvent(new Event("blur"));
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    store.restoreWindow("win-2");
+    layer.reconcile();
+  });
+
+  afterEach(() => {
+    strayFrame?.remove();
+    strayFrame = null;
+    vi.useRealTimers();
+  });
+
+  it("raises the window of an unfocused page the focus landed in, once, from the window's blur", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-1").focus();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    window.dispatchEvent(new Event("blur"));
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(topWindowId()).toBe("win-1");
+    runFrame();
+    runFrame();
+    expect(raise).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises the window of a frame the focus moved into from another frame, on the next frame", () => {
+    frameOf("win-2").focus();
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    // Fires nothing on the shell's document.
+    frameOf("win-1").focus();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(topWindowId()).toBe("win-1");
+  });
+
+  it("raises nothing for the focused window's frame, nor for a frame that is no page of the shell's", () => {
+    frameOf("win-2").focus();
+    window.dispatchEvent(new Event("blur"));
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    strayFrame = document.createElement("iframe");
+    document.body.appendChild(strayFrame);
+    strayFrame.focus();
+    window.dispatchEvent(new Event("blur"));
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("does not raise the window the shell just moved the focus away from", () => {
+    frameOf("win-2").focus();
+    runFrame();
+    // The focus stays in win-2's page until the next reconcile.
+    store.raiseWindow("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
+  it("raises nothing during a gesture, nor while another window is being moved", () => {
+    layer.setGestureActive(true);
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    layer.setGestureActive(false);
+    host.focus();
+    store.beginWindowMove("win-2", { x: 100, y: 60 });
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing on a viewed desktop, and says nothing about it", async () => {
+    await viewAlicesDesktopAtHalfScale([placementRecord("win-a"), placementRecord("win-b")]);
+    renderChrome("win-a", "win-b");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    blurIntoFrameOf("win-a");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(store.toasts.current()).toEqual([]);
+  });
+
+  it("raises nothing while the overview is up", () => {
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing for a page that is hidden, being pulled out, or covered", () => {
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    store.restoreWindow("win-1");
+    store.raiseWindow("win-2");
+    layer.reconcile();
+
+    layer.setTornOutWindow("win-1");
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    layer.setTornOutWindow(null);
+
+    drawChromeAt("win-1", CASCADE_RECT);
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing on a touch client, whose unfocused pages take no press", () => {
+    store.setThemeMetrics(METRICS, { isPhone: false, isTouch: true });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("raises nothing for the one page the phone shows", () => {
+    layer.setMountPolicy({ kind: "shown", windowId: "win-1", alsoKeep: [] });
+    layer.reconcile();
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  /** Run the animation frames the shell takes to be past a prompt. */
+  function pastThePromptSettle(): void {
+    for (let frame = 0; frame <= SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+  }
+
+  it("takes a landing that answers the shell:shown just posted to the page for no press: no raise, the focus handed back by the next frame", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    load("win-1");
+    blurIntoFrameOf("win-1");
+    expect(raise).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    runFrame();
+    expect(raise).not.toHaveBeenCalled();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("takes a landing that answers the latest ttyd-focus posted to the page for no press, however late the post", () => {
+    // win-2's grants go out at three delays; the second is posted 300 ms in, just before the user chooses win-1.
+    vi.advanceTimersByTime(0);
+    pastThePromptSettle();
+    vi.advanceTimersByTime(300);
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-2").focus();
+    runFrame();
+    expect(raise).not.toHaveBeenCalled();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("raises for a landing that comes well after the shell's last message to the page", () => {
+    load("win-1");
+    pastThePromptSettle();
+    blurIntoFrameOf("win-1");
+    expect(topWindowId()).toBe("win-1");
+  });
+
+  it("detects a press in a page the shell handed the focus back from", () => {
+    load("win-1");
+    blurIntoFrameOf("win-1");
+    runFrame();
+    expect(document.activeElement).toBe(host);
+    pastThePromptSettle();
+    blurIntoFrameOf("win-1");
+    expect(topWindowId()).toBe("win-1");
+  });
+
+  it("holds a second raise off for a while after one, and applies the landing that came meanwhile once the hold is over", () => {
+    blurIntoFrameOf("win-1");
+    layer.reconcile();
+    expect(topWindowId()).toBe("win-1");
+    frameOf("win-2").focus();
+    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
+    expect(topWindowId()).toBe("win-1");
+    runFrame();
+    expect(topWindowId()).toBe("win-2");
+  });
+
+  it("drops the focused window's pending focus grants once the hold sets aside a landing in another window's page", () => {
+    blurIntoFrameOf("win-1");
+    layer.reconcile();
+    const grants = spyOnFrame("win-1");
+    frameOf("win-2").focus();
+    runFrame();
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(0);
+    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
+    expect(topWindowId()).toBe("win-2");
+  });
+
+  it("raises a few times, not on every frame, for two pages that each take the focus back when they lose it", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    const frames = 6 * WATCHER_RAISE_HOLD_FRAMES;
+    for (let frame = 0; frame < frames; frame += 1) {
+      const unfocused = topWindowId() === "win-1" ? "win-2" : "win-1";
+      frameOf(unfocused).focus();
+      runFrame();
+      layer.reconcile();
+    }
+    expect(raise.mock.calls.length).toBeGreaterThan(1);
+    expect(raise.mock.calls.length).toBeLessThanOrEqual(frames / WATCHER_RAISE_HOLD_FRAMES + 1);
+  });
+
+  it("reads nothing from the store in a frame while the focus rests in the focused window's page or outside every frame", () => {
+    const getState = vi.spyOn(store, "getState");
+    host.focus();
+    runFrame();
+    frameOf("win-2").focus();
+    runFrame();
+    expect(getState).not.toHaveBeenCalled();
+    runFrame();
+    expect(getState).not.toHaveBeenCalled();
+  });
+
+  it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {
+    runFrame();
+    runFrame();
+    expect(pendingFrames.size).toBe(1);
+    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    expect(pendingFrames.size).toBe(1);
+    runFrame();
+    expect(pendingFrames.size).toBe(1);
+  });
+});
+
+describe("the focus grants a raised window's page is sent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    store.restoreWindow("win-2");
+    layer.reconcile();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("posts the focused window's page the grant three times over the retry schedule", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(1);
+    vi.advanceTimersByTime(1000);
+    expect(grantsSeen(grants)).toBe(3);
+  });
+
+  it("drops the grants still pending for a window when another window becomes the focused one", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    expect(grantsSeen(grants)).toBe(1);
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const nextGrants = spyOnFrame("win-1");
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
+    expect(grantsSeen(nextGrants)).toBe(3);
+  });
+
+  it("posts nothing for a window the store has raised another over, before the layer has reconciled", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    store.raiseWindow("win-1");
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
+  });
+
+  it("drops the pending grants of a layer that a newer one replaces", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
   });
 });
 
