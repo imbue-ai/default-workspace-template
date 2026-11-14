@@ -1693,7 +1693,17 @@ def test_on_a_touch_client_the_first_tap_on_an_unfocused_window_only_raises_it(
     the shield, which raises the window and takes the tap; the next tap reaches the page."""
     with _second_client(page, e2e_server, has_touch=True) as touch_page:
         expect(touch_page.locator("html")).to_have_attribute("data-touch", "")
-        first, second = _open_a_second_window_over_the_first(touch_page, e2e_server)
+        # Opened by the agent's op: a touch client opens a shortcut on one tap, so a double click would open two.
+        client_id = _client_id(touch_page)
+        first = _broadcast_op(
+            e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/?w=first", "client": client_id}
+        )["window_id"]
+        expect(_window(touch_page, first)).to_be_visible(timeout=15000)
+        _move_window_off_the_shortcuts(touch_page, first)
+        second = _broadcast_op(
+            e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/?w=second", "client": client_id}
+        )["window_id"]
+        expect(_window(touch_page, second)).to_have_attribute("data-focused", "true", timeout=15000)
         expect(_window(touch_page, first).locator("[data-window-shield]")).to_have_count(1)
         expect(_window(touch_page, second).locator("[data-window-shield]")).to_have_count(0)
         first_frame = _page_frame(touch_page, first)
