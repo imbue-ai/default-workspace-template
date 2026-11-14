@@ -150,6 +150,7 @@ class E2EServer(FrozenModel):
     repo_root: Path = Field(description="The workspace root the update notice reads its record under")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
+    second_url: str = Field(default="", description="The second stub app's loopback URL; empty when none is offered")
     registry_path: Path = Field(description="The registry file the shell and ``workspace-layout`` read")
     agent_events_path: Path = Field(
         description="The agents event file the avatar's mood is read from, absent at first"
@@ -180,6 +181,8 @@ def _running_e2e_server(
     extra_rows: tuple[str, ...] = (),
     # Whether the second app's pages nest a frame that takes the focus when the shell grants it, as the terminal's do.
     is_second_app_terminal_like: bool = False,
+    # Whether the second app's pages focus their own input a moment after they load, as the chat's composer does.
+    is_second_app_self_focusing: bool = False,
     # The stub app's default shortcut mode. ``focus`` makes it a one-window app, whose every launch lands in the
     # window the desktop already holds; ``new`` lets each launch open a window of its own.
     stub_shortcut_mode: str = "focus",
@@ -198,7 +201,13 @@ def _running_e2e_server(
 
     # The stubs serve first, so the registry can name where their pages are framed from.
     second_serving = (
-        serve_app(_stub_app(base_url, is_terminal_like=is_second_app_terminal_like))
+        serve_app(
+            _stub_app(
+                base_url,
+                is_terminal_like=is_second_app_terminal_like,
+                self_focus_delay_ms=_SELF_FOCUS_DELAY_MS if is_second_app_self_focusing else None,
+            )
+        )
         if is_second_app_offered
         else contextlib.nullcontext()
     )
@@ -307,6 +316,7 @@ def _running_e2e_server(
                     repo_root=repo_root,
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                    second_url=second_served.http_url if second_served is not None else "",
                     registry_path=registry_path,
                     agent_events_path=agent_events_path,
                     theme=theme,
@@ -342,7 +352,8 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # told, and each press and wheel it receives, and its body is taller than the frame so a wheel scrolls it. It
 # installs the served element context menu as a scaffolded app's page does, so a right-click in the frame drafts
 # through the shell. A terminal-like page nests a frame (``_PTY_PAGE``) and passes both its ``shell:shown`` and the
-# shell's ``ttyd-focus`` on to it, as the terminal's wrapper does.
+# shell's ``ttyd-focus`` on to it, as the terminal's wrapper does. A self-focusing page focuses its ``#held`` input
+# a moment after it loads and posts a note of it to the stub app, which a test reads without touching the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" /><div style="height: 4000px"></div>
 <script type="module">
@@ -350,6 +361,7 @@ import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
 import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
 const isNavigable = __NAVIGABLE__;
 const isTerminalLike = __TERMINAL_LIKE__;
+const selfFocusDelayMs = __SELF_FOCUS_DELAY_MS__;
 const where = document.getElementById("where");
 const titleOf = (path) => "Stub " + path;
 const here = () => location.pathname + location.search;
@@ -370,6 +382,12 @@ if (pty !== null) {
   window.addEventListener("message", (event) => {
     if (event.source === window.parent && event.data?.type === "ttyd-focus") focusPty();
   });
+}
+if (selfFocusDelayMs >= 0) {
+  setTimeout(() => {
+    document.getElementById("held").focus();
+    fetch("/__self_focused", { method: "POST" });
+  }, selfFocusDelayMs);
 }
 const handlers = {
   onHandshake(handshake) {
@@ -403,6 +421,10 @@ window.__openPath = (path, ifPresent) => connection.openPath(path, ifPresent);
 # How long a terminal-like page's pty keeps the thread busy after it takes the focus, as a terminal client starting does.
 _PTY_STALL_MS = 120
 
+# How long after its script starts a self-focusing page focuses its input: well past the few animation frames in
+# which the shell takes a focus for the answer to its own message.
+_SELF_FOCUS_DELAY_MS = 250
+
 # The frame a terminal-like page nests: its input takes the focus when the page grants it, and each grant is recorded.
 _PTY_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Pty</title></head><body>
 <input id="pty" value="" />
@@ -424,24 +446,38 @@ _PLAIN_PAGE_COOKIE = "stub-page"
 _PLAIN_PAGE_COOKIE_VALUE = "plain"
 
 
-def _stub_page_html(base_url: str, is_navigable: bool, is_terminal_like: bool = False) -> str:
+def _stub_page_html(
+    base_url: str, is_navigable: bool, is_terminal_like: bool = False, self_focus_delay_ms: int | None = None
+) -> str:
     return (
         _STUB_PAGE_TEMPLATE.replace("__BASE_URL__", base_url)
         .replace("__NAVIGABLE__", "true" if is_navigable else "false")
         .replace("__TERMINAL_LIKE__", "true" if is_terminal_like else "false")
+        .replace("__SELF_FOCUS_DELAY_MS__", str(-1 if self_focus_delay_ms is None else self_focus_delay_ms))
     )
 
 
-def _stub_app(base_url: str, is_terminal_like: bool = False) -> Flask:
+def _stub_app(base_url: str, is_terminal_like: bool = False, self_focus_delay_ms: int | None = None) -> Flask:
     """The stub app: the stand-in page at every GET path, and at every POST path a launch that answers the page it
     opens, the root with the launch path and the posted params (the shell's envelope aside) as its query. Every
-    launch posted is kept for the tests to read at ``/__launches``."""
+    launch posted is kept for the tests to read at ``/__launches``, and the count of times a self-focusing page
+    focused itself at ``/__self_focuses``."""
     app = Flask("stub")
     launches: list[dict[str, Any]] = []
+    self_focuses: list[None] = []
 
     def _page(path: str = "") -> Response:
         is_navigable = request.cookies.get(_PLAIN_PAGE_COOKIE) != _PLAIN_PAGE_COOKIE_VALUE
-        return Response(_stub_page_html(base_url, is_navigable, is_terminal_like), mimetype="text/html")
+        return Response(
+            _stub_page_html(base_url, is_navigable, is_terminal_like, self_focus_delay_ms), mimetype="text/html"
+        )
+
+    def _note_self_focus() -> Response:
+        self_focuses.append(None)
+        return Response(status=204)
+
+    def _serve_self_focus_count() -> Response:
+        return jsonify(len(self_focuses))
 
     def _serve_pty_page() -> Response:
         return Response(_PTY_PAGE.replace("__STALL_MS__", str(_PTY_STALL_MS)), mimetype="text/html")
@@ -459,6 +495,10 @@ def _stub_app(base_url: str, is_terminal_like: bool = False) -> Flask:
     app.add_url_rule("/", view_func=_page, endpoint="stub_page_root", methods=["GET"])
     app.add_url_rule("/__launches", view_func=_serve_posted_launches, endpoint="stub_launches", methods=["GET"])
     app.add_url_rule("/__pty", view_func=_serve_pty_page, endpoint="stub_pty", methods=["GET"])
+    app.add_url_rule("/__self_focused", view_func=_note_self_focus, endpoint="stub_self_focused", methods=["POST"])
+    app.add_url_rule(
+        "/__self_focuses", view_func=_serve_self_focus_count, endpoint="stub_self_focuses", methods=["GET"]
+    )
     app.add_url_rule("/<path:path>", view_func=_page, endpoint="stub_page", methods=["GET"])
     app.add_url_rule("/<path:path>", view_func=_launch, endpoint="stub_launch", methods=["POST"])
     return app
@@ -467,6 +507,11 @@ def _stub_app(base_url: str, is_terminal_like: bool = False) -> Flask:
 def _launched_page_path(launch_path: str, params: dict[str, Any]) -> str:
     """The page a stub's POST launch path at ``/<launch_path>`` answers for ``params``."""
     return "/?" + urllib.parse.urlencode({_LAUNCHED_VIA_PARAM: launch_path, **params})
+
+
+def _self_focus_count(app_url: str) -> int:
+    """How many times a page of the stub app at ``app_url`` has focused its own input."""
+    return int(_get_json(f"{app_url}/__self_focuses"))
 
 
 def _posted_launches(app_url: str) -> list[dict[str, Any]]:
@@ -747,8 +792,9 @@ def _wait_for_stored_top(server: E2EServer, client_id: str, window_id: str) -> N
 
 
 def _open_a_terminal_like_window_under_a_plain_one(page: Page, server: E2EServer) -> tuple[str, str]:
-    """Open a terminal-like window clear of the shortcuts and wait out the focus grants its raise draws, then a plain
-    window; answers (terminal, plain) once the plain one is focused and the terminal's window lies beneath it."""
+    """Open the second app's window (terminal-like when the server makes its pages so) clear of the shortcuts and wait
+    out the focus grants its raise draws, then a plain window; answers (second app's, plain) once the plain one is
+    focused and the other window lies beneath it."""
     terminal = _open_via_shortcut(page, server, _SECOND_SHORTCUT_KEY)
     _move_window_off_the_shortcuts(page, terminal)
     _wait_out_the_focus_grants(page, _now_ms(page))
@@ -1875,6 +1921,39 @@ def test_reloading_the_shell_leaves_the_top_window_on_top_over_a_terminal_like_w
         page.mouse.click(*_content_point(page, terminal))
         expect(_window(page, terminal)).to_have_attribute("data-focused", "true", timeout=15000)
         _wait_for_stored_top(server, client_id, terminal)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_reloading_the_shell_leaves_the_top_window_on_top_over_a_page_that_focuses_itself(
+    tmp_path: Path, page: Page
+) -> None:
+    """A page focuses its own input a moment after it loads, as the chat's composer does, which after a reload it does
+    in a window beneath the top one. No press is behind that focus: the top window stays on top and focused, and a
+    press in that page's window afterwards still raises it. The test makes no call into the shell's document between
+    the reload and the shell's look at the focus, since Playwright runs each as a user's gesture."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, is_second_app_self_focusing=True) as server:
+        _land(page, server)
+        focusing, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
+        client_id = _client_id(page)
+        _wait_for_stored_top(server, client_id, plain)
+        focuses_before = _self_focus_count(server.second_url)
+
+        page.reload()
+        wait_for(
+            lambda: _self_focus_count(server.second_url) > focuses_before,
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the reloaded page never focused its own input",
+        )
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert list(_stored_placements(server.state_dir, client_id))[-1:] == [plain]
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true")
+        expect(_window(page, focusing)).to_have_attribute("data-focused", "false")
+        assert page.evaluate("() => document.activeElement?.getAttribute('data-live-page') ?? null") != focusing
+
+        page.mouse.click(*_content_point(page, focusing))
+        expect(_window(page, focusing)).to_have_attribute("data-focused", "true", timeout=15000)
+        _wait_for_stored_top(server, client_id, focusing)
 
 
 @pytest.mark.timeout(90, func_only=False)

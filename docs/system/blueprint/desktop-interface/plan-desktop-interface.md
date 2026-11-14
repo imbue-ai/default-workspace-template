@@ -186,9 +186,11 @@ Other clients create the page when the window is first restored there, and keep 
 The top non-minimized window is focused.
 Raising moves a placement to the end of the list and saves.
 A click on a window's chrome raises it.
-A click into a page cannot reach the shell across origins, so the shell raises a window when the document's focus lands in its page's frame.
+A click into a page cannot reach the shell across origins, so the shell raises a window when the document's focus lands in its page's frame while the document has user activation, which a press gives it.
 On a non-touch client every page takes the pointer, the pages of unfocused windows included: a wheel or trackpad scroll over a background window scrolls its page, and a press there is delivered to the page and raises the window; the first press is not consumed.
-A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window; on a non-touch client a page that focuses itself while its window is unfocused raises the window the same way.
+The shell's own sight of a page taking the focus by itself, with no press or key behind it (the chat's composer focusing itself after a load), raises nothing: it hands the focus back to its own element.
+A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window.
+A press into a page that does not move the focus into its frame (a page that cancels the press, such as the chat page while its own popover is open) is not seen by the shell, so that window raises on a later press.
 A touch client keeps the pages of every window but the focused one inert (`pointer-events: none` on their iframes) under a transparent shield: the press lands on the shield, and the shell raises the window and makes its page interactive; the first press is consumed.
 While a menu or the launcher is open the shield covers every window, the focused one too, so the click that dismisses them reaches the shell.
 
@@ -359,6 +361,7 @@ Every page takes the pointer except on a touch client, where only the focused wi
 The layer raises the window whose page frame holds the document's focus while that window is unfocused, through the store's `raiseWindow`, so a viewed desktop and a window being moved or resized refuse the raise.
 It reads the document's active element when the window loses focus to a frame and once per animation frame, because a move of the focus from one frame to another fires no event on the shell's document; it does nothing while a gesture is in progress, in the overview, on a viewed desktop, or on a touch client.
 A focus that lands within a few frames of the layer's own `shell:shown` or `ttyd-focus` to that page is the page's answer to it, not a press (a terminal's wrapper focuses its pty on both): it raises nothing, and the next frame hands the document's focus back to the layer's host element, so a later press into the page still lands as a change of the active element.
+A focus that lands while the browser reports no user activation on the shell's document (`navigator.userActivation.isActive` is false; a press or a key in the document or in any page's frame gives it for a few seconds) is the page's own doing, not a press: it is handled the same way, raising nothing and handing the focus back. A browser that does not report user activation is not gated.
 After the layer raises a window it raises no other for a few frames, so pages that take the focus back whenever they lose it do not turn every press into a fight over the stack; a landing that comes meanwhile stays in the document's focus, drops the focused window's pending `ttyd-focus` posts so none takes the focus from it, and is raised by the first frame after the hold.
 The page-reported `shell:focused` of section 4.2 raises the same window.
 Hidden pages (minimized, on another desktop) are parked: moved out of the viewport and made invisible, which stops every engine rendering them while the page keeps its size, layout, and scroll (`display: none` would collapse its viewport and lose its document scroll, and Safari keeps rendering it).

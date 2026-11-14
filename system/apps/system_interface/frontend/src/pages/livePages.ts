@@ -12,6 +12,7 @@
  * handle, which is longer than the drag it may become: the pixels a press spends reaching the drag
  * threshold have to be ones the shell can see. A press into an unfocused window's page never
  * reaches the shell, so the shell raises that window when the document's focus lands in its frame
+ * while the document has user activation, which a press gives it and a page focusing itself does not
  * (``raiseWindowOfActiveFrame``).
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
@@ -124,6 +125,12 @@ export const SHELL_PROMPT_SETTLE_FRAMES = 3;
 /** How many animation frames after the watcher raises a window it raises no other, so pages that take the focus back
  *  when they lose it do not turn every press into a fight over the stack. */
 export const WATCHER_RAISE_HOLD_FRAMES = 12;
+
+/** Whether the browser reports no transient user activation on the shell's document, which a press or key in any of its
+ *  frames gives it; false where the browser reports nothing. */
+function isWithoutUserActivation(): boolean {
+  return navigator.userActivation?.isActive === false;
+}
 
 // A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
 // invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
@@ -666,7 +673,8 @@ export class LivePagesLayer implements PageDriver {
     if (page !== undefined) this.noteFocusLandingIn(page);
   }
 
-  /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus. */
+  /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus or
+   *  the page took it with no press or key behind it. */
   private raiseWindowOfActiveFrame(canHandBack: boolean): void {
     const page = this.activePage();
     if (page === undefined || page.windowId === this.lastFocusedWindowId) return;
@@ -675,7 +683,7 @@ export class LivePagesLayer implements PageDriver {
     if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
     // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
     if (page.windowId === activeFocusedWindowId(state)) return;
-    if (this.isAnswerToPrompt(page)) {
+    if (this.isAnswerToPrompt(page) || isWithoutUserActivation()) {
       // The focus cannot be handed back from inside the blur event; the next frame does.
       if (canHandBack) this.host.focus({ preventScroll: true });
       return;
