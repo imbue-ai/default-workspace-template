@@ -121,6 +121,10 @@ export const MAX_WINDOW_TITLE_LENGTH = 256;
  *  ``ttyd-focus``) a focus landing in the page is taken for that answer, and no press. */
 export const SHELL_PROMPT_SETTLE_FRAMES = 3;
 
+/** How many animation frames after the watcher raises a window it raises no other, so pages that take the focus back
+ *  when they lose it do not turn every press into a fight over the stack. */
+export const WATCHER_RAISE_HOLD_FRAMES = 12;
+
 // A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
 // invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
 // it keeps the page's size, layout and scroll.
@@ -234,6 +238,8 @@ export class LivePagesLayer implements PageDriver {
   private cancelFrameFocus: () => void = () => undefined;
   /** The animation frames the watcher has run. */
   private watchedFrames = 0;
+  /** The frame the watcher last raised a window in; null before any. */
+  private lastWatcherRaiseFrame: number | null = null;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
@@ -679,6 +685,13 @@ export class LivePagesLayer implements PageDriver {
       if (canHandBack) this.host.focus({ preventScroll: true });
       return;
     }
+    if (
+      this.lastWatcherRaiseFrame !== null &&
+      this.watchedFrames - this.lastWatcherRaiseFrame < WATCHER_RAISE_HOLD_FRAMES
+    ) {
+      return;
+    }
+    this.lastWatcherRaiseFrame = this.watchedFrames;
     this.store.raiseWindow(page.windowId);
   }
 

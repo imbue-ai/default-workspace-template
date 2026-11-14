@@ -50,6 +50,7 @@ import {
   DESKTOP_ROOT_ATTRIBUTE,
   PAGE_FRAME_ALLOW,
   SHELL_PROMPT_SETTLE_FRAMES,
+  WATCHER_RAISE_HOLD_FRAMES,
   pageFrameAllow,
 } from "./livePages";
 
@@ -1518,6 +1519,30 @@ describe("raising the window the document's focus lands in", () => {
     pastThePromptSettle();
     blurIntoFrameOf("win-1");
     expect(topWindowId()).toBe("win-1");
+  });
+
+  it("holds a second raise off for a while after one, and applies the landing that came meanwhile once the hold is over", () => {
+    blurIntoFrameOf("win-1");
+    layer.reconcile();
+    expect(topWindowId()).toBe("win-1");
+    frameOf("win-2").focus();
+    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
+    expect(topWindowId()).toBe("win-1");
+    runFrame();
+    expect(topWindowId()).toBe("win-2");
+  });
+
+  it("raises a few times, not on every frame, for two pages that each take the focus back when they lose it", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    const frames = 6 * WATCHER_RAISE_HOLD_FRAMES;
+    for (let frame = 0; frame < frames; frame += 1) {
+      const unfocused = topWindowId() === "win-1" ? "win-2" : "win-1";
+      frameOf(unfocused).focus();
+      runFrame();
+      layer.reconcile();
+    }
+    expect(raise.mock.calls.length).toBeGreaterThan(1);
+    expect(raise.mock.calls.length).toBeLessThanOrEqual(frames / WATCHER_RAISE_HOLD_FRAMES + 1);
   });
 
   it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {
