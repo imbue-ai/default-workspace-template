@@ -1893,8 +1893,20 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
         "terminal": [],
         "files": [],
         "buddy": [
-            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
-            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+            {
+                "type": "minds:focus-chat",
+                "path": "/api/focus-chat",
+                "show": None,
+                "showing": [],
+                "reload_when_raised": False,
+            },
+            {
+                "type": "open:file",
+                "path": None,
+                "show": "{path}?view",
+                "showing": ["{path}/"],
+                "reload_when_raised": False,
+            },
         ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]

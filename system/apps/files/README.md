@@ -201,7 +201,9 @@ it, such as a chat's link to an absolute path). The shell shows the path's
 `?view` page in a Files window: a file's view page, or, for a folder, the folder
 itself, since Files reads `?view` on a folder as the folder. A window already on
 that file or folder, as `/a/b`, `/a/b/`, or `/a/b/?view`, is raised instead of
-opening another.
+opening another. A file's window is also reloaded (`reload_when_raised`), so a
+file rewritten under the same name shows its new content; a folder's window is
+only raised, since it keeps itself current.
 
 ## Tests
 

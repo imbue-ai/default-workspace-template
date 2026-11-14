@@ -388,7 +388,15 @@ def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -
         return MessageDelivery(app=shown.app, status=None, detail=shown.refusal, is_delivered=False)
     requester = OpRequester(app=shown.app, marker="")
     try:
-        result = show_page_for_client(_shell(), shown.app, shown.page, shown.showing, relayed.client_id, requester)
+        result = show_page_for_client(
+            _shell(),
+            shown.app,
+            shown.page,
+            shown.showing,
+            relayed.client_id,
+            requester,
+            is_reloaded_when_raised=shown.is_reloaded_when_raised,
+        )
     except ShellError as e:
         logger.warning("Could not show {} of {} for {}: {}", shown.page, shown.app, relayed.type, e)
         return MessageDelivery(app=shown.app, status=None, detail=str(e), is_delivered=False)

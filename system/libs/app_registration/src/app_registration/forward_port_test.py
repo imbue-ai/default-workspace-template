@@ -806,6 +806,7 @@ path = "/api/focus-chat"
 type = "open:file"
 show = "{path}?view"
 showing = ["{path}", "{path}/"]
+reload_when_raised = true
 
 [[keybindings]]
 id = "rename"
@@ -898,7 +899,12 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     }
     assert row["message_handlers"] == [
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
-        {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
+        {
+            "type": "open:file",
+            "show": "{path}?view",
+            "showing": ["{path}", "{path}/"],
+            "reload_when_raised": True,
+        },
     ]
     # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
     assert row["keybindings"] == [
@@ -1050,6 +1056,16 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nshowing = ["{path}/"]\n',
             "a message handler gives 'showing' only beside 'show'",
             id="message-handler-showing-beside-a-path",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\nshow = "{path}"\nreload_when_raised = "yes"\n',
+            "a message handler's reload_when_raised must be a boolean",
+            id="message-handler-reload-when-raised-not-a-boolean",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nreload_when_raised = true\n',
+            "a message handler gives 'reload_when_raised' only beside 'show'",
+            id="message-handler-reload-when-raised-beside-a-path",
         ),
         pytest.param(
             '[[keybindings]]\nid = "rename"\n',
