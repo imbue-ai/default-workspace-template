@@ -82,6 +82,7 @@ import {
 import { ActivityIndicator, runningToolCall, turnStatusPlacement } from "./ActivityIndicator";
 import { authorOfTurn } from "./user-message-display";
 import { TurnDoneMark } from "./TurnDoneMark";
+import { LastMessageMark } from "./LastMessageMark";
 import type { AssistantMessageEvent, TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
@@ -883,10 +884,12 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // The agent's output past the transcript and the status row end the last row's stretch when
         // that row is the agent's and ends the transcript; otherwise they follow it.
         ...liveEnd.nodes,
-        // The latest turn's done mark once it has finished; anything queued behind it follows, then
+        // The latest turn's done mark once it has finished, and when the last message was; anything
+        // queued behind them follows, then
         // the messages the chat app holds while the chat switches harness, then this page's own
         // not-yet-delivered sends.
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
+        m(LastMessageMark, { key: "last-message", chatId, events }),
         ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
         // The status row under the user's own send while it waits on the agent or opens the turn the row reports.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
