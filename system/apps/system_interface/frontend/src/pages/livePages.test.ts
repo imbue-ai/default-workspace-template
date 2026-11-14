@@ -1545,6 +1545,17 @@ describe("raising the window the document's focus lands in", () => {
     expect(raise.mock.calls.length).toBeLessThanOrEqual(frames / WATCHER_RAISE_HOLD_FRAMES + 1);
   });
 
+  it("reads nothing from the store in a frame while the focus rests in the focused window's page or outside every frame", () => {
+    const getState = vi.spyOn(store, "getState");
+    host.focus();
+    runFrame();
+    frameOf("win-2").focus();
+    runFrame();
+    expect(getState).not.toHaveBeenCalled();
+    runFrame();
+    expect(getState).not.toHaveBeenCalled();
+  });
+
   it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {
     runFrame();
     runFrame();

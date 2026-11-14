@@ -316,9 +316,7 @@ export class LivePagesLayer implements PageDriver {
    *  a switch to another application and back), and the page would report it and be raised over the window the
    *  user chose. */
   takeFocusFromOtherPages(windowId: string | null): void {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLIFrameElement)) return;
-    const page = this.pageOfFrame(active);
+    const page = this.activePage();
     if (page === undefined || page.windowId === windowId) return;
     this.host.focus({ preventScroll: true });
   }
@@ -664,22 +662,19 @@ export class LivePagesLayer implements PageDriver {
 
   /** The window lost focus to a frame: when the frame is a contract-less page's, note the landing. */
   private noteFocusLandingInActiveFrame(): void {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLIFrameElement)) return;
-    const page = this.pageOfFrame(active);
+    const page = this.activePage();
     if (page !== undefined) this.noteFocusLandingIn(page);
   }
 
   /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus. */
   private raiseWindowOfActiveFrame(canHandBack: boolean): void {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLIFrameElement)) return;
-    const page = this.pageOfFrame(active);
-    if (page === undefined || !this.isShown(page) || page.isCovered || this.isGestureActive) return;
+    const page = this.activePage();
+    if (page === undefined || page.windowId === this.lastFocusedWindowId) return;
+    if (!this.isShown(page) || page.isCovered || this.isGestureActive) return;
     const state = this.store.getState();
     if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
     // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
-    if (page.windowId === activeFocusedWindowId(state) || page.windowId === this.lastFocusedWindowId) return;
+    if (page.windowId === activeFocusedWindowId(state)) return;
     if (this.isAnswerToPrompt(page)) {
       // The focus cannot be handed back from inside the blur event; the next frame does.
       if (canHandBack) this.host.focus({ preventScroll: true });
@@ -991,6 +986,12 @@ export class LivePagesLayer implements PageDriver {
     page.lastSentVisibility = isVisible;
     if (isVisible) page.lastFocusPromptFrame = this.watchedFrames;
     sendToChildFrame(page.frame, isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
+  }
+
+  /** The page whose frame holds the document's focus. */
+  private activePage(): LivePage | undefined {
+    const active = document.activeElement;
+    return active instanceof HTMLIFrameElement ? this.pageOfFrame(active) : undefined;
   }
 
   private pageOfFrame(frame: HTMLIFrameElement): LivePage | undefined {
