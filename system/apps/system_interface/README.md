@@ -596,8 +596,11 @@ workspace name with a pencil that opens the avatar chooser, "Working" or
 person drafts a mention of them (`@<handle> `) through the first launch path of
 the machine that declares a `mention_param` (the chat app's, into the Lounge),
 into its pinned window on this desktop when there is one; clicking the agent
-runs the primary text action with nothing to send, which opens the main chat;
-clicking your own picture does nothing. The shell names no app in any of this.
+puts the avatar's pinned window on this desktop on screen on whatever chat it
+holds (restored, raised, or its pulled-out window shown, never put away), and
+only with no such window runs the primary text action with nothing to send,
+which opens the main chat; clicking your own picture does nothing. The shell
+names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
 somebody sends, every post the agent makes into a room, and every notification a chat

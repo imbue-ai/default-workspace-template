@@ -132,6 +132,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
   draftTargetOf,
@@ -1680,10 +1681,16 @@ export class DesktopStore {
     return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
   }
 
-  /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
-   *  action with nothing to send (the chat app's "Send to main chat" with no text opens the main chat). */
-  async openMainChat(): Promise<boolean> {
-    return this.startWithText("");
+  /** A click on the agent's tray entry (the multiplayer spec, section 6.2): the avatar's pinned window on the
+   *  active desktop is put on screen on whatever chat it holds, never put away; with no such window the main chat
+   *  opens, through the primary text action with nothing to send. Refused while viewing somebody else's desktop,
+   *  whose pinned window is theirs. False when refused or when nothing opened. */
+  async openAgentChat(): Promise<boolean> {
+    if (this.refuseWhileViewing("show the agent's chat")) return false;
+    const pinned = avatarPinnedEntryOf(this.state);
+    if (pinned === null) return this.startWithText("");
+    this.showWindow(pinned.window.id);
+    return true;
   }
 
   /** A window's "Chat about this app" (the multiplayer spec, section 9.2): the window's app is named to the first
@@ -2935,9 +2942,15 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: for a pulled-out window, show its ghost again when the ghost is hidden, else its
-   *  own desktop window; otherwise restore and raise when minimized, minimize when focused, raise otherwise. */
+  /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
+    if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
+    else this.showWindow(windowId);
+  }
+
+  /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
+   *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
+  private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       if (placement.is_minimized) this.showWindowGhost(windowId);
@@ -2945,7 +2958,6 @@ export class DesktopStore {
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);
-    else if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.raiseWindow(windowId);
   }
 

@@ -1530,7 +1530,7 @@ export function App(): m.Component<AppAttrs> {
               },
               onAgentClick: () => {
                 trayCard.close();
-                void current.openMainChat();
+                void current.openAgentChat();
               },
               onAgentContextMenu: (x, y) => {
                 trayCard.close();
