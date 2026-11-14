@@ -1,0 +1,1 @@
+`announceReadyToEmbedder` takes `reportsProviderChooserOnScreen`. The new `reportProviderChooserOnScreen` sends `minds:provider-chooser-on-screen {}` (embed contract v16), and `IS_CHAT_ROOT_FOCUS_ACCEPTED` says whether the vendored contract lets a `minds:focus-chat` with no chat through. Both are probed by name, so an older vendored contract still builds.

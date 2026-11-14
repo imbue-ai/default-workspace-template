@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import pytest
+from workspace_layout.primitives import ClientId
 
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import RunningWorkspace
@@ -21,13 +22,21 @@ _CLIENT_ID = "client-4f1d"
 _OTHER_CHAT_ID = "agent-7c3e9b"
 
 
-def _focus_chat(workspace: RunningWorkspace, chat_id: str) -> httpx.Response:
-    """What the shell's relay posts this app for ``minds:focus-chat``: the message and the client it reached."""
+def _focus_chat(workspace: RunningWorkspace, chat_id: str | None) -> httpx.Response:
+    """What the shell's relay posts this app for ``minds:focus-chat``: the message and the client it reached; with no
+    chat, the message carries none."""
     return httpx.post(
         f"{workspace.chat_url}/api/focus-chat",
-        json={"type": "minds:focus-chat", "client_id": _CLIENT_ID, "chatId": chat_id},
+        json={"type": "minds:focus-chat", "client_id": _CLIENT_ID, **({} if chat_id is None else {"chatId": chat_id})},
         timeout=10.0,
     )
+
+
+def _client_chat_paths(workspace: RunningWorkspace) -> dict[str, str]:
+    """Each chat window's path as the client sees it (a pinned chat window is independent: its path is per client)."""
+    shell = workspace.shell_state.shell
+    windows = shell.windows_for_client(shell.get_desktop(_HOME_DESKTOP_ID), ClientId(_CLIENT_ID))
+    return {str(window.id): str(window.path) for window in windows if window.app == "chat"}
 
 
 def _chat_windows(workspace: RunningWorkspace) -> list[dict[str, Any]]:
@@ -67,5 +76,33 @@ def test_a_focus_chat_opens_the_chat_root_on_the_chat_and_then_moves_that_window
                 (window["id"], f"/?chat={_OTHER_CHAT_ID}")
             ]
             assert _placements(workspace)[-1]["window_id"] == window["id"]
+        finally:
+            broadcaster.unregister(client_queue)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_focus_chat_with_no_chat_raises_the_pinned_chat_root_and_never_moves_it_off_its_chat(
+    tmp_path: Path,
+) -> None:
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), is_chat_pinned=True) as workspace:
+        broadcaster = workspace.shell_state.shell.broadcaster
+        client_queue = broadcaster.register()
+        broadcaster.set_client_info(client_queue, _CLIENT_ID, _HOME_DESKTOP_ID)
+        try:
+            # A new workspace: the pinned chat root waits minimized at the root, and the ask raises it there.
+            ((pinned_id, pinned_path),) = _client_chat_paths(workspace).items()
+            assert pinned_path == "/"
+            entered = _focus_chat(workspace, None)
+            assert entered.status_code == 200, entered.text
+            assert (entered.json()["shown"], entered.json()["window_id"]) == ("raised", pinned_id)
+            on_top = _placements(workspace)[-1]
+            assert (on_top["window_id"], on_top["is_minimized"]) == (pinned_id, False)
+            assert _client_chat_paths(workspace) == {pinned_id: "/"}
+
+            # A chat shown in it since stays shown: asking for the chat root again raises the window as it stands.
+            assert _focus_chat(workspace, FIXTURE_AGENT_ID).json()["shown"] == "navigated"
+            again = _focus_chat(workspace, None)
+            assert (again.json()["shown"], again.json()["window_id"]) == ("raised", pinned_id)
+            assert _client_chat_paths(workspace) == {pinned_id: f"/?chat={FIXTURE_AGENT_ID}"}
         finally:
             broadcaster.unregister(client_queue)

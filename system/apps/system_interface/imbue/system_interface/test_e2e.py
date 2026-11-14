@@ -133,6 +133,10 @@ _GEOMETRY_TOLERANCE_PX = 4
 # imbue/system_interface/test_e2e.py -> the template's root, whose built-in theme folders a themed shell copies.
 _TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
 _BUILTIN_THEMES = ("standard", "mac-classic", "windows-2000")
+# The embed contract the frontends bundle, fetched from the pinned mngr (system/scripts/fetch_mngr_assets.sh).
+_VENDORED_EMBED_CONTRACT = (
+    _TEMPLATE_ROOT / "system/vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/embed_contract.js"
+)
 # Where the theme test sets its window: clear of the shortcuts, with room past its every edge for the resizes.
 _OPEN_SPOT = (260.0, 60.0)
 # How far from a window control's centre, each way, a press must still land on it, however small a theme draws it.
@@ -3245,10 +3249,12 @@ _CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><tit
 <iframe id="workspace" src="__SHELL_URL__/" style="width: 1200px; height: 800px"></iframe>
 <script>
 window.__readyCount = 0;
+window.__readyAnnouncement = null;
 window.addEventListener("message", (event) => {
   const frame = document.getElementById("workspace");
   if (event.source !== frame.contentWindow || event.data?.type !== "minds:workspace-ready") return;
   window.__readyCount += 1;
+  window.__readyAnnouncement = event.data;
   frame.contentWindow.postMessage({ type: "minds:focus-chat", chatId: "__CHAT_ID__" }, "*");
 });
 </script></body></html>"""
@@ -3271,7 +3277,8 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
 ) -> None:
     """The shell framed by the Imbue Studio chrome relays ``minds:focus-chat`` to the app whose registry row registers the
     type: the app's handler route is posted the message once, with the client id of the shell page that received
-    it, and the shell reads nothing of it itself."""
+    it, and the shell reads nothing of it itself. The readiness the chrome waits for says what the workspace's pages
+    report and handle."""
     received: list[dict[str, Any]] = []
     with serve_app(message_handling_app(received, _FOCUS_CHAT_HANDLER_PATH, 200)) as handler_app:
         handler_row = registry_row_toml(
@@ -3290,6 +3297,7 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
                 shell_frame = page.frame_locator("#workspace")
                 expect(shell_frame.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
                 page.wait_for_function("() => window.__readyCount === 1", timeout=15000)
+                announcement = page.evaluate("() => window.__readyAnnouncement")
                 wait_for(
                     lambda: len(received) >= 1,
                     timeout=15.0,
@@ -3305,6 +3313,14 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
                 chrome_server.server_close()
     assert isinstance(client_id, str) and client_id
     assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]
+    assert announcement == {
+        "type": "minds:workspace-ready",
+        "opensLinks": True,
+        "opensCustomSchemeLinks": True,
+        "reportsChatOnScreen": True,
+        # Promised only on a contract whose validator lets a focus-chat with no chat through to the shell.
+        "reportsProviderChooserOnScreen": "PROVIDER_CHOOSER_ON_SCREEN" in _VENDORED_EMBED_CONTRACT.read_text(),
+    }
 
 
 _OPEN_URL_HANDLER_PATH = "/api/open-url"

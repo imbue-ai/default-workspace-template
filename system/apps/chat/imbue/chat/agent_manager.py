@@ -4559,6 +4559,12 @@ class AgentManager:
         with self._lock:
             return list(self._provisional_chats.values())
 
+    def get_shown_chat_ids(self) -> list[ChatId]:
+        """The id of every chat the pages are shown: the listed chats, then the provisional ones not listed yet."""
+        with self._lock:
+            listed = [chat.chat_id for _agent, chat in self._listed_chats_locked()]
+            return [*listed, *(chat_id for chat_id in self._provisional_chats if chat_id not in listed)]
+
     def get_provisional_chats_as_shown(self) -> list[ProvisionalChatAsShown]:
         """``get_provisional_chats`` as the pages are sent them, for a client catching up."""
         return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
