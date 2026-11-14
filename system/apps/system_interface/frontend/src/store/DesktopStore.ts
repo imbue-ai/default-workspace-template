@@ -91,6 +91,7 @@ import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
+import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
   backdropFrameOf,
@@ -1191,6 +1192,10 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onResourceGaugeChanged: (view) => {
+        applyResourceGauge(resourceGaugeFromWire(view), this.deps.redraw);
+        this.deps.redraw();
+      },
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
@@ -2031,12 +2036,18 @@ export class DesktopStore {
       await this.focusOrOpenWindowAt(app.name, path);
       return;
     }
+    await this.showAppPage(app.name, path, [pinPage]);
+  }
+
+  /** Put a page of ``app`` on this client's screen through the shell's ``show``: a window already there is raised,
+   *  else the app's window on one of the ``repoint`` pages (or its pinned window) is pointed at it, else one opens. */
+  async showAppPage(app: string, path: string, repoint: readonly string[]): Promise<void> {
     await this.flushPendingSave();
     let outcome: PageShowOutcome;
     try {
-      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);

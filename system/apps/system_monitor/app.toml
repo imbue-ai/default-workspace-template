@@ -26,6 +26,12 @@ system = true
 launch = "open"
 mode = "focus"
 
+# A resource warning from the shell's tray gauge (a resource past the level the user set) lands on that resource's
+# view: the desktop posts this message into the shell, which shows the page for the declaring app.
+[[message_handlers]]
+type = "minds:show-system-monitor"
+show = "/{view}"
+
 # A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is
 # nothing to copy.
 [preview]

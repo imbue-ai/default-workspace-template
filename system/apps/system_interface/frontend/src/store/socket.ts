@@ -101,6 +101,8 @@ export interface SocketHandlers {
   onAvatarSelectionChanged(design: string): void;
   /** The update notice as the shell now holds it, null once the record is cleared. */
   onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
+  /** The tray's resource gauge, as the shell pushes it (see ``model/resourceGauge``). */
+  onResourceGaugeChanged(view: unknown): void;
   /** The workspace's themes or its default theme changed (workspace-themes plan section 5.2). */
   onThemesChanged(catalog: ThemeCatalog): void;
   /** Somebody changed a keybinding; the shell and every framed page re-fetch their resolved chords. */
@@ -132,6 +134,8 @@ export interface DesktopSocket {
 }
 
 interface RawSocketEvent {
+  /** ``resource_gauge_changed``: the gauge, parsed by its model. */
+  view?: unknown;
   type?: unknown;
   apps?: unknown;
   desktops?: unknown;
@@ -279,6 +283,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "update_notice_changed":
         handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
+        return;
+      case "resource_gauge_changed":
+        handlers.onResourceGaugeChanged(event.view);
         return;
       case "themes_changed":
         handlers.onThemesChanged(parseThemeCatalog(event.catalog));

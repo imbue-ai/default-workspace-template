@@ -74,6 +74,7 @@ beforeEach(() => {
     onRosterUpdated: vi.fn(),
     onClientsUpdated: vi.fn(),
     onChatsActivity: vi.fn(),
+    onResourceGaugeChanged: vi.fn(),
     onBubble: vi.fn(),
     onConnected: vi.fn(),
   };
@@ -217,6 +218,13 @@ describe("ShellSocket", () => {
       WireShapeError,
     );
     expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands the pushed resource gauge to its handler as it came", () => {
+    current().open();
+    const view = { settings: { visibility: "always" }, alerts: [] };
+    current().receive({ type: "resource_gauge_changed", view });
+    expect(handlers.onResourceGaugeChanged).toHaveBeenCalledWith(view);
   });
 
   it("delivers the theme catalog the shell pushes, leaving out a malformed theme", () => {

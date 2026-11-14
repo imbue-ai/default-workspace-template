@@ -307,6 +307,11 @@ class WebSocketBroadcaster(MutableModel):
         """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
         self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
 
+    def broadcast_resource_gauge_changed(self, view: Mapping[str, Any]) -> None:
+        """The tray's resource gauge changed what it shows (a reading moved, a warning was raised or cleared, the
+        settings were saved); also sent once a minute unchanged, so a window can tell the gauge is still updated."""
+        self.broadcast({"type": "resource_gauge_changed", "view": dict(view)})
+
     def broadcast_layout_op(self, message: LayoutOpMessage) -> None:
         """Send a transient ``layout_op`` to the browser (desktop contracts.md section 8): ``refresh`` and the
         interface reload, which are the whole effect of their ops, and the ``show``, ``open`` (unless minimized),

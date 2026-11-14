@@ -60,8 +60,11 @@ _IRRELEVANT_PATHS = (
         # Every manifest the served environment was resolved from.
         ("system/apps/system_interface/pyproject.toml", True),
         ("pyproject.toml", True),
+        # The resource gauge reads memory and CPU through the memory guard's package.
+        ("system/services/oom_priority/pyproject.toml", True),
+        ("system/services/oom_priority/src/oom_priority/meminfo.py", True),
         # ... but not the manifests of another app's dependencies, which another process runs.
-        ("system/services/oom_priority/pyproject.toml", False),
+        ("system/libs/routines/pyproject.toml", False),
         ("system/libs/tk_command_parsing/pyproject.toml", False),
         # ... nor the root lockfile, which every scaffolded app relocks.
         ("uv.lock", False),
@@ -71,7 +74,7 @@ _IRRELEVANT_PATHS = (
         ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
         ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
         # Workspace libraries another app imports and this process does not.
-        ("system/services/oom_priority/src/oom_priority/bands.py", False),
+        ("system/libs/routines/src/routines/notifications.py", False),
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),

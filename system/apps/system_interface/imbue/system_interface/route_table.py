@@ -90,6 +90,10 @@ from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogRe
 from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeView
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -249,6 +253,11 @@ SHELL_ROUTE_TABLE: RouteTable = {
     # The show-around tour
     ("GET", TOUR_ROUTE): RouteModels(response_model=TourProgress),
     ("POST", TOUR_ROUTE): RouteModels(request_model=TourProgress, response_model=TourProgress),
+    # The tray's resource gauge
+    ("GET", RESOURCE_GAUGE_ROUTE): RouteModels(response_model=ResourceGaugeView),
+    ("POST", RESOURCE_GAUGE_SETTINGS_ROUTE): RouteModels(
+        request_model=ResourceGaugeSettings, response_model=ResourceGaugeView
+    ),
     # Keybindings (user-profile-state spec, sections 9.3 and 10.3)
     ("GET", KEYBINDINGS_ME_ROUTE): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", KEYBINDINGS_CATALOG_ROUTE): RouteModels(response_model=KeybindingsCatalogResponse),

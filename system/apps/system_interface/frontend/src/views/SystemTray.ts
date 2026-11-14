@@ -1,7 +1,7 @@
 /**
- * The system tray at the taskbar's right end (the multiplayer spec, section 6.1): the share button (under a chrome
- * that takes it), the people, the viewer's own entry, and the agent. The overview button sits before the window
- * entries (section 8.2).
+ * The system tray at the taskbar's right end (the multiplayer spec, section 6.1): the resource gauge (when the user's
+ * settings show it), the share button (under a chrome that takes it), the people, the viewer's own entry, and the
+ * agent. The overview button sits before the window entries (section 8.2).
  */
 
 import m from "mithril";
@@ -10,6 +10,7 @@ import type { RosterParticipant } from "../model/records";
 import type { AvatarState } from "../reducers/desktopState";
 import { AgentEntry } from "./tray/AgentEntry";
 import { PeopleStrip } from "./tray/PeopleStrip";
+import { ResourceGauge, type ResourceGaugeAttrs } from "./tray/ResourceGauge";
 import { ShareButton } from "./tray/ShareButton";
 
 export interface SystemTrayAttrs {
@@ -32,12 +33,15 @@ export interface SystemTrayAttrs {
   readonly onPersonHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
   readonly onAgentHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
+  /** The workspace's CPU, memory and disk, drawn first when the user's settings show it. */
+  readonly resourceGauge: ResourceGaugeAttrs;
 }
 
 export const SystemTray: m.Component<SystemTrayAttrs> = {
   view(vnode) {
     const attrs = vnode.attrs;
     return m("div", { "data-system-tray": "", class: "system-tray flex shrink-0 items-center gap-2 pl-2" }, [
+      m(ResourceGauge, attrs.resourceGauge),
       attrs.isShareOffered ? m(ShareButton) : null,
       m(PeopleStrip, {
         roster: attrs.roster,
