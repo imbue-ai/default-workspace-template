@@ -23,13 +23,21 @@
 // The message is idempotent, and panes that are not ttyd ignore it.
 const FOCUS_RETRY_DELAYS_MS = [0, 300, 1000];
 
-/** Ask the first iframe under ``container`` to take focus (a ttyd client focuses its terminal; any other page ignores it). */
-export function requestFrameFocus(container: HTMLElement | null): void {
-  if (container === null) return;
-  for (const delay of FOCUS_RETRY_DELAYS_MS) {
+export interface FrameFocusOptions {
+  /** Asked before each post; a post it answers false for is dropped. */
+  readonly isStillWanted?: () => boolean;
+}
+
+/** Ask the first iframe under ``container`` to take focus (a ttyd client focuses its terminal; any other page
+ *  ignores it). Answers a function that drops the posts still pending. */
+export function requestFrameFocus(container: HTMLElement | null, options: FrameFocusOptions = {}): () => void {
+  if (container === null) return () => undefined;
+  const timers = FOCUS_RETRY_DELAYS_MS.map((delay) =>
     setTimeout(() => {
+      if (options.isStillWanted?.() === false) return;
       const frame = container.querySelector("iframe");
       frame?.contentWindow?.postMessage({ type: "ttyd-focus" }, "*");
-    }, delay);
-  }
+    }, delay),
+  );
+  return () => timers.forEach(clearTimeout);
 }

@@ -93,6 +93,9 @@ _HOME_DESKTOP_ID = "home"
 # How long a negative assertion ("nothing more opened") gives the shell before reading its state.
 _NEGATIVE_SETTLE_MS = 1000
 
+# Longer than the shell takes to post its three focus grants to a window it has raised (terminalFocus.ts).
+_FOCUS_GRANT_SCHEDULE_MS = 1500
+
 # The stub app the machine offers: an app with one launch path, ``new`` at ``/new``, and a
 # focus-mode default shortcut for it. Its pages are the stand-ins the stub serves at every other path.
 _STUB_APP_NAME = "docs"
@@ -175,6 +178,8 @@ def _running_e2e_server(
     pin: tuple[str, str, str] | None = None,
     # Further registry rows, for apps a test serves itself.
     extra_rows: tuple[str, ...] = (),
+    # Whether the second app's pages nest a frame that takes the focus when the shell grants it, as the terminal's do.
+    is_second_app_terminal_like: bool = False,
     # The stub app's default shortcut mode. ``focus`` makes it a one-window app, whose every launch lands in the
     # window the desktop already holds; ``new`` lets each launch open a window of its own.
     stub_shortcut_mode: str = "focus",
@@ -192,7 +197,11 @@ def _running_e2e_server(
     registry_path = tmp_path / "registry" / "apps.toml"
 
     # The stubs serve first, so the registry can name where their pages are framed from.
-    second_serving = serve_app(_stub_app(base_url)) if is_second_app_offered else contextlib.nullcontext()
+    second_serving = (
+        serve_app(_stub_app(base_url, is_terminal_like=is_second_app_terminal_like))
+        if is_second_app_offered
+        else contextlib.nullcontext()
+    )
     pinned_serving = serve_app(_stub_app(base_url)) if pin is not None else contextlib.nullcontext()
     with (
         pytest.MonkeyPatch.context() as monkeypatch,
@@ -332,13 +341,15 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # its frame to move it. Its ``#held`` input is state no reload survives, it records each shown and hidden it is
 # told, and each press and wheel it receives, and its body is taller than the frame so a wheel scrolls it. It
 # installs the served element context menu as a scaffolded app's page does, so a right-click in the frame drafts
-# through the shell.
+# through the shell. A terminal-like page nests a frame (``_PTY_PAGE``) and passes both its ``shell:shown`` and the
+# shell's ``ttyd-focus`` on to it, as the terminal's wrapper does.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" /><div style="height: 4000px"></div>
 <script type="module">
 import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
 import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
 const isNavigable = __NAVIGABLE__;
+const isTerminalLike = __TERMINAL_LIKE__;
 const where = document.getElementById("where");
 const titleOf = (path) => "Stub " + path;
 const here = () => location.pathname + location.search;
@@ -350,12 +361,25 @@ window.__wheels = 0;
 window.__visibility = [];
 window.addEventListener("pointerdown", () => { window.__presses += 1; });
 window.addEventListener("wheel", () => { window.__wheels += 1; }, { passive: true });
+const pty = isTerminalLike ? document.createElement("iframe") : null;
+const focusPty = () => pty?.contentWindow?.postMessage({ type: "ttyd-focus" }, "*");
+if (pty !== null) {
+  pty.src = "/__pty";
+  pty.style.cssText = "width: 100%; height: 120px; border: 0";
+  document.body.prepend(pty);
+  window.addEventListener("message", (event) => {
+    if (event.source === window.parent && event.data?.type === "ttyd-focus") focusPty();
+  });
+}
 const handlers = {
   onHandshake(handshake) {
     window.__handshake = handshake;
     connection.location(here(), titleOf(here()));
   },
-  onShown: () => window.__visibility.push("shown"),
+  onShown: () => {
+    window.__visibility.push("shown");
+    focusPty();
+  },
   onHidden: () => window.__visibility.push("hidden"),
 };
 if (isNavigable) {
@@ -376,18 +400,34 @@ window.__navigateTo = (path) => {
 window.__openPath = (path, ifPresent) => connection.openPath(path, ifPresent);
 </script></body></html>"""
 
+# The frame a terminal-like page nests: its input takes the focus when the page grants it, and each grant is recorded.
+_PTY_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Pty</title></head><body>
+<input id="pty" value="" />
+<script>
+window.__grants = [];
+window.__focuses = 0;
+window.addEventListener("focus", () => { window.__focuses += 1; });
+window.addEventListener("message", (event) => {
+  if (event.data?.type !== "ttyd-focus") return;
+  window.__grants.push(performance.timeOrigin + performance.now());
+  document.getElementById("pty").focus();
+});
+</script></body></html>"""
+
 # The cookie a browser context sets on a stub origin to be served the plain (non-navigable) page.
 _PLAIN_PAGE_COOKIE = "stub-page"
 _PLAIN_PAGE_COOKIE_VALUE = "plain"
 
 
-def _stub_page_html(base_url: str, is_navigable: bool) -> str:
-    return _STUB_PAGE_TEMPLATE.replace("__BASE_URL__", base_url).replace(
-        "__NAVIGABLE__", "true" if is_navigable else "false"
+def _stub_page_html(base_url: str, is_navigable: bool, is_terminal_like: bool = False) -> str:
+    return (
+        _STUB_PAGE_TEMPLATE.replace("__BASE_URL__", base_url)
+        .replace("__NAVIGABLE__", "true" if is_navigable else "false")
+        .replace("__TERMINAL_LIKE__", "true" if is_terminal_like else "false")
     )
 
 
-def _stub_app(base_url: str) -> Flask:
+def _stub_app(base_url: str, is_terminal_like: bool = False) -> Flask:
     """The stub app: the stand-in page at every GET path, and at every POST path a launch that answers the page it
     opens, the root with the launch path and the posted params (the shell's envelope aside) as its query. Every
     launch posted is kept for the tests to read at ``/__launches``."""
@@ -396,7 +436,10 @@ def _stub_app(base_url: str) -> Flask:
 
     def _page(path: str = "") -> Response:
         is_navigable = request.cookies.get(_PLAIN_PAGE_COOKIE) != _PLAIN_PAGE_COOKIE_VALUE
-        return Response(_stub_page_html(base_url, is_navigable), mimetype="text/html")
+        return Response(_stub_page_html(base_url, is_navigable, is_terminal_like), mimetype="text/html")
+
+    def _serve_pty_page() -> Response:
+        return Response(_PTY_PAGE, mimetype="text/html")
 
     def _launch(path: str) -> Response:
         body = request.get_json()
@@ -410,6 +453,7 @@ def _stub_app(base_url: str) -> Flask:
 
     app.add_url_rule("/", view_func=_page, endpoint="stub_page_root", methods=["GET"])
     app.add_url_rule("/__launches", view_func=_serve_posted_launches, endpoint="stub_launches", methods=["GET"])
+    app.add_url_rule("/__pty", view_func=_serve_pty_page, endpoint="stub_pty", methods=["GET"])
     app.add_url_rule("/<path:path>", view_func=_page, endpoint="stub_page", methods=["GET"])
     app.add_url_rule("/<path:path>", view_func=_launch, endpoint="stub_launch", methods=["POST"])
     return app
@@ -633,6 +677,69 @@ def _content_point(page: Page, window_id: str) -> tuple[float, float]:
     """A point over a lower window's page near its content's bottom-left corner, clear of the windows in front."""
     content_box = _box(_window(page, window_id).locator("[data-window-content]"))
     return content_box["x"] + 20, content_box["y"] + content_box["height"] - 20
+
+
+def _pty_frame(page: Page, window_id: str) -> Frame:
+    """The frame a terminal-like window's page nests."""
+    (pty,) = _page_frame(page, window_id).child_frames
+    return pty
+
+
+def _wait_for_focused(page: Page, window_id: str) -> None:
+    """Wait until the window is the focused one, polling every animation frame so the wait costs no more than a few."""
+    page.wait_for_function(
+        "(id) => document.querySelector(`[data-window-id=\"${id}\"]`)?.getAttribute('data-focused') === 'true'",
+        arg=window_id,
+        timeout=15000,
+    )
+
+
+def _now_ms(page: Page) -> float:
+    """The page's clock, in the epoch milliseconds a stub frame reads on its own."""
+    return page.evaluate("() => performance.timeOrigin + performance.now()")
+
+
+def _wait_out_the_focus_grants(page: Page, raised_at: float) -> None:
+    """Wait until the grants the shell posts to a window it raised at ``raised_at`` (``_now_ms``) have all been posted."""
+    page.wait_for_function(
+        "(deadline) => performance.timeOrigin + performance.now() > deadline",
+        arg=raised_at + _FOCUS_GRANT_SCHEDULE_MS,
+        timeout=15000,
+        polling=100,
+    )
+
+
+def _after_animation_frames(page: Page, frames: int = 3) -> None:
+    """Let the page run ``frames`` animation frames: the shell looks at the document's focus once in each."""
+    page.evaluate(
+        """(frames) => new Promise((resolve) => {
+          let left = frames;
+          const tick = () => (--left <= 0 ? resolve(undefined) : requestAnimationFrame(tick));
+          requestAnimationFrame(tick);
+        })""",
+        frames,
+    )
+
+
+def _wait_for_stored_top(server: E2EServer, client_id: str, window_id: str) -> None:
+    """Wait until the client's placement file stacks ``window_id`` last, which is the top."""
+    wait_for(
+        lambda: list(_stored_placements(server.state_dir, client_id))[-1:] == [window_id],
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"the placement file never stacked {window_id} on top",
+    )
+
+
+def _open_a_terminal_like_window_under_a_plain_one(page: Page, server: E2EServer) -> tuple[str, str]:
+    """Open a terminal-like window clear of the shortcuts and wait out the focus grants its raise draws, then a plain
+    window; answers (terminal, plain) once the plain one is focused and the terminal's window lies beneath it."""
+    terminal = _open_via_shortcut(page, server, _SECOND_SHORTCUT_KEY)
+    _move_window_off_the_shortcuts(page, terminal)
+    _wait_out_the_focus_grants(page, _now_ms(page))
+    plain = _open_via_shortcut(page, server)
+    expect(_window(page, plain)).to_have_attribute("data-focused", "true", timeout=15000)
+    return terminal, plain
 
 
 def _assert_close(actual: float, expected: float, what: str) -> None:
@@ -1658,6 +1765,39 @@ def test_pressing_a_lower_window_moves_the_keyboard_to_its_page(e2e_server: E2ES
     first_frame.wait_for_function("() => window.__keys.join('') === 'ab'", timeout=15000)
     assert second_frame.input_value("#held") == "typed"
     assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') === {json.dumps(first)}")
+
+
+@pytest.mark.timeout(90, func_only=False)
+@pytest.mark.parametrize("how", ["press", "taskbar", "op"])
+def test_a_late_focus_grant_to_a_raised_terminal_does_not_undo_a_later_raise_of_another_window(
+    tmp_path: Path, page: Page, how: str
+) -> None:
+    """The shell grants a window it raises the focus three times over a second, which a terminal-like page takes into
+    its nested frame. Raising another window inside that second, by a press on it, its taskbar entry or an agent's
+    focus op (once the shell has saved the first raise, which the op would otherwise race), leaves that window on
+    top: a late grant never lands the focus in the buried window and brings it back."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, is_second_app_terminal_like=True) as server:
+        _land(page, server)
+        terminal, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
+        client_id = _client_id(page)
+
+        raised_at = _now_ms(page)
+        page.mouse.click(*_content_point(page, terminal))
+        _wait_for_focused(page, terminal)
+        if how == "press":
+            page.mouse.click(*_content_point(page, plain))
+        elif how == "taskbar":
+            _taskbar_entry(page, plain).click()
+        else:
+            _wait_for_stored_top(server, client_id, terminal)
+            _broadcast_op(server.base_url, "focus", {"window": plain, "client": client_id})
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true", timeout=15000)
+
+        _wait_out_the_focus_grants(page, raised_at)
+        _after_animation_frames(page)
+        expect(_window(page, plain)).to_have_attribute("data-focused", "true")
+        expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
+        _wait_for_stored_top(server, client_id, plain)
 
 
 @pytest.mark.timeout(90, func_only=False)

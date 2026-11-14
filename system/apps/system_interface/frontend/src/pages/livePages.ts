@@ -223,6 +223,8 @@ export class LivePagesLayer implements PageDriver {
    *  inside or ends (the pull-out-window spec). */
   private tornOutWindowId: string | null = null;
   private lastFocusedWindowId: string | null = null;
+  /** Drops the ``ttyd-focus`` posts still pending for the window last focused. */
+  private cancelFrameFocus: () => void = () => undefined;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
@@ -273,6 +275,7 @@ export class LivePagesLayer implements PageDriver {
     stopWatchingFrameFocus = () => {
       window.removeEventListener("blur", onWindowBlur);
       cancelAnimationFrame(frameRequest);
+      this.cancelFrameFocus();
     };
   }
 
@@ -620,14 +623,24 @@ export class LivePagesLayer implements PageDriver {
   private focusIfChanged(focused: string | null): void {
     if (focused === this.lastFocusedWindowId) return;
     this.lastFocusedWindowId = focused;
+    this.cancelFrameFocus();
     this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page === undefined) return;
-    requestFrameFocus(page.wrapper);
+    this.cancelFrameFocus = requestFrameFocus(page.wrapper, {
+      isStillWanted: () => this.isFocusHolder(page.windowId),
+    });
     // However the window was raised: somebody put it on screen, and a page that binds no contract will say
     // nothing more about what happens in it. A page that has not loaded yet (the shell's boot, a window just
     // opened) may still declare the contract, so its raise says nothing; a click into it still counts.
     if (page.greetedDesktopId !== null) this.noteFocusLandingIn(page);
+  }
+
+  /** Whether ``windowId`` is the window the last reconcile focused and, on the desktop, still the one the store focuses. */
+  private isFocusHolder(windowId: string): boolean {
+    if (this.lastFocusedWindowId !== windowId) return false;
+    const isOnDesktop = this.store.getSoloWindowId() === null && this.mountPolicy.kind === "all";
+    return !isOnDesktop || activeFocusedWindowId(this.store.getState()) === windowId;
   }
 
   /** The window lost focus to a frame: when the frame is a contract-less page's, note the landing. */

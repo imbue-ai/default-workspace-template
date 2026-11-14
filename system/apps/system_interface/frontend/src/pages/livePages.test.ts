@@ -1471,6 +1471,59 @@ describe("raising the window the document's focus lands in", () => {
   });
 });
 
+describe("the focus grants a raised window's page is sent", () => {
+  /** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
+  function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
+    return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    store.restoreWindow("win-2");
+    layer.reconcile();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("posts the focused window's page the grant three times over the retry schedule", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(1);
+    vi.advanceTimersByTime(1000);
+    expect(grantsSeen(grants)).toBe(3);
+  });
+
+  it("drops the grants still pending for a window when another window becomes the focused one", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    expect(grantsSeen(grants)).toBe(1);
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const nextGrants = spyOnFrame("win-1");
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
+    expect(grantsSeen(nextGrants)).toBe(3);
+  });
+
+  it("posts nothing for a window the store has raised another over, before the layer has reconciled", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    store.raiseWindow("win-1");
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
+  });
+
+  it("drops the pending grants of a layer that a newer one replaces", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(100);
+    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(1);
+  });
+});
+
 describe("the phone's mount policy", () => {
   it("lays the shown page over the whole host, keeps the kept one hidden, and destroys every other", () => {
     expect(layer.hasPage("win-1")).toBe(true);
