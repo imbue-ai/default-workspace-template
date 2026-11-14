@@ -93,7 +93,7 @@ _HOME_DESKTOP_ID = "home"
 # How long a negative assertion ("nothing more opened") gives the shell before reading its state.
 _NEGATIVE_SETTLE_MS = 1000
 
-# Longer than the shell takes to post its three focus grants to a window it has raised (terminalFocus.ts).
+# Longer than the shell takes to post its focus grants to a window it has raised.
 _FOCUS_GRANT_SCHEDULE_MS = 1500
 
 # The stub app the machine offers: an app with one launch path, ``new`` at ``/new``, and a
@@ -342,7 +342,7 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # told, and each press and wheel it receives, and its body is taller than the frame so a wheel scrolls it. It
 # installs the served element context menu as a scaffolded app's page does, so a right-click in the frame drafts
 # through the shell. A terminal-like page nests a frame (``_PTY_PAGE``) and passes both its ``shell:shown`` and the
-# shell's ``ttyd-focus`` on to it, as the terminal's wrapper does.
+# shell's ``ttyd-focus`` on to it.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" /><div style="height: 4000px"></div>
 <script type="module">
@@ -403,16 +403,14 @@ window.__openPath = (path, ifPresent) => connection.openPath(path, ifPresent);
 # How long a terminal-like page's pty keeps the thread busy after it takes the focus, as a terminal client starting does.
 _PTY_STALL_MS = 120
 
-# The frame a terminal-like page nests: its input takes the focus when the page grants it, and each grant is recorded.
+# The frame a terminal-like page nests: its input takes the focus when the page grants it, and each grant is counted.
 _PTY_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Pty</title></head><body>
 <input id="pty" value="" />
 <script>
-window.__grants = [];
-window.__focuses = 0;
-window.addEventListener("focus", () => { window.__focuses += 1; });
+window.__grants = 0;
 window.addEventListener("message", (event) => {
   if (event.data?.type !== "ttyd-focus") return;
-  window.__grants.push(performance.timeOrigin + performance.now());
+  window.__grants += 1;
   document.getElementById("pty").focus();
   const busyUntil = performance.now() + __STALL_MS__;
   while (performance.now() < busyUntil);
@@ -710,7 +708,7 @@ def _wait_for_focused(page: Page, window_id: str) -> None:
 
 
 def _now_ms(page: Page) -> float:
-    """The page's clock, in the epoch milliseconds a stub frame reads on its own."""
+    """The page's clock, in epoch milliseconds."""
     return page.evaluate("() => performance.timeOrigin + performance.now()")
 
 
@@ -1866,7 +1864,7 @@ def test_reloading_the_shell_leaves_the_top_window_on_top_over_a_terminal_like_w
 
         page.reload()
         _land(page, server)
-        _pty_frame(page, terminal).wait_for_function("() => window.__grants.length > 0", timeout=15000)
+        _pty_frame(page, terminal).wait_for_function("() => window.__grants > 0", timeout=15000)
         _after_animation_frames(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
@@ -1889,14 +1887,14 @@ def test_a_round_trip_through_another_desktop_leaves_the_top_window_on_top_over_
         client_id = _client_id(page)
         other_desktop = _create_desktop_shown_on(server, [page])
         _wait_for_stored_top(server, client_id, plain)
-        grants_before = _pty_frame(page, terminal).evaluate("() => window.__grants.length")
+        grants_before = _pty_frame(page, terminal).evaluate("() => window.__grants")
 
         _switch_to_desktop(page, other_desktop)
         _expect_on_desktop(page, other_desktop)
         _switch_to_desktop(page, _HOME_DESKTOP_ID)
         _expect_on_desktop(page, _HOME_DESKTOP_ID)
         _pty_frame(page, terminal).wait_for_function(
-            "(before) => window.__grants.length > before", arg=grants_before, timeout=15000
+            "(before) => window.__grants > before", arg=grants_before, timeout=15000
         )
         _after_animation_frames(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
@@ -1922,15 +1920,13 @@ def test_an_agent_reloading_a_terminal_like_window_beneath_the_top_one_leaves_th
         )
         _wait_for_stored_top(server, client_id, plain)
 
-        _page_frame(page, terminal).evaluate("() => { window.__beforeRefresh = true; }")
+        terminal_frame = _page_frame(page, terminal)
+        terminal_frame.evaluate("() => { window.__beforeRefresh = true; }")
         _broadcast_op(server.base_url, "refresh", {"window": terminal, "client": client_id})
-        wait_for(
-            lambda: _page_frame(page, terminal).evaluate("() => window.__beforeRefresh === undefined"),
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="the terminal-like window never reloaded",
+        terminal_frame.wait_for_function(
+            "() => window.__beforeRefresh === undefined && window.__handshake !== undefined", timeout=15000
         )
-        _pty_frame(page, terminal).wait_for_function("() => window.__grants.length > 0", timeout=15000)
+        _pty_frame(page, terminal).wait_for_function("() => window.__grants > 0", timeout=15000)
         _after_animation_frames(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")

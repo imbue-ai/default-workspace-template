@@ -1497,7 +1497,7 @@ describe("raising the window the document's focus lands in", () => {
   });
 
   it("takes a landing that answers the latest ttyd-focus posted to the page for no press, however late the post", () => {
-    // win-2's grants go out at three delays; the second is posted 300 ms in, just before the user chooses win-1.
+    // A later grant to win-2 goes out just before the user chooses win-1.
     vi.advanceTimersByTime(0);
     pastThePromptSettle();
     vi.advanceTimersByTime(300);
