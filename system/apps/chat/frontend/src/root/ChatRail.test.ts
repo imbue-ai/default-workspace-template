@@ -16,8 +16,9 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { setParticipantsForTesting } from "../models/Participants";
-import { ChatRail, rowMenuRows } from "./ChatRail";
+import { ChatRail, railContextMenuRoutes, rowMenuRows } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
@@ -222,5 +223,79 @@ describe("ChatRail rooms", () => {
     // A room's reader is stopped and restarted from the menu like any chat's agent, and never made the main chat.
     expect(labelsOf(lounge)).toEqual(["Rename", "Stop room", "-", "Delete room"]);
     expect(labelsOf(stopped)).toEqual(["Rename", "Restart room", "-", "Delete room"]);
+  });
+});
+
+describe("ChatRail right-click", () => {
+  let uninstall: (() => void) | null = null;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = null;
+  });
+
+  /** The rail over two chats, under the root's element menu wired as the root wires it. */
+  function mountUnderElementMenu(hasNativeMenu = false): { openElsewhere: ReturnType<typeof vi.fn> } {
+    const attrs = chatRailAttrsFixture({ rows: [chatRowFixture("agent-1"), chatRowFixture("agent-2")] });
+    const mounted = document.createElement("div");
+    document.body.appendChild(mounted);
+    root = mounted;
+    m.mount(mounted, { view: () => m(ChatRail, attrs) });
+    const openElsewhere = vi.fn();
+    uninstall = installElementContextMenu({
+      draft: () => undefined,
+      isDraftAvailable: () => true,
+      openLink: () => undefined,
+      hasNativeMenu: () => hasNativeMenu,
+      ...railContextMenuRoutes(() => attrs, openElsewhere),
+    });
+    return { openElsewhere };
+  }
+
+  function rightClick(element: Element): MouseEvent {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 30 });
+    element.dispatchEvent(event);
+    m.redraw.sync();
+    return event;
+  }
+
+  it("opens the row's own menu, its verbs then the element menu's rows, and leaves the rest of the rail elsewhere", () => {
+    const { openElsewhere } = mountUnderElementMenu();
+    expect(rightClick(root!.querySelector('[data-chat-id="agent-2"]')!).defaultPrevented).toBe(true);
+    const keys = [...document.querySelectorAll(".chat-rail-menu [data-menu-row]")].map((row) =>
+      row.getAttribute("data-menu-row"),
+    );
+    expect(keys.slice(0, 2)).toEqual(["rename", "make-main"]);
+    expect(keys).toContain("delete");
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    expect(openElsewhere).not.toHaveBeenCalled();
+    rightClick(root!.querySelector(".chat-rail")!);
+    expect(openElsewhere).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a right-click in a row's rename field to the field, without the row's verbs", () => {
+    const { openElsewhere } = mountUnderElementMenu();
+    root!.querySelector('[data-chat-id="agent-2"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    m.redraw.sync();
+    const field = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input')!;
+    rightClick(field);
+    expect(document.querySelector(".chat-rail-menu")).toBeNull();
+    expect(openElsewhere).toHaveBeenCalledTimes(1);
+    const [rows] = openElsewhere.mock.calls[0] as [{ key?: string }[]];
+    expect(rows.map((row) => row.key)).not.toContain("rename");
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
+  it("where the desktop app draws a native menu, still opens a row's own menu, and leaves its rename field to the app", () => {
+    const { openElsewhere } = mountUnderElementMenu(true);
+    expect(rightClick(root!.querySelector('[data-chat-id="agent-2"]')!).defaultPrevented).toBe(true);
+    expect(document.querySelector('.chat-rail-menu [data-menu-row="rename"]')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    root!.querySelector('[data-chat-id="agent-2"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    m.redraw.sync();
+    const field = root!.querySelector<HTMLInputElement>('[data-chat-id="agent-2"] .chat-rail-rename-input')!;
+    expect(rightClick(field).defaultPrevented).toBe(false);
+    expect(openElsewhere).not.toHaveBeenCalled();
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 });

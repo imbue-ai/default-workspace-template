@@ -8,9 +8,44 @@
 import m from "mithril";
 
 import type { ContextMenuPoint } from "../context_menu";
-import type { ContextMenuRow } from "../context_menu_rows";
+import type { ContextMenuRow, ContextMenuSubmenuChildRow } from "../context_menu_rows";
 import { anchorForPoint } from "../menu-position";
 import { createMenu, type Menu, type MenuRow } from "./menu";
+
+/** The shared Menu's row kinds the element menu leaves out on purpose: each holds a Mithril view or a value with
+ *  nothing to pick, which a page without the framework cannot be handed. */
+type MenuOnlyRowKind = "value" | "custom";
+
+type MustBeNever<Kind extends never> = Kind;
+
+/** Fails the build when the shared Menu gains a row kind the element menu neither takes nor names above, so a new
+ *  kind is given to every app's right-click menu, or left out, by decision. */
+export type UnplacedMenuRowKind = MustBeNever<Exclude<MenuRow["kind"], ContextMenuRow["kind"] | MenuOnlyRowKind>>;
+
+function closingOnToggle(row: ContextMenuSubmenuChildRow, close: () => void): ContextMenuSubmenuChildRow {
+  if (row.kind !== "check") return row;
+  return {
+    ...row,
+    onToggle: () => {
+      row.onToggle();
+      close();
+    },
+  };
+}
+
+/**
+ * The element menu's rows as the shared Menu takes them for a right-click menu. A check row's pick closes the menu
+ * here, as it does in the framework-free renderer: the shared Menu's own check row stays up for another toggle,
+ * which a page without the framework cannot offer, and which rows captured at the right-click would answer with
+ * the mark they were captured with.
+ */
+export function menuRowsOfContextMenu(rows: readonly ContextMenuRow[], close: () => void): MenuRow[] {
+  return rows.map((row) =>
+    row.kind === "submenu"
+      ? { ...row, rows: () => row.rows().map((child) => closingOnToggle(child, close)) }
+      : closingOnToggle(row, close),
+  );
+}
 
 export interface ContextMenuOpener {
   /** What ``installElementContextMenu`` calls with the rows and the pointer. */
@@ -37,7 +72,7 @@ export function createContextMenuOpener(ownerDocument: Document = document): Con
   return {
     menu,
     open(nextRows, point) {
-      rows = nextRows;
+      rows = menuRowsOfContextMenu(nextRows, () => menu.close());
       menu.open(anchorForPoint(point.x, point.y));
     },
     dispose() {

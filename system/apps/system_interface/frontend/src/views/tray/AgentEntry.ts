@@ -19,7 +19,7 @@ export interface AgentEntryAttrs {
   /** Whether the agent just posted into a room or a chat just notified the user, which the entry hops for. */
   readonly isHopping: boolean;
   readonly onClick: () => void;
-  readonly onContextMenu: (x: number, y: number) => void;
+  readonly onContextMenu: () => void;
   readonly onHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
 }
@@ -40,10 +40,7 @@ export const AgentEntry: m.Component<AgentEntryAttrs> = {
         style: { width: `${AGENT_PICTURE_SIZE_PX}px`, height: `${AGENT_PICTURE_SIZE_PX}px` },
         "aria-label": attrs.workspaceName === "" ? "The agent" : attrs.workspaceName,
         onclick: attrs.onClick,
-        oncontextmenu: (event: MouseEvent) => {
-          event.preventDefault();
-          attrs.onContextMenu(event.clientX, event.clientY);
-        },
+        oncontextmenu: attrs.onContextMenu,
         onmouseenter: (event: MouseEvent) => attrs.onHoverStart(event.currentTarget as HTMLElement),
         onmouseleave: attrs.onHoverEnd,
       },

@@ -22,7 +22,6 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { backdropFrameOf, frameForState, frameToPixels } from "../geometry/frames";
 import type { PixelRect, PixelSize } from "../geometry/frames";
 import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
@@ -158,7 +157,6 @@ export interface OverviewAttrs {
   readonly onRename: (desktopId: string, name: string) => void;
   /** The viewer's own desktops in their new order (every one of them). */
   readonly onReorder: (desktopIds: readonly string[]) => void;
-  readonly onDesktopContextMenu: (desktopId: string, x: number, y: number, target: Element) => void;
   readonly onConfirmDelete: (desktopId: string) => void;
   readonly onKeepDesktop: () => void;
   readonly onNewDesktop: () => void;
@@ -392,10 +390,6 @@ export function Overview(): m.Component<OverviewAttrs> {
               ...(desktop.wallpaper === null ? {} : { backgroundImage: wallpaperBackgroundImage(desktop.wallpaper) }),
             },
             onclick: () => attrs.onSwitchDesktop(desktop.id),
-            oncontextmenu: (event: MouseEvent) => {
-              event.preventDefault();
-              attrs.onDesktopContextMenu(desktop.id, event.clientX, event.clientY, targetElementOf(event));
-            },
           },
           miniWindows(attrs, desktop, size),
         ),

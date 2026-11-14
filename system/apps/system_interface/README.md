@@ -60,10 +60,14 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
   into this app's static output; every app serves those same files from its
   own origin, since a cross-origin module import carries no cookie and the
-  forwarder refuses it. The desktop's own chrome draws the element menu too: a
-  right-click the views leave alone opens it, and the entry, shortcut,
-  backdrop, and overview thumbnail menus end with its reference rows
-  (`docs/system/blueprint/element-reference-menu/`).
+  forwarder refuses it. The desktop's own chrome draws the element menu too,
+  for every right-click on it: on an entry, a shortcut, the launcher's row of
+  an app shortcut, the bare backdrop, an overview thumbnail, or the tray's
+  agent, the menu leads with that thing's own rows
+  (`docs/system/blueprint/element-reference-menu/`). Where the Imbue Studio
+  desktop app draws a native menu, a right-click on text being edited, on the
+  selection, or on a plain link, and any with Shift held, is left to it
+  (the plan's section 11).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `/api/desktops/order`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),

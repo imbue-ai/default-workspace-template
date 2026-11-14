@@ -6,7 +6,8 @@
  * The rows are ordered and grouped by ``rows.ts``. The main chat leads in a medium weight, its group set
  * off from the rest by a rule, since it is where a text with no chat of its own goes. A row is renameable in place (double-click,
  * or the pencil under the pointer), and a right-click opens a menu: rename, stop or restart,
- * delete (which asks first). A stopped chat stays in the list faded with a pause mark; one
+ * delete (which asks first). The right-click is the root's element menu's, which reads a row's verbs from here and
+ * has this list draw them (``railContextMenuRoutes``). A stopped chat stays in the list faded with a pause mark; one
  * being deleted is crossed out until the list drops it.
  *
  * The list's right edge drags to resize it (``railWidth``); a double-click there puts back the
@@ -22,8 +23,10 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
+import { menuRowsOfContextMenu } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { ContextMenuOpen, ContextMenuOptions } from "@imbue/workspace-ui/src/context_menu";
+import { elementReferenceRows, type ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
@@ -92,9 +95,9 @@ const deletingChatIds = new Set<string>();
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
 let menuChatId: string | null = null;
-// The reference rows for the element the open menu was opened on, built at the right-click; none
-// for a menu opened from a row's kebab.
-let menuReferenceRows: readonly MenuRow[] = [];
+// The rows after the verbs: the element menu's for the element right-clicked; none for a menu opened from a row's
+// kebab.
+let menuTrailingRows: readonly ContextMenuRow[] = [];
 
 const railMenu = createMenu({
   placement: "below",
@@ -104,7 +107,7 @@ const railMenu = createMenu({
   extraClass: "chat-rail-menu",
   onClose: () => {
     menuChatId = null;
-    menuReferenceRows = [];
+    menuTrailingRows = [];
   },
 });
 
@@ -179,7 +182,11 @@ export type RowReferenceContext = Pick<
 >;
 
 /** The reference rows of a menu about ``element``, opened at ``click``: what a right-click on it offers. */
-export function referenceRowsFor(attrs: RowReferenceContext, element: Element, click: ReferenceClick): MenuRow[] {
+export function referenceRowsFor(
+  attrs: RowReferenceContext,
+  element: Element,
+  click: ReferenceClick,
+): ContextMenuRow[] {
   const reference = describeElement(element, click, attrs.referenceScope);
   return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
 }
@@ -206,9 +213,13 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   });
 }
 
-/** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,
- *  and none for a menu opened from a kebab. */
-export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: readonly MenuRow[] = []): MenuRow[] {
+/** The rows a chat's menu offers, ending with ``trailingRows``: the element menu's rows for the element
+ *  right-clicked, the reference rows for the phone header's kebab, and none for a row's kebab. */
+export function rowMenuRows(
+  attrs: RowMenuContext,
+  row: ChatRow,
+  trailingRows: readonly ContextMenuRow[] = [],
+): ContextMenuRow[] {
   const isStopped = row.status === "stopped";
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
@@ -222,7 +233,7 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
             key: "make-main",
             label: "Make main chat",
             onSelect: () => makeMainFromMenu(row),
-          } as MenuRow,
+          } satisfies ContextMenuRow,
         ]),
     // The main chat is kept running (the chat app wakes it whenever it is found stopped), and a chat that is not an
     // agent yet has nothing to stop, so neither offers these. A room's reader is stopped and restarted like any
@@ -235,7 +246,7 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
             key: isStopped ? "start" : "stop",
             label: `${isStopped ? "Restart" : "Stop"} ${isRoom(row) ? "room" : "chat"}`,
             onSelect: () => setRunningFromMenu(row, isStopped),
-          } as MenuRow,
+          } satisfies ContextMenuRow,
         ]),
     { kind: "divider" },
     {
@@ -245,14 +256,43 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
       tone: "danger",
       onSelect: () => deleteFromMenu(attrs, row),
     },
-    ...(referenceRows.length === 0 ? [] : [{ kind: "divider" } as MenuRow, ...referenceRows]),
+    ...(trailingRows.length === 0 ? [] : [{ kind: "divider" } satisfies ContextMenuRow, ...trailingRows]),
   ];
 }
 
-/** The reference rows for a right-click on a row's element, built as the menu opens. */
-function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow[] {
-  const target = targetOfEvent(event, document);
-  return referenceRowsFor(attrs, target.element, target.click);
+/** The row ``element`` is in, or null off the rows and on one being deleted or renamed, which offers no verbs: a
+ *  right-click in the rename field is the field's, for its edit rows. */
+function railRowOf(context: RowMenuContext, element: Element): ChatRow | null {
+  const chatId = element.closest(".chat-rail-row[data-chat-id]")?.getAttribute("data-chat-id") ?? null;
+  if (chatId === null || isDeleting(chatId) || isRenaming(chatId)) return null;
+  return context.rows.find((row) => row.chatId === chatId) ?? null;
+}
+
+/** The root's element menu over the rail (``installElementContextMenu``'s ``extraRows`` and ``open``): a row's
+ *  verbs lead its menu. The menu is the rail's own, which reads the verbs afresh as it draws, and a right-click off
+ *  the rows goes to ``openElsewhere``. */
+export function railContextMenuRoutes(
+  context: () => RowMenuContext,
+  openElsewhere: ContextMenuOpen,
+): Required<Pick<ContextMenuOptions, "extraRows" | "open">> {
+  return {
+    extraRows: (target) => {
+      const current = context();
+      const row = railRowOf(current, target.element);
+      return row === null ? [] : rowMenuRows(current, row);
+    },
+    open: (rows, point, target, followingRows) => {
+      const row = railRowOf(context(), target.element);
+      if (row === null) {
+        openElsewhere(rows, point, target, followingRows);
+        return;
+      }
+      menuChatId = row.chatId;
+      menuTrailingRows = followingRows;
+      railMenu.open(anchorForPoint(point.x, point.y));
+      m.redraw();
+    },
+  };
 }
 
 // The status marks
@@ -280,7 +320,7 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
 /** Open a row's menu from its kebab: the same verbs as a right-click, hung off the kebab. */
 function openRowMenu(row: ChatRow, kebab: HTMLElement): void {
   menuChatId = row.chatId;
-  menuReferenceRows = [];
+  menuTrailingRows = [];
   railMenu.open(kebab);
 }
 
@@ -321,7 +361,11 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
           railGroups(attrs),
         ),
         attrs.isTouch ? null : resizeHandle(),
-        menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuReferenceRows)),
+        menuRow === undefined
+          ? null
+          : railMenu.view(
+              menuRowsOfContextMenu(rowMenuRows(attrs, menuRow, menuTrailingRows), () => railMenu.close()),
+            ),
       ],
     );
   },
@@ -489,13 +533,6 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
       ondblclick: () => beginRename(row),
-      oncontextmenu: (event: MouseEvent) => {
-        event.preventDefault();
-        if (isDeleting) return;
-        menuChatId = row.chatId;
-        menuReferenceRows = referenceRowsForEvent(attrs, event);
-        railMenu.open(anchorForPoint(event.clientX, event.clientY));
-      },
     },
     [
       // A room wears the people glyph where an idle chat wears its dot; while an agent it asked works, the dot.

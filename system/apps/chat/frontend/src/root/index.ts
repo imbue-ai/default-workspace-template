@@ -58,7 +58,7 @@ import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
-import { ChatRail } from "./ChatRail";
+import { ChatRail, railContextMenuRoutes } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
@@ -561,14 +561,14 @@ function bootstrap(): void {
   isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
-  // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append
-  // the reference rows to their own menu instead.
+  // The element menu over the root's own chrome (element-reference-menu plan section 7.3), a rail row's verbs leading
+  // the menu of a right-click on the row.
   installElementContextMenu({
     connection: shell,
     handshake: () => handshake,
     draft: draftReference,
     isDraftAvailable: isReferenceDraftAvailable,
-    open: createContextMenuOpener().open,
+    ...railContextMenuRoutes(() => railAttrs(railRows(), compactQuery.matches), createContextMenuOpener().open),
   });
   // The pointer hides while text is typed into the root's own fields (the send picker); the inner
   // chat frame does the same for itself.
