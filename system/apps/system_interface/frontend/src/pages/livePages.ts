@@ -684,6 +684,8 @@ export class LivePagesLayer implements PageDriver {
       this.lastWatcherRaiseFrame !== null &&
       this.watchedFrames - this.lastWatcherRaiseFrame < WATCHER_RAISE_HOLD_FRAMES
     ) {
+      // A press set aside is the user moving on: the focused window's pending grants must not take the focus from it.
+      this.cancelFrameFocus();
       return;
     }
     this.lastWatcherRaiseFrame = this.watchedFrames;

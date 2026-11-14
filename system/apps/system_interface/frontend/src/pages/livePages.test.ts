@@ -123,6 +123,11 @@ function spyOnFrame(windowId: string): ReturnType<typeof vi.fn> {
   return spy;
 }
 
+/** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
+function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
+  return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
+}
+
 function load(windowId: string): void {
   frameOf(windowId).dispatchEvent(new Event("load"));
 }
@@ -1534,6 +1539,18 @@ describe("raising the window the document's focus lands in", () => {
     expect(topWindowId()).toBe("win-2");
   });
 
+  it("drops the focused window's pending focus grants once the hold sets aside a landing in another window's page", () => {
+    blurIntoFrameOf("win-1");
+    layer.reconcile();
+    const grants = spyOnFrame("win-1");
+    frameOf("win-2").focus();
+    runFrame();
+    vi.advanceTimersByTime(2000);
+    expect(grantsSeen(grants)).toBe(0);
+    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
+    expect(topWindowId()).toBe("win-2");
+  });
+
   it("raises a few times, not on every frame, for two pages that each take the focus back when they lose it", () => {
     const raise = vi.spyOn(store, "raiseWindow");
     const frames = 6 * WATCHER_RAISE_HOLD_FRAMES;
@@ -1570,11 +1587,6 @@ describe("raising the window the document's focus lands in", () => {
 });
 
 describe("the focus grants a raised window's page is sent", () => {
-  /** The ``ttyd-focus`` messages ``spy`` (from ``spyOnFrame``) has seen. */
-  function grantsSeen(spy: ReturnType<typeof vi.fn>): number {
-    return spy.mock.calls.filter(([message]) => (message as { type?: string }).type === "ttyd-focus").length;
-  }
-
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     store.restoreWindow("win-2");
