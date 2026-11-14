@@ -79,6 +79,11 @@ function runFrame(): void {
   for (const callback of due) callback(0);
 }
 
+/** Run the animation frames the shell takes to be past a prompt. */
+function pastThePromptSettle(): void {
+  for (let frame = 0; frame <= SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+}
+
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
 function renderChrome(...extraWindowIds: string[]): void {
   windows.innerHTML = "";
@@ -1479,11 +1484,6 @@ describe("raising the window the document's focus lands in", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
-  /** Run the animation frames the shell takes to be past a prompt. */
-  function pastThePromptSettle(): void {
-    for (let frame = 0; frame <= SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
-  }
-
   it("takes a landing that answers the shell:shown just posted to the page for no press: no raise, the focus handed back by the next frame", () => {
     const raise = vi.spyOn(store, "raiseWindow");
     load("win-1");
@@ -1494,6 +1494,28 @@ describe("raising the window the document's focus lands in", () => {
     expect(raise).not.toHaveBeenCalled();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     expect(document.activeElement).toBe(host);
+  });
+
+  it("hands the focus back on the next frame for a landing the window's blur took for an answer at the last settle frame", () => {
+    const raise = vi.spyOn(store, "raiseWindow");
+    load("win-1");
+    for (let frame = 0; frame < SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+    blurIntoFrameOf("win-1");
+    expect(raise).not.toHaveBeenCalled();
+    runFrame();
+    expect(raise).not.toHaveBeenCalled();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("takes a press that comes after a landing the blur took for an answer, once that landing is gone", () => {
+    load("win-1");
+    for (let frame = 0; frame < SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+    blurIntoFrameOf("win-1");
+    host.focus();
+    runFrame();
+    blurIntoFrameOf("win-1");
+    expect(topWindowId()).toBe("win-1");
   });
 
   it("takes a landing that answers the latest ttyd-focus posted to the page for no press, however late the post", () => {

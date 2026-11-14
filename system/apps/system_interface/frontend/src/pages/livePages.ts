@@ -240,6 +240,8 @@ export class LivePagesLayer implements PageDriver {
   private watchedFrames = 0;
   /** The frame the watcher last raised a window in; null before any. */
   private lastWatcherRaiseFrame: number | null = null;
+  /** The page whose landing the window's blur took for an answer to a prompt: the next frame hands its focus back. */
+  private pageToHandBack: LivePage | null = null;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
@@ -286,6 +288,7 @@ export class LivePagesLayer implements PageDriver {
       frameRequest = requestAnimationFrame(watchActiveFrame);
       this.watchedFrames += 1;
       this.raiseWindowOfActiveFrame(true);
+      this.pageToHandBack = null;
     };
     frameRequest = requestAnimationFrame(watchActiveFrame);
     stopWatchingFrameFocus = () => {
@@ -675,9 +678,10 @@ export class LivePagesLayer implements PageDriver {
     if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
     // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
     if (page.windowId === activeFocusedWindowId(state)) return;
-    if (this.isAnswerToPrompt(page)) {
+    if (page === this.pageToHandBack || this.isAnswerToPrompt(page)) {
       // The focus cannot be handed back from inside the blur event; the next frame does.
       if (canHandBack) this.host.focus({ preventScroll: true });
+      else this.pageToHandBack = page;
       return;
     }
     if (
