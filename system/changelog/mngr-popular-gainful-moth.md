@@ -1,0 +1,1 @@
+`workspace_ui` gains `isImeKeydown`, which the chat frontend's text fields use to leave the keystrokes of an input-method composition to the input method, so committing a composition no longer sends a message early (see the chat app's entry).

@@ -1,0 +1,1 @@
+`keybindings.ts` exports `isImeKeydown(event)`, which says whether a keydown belongs to an input-method composition: `isComposing` is set, or `keyCode` is the value WebKit reports for a consumed key after `compositionend` has already fired. A text field calls it before acting on Enter, Escape, Tab or the arrows.

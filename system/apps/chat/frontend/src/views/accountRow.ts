@@ -17,6 +17,7 @@ import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from ".
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { isImeKeydown } from "@imbue/workspace-ui/src/keybindings";
 import * as css from "./modelProviderMenuStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
 
@@ -133,6 +134,7 @@ function renameField(opts: AccountRowOptions): m.Vnode {
       commitRename(state, row, opts.onChanged);
     },
     onkeydown: (event: KeyboardEvent) => {
+      if (isImeKeydown(event)) return;
       if (event.key === "Enter") (event.target as HTMLInputElement).blur();
       else if (event.key === "Escape") endRename(state);
     },
