@@ -329,11 +329,12 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
-# told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
-# drafts through the shell.
+# its frame to move it. Its ``#held`` input is state no reload survives, it records each shown and hidden it is
+# told, and each press and wheel it receives, and its body is taller than the frame so a wheel scrolls it. It
+# installs the served element context menu as a scaffolded app's page does, so a right-click in the frame drafts
+# through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
-<div id="where"></div><input id="held" value="" />
+<div id="where"></div><input id="held" value="" /><div style="height: 4000px"></div>
 <script type="module">
 import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
 import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
@@ -345,8 +346,10 @@ const show = (path) => { where.textContent = path; document.title = titleOf(path
 show(here());
 window.__navigations = [];
 window.__presses = 0;
+window.__wheels = 0;
 window.__visibility = [];
 window.addEventListener("pointerdown", () => { window.__presses += 1; });
+window.addEventListener("wheel", () => { window.__wheels += 1; }, { passive: true });
 const handlers = {
   onHandshake(handshake) {
     window.__handshake = handshake;
@@ -626,10 +629,10 @@ def _open_a_second_window_over_the_first(page: Page, server: E2EServer) -> tuple
     return first, second
 
 
-def _press_shield(page: Page, window_id: str) -> None:
-    """A press on a lower window's content, which its shield takes, near the shield's bottom-left corner."""
-    shield_box = _box(_window(page, window_id).locator("[data-window-shield]"))
-    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+def _content_point(page: Page, window_id: str) -> tuple[float, float]:
+    """A point over a lower window's page near its content's bottom-left corner, clear of the windows in front."""
+    content_box = _box(_window(page, window_id).locator("[data-window-content]"))
+    return content_box["x"] + 20, content_box["y"] + content_box["height"] - 20
 
 
 def _assert_close(actual: float, expected: float, what: str) -> None:
@@ -1521,34 +1524,82 @@ def test_every_theme_keeps_a_window_movable_resizable_from_every_edge_and_its_co
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_events(
-    e2e_server: E2EServer, page: Page
-) -> None:
-    """Two windows: the later one is focused and its page takes the pointer; a press on the earlier one's content
-    raises it (the shield takes the press), after which a real click into its content reaches its page through the
-    transparent chrome, and the stack order is what the placement file says."""
+def test_pressing_a_lower_window_reaches_its_page_and_raises_it(e2e_server: E2EServer, page: Page) -> None:
+    """Two windows: the later one is focused. No shield lies over the earlier one's content, so a real press there
+    reaches its page, and the shell raises the window the press gave the document's focus to, in the stack the
+    placement file stores."""
     _land(page, e2e_server)
     first, second = _open_a_second_window_over_the_first(page, e2e_server)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
-    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(1)
+    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
     expect(_window(page, second).locator("[data-window-shield]")).to_have_count(0)
 
-    _press_shield(page, first)
-    expect(_window(page, first)).to_have_attribute("data-focused", "true")
-    expect(_window(page, second)).to_have_attribute("data-focused", "false")
-    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
-
-    content_box = _box(_window(page, first).locator("[data-window-content]"))
     first_frame = _page_frame(page, first)
     assert first_frame.evaluate("() => window.__presses") == 0
-    page.mouse.click(content_box["x"] + content_box["width"] / 2, content_box["y"] + content_box["height"] / 2)
+    page.mouse.click(*_content_point(page, first))
     first_frame.wait_for_function("() => window.__presses === 1", timeout=15000)
+    expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
+    expect(_window(page, second)).to_have_attribute("data-focused", "false")
     client_id = _client_id(page)
 
     def _first_on_top() -> bool:
         return list(_stored_placements(e2e_server.state_dir, client_id))[-1:] == [first]
 
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_right_click_on_an_unfocused_window_opens_its_pages_own_menu_and_raises_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A right-click on a lower window's content reaches its page, which opens its own element menu, and the focus
+    the press gave the page raises the window."""
+    _land(page, e2e_server)
+    first, _second = _open_a_second_window_over_the_first(page, e2e_server)
+    first_frame = _page_frame(page, first)
+
+    page.mouse.click(*_content_point(page, first), button="right")
+    expect(first_frame.locator("[data-context-menu]")).to_be_visible(timeout=15000)
+    expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_wheel_over_an_unfocused_window_scrolls_its_page_without_raising_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """Hovering an unfocused window and scrolling reaches its page, with no press first, and leaves the stack alone."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    expect(_window(page, first)).to_have_attribute("data-focused", "false")
+    first_frame = _page_frame(page, first)
+    assert first_frame.evaluate("() => [window.__wheels, window.scrollY]") == [0, 0]
+
+    page.mouse.move(*_content_point(page, first))
+    page.mouse.wheel(0, 300)
+    first_frame.wait_for_function("() => window.__wheels > 0 && window.scrollY > 0", timeout=15000)
+    expect(_window(page, first)).to_have_attribute("data-focused", "false")
+    expect(_window(page, second)).to_have_attribute("data-focused", "true")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_launcher_shields_every_window_and_its_dismissing_press_does_not_reach_a_page(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """While the launcher is open every window, the focused one too, has a shield over its content, so the press that
+    dismisses the launcher reaches the shell and not the page under it; the shields go with the launcher."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    first_frame = _page_frame(page, first)
+
+    _open_launcher(page)
+    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(1)
+    expect(_window(page, second).locator("[data-window-shield]")).to_have_count(1)
+    page.mouse.click(*_content_point(page, first))
+    expect(page.locator("[data-launcher-overlay]")).to_have_count(0)
+    expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
+    expect(_window(page, second).locator("[data-window-shield]")).to_have_count(0)
+    page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+    assert first_frame.evaluate("() => window.__presses") == 0
 
 
 # The animation frames a page runs in half a second: none while the browser is not rendering it.
@@ -1586,25 +1637,27 @@ def test_a_page_a_window_in_front_wholly_covers_stops_rendering_until_uncovered(
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_raising_a_window_by_its_content_takes_the_focus_off_the_window_now_under_it(
-    e2e_server: E2EServer, page: Page
-) -> None:
-    """A press on a lower window's content raises it without the press reaching any page; the page that held the
-    keyboard (the one typed in last) must lose it, or keys go to a window the user can no longer see, and the
-    browser hands that page the focus back when the user returns from another application, which raises it again."""
+def test_pressing_a_lower_window_moves_the_keyboard_to_its_page(e2e_server: E2EServer, page: Page) -> None:
+    """A press on a lower window's content gives its page the keyboard along with the raise: keys typed after it go
+    to that page, and the page that held the keyboard (the one typed in last) loses it."""
     _land(page, e2e_server)
     first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    first_frame = _page_frame(page, first)
     second_frame = _page_frame(page, second)
+    first_frame.evaluate(
+        "() => { window.__keys = []; window.addEventListener('keydown', (e) => window.__keys.push(e.key)); }"
+    )
     second_frame.click("#held")
     page.keyboard.type("typed")
     assert second_frame.input_value("#held") == "typed"
 
-    _press_shield(page, first)
-    expect(_window(page, first)).to_have_attribute("data-focused", "true")
-    page.keyboard.type(" stray")
+    page.mouse.click(*_content_point(page, first))
+    expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
+    page.keyboard.type("ab")
 
+    first_frame.wait_for_function("() => window.__keys.join('') === 'ab'", timeout=15000)
     assert second_frame.input_value("#held") == "typed"
-    assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') !== {json.dumps(second)}")
+    assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') === {json.dumps(first)}")
 
 
 @pytest.mark.timeout(90, func_only=False)
