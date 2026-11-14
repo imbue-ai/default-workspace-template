@@ -72,7 +72,7 @@ let layer: LivePagesLayer;
 let pendingFrames: Map<number, FrameRequestCallback>;
 let frameSpies: MockInstance[];
 
-/** Run every animation frame requested so far, as the browser's next frame would. */
+/** Run every animation frame requested so far. */
 function runFrame(): void {
   const due = [...pendingFrames.values()];
   pendingFrames.clear();
@@ -1324,13 +1324,16 @@ describe("the contract", () => {
 describe("raising the window the document's focus lands in", () => {
   const CASCADE_RECT = { left: 50, top: 48, width: 600, height: 560 };
 
+  /** A frame in the document that is no page of the shell's. */
+  let strayFrame: HTMLIFrameElement | null = null;
+
   /** The window the active desktop's stack ends with. */
   function topWindowId(): string | undefined {
     const placements = activePlacements(store.getState());
     return placements[placements.length - 1]?.window_id;
   }
 
-  /** The window loses focus to ``windowId``'s frame, as it does when the focus comes from the shell's own document. */
+  /** Focus ``windowId``'s frame and fire the window's blur. */
   function blurIntoFrameOf(windowId: string): void {
     frameOf(windowId).focus();
     window.dispatchEvent(new Event("blur"));
@@ -1338,12 +1341,13 @@ describe("raising the window the document's focus lands in", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    // win-2 focused, win-1 behind it.
     store.restoreWindow("win-2");
     layer.reconcile();
   });
 
   afterEach(() => {
+    strayFrame?.remove();
+    strayFrame = null;
     vi.useRealTimers();
   });
 
@@ -1376,20 +1380,18 @@ describe("raising the window the document's focus lands in", () => {
     window.dispatchEvent(new Event("blur"));
     runFrame();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    const other = document.createElement("iframe");
-    document.body.appendChild(other);
-    other.focus();
+    strayFrame = document.createElement("iframe");
+    document.body.appendChild(strayFrame);
+    strayFrame.focus();
     window.dispatchEvent(new Event("blur"));
     runFrame();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    other.remove();
   });
 
   it("does not raise the window the shell just moved the focus away from", () => {
     frameOf("win-2").focus();
     runFrame();
-    // Raised by something other than a press (a taskbar entry, an agent's focus): the document's focus stays in
-    // win-2's page until the redraw's reconcile takes it off.
+    // The focus stays in win-2's page until the next reconcile.
     store.raiseWindow("win-1");
     runFrame();
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");

@@ -344,7 +344,7 @@ describe("a window's travel", () => {
     travelled = { ...travelled, left };
   }
 
-  /** The frames requested for the travel's follow, whatever else (the live pages' own watcher) requests. */
+  /** The frames requested for the travel's follow. */
   function travelFramesRequested(scheduled: MockInstance): unknown[] {
     return scheduled.mock.calls.filter(([callback]) => callback.name === "followTravellingWindows");
   }
@@ -368,11 +368,14 @@ describe("a window's travel", () => {
     expect(page.style.left).toBe("100px");
 
     // One transition per property the move changes; the travel is over when the last of them ends.
+    const duringTravel = vi.spyOn(globalThis, "requestAnimationFrame");
     root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
     root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
     travelTo(300);
     await twoFrames();
     expect(page.style.left).toBe("300px");
+    expect(travelFramesRequested(duringTravel)).not.toEqual([]);
+    duringTravel.mockRestore();
 
     root.dispatchEvent(new Event("transitionend", { bubbles: true }));
     travelTo(500);
