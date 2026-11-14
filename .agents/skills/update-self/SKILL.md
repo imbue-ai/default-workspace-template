@@ -947,17 +947,12 @@ stopped back yourself (`references/freeing-memory-for-an-update.md`, "Putting it
 back").
 
 If a stray preview of a critical app is registered (an older pass may have left
-one; the careful flow refuses its next pass on that app while one is), tear it
-down with the preview script and close its window:
+one; the careful flow refuses its next pass on that app while one is), close its
+window and tear it down with the preview script:
 
 ```bash
-uv run --no-sync workspace-layout close <name>-preview
-uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> --close-windows
 ```
-
-The close goes first: nothing takes a window away when its app leaves the registry, so
-once `down` has deregistered the row the preview's window would stay on the desktop
-pointing at a page nothing serves.
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are what a retry starts from: keep them

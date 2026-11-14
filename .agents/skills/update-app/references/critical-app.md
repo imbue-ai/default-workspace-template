@@ -279,8 +279,7 @@ shapes.
 worktrees, so before creating the worker, release your hold on it:
 
 ```bash
-uv run --no-sync workspace-layout close <name>-preview
-uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> --close-windows
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
 
@@ -461,16 +460,12 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    ticket, and release the leases:
 
    ```bash
-   uv run --no-sync workspace-layout close <name>-preview
-   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
+   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> --close-windows
    ```
 
-   The close goes first: nothing takes a window away when its app leaves the
-   registry, so a window closed after `down` would stay on the desktop pointing
-   at a page nothing serves. `down` is idempotent and tears down the siblings it
-   booted. This flow does not pass through
-   `update-creation` step 4, so the worker's teardown is yours. After a `0`,
-   destroy it:
+   `down` is idempotent and tears down the siblings it booted. This flow does
+   not pass through `update-creation` step 4, so the worker's teardown is
+   yours. After a `0`, destroy it:
 
    ```bash
    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"

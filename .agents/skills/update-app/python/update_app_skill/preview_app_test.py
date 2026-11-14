@@ -103,6 +103,8 @@ class _RecordingInstances(mod.Instances):
         self.repo_root = repo_root
         self.specs: list[mod.InstanceSpec] = []
         self.downs: list[str] = []
+        # The downs asked to close the windows still showing their instance.
+        self.downs_closing_windows: list[str] = []
         self.next_port = next_port
         self.failing_names = set(failing_names)
 
@@ -121,8 +123,10 @@ class _RecordingInstances(mod.Instances):
         )
         return 0
 
-    def down(self, name: str, repo_root: Path) -> int:
+    def down(self, name: str, repo_root: Path, *, close_windows: bool) -> int:
         self.downs.append(name)
+        if close_windows:
+            self.downs_closing_windows.append(name)
         if name in self.failing_names:
             return 1
         state_path = self._state_path(name)
@@ -408,8 +412,9 @@ def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees
     assert instances.ups() == ["notes-preview", "notes-preview"]
 
 
+@pytest.mark.parametrize("close_windows", [False, True])
 def test_down_tears_down_the_siblings_it_booted_and_drops_the_registry_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_windows: bool
 ) -> None:
     worktree = _write_worktree(tmp_path)
     live_registry = tmp_path / "apps.toml"
@@ -436,11 +441,56 @@ def test_down_tears_down_the_siblings_it_booted_and_drops_the_registry_copy(
     assert registry_copy.exists()
     instances.downs.clear()
 
-    assert mod.down("system_interface", tmp_path, instances=instances) == 0
+    assert (
+        mod.down(
+            "system_interface",
+            tmp_path,
+            instances=instances,
+            close_windows=close_windows,
+        )
+        == 0
+    )
 
     assert instances.downs == ["system_interface-preview", "chat-preview"]
+    assert instances.downs_closing_windows == (instances.downs if close_windows else [])
     assert not registry_copy.exists()
     assert mod.live_preview_url(tmp_path, "chat") is None
+
+
+def test_a_re_run_down_reaches_a_sibling_that_would_not_come_down_the_first_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sibling refused under its open window is still reached by the re-run its refusal asks for."""
+    worktree = _write_worktree(tmp_path)
+    live_registry = tmp_path / "apps.toml"
+    live_registry.write_text(
+        _dump_registry(
+            [{"name": "chat-preview-app", "url": "http://localhost:1", "label": "p"}]
+        )
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
+    instances = _RecordingInstances(tmp_path)
+    _up_shell_with_chat(tmp_path, worktree, instances)
+    instances.failing_names.add("chat-preview")
+
+    assert mod.down("system_interface", tmp_path, instances=instances) == 1
+    assert mod.live_preview_url(tmp_path, "system_interface") is None
+    assert mod.live_preview_url(tmp_path, "chat") is not None
+
+    instances.failing_names.clear()
+    instances.downs.clear()
+    assert (
+        mod.down("system_interface", tmp_path, instances=instances, close_windows=True)
+        == 0
+    )
+
+    assert instances.downs == ["system_interface-preview", "chat-preview"]
+    assert mod.live_preview_url(tmp_path, "chat") is None
+    assert not (
+        tmp_path
+        / mod.INSTANCES_ROOT
+        / f"system_interface-preview{mod.PREVIEW_STATE_SUFFIX}"
+    ).exists()
 
 
 def test_a_re_up_without_siblings_still_tears_down_the_ones_an_earlier_up_booted(

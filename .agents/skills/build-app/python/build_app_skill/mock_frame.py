@@ -121,6 +121,8 @@ class Frames:
             repo_root,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
+            desktops=serve_isolated_instance.Desktops(),
+            close_windows=True,
         )
 
 
@@ -156,9 +158,8 @@ def frame_display_name(display_name: str) -> str:
 
 def find_app(app_name: str, repo_root: Path) -> FramedApp:
     """The registered app scaffolded as ``app_name``; raises MockFrameError when there is none."""
-    # Imported here: both load pydantic, which a refused or --help call need not pay for.
+    # Imported here: it loads pydantic, which a refused or --help call need not pay for.
     from app_manifest.manifest import load_manifest
-    from app_manifest.registry import read_registry
 
     manifest_path = (
         repo_root / "system" / "apps" / app_name.replace("-", "_") / "app.toml"
@@ -167,12 +168,8 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
         manifest = load_manifest(manifest_path, repo_root=repo_root)
     except ManifestLoadError as exc:
         raise MockFrameError(f"no app named {app_name!r} to frame: {exc}") from exc
-    try:
-        rows = read_registry(forward_port.apps_file(repo_root))
-    except RegistryReadError as exc:
-        raise MockFrameError(str(exc)) from exc
-    row = next((row for row in rows if row.name == app_name), None)
-    if row is None:
+    url = _registered_url(app_name, repo_root)
+    if url is None:
         raise MockFrameError(
             f"{app_name!r} is not registered, so there is nothing running to frame; start "
             "it first (the scaffold's --start, or supervisorctl start)"
@@ -181,8 +178,21 @@ def find_app(app_name: str, repo_root: Path) -> FramedApp:
         name=app_name,
         manifest_path=manifest_path,
         display_name=str(manifest.display_name),
-        url=str(row.url),
+        url=url,
     )
+
+
+def _registered_url(name: str, repo_root: Path) -> str | None:
+    """The URL ``name`` is registered at, or None when it has no registry row; raises MockFrameError when the
+    registry cannot be read."""
+    # Imported here: it loads pydantic, which a refused or --help call need not pay for.
+    from app_manifest.registry import read_registry
+
+    try:
+        rows = read_registry(forward_port.apps_file(repo_root))
+    except RegistryReadError as exc:
+        raise MockFrameError(str(exc)) from exc
+    return next((str(row.url) for row in rows if row.name == name), None)
 
 
 def _register(
@@ -285,18 +295,21 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
     return _run_layout(layout, ["refresh", "--app", app_name])
 
 
-def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
+def down(app_name: str, repo_root: Path, *, frames: Frames) -> int:
     """Close the mock window, remove the frame, and make the app an ordinary app again.
 
     The frame comes down even when the app itself is gone (removed while still a mock);
-    its registration is then left alone, since registering it would add it back.
+    its registration is then left alone, since registering it would add it back. A
+    frame still registered after a failed teardown (a window that could not be closed)
+    still shows the app, which then stays hidden behind it.
     """
-    if layout.run(["close", frame_name(app_name)]) != 0:
-        sys.stderr.write(
-            f"note: the {frame_name(app_name)} window was not closed (see above; most "
-            "often none was open); the frame comes down regardless.\n"
-        )
     code = frames.down(app_name, repo_root)
+    if code != 0 and _registered_url(frame_name(app_name), repo_root) is not None:
+        sys.stderr.write(
+            f"mock frame: the {frame_name(app_name)} frame is still up (see above), so "
+            f"{app_name!r} stays hidden behind it.\n"
+        )
+        return code
     try:
         app = find_app(app_name, repo_root)
     except MockFrameError as exc:
@@ -380,7 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "refresh":
             return refresh(args.app, repo_root, frames=Frames(), layout=layout)
-        return down(args.app, repo_root, frames=Frames(), layout=layout)
+        return down(args.app, repo_root, frames=Frames())
     except MockFrameError as exc:
         sys.stderr.write(f"mock frame: {exc}\n")
         return 1

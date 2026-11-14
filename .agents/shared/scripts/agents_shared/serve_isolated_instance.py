@@ -1,6 +1,6 @@
 """Spin up an isolated, throwaway instance of a service on a spare port.
 
-This is the shared substrate under three service flows:
+This is the shared substrate under four service flows:
 
 - ``update-app`` boots a copy of a service against a *copy* of its data
   (``DATA_DIR`` pointed at a scratch dir) so an edit can be exercised -- writes,
@@ -12,6 +12,9 @@ This is the shared substrate under three service flows:
   through ``preview_app.py``, and ``refresh``-es it in place as the lead edits.
 - ``build-app`` shows a new app that is still a mock inside the labeled frame,
   around the app's own live program, through ``mock_frame.py``.
+- A hand-built page (a detached prototype, such as an HTML mock) is served by
+  ``python3 -m http.server`` and shown in the same labeled frame, as the
+  interactive-delivery reference gives it.
 
 The two ``update-app`` flows are the same motion: launch the service on a free
 port, with environment overrides that isolate its writable state, wait until it
@@ -35,13 +38,15 @@ The shapes:
   app to open, so one preview adds one app to the launcher and the window list
   rather than two -- and the frame registers ``--preview-title`` as its display
   name, so it reads as the app it previews rather than as its service name.
+  ``--preview-kind mock`` labels the frame a UI sketch rather than a proposed
+  change, and ``--preview-note`` adds a line under its banner.
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
   kills both servers and deregisters both services.
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
-  live program while it is still a mock -- with a banner kind and note of its own.
+  live program while it is still a mock -- with a banner kind and note.
   Nothing else is booted or registered, and ``down`` removes only the frame.
 
 The service must read its port (and, when relevant, its data dir) from the
@@ -55,14 +60,19 @@ Usage:
         [--host-env <ENVVAR>] \\
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
-        [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
+        [--preview-service-name <name> --preview-title <label> [--inner-path /path] \\
+         [--preview-kind change|mock] [--preview-note <line>]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
-    uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
+    uv run --no-sync serve_isolated_instance.py down --name <slug> [--close-windows] [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
 registrations, and the user's window all stay put.
+
+``down`` refuses while a window on the user's desktops still shows one of the
+instance's services, since the teardown would leave it on a dead server;
+``--close-windows`` closes those windows first.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
@@ -84,9 +94,11 @@ Exit codes:
     0  Success (instance is up and healthy / rebooted in place / torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
-       rebooted server never became healthy; or, for ``down``, a recorded process
-       survived SIGKILL (its state dir is kept so it stays findable); or a bad
-       argument / unreadable state file.
+       rebooted server never became healthy; or, for ``down``, a window still
+       shows the instance (without ``--close-windows``, or one could not be
+       closed; nothing is torn down), or a recorded process survived SIGKILL (its
+       state dir is kept so it stays findable); or a bad argument / unreadable
+       state file.
 """
 
 from __future__ import annotations
@@ -105,12 +117,23 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
+from urllib.parse import quote
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
 from workspace_bare_scripts import run_in_background, venv_links
+from workspace_layout.cli import OP_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS
+from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.shell_url import DESKTOPS_ROUTE, shell_base_url
+from workspace_layout.transport import (
+    HTTP_SUCCESS_RANGE,
+    exchange_with_shell,
+    quote_answer,
+    refusal_detail,
+)
 
 from agents_shared.preview_wrapper_server import FrameKind
 
@@ -377,6 +400,79 @@ class Registry:
 
     def remove(self, repo_root: Path, service_name: str) -> None:
         forward_port.remove(forward_port.apps_file(repo_root), service_name)
+
+
+class OpenWindow(NamedTuple):
+    """A window on the user's desktops showing one of an instance's services."""
+
+    window_id: str
+    app: str
+    desktop_id: str
+
+
+def _windows_in(listing: dict[str, Any] | str, apps: Sequence[str]) -> list[OpenWindow]:
+    """The windows of ``apps`` a ``GET /api/desktops`` answer lists; raises InstanceError when it is not a listing."""
+    if not isinstance(listing, dict):
+        raise InstanceError(
+            f"the shell's desktops are not a desktops listing: {quote_answer(listing)}"
+        )
+    try:
+        return [
+            OpenWindow(str(window["id"]), str(window["app"]), str(desktop["id"]))
+            for desktop in listing["desktops"]
+            for window in desktop["windows"]
+            if window["app"] in apps
+        ]
+    except (KeyError, TypeError) as exc:
+        raise InstanceError(
+            f"the shell's desktops are not a desktops listing ({exc!r}): {quote_answer(listing)}"
+        ) from exc
+
+
+@dataclass
+class Desktops:
+    """Indirection over the shell's desktops at ``shell_url``, so tests can record which windows a teardown closes.
+
+    It closes a window through the shell's own close route, which closes it for every
+    client and names none, so no one's view moves to another desktop.
+    """
+
+    shell_url: str = field(default_factory=shell_base_url)
+
+    def windows_of(self, apps: Sequence[str]) -> list[OpenWindow]:
+        """Every window showing one of ``apps``, on any desktop; raises InstanceError when the shell cannot be read."""
+        listing = self._exchange(
+            "GET", DESKTOPS_ROUTE, "read the desktops", READ_TIMEOUT_SECONDS
+        )
+        return _windows_in(listing, apps)
+
+    def close(self, window: OpenWindow) -> None:
+        """Close ``window``; raises InstanceError when it cannot be closed (a pinned window is refused)."""
+        self._exchange(
+            "POST",
+            f"{DESKTOPS_ROUTE}/{quote(window.desktop_id, safe='')}/windows/"
+            f"{quote(window.window_id, safe='')}/close",
+            f"close window {window.window_id} ({window.app})",
+            OP_TIMEOUT_SECONDS,
+        )
+
+    def _exchange(
+        self, method: str, route: str, what: str, timeout_seconds: float
+    ) -> dict[str, Any] | str:
+        try:
+            status, answer = exchange_with_shell(
+                method,
+                f"{self.shell_url}{route}",
+                None if method == "GET" else {},
+                timeout_seconds,
+            )
+        except ShellUnreachableError as exc:
+            raise InstanceError(f"could not {what}: {exc}") from exc
+        if status not in HTTP_SUCCESS_RANGE:
+            raise InstanceError(
+                f"could not {what}: the shell answered {status}: {refusal_detail(answer)}"
+            )
+        return answer
 
 
 class ProbeResult(NamedTuple):
@@ -977,6 +1073,23 @@ def _unwind_failed_boot(
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
 
 
+def _wrapper_args(
+    inner_service: str, title: str, inner_path: str, kind: FrameKind, note: str | None
+) -> list[str]:
+    """The preview wrapper's argv for framing ``inner_service`` under ``title``, with ``kind``'s banner and ``note``."""
+    return [
+        "--inner-service",
+        inner_service,
+        "--title",
+        title,
+        "--inner-path",
+        inner_path,
+        "--kind",
+        kind,
+        *(["--note", note] if note else []),
+    ]
+
+
 def _boot_wrapper(
     repo_root: Path,
     name: str,
@@ -1045,6 +1158,8 @@ def up(
     service_name: str | None = None,
     preview_service_name: str | None = None,
     preview_title: str | None = None,
+    preview_kind: FrameKind = FrameKind.CHANGE,
+    preview_note: str | None = None,
     inner_path: str = "/",
     theming_mode: str | None = None,
     project: str | None = None,
@@ -1066,7 +1181,8 @@ def up(
     the ``main`` port to serve 200. With ``service_name`` it also registers the
     instance as a service (served at its own origin); with the preview names +
     title it additionally boots the labeled wrapper frame, opening the inner
-    service at ``inner_path``. ``theming_mode`` is the served app's ``[theming]``
+    service at ``inner_path``, with the banner ``preview_kind`` names and
+    ``preview_note`` under it. ``theming_mode`` is the served app's ``[theming]``
     mode, recorded on the inner service's row so the workspace themes it as it
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
@@ -1095,6 +1211,14 @@ def up(
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
         return 1
+    if not preview_requested and (
+        preview_kind is not FrameKind.CHANGE or preview_note is not None
+    ):
+        sys.stderr.write(
+            "up: --preview-kind and --preview-note label a preview frame, which needs "
+            "--preview-service-name and --preview-title.\n"
+        )
+        return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
     if project is not None:
@@ -1102,8 +1226,14 @@ def up(
 
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
-    # port with nothing left recording its pid, so refuse instead.
-    if down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper) != 0:
+    # port with nothing left recording its pid, so refuse instead. Its windows stay
+    # open: the new instance registers the same names, so they show it.
+    if (
+        _tear_down_instance(
+            name, repo_root, runner=runner, registry=registry, sleeper=sleeper
+        )
+        != 0
+    ):
         sys.stderr.write(
             f"up: refusing to boot '{name}' over an instance that could not be "
             f"cleared (see above). Resolve it, or remove "
@@ -1194,14 +1324,9 @@ def up(
                 repo_root,
                 name,
                 wrapper_log_path,
-                [
-                    "--inner-service",
-                    service_name,
-                    "--title",
-                    preview_title,
-                    "--inner-path",
-                    inner_path,
-                ],
+                _wrapper_args(
+                    service_name, preview_title, inner_path, preview_kind, preview_note
+                ),
                 pids,
                 http=http,
                 spawner=spawner,
@@ -1282,7 +1407,7 @@ def up(
             "puts it on the user's screen. Run "
             f"`uv run --no-sync {_SELF_HINT} refresh --name {name}` to pick up a later "
             f"edit on this same port, and `uv run --no-sync {_SELF_HINT} down --name "
-            f"{name}` to tear it down.\n"
+            f"{name} --close-windows` to close its window and tear it down.\n"
         )
     else:
         sys.stdout.write(f"{inner_url}\n")
@@ -1428,18 +1553,7 @@ def frame(
     state_dir = _state_dir(repo_root, name)
     wrapper_log_path = state_dir / WRAPPER_LOG_FILENAME
     state_dir.mkdir(parents=True, exist_ok=True)
-    wrapper_args = [
-        "--inner-service",
-        inner_service,
-        "--title",
-        title,
-        "--inner-path",
-        inner_path,
-        "--kind",
-        kind,
-    ]
-    if note:
-        wrapper_args += ["--note", note]
+    wrapper_args = _wrapper_args(inner_service, title, inner_path, kind, note)
     record = FrameRecord(
         inner_service=inner_service,
         frame_service_name=frame_service_name,
@@ -1508,6 +1622,91 @@ def frame(
 
 
 def down(
+    name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    registry: Registry,
+    desktops: Desktops,
+    close_windows: bool = False,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
+    """Tear down the instance for ``name`` as ``_tear_down_instance`` does, unless a window still shows it.
+
+    A window on the user's desktops showing one of its services would be left on a
+    dead server, so with one open this refuses and changes nothing, unless
+    ``close_windows``, which closes them first; a window that cannot be closed
+    refuses the same way. When the desktops cannot be read, no window is known to
+    show it, and the teardown goes ahead with a warning.
+    """
+    shown_apps = _apps_its_windows_show(repo_root, name)
+    if shown_apps and _close_windows_or_refuse(
+        name, shown_apps, desktops, close_windows=close_windows
+    ):
+        return 1
+    return _tear_down_instance(
+        name, repo_root, runner=runner, registry=registry, sleeper=sleeper
+    )
+
+
+def _apps_its_windows_show(repo_root: Path, name: str) -> list[str]:
+    """The apps a window of the instance ``name`` shows: the services its state records, and a recorded frame's own.
+
+    A frame whose re-frame failed is kept as a record alone, registered as nothing,
+    while a window opened on it can still be up. Empty without a readable state, which
+    ``_tear_down_instance`` reports.
+    """
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(state, dict):
+        return []
+    apps = [str(service) for service in state.get("services") or []]
+    frame_record = state.get(FRAME_STATE_KEY)
+    if isinstance(frame_record, dict):
+        frame_service_name = frame_record.get("frame_service_name")
+        if isinstance(frame_service_name, str) and frame_service_name not in apps:
+            apps.append(frame_service_name)
+    return apps
+
+
+def _close_windows_or_refuse(
+    name: str, apps: Sequence[str], desktops: Desktops, *, close_windows: bool
+) -> bool:
+    """Close the windows showing ``apps`` when ``close_windows``; True while one stays open."""
+    try:
+        windows = desktops.windows_of(apps)
+    except InstanceError as exc:
+        sys.stderr.write(
+            f"warning: could not check for windows showing '{name}' ({exc}); tearing "
+            "it down regardless.\n"
+        )
+        return False
+    if not windows:
+        return False
+    if not close_windows:
+        listed = ", ".join(
+            f"{window.window_id} ({window.app}, desktop {window.desktop_id})"
+            for window in windows
+        )
+        sys.stderr.write(
+            f"error: instance '{name}' is NOT torn down: window(s) {listed} still show "
+            "it, and would be left on a dead server. Re-run with --close-windows to "
+            "close them first (the user sees them close).\n"
+        )
+        return True
+    for window in windows:
+        try:
+            desktops.close(window)
+        except InstanceError as exc:
+            sys.stderr.write(f"error: instance '{name}' is NOT torn down: {exc}\n")
+            return True
+    sys.stderr.write(f"closed {len(windows)} window(s) showing '{name}'.\n")
+    return False
+
+
+def _tear_down_instance(
     name: str,
     repo_root: Path,
     *,
@@ -1804,6 +2003,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="The path the preview frame opens the inner service on (default: /).",
     )
     up_parser.add_argument(
+        "--preview-kind",
+        type=FrameKind,
+        choices=list(FrameKind),
+        default=FrameKind.CHANGE,
+        help="What the preview frame's banner calls the page: 'change' (a proposed "
+        "change to an app, the default) or 'mock' (a UI sketch, not a finished app).",
+    )
+    up_parser.add_argument(
+        "--preview-note",
+        default=None,
+        help="A line under the preview frame's banner, e.g. what is not real yet.",
+    )
+    up_parser.add_argument(
         "--project",
         default=None,
         help="Boot the launch argv from this standalone project's own venv (a user "
@@ -1824,6 +2036,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Idempotent.",
     )
     down_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
+    down_parser.add_argument(
+        "--close-windows",
+        action="store_true",
+        help="Close the windows on the user's desktops that still show the instance "
+        "first; without it, an open one refuses the teardown.",
+    )
     _add_repo_root_arg(down_parser)
 
     refresh_parser = subparsers.add_parser(
@@ -1865,6 +2083,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             service_name=args.service_name,
             preview_service_name=args.preview_service_name,
             preview_title=args.preview_title,
+            preview_kind=args.preview_kind,
+            preview_note=args.preview_note,
             inner_path=args.inner_path,
             theming_mode=args.theming_mode,
             project=args.project,
@@ -1875,7 +2095,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             venv_linker=VenvLinker(),
         )
     if args.command == "down":
-        return down(args.name, repo_root, runner=Runner(), registry=Registry())
+        return down(
+            args.name,
+            repo_root,
+            runner=Runner(),
+            registry=Registry(),
+            desktops=Desktops(),
+            close_windows=args.close_windows,
+        )
     if args.command == "refresh":
         return refresh(
             args.name,

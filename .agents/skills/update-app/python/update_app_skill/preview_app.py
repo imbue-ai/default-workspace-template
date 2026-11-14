@@ -22,18 +22,22 @@ the root venv):
         --app <name> --worktree <dir> [--with <name>]... [--instance-key <key>] \\
         [--title <label>] [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name> [--repo-root PATH]
-    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--repo-root PATH]
+    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--close-windows] [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
 of it with ``uv run --no-sync workspace-layout open <name>-preview``. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
 the registrations, and the window untouched. ``down`` tears the preview down together
-with the siblings it booted, and verifies the processes died.
+with the siblings it booted, and verifies the processes died; while a window still
+shows the preview it refuses, unless ``--close-windows`` closes it first.
 
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared boot failed (which quotes the boot log).
+       pass's preview is up, or the shared boot failed (which quotes the boot log);
+       or, for ``down``, a window still shows the preview or one of its siblings
+       (without ``--close-windows``, or one could not be closed), or a process
+       survived SIGKILL. A re-run reaches the siblings not yet torn down.
 """
 
 from __future__ import annotations
@@ -127,12 +131,14 @@ class Instances:
             venv_linker=serve_isolated_instance.VenvLinker(),
         )
 
-    def down(self, name: str, repo_root: Path) -> int:
+    def down(self, name: str, repo_root: Path, *, close_windows: bool) -> int:
         return serve_isolated_instance.down(
             name,
             repo_root,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
+            desktops=serve_isolated_instance.Desktops(),
+            close_windows=close_windows,
         )
 
 
@@ -286,25 +292,38 @@ def down(
     repo_root: Path,
     *,
     instances: Instances,
+    close_windows: bool = False,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Tear the preview down, then the siblings it booted; keep everything a survivor still needs.
 
-    A preview that another live preview frames (a chat taken down on its own under a
-    shell preview) leaves that preview's registry copy pointing at the live app again.
+    A preview with a window still open refuses unless ``close_windows``, which closes
+    it first (``serve_isolated_instance.down``). The preview's record outlives a
+    sibling that would not come down, since it is the only way a re-run reaches that
+    sibling. A preview that another live preview frames (a chat taken down on its own
+    under a shell preview) leaves that preview's registry copy pointing at the live
+    app again.
     """
     siblings = _recorded_siblings(repo_root, app_name)
     dump = dump_registry if dump_registry is not None else forward_port.dump_registry
-    code = instances.down(instance_name(app_name), repo_root)
+    code = instances.down(
+        instance_name(app_name), repo_root, close_windows=close_windows
+    )
     if code != 0:
         return code
     _registry_copy_path(repo_root, app_name).unlink(missing_ok=True)
-    _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     _reframe_previews_naming(repo_root, app_name, dump)
     for sibling in siblings:
-        code = down(sibling, repo_root, instances=instances, dump_registry=dump)
+        code = down(
+            sibling,
+            repo_root,
+            instances=instances,
+            close_windows=close_windows,
+            dump_registry=dump,
+        )
         if code != 0:
             return code
+    _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     return 0
 
 
@@ -364,6 +383,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "down", help="Tear the preview down, with the siblings it booted. Idempotent."
     )
     down_parser.add_argument("--app", required=True, help="The app's registered name.")
+    down_parser.add_argument(
+        "--close-windows",
+        action="store_true",
+        help="Close the windows still showing the preview or the siblings it booted "
+        "first; without it, an open one refuses the teardown.",
+    )
     _add_repo_root_arg(down_parser)
 
     args = parser.parse_args(argv)
@@ -384,7 +409,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "refresh":
             return refresh(args.app, repo_root, instances=Instances())
         if args.command == "down":
-            return down(args.app, repo_root, instances=Instances())
+            return down(
+                args.app,
+                repo_root,
+                instances=Instances(),
+                close_windows=args.close_windows,
+            )
     except (PreviewError, ManifestLoadError) as exc:
         sys.stderr.write(f"preview: {exc}\n")
         return 1

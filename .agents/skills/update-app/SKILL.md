@@ -430,7 +430,7 @@ where the data dies. Encode these, cheapest first:
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> --close-windows   # closes its window too
   ```
 
   Every `up` and `refresh` syncs the app's venv in the worktree and then starts
