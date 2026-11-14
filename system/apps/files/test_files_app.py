@@ -3,11 +3,14 @@
 Every change a test makes goes through the app's own controls and is read back off the disk.
 """
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import Browser
+from playwright.sync_api import FloatRect
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import Request
@@ -685,6 +688,183 @@ def test_an_image_page_draws_the_image(open_files_page: OpenFilesPage) -> None:
     expect(image).to_be_visible()
     assert image.evaluate("img => img.naturalWidth") == 1
     expect(page.locator(".edit-file")).to_have_count(0)
+
+
+_WIDE_PICTURE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900">'
+    '<rect width="1600" height="900" fill="white"/><circle cx="1200" cy="600" r="100" fill="red"/></svg>'
+)
+
+_FITTED = "matrix(1, 0, 0, 1, 0, 0)"
+
+
+def _wide_picture_page(open_files_page: OpenFilesPage, files_root: Path) -> Page:
+    (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
+    page = open_files_page("/wide.svg?view")
+    expect(page.locator(".files-file-image")).to_be_visible()
+    return page
+
+
+def _image_box(page: Page) -> FloatRect:
+    box = page.locator(".files-file-image").bounding_box()
+    assert box is not None
+    return box
+
+
+def _stage_transform(page: Page) -> str:
+    return page.locator(".files-image-stage").evaluate("stage => getComputedStyle(stage).transform")
+
+
+def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
+    page.wait_for_function(
+        "([fitted, isFitted]) => (getComputedStyle(document.querySelector('.files-image-stage')).transform"
+        " === fitted) === isFitted",
+        arg=[_FITTED, is_fitted],
+    )
+
+
+def _wait_for_stage_scale(page: Page, scale: float) -> None:
+    """Wait until the stage is drawn at ``scale``, within a hundredth of it."""
+    page.wait_for_function(
+        "scale => Math.abs(new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform).a"
+        " - scale) < scale / 100",
+        arg=scale,
+    )
+
+
+def _point_at(page: Page, x_fraction: float, y_fraction: float) -> tuple[float, float]:
+    """Rest the pointer on the picture at the given fractions of its size, and return that point. A hover, because
+    Fortress glides the cursor to a point after a plain move returns, so input sent at once lands along the way."""
+    box = _image_box(page)
+    page.locator(".files-file-image").hover(position={"x": box["width"] * x_fraction, "y": box["height"] * y_fraction})
+    return (box["x"] + box["width"] * x_fraction, box["y"] + box["height"] * y_fraction)
+
+
+def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    fitted = _image_box(page)
+    pointer = _point_at(page, 0.75, 0.7)
+
+    # A plain scroll leaves a fitted picture alone (were it read as a pinch, the zoom below would not be e); a
+    # trackpad pinch reaches the page as many small Ctrl+wheel events.
+    page.mouse.wheel(0, -120)
+    page.keyboard.down("Control")
+    for _ in range(10):
+        page.mouse.wheel(0, -10)
+    page.keyboard.up("Control")
+    _wait_for_stage_scale(page, math.e)
+
+    zoomed = _image_box(page)
+    assert zoomed["width"] / fitted["width"] == pytest.approx(math.e, rel=0.01)
+    assert (pointer[0] - zoomed["x"]) / zoomed["width"] == pytest.approx(0.75, abs=0.005)
+    assert (pointer[1] - zoomed["y"]) / zoomed["height"] == pytest.approx(0.7, abs=0.005)
+
+    page.mouse.dblclick(*pointer)
+    _wait_for_stage_transform(page, is_fitted=True)
+    assert _image_box(page) == pytest.approx(fitted)
+
+    # One notch of a mouse wheel with Ctrl held is a step, not a leap.
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -100)
+    page.keyboard.up("Control")
+    _wait_for_stage_transform(page, is_fitted=False)
+    assert 1.1 < _image_box(page)["width"] / fitted["width"] < 1.5
+
+
+def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFilesPage, files_root: Path) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    centre = _point_at(page, 0.5, 0.5)
+
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    assert _stage_transform(page) == _FITTED
+
+    _point_at(page, 0.5, 0.5)
+    page.mouse.dblclick(*centre)
+    _wait_for_stage_transform(page, is_fitted=False)
+    zoomed = _image_box(page)
+    _point_at(page, 0.5, 0.5)
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    moved = _image_box(page)
+    assert (moved["x"] - zoomed["x"], moved["y"] - zoomed["y"]) == pytest.approx((-100, -50), abs=1)
+
+
+def _view_box(page: Page) -> dict[str, float]:
+    """The part of the frame a fitted picture is laid out in: its box inside the padding."""
+    return page.locator(".files-image-frame").evaluate(
+        """frame => {
+            const box = frame.getBoundingClientRect();
+            const style = getComputedStyle(frame);
+            const left = box.left + parseFloat(style.paddingLeft);
+            const top = box.top + parseFloat(style.paddingTop);
+            return {x: left, y: top, right: box.right - parseFloat(style.paddingRight),
+                    bottom: box.bottom - parseFloat(style.paddingBottom)};
+        }"""
+    )
+
+
+def test_a_zoomed_image_scrolled_far_past_its_edge_still_covers_the_view(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    page.mouse.dblclick(*_point_at(page, 0.5, 0.5))
+    _wait_for_stage_transform(page, is_fitted=False)
+
+    for _ in range(10):
+        page.mouse.wheel(400, 400)
+
+    # Held at its bottom-right corner: the picture's edges meet the view's rather than leaving it.
+    page.wait_for_function(
+        """() => {
+            const image = document.querySelector('.files-file-image').getBoundingClientRect();
+            const stage = document.querySelector('.files-image-stage');
+            const frame = stage.parentElement.getBoundingClientRect();
+            const style = getComputedStyle(stage.parentElement);
+            return Math.abs(image.right - (frame.right - parseFloat(style.paddingRight))) < 1
+                && Math.abs(image.bottom - (frame.bottom - parseFloat(style.paddingBottom))) < 1;
+        }"""
+    )
+    image = _image_box(page)
+    view = _view_box(page)
+    assert image["x"] < view["x"] and image["y"] < view["y"]
+
+
+def test_a_touch_pinch_out_past_the_fit_after_moving_leaves_the_image_fitted(
+    module_browser: Browser, files_origin: str, files_root: Path
+) -> None:
+    (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
+    context = module_browser.new_context(viewport={"width": 390, "height": 760}, has_touch=True, is_mobile=True)
+    try:
+        page = context.new_page()
+        page.goto(f"{files_origin}/wide.svg?view")
+        expect(page.locator(".files-file-image")).to_be_visible()
+        fitted = _image_box(page)
+        touch = context.new_cdp_session(page)
+
+        def fingers(kind: str, centre_x: float, spread: float) -> None:
+            points = [{"x": centre_x - spread, "y": 380, "id": 1}, {"x": centre_x + spread, "y": 380, "id": 2}]
+            touch.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else points})
+
+        # Spread the fingers to zoom in, move them across to pan, then pinch them together past the fit.
+        fingers("touchStart", 195, 30)
+        for spread in range(35, 160, 5):
+            fingers("touchMove", 195, spread)
+        _wait_for_stage_transform(page, is_fitted=False)
+        for centre_x in range(195, 60, -5):
+            fingers("touchMove", centre_x, 160)
+        for spread in range(160, 5, -5):
+            fingers("touchMove", 60, spread)
+        fingers("touchEnd", 60, 0)
+
+        _wait_for_stage_transform(page, is_fitted=True)
+        assert _image_box(page) == pytest.approx(fitted)
+    finally:
+        context.close()
 
 
 def test_deleting_a_file_from_its_page_leaves_the_window_saying_so(

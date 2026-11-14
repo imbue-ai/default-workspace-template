@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@imbue/workspace-ui": "0.1.0",
+    "@panzoom/panzoom": "^4.6.2",
     "mithril": "^2.2.7"
   },
   "devDependencies": {
