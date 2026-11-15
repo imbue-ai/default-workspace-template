@@ -46,74 +46,94 @@ as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
+### Size each request before touching code
+
 Requests can arrive several to a message, one per message over the course of the
 conversation, or mixed in with feedback on a change already in progress. Size
-each one as it comes in; its size changes what you do *before* touching code.
-Size is a range, and these are its two ends:
+each one as it comes in, by two questions: how much it changes what the user
+sees, and how long it will take to build. The answers decide what you do
+*before* touching code:
+
+| | Builds in a couple of minutes or less | Takes longer |
+|---|---|---|
+| **Small / contained change** | Build it yourself through the live change loop below | Hand it to the background worker |
+| **Larger-scope change** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
 
 - **Small / contained change** -- a bug fix, a copy tweak, a new field, a
-  backend logic fix, a config or `command` change, a restart. Go straight
-  to the live change loop below: edit, apply, refresh, verify.
-
+  backend logic fix, a config or `command` change, a restart.
 - **Larger-scope change** -- a redesign, a new page or view, a meaningful
-  shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
-  `.agents/shared/references/interactive-delivery.md`**, put a cheap,
-  throwaway version of the *proposed* change in front of the user, loop until
-  they **explicitly confirm** the shape, and only then build the real thing
-  to a usable state. Never build heavy against an unconfirmed shape
-  yourself; a background worker may start while its first milestone serves as
-  the mock.
-
-  This is the demonstrative-prototype choice from
-  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
-  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
-  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
-  a redesign, or a data-touching change -- boot the *actually changed* app as a
-  labeled preview window beside the live one (Type 1 -- the real edit shown
-  through the real surface) with `preview_app.py` (invocation under "Protect
-  the user's data while you verify"; the same preview mechanism the careful
-  flow uses). Either way, *reading* the live store to render a preview is
-  fine; never let a preview or verification *write* to it.
-
-  **Does this change warrant a preview at all?** For an ordinary app a
-  preview is the exception, not the default. If the change *works*, a taste
-  mismatch is cheap to fix next round, so most changes can just go live and
-  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
-  a data-touching change, a substantial visual shift. A routine tweak, a copy
-  change, or a behavior-only change behind an unchanged surface doesn't need one.
-  (A critical app leans the other way -- the careful flow previews by default,
-  because the live app is off-limits. It still asks this same question before
-  the *final* pre-merge preview: a change the user cannot observe gives them
-  nothing to judge.)
-
-  A new view or capability bolted onto an existing service is its own
-  delivery with its own feedback gate (interactive-delivery phase 8):
-  confirm and ship it on its own rather than bundling it with unrelated
-  changes.
+  shift in look-and-feel, or a new user-facing capability.
 
 Many requests fall somewhere in between, for example a new control on an
-existing page. Decide by how much it changes what the user sees: go straight to
-the live change loop if that change is minor, and confirm the shape first if it
-is substantial or you can't tell. Either way, the mechanics of surfacing the
-change to the user are the same live loop.
+existing page. Decide by how much it changes what the user sees: treat it as
+small if that change is minor, and as larger-scope if it is substantial or you
+can't tell. Either way, the mechanics of surfacing the change to the user are
+the same live loop. For build time, "Hand large work to a background worker"
+below lists the typical cases that take longer.
 
-Separately from how much the user sees, ask how long the change will take to
-build: one of any size that will take more than a couple of minutes goes to
-a background worker (next section). A message often holds several requests,
-and each one stays its own request. Treat each as if it had arrived alone:
-decide on its own whether it needs its shape confirmed and how long it will take
-to build, then hand the long ones to the worker and build the short ones
-yourself. A request that would not have been mocked on its own is not added to
-another request's mock or held back until that mock is approved.
+Before you touch code, write one line per request in your reply or your plan:
+the request, whether it needs its shape confirmed first, and whether you build
+it here or hand it to the background worker. Then act on those lines.
+
+A message often holds several requests, and each one stays its own request.
+Treat each as if it had arrived alone: decide on its own whether it needs its
+shape confirmed and how long it will take to build, then hand the long ones to
+the worker and build the short ones yourself. A request that would not have
+been mocked on its own is not added to another request's mock or held back
+until that mock is approved.
+
+### Confirming the shape first
+
+For a larger-scope change, run the *same* mock-confirm flow `build-app` used to
+create the service: **read `.agents/shared/references/interactive-delivery.md`**,
+put a cheap, throwaway version of the *proposed* change in front of the user,
+loop until they **explicitly confirm** the shape, and only then build the real
+thing to a usable state. Never build heavy against an unconfirmed shape
+yourself; a background worker may start while its first milestone serves as
+the mock.
+
+This is the demonstrative-prototype choice from
+[`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+a redesign, or a data-touching change -- boot the *actually changed* app as a
+labeled preview window beside the live one (Type 1 -- the real edit shown
+through the real surface) with `preview_app.py` (invocation under "Protect
+the user's data while you verify"; the same preview mechanism the careful
+flow uses). Either way, *reading* the live store to render a preview is
+fine; never let a preview or verification *write* to it.
+
+**Does this change warrant a preview at all?** For an ordinary app a
+preview is the exception, not the default. If the change *works*, a taste
+mismatch is cheap to fix next round, so most changes can just go live and
+iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+a data-touching change, a substantial visual shift. A routine tweak, a copy
+change, or a behavior-only change behind an unchanged surface doesn't need one.
+(A critical app leans the other way -- the careful flow previews by default,
+because the live app is off-limits. It still asks this same question before
+the *final* pre-merge preview: a change the user cannot observe gives them
+nothing to judge.)
+
+A new view or capability bolted onto an existing service is its own
+delivery with its own feedback gate (interactive-delivery phase 8):
+confirm and ship it on its own rather than bundling it with unrelated
+changes.
 
 ## Hand large work to a background worker
 
 Keep the main chat free for the user. A request you expect to take more than
 a couple of minutes of building goes to a background worker through the
-`launch-task` skill, whatever its size on screen: for example a feature that
-spans several files, or a change applied across many records or many parts of
-the app. Use one worker for all such requests: hand it the first, and send
+`launch-task` skill, whatever its size on screen. Typical cases:
+
+- a feature or change that spans several files or many parts of the app;
+- exploration that needs web searches or reading several sources;
+- reading or writing several pieces of data;
+- processing a medium or large amount of data, or applying a change across
+  many records;
+- a long command, such as a build, a test suite or a big install;
+- debugging a problem whose cause is unknown.
+
+Use one worker for all such requests: hand it the first, and send
 each later one to the same worker with `create_worker.py reply`. The worker
 may combine its requests and build them together, in whatever order gets
 the work done fastest, without finishing one before starting the next. Build the rest yourself
