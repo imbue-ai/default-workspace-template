@@ -799,7 +799,26 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     isSendPendingAfterDictation = false;
   }
 
+  /** Escape while the model loads calls the load off. The text box is disabled then, so its own Escape cannot;
+   *  this one answers from the mic the press left focused or from no control at all, and leaves a key meant for
+   *  another control (a menu, a dialog) alone. */
+  function handleLoadingEscape(event: KeyboardEvent): boolean {
+    if (event.key !== "Escape" || event.defaultPrevented || dictation === null || dictation.state !== "loading") {
+      return false;
+    }
+    const target = event.target;
+    if (target == null) return false;
+    const isFromPage = target === document || target === document.documentElement || target === document.body;
+    const isFromComposer =
+      typeof Element !== "undefined" && target instanceof Element && target.closest(".message-input") !== null;
+    if (!isFromPage && !isFromComposer) return false;
+    event.preventDefault();
+    void dictation.cancel();
+    return true;
+  }
+
   function handleDictationShortcut(event: KeyboardEvent): void {
+    if (handleLoadingEscape(event)) return;
     if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
     event.preventDefault();
     toggleDictation();

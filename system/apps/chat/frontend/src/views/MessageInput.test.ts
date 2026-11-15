@@ -2704,6 +2704,29 @@ describe("MessageInput dictation", () => {
     expect(mocks.dictation!.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("calls the model's load off on Escape from the page or the mic, but not from another control", async () => {
+    mocks.speechModelProbe.mockResolvedValue({ isDownloaded: false, totalBytes: 250_000_000, device: "wasm" });
+    const { render } = composer();
+    await mountOnPage(render);
+    (findByAttr(render(), "aria-label", "Set up dictation")!.attrs!.onclick as () => void)();
+    setDictationState("loading");
+    const keydowns = mocks.listeners.get("keydown") ?? [];
+    const onKeydown = keydowns[keydowns.length - 1];
+    const escape = (target: unknown) => ({ key: "Escape", defaultPrevented: false, target, preventDefault: vi.fn() });
+    // A key from some other control (not the page, not an element in the composer) is that control's.
+    const fromAnotherControl = escape({ closest: () => null });
+    onKeydown(fromAnotherControl);
+    expect(mocks.dictation!.cancel).not.toHaveBeenCalled();
+    expect(fromAnotherControl.preventDefault).not.toHaveBeenCalled();
+    const fromThePage = escape(document);
+    onKeydown(fromThePage);
+    expect(mocks.dictation!.cancel).toHaveBeenCalledTimes(1);
+    expect(fromThePage.preventDefault).toHaveBeenCalledTimes(1);
+    setDictationState("idle");
+    onKeydown(escape(document));
+    expect(mocks.dictation!.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("starts dictation at the first press once the model is on this device", async () => {
     const { render } = composer();
     await mountOnPage(render);
