@@ -9,8 +9,9 @@
 # process's environment; `ls` and `rm` on the directory are allowed, and so is the
 # request script, whose output names the path it will write. Everything else that
 # names the directory -- `cat`, `source`, `sed`, `python3 -c`, a redirect, a Read
-# or Edit tool call on a file there -- is refused with the reason on stderr. mcpc's
-# store is data/.secrets/mcpc/, so ~/.mcpc (its link) names it too.
+# or Edit tool call on a file there -- is refused with the reason on stderr. An
+# older workspace's mcpc store is data/.secrets/mcpc/, so ~/.mcpc (its link)
+# names it too.
 #
 # Unlike the shell-only guards, this one also polices the file tools, because a
 # `Read` of the file defeats the rule as surely as a `cat`. The whole hook payload
@@ -18,17 +19,17 @@
 # carry a path (claude's, codex's, and pi's spellings).
 #
 # Blocks via exit 2 with a stderr message the agent sees. The parsing lives in the
-# sibling agent_secrets_guard_check.py, which shell-tokenizes with `shlex` so a
+# workspace_bare_scripts/agent_secrets_guard_check.py, which shell-tokenizes with `shlex` so a
 # quoted rationale that mentions the directory stays inside one token, and which
 # never prints the command or the path back (either may carry a value).
 set -euo pipefail
 
 input=$(cat)
 
-# Cheap guard: every refused call names the directory (or mcpc's store inside it,
-# as ~/.mcpc) somewhere in its payload, so the overwhelming majority of calls
-# never pay for the checker.
+# Cheap guard: every refused call names the directory (or an older workspace's
+# mcpc store inside it, as ~/.mcpc) somewhere in its payload, so the overwhelming
+# majority of calls never pay for the checker.
 [[ "$input" == *".secrets"* || "$input" == *".mcpc"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-exec python3 "$script_dir/agent_secrets_guard_check.py" <<<"$input"
+exec python3 "$script_dir/agent_hook_check.py" secrets_guard <<<"$input"

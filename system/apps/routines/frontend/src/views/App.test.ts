@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import "@imbue/workspace-ui/src/testing/dom";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
+import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { detailOf, listingOf, rowOf, runDetailOf, runOf, scheduleFormOf } from "../testing/records";
-import { AppModel, IDLE_REFRESH_MS, RUNNING_REFRESH_MS, type AppHost } from "./App";
+import { App, AppModel, IDLE_REFRESH_MS, RUNNING_REFRESH_MS, type AppHost } from "./App";
 
 const requests: string[] = [];
 const bodies: unknown[] = [];
@@ -67,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountViews();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -311,6 +314,20 @@ describe("AppModel", () => {
     ]);
     expect(requests[2]).toBe("GET /api/routines/news-sync");
     expect(model.isBusy).toBe(false);
+    model.dispose();
+  });
+});
+
+describe("App", () => {
+  it("draws the page inside a window-tall scroller, since the base style keeps the body from scrolling", async () => {
+    const model = await loadedRoutinePage();
+
+    const root = mountView(() => m(App, { model }));
+
+    const scroller = root.querySelector("[data-scroller]");
+    expect(scroller?.classList.contains("h-screen")).toBe(true);
+    expect(scroller?.classList.contains("overflow-y-auto")).toBe(true);
+    expect(scroller?.querySelector("h1")?.textContent).toBe(detailOf().row.title);
     model.dispose();
   });
 });

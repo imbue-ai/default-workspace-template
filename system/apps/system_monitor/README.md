@@ -17,13 +17,16 @@ seconds. The design is `docs/system/specs/system-monitor.md`.
   total, the memory guard's 90% mark on the bar and the chart, a note from
   80% used naming the largest kind of memory the user can free, the
   breakdown, and the stops with their commands behind a Details toggle.
-- **Disk** (`/disk`): used out of total, worded as the machine's whole disk
+- **Disk** (`/disk`): used out of total as the workspace can use them
   (a local docker workspace's volume has no quota of its own, so this is the
-  laptop's disk; a cloud machine's is its data disk); "See what's using the
+  laptop's disk; on a cloud machine, free is the smaller of the room left under
+  the machine's disk quota and the disk's own free space); "See what's using the
   disk", which measures the disk only when asked (walking it is slow under
   gVisor and the figures go stale at once): workspace files with the folders
-  under them, uploads, each app's data, each package cache, and everything
-  else (the system software and the rest of the machine's disk), as of when
+  under them, uploads, each app's data, each package cache, the chats, logs
+  and settings kept in the home folder beside the workspace's files (with the
+  folders under them), and everything else (the system software, including
+  the venvs, and the rest of the machine's disk), as of when
   it ran; and the state of the backups (read from the backup service's events
   and settings, never by running restic), with a link to that service's README.
 
@@ -103,7 +106,9 @@ shares one snapshot taken at most every 4 seconds (`stats.SharedSnapshot`), the
 stop history and the guard's log are read only from their last 256 KB and 1 MB
 and only again once they change (on a stop), the page is sent only the fields
 it shows, and a hidden window stops polling. The on-demand disk walk runs one
-`du` per row on a thread, at most one walk at a time (`disk.DiskScanner`).
+`du` per row (one per app directory, and the system software behind
+"Everything else") on a thread, at most one walk at a time
+(`disk.DiskScanner`).
 
 Stops are paired with the guard's log lines newest first, on pid and process
 name. The log is rotated and the ledger is not, so the oldest stops lose their
@@ -111,14 +116,9 @@ lines. Taken in that order they find none, so a later stop's line that reused
 their pid can never mislabel them; they keep a plainer description with no
 command.
 
-Two known limits:
-
-- A pid in the agent-pid registry is trusted while a process holds it. If an
-  agent exits and an unrelated process reuses its pid before the next agent
-  launch prunes the registry, that process counts as the agent's chat.
-- Code checkers are recognised by command-line fragments of the common language
-  servers (`programs.CODE_CHECKER_MARKERS`); one not in that list counts under
-  the chat or program that started it.
+One known limit: code checkers are recognised by command-line fragments of the
+common language servers (`programs.CODE_CHECKER_MARKERS`); one not in that list
+counts under the chat or program that started it.
 
 The app describes its own HTTP API at `GET /api/schema` (the manifest's
 `api_schema_path`), an OpenAPI document built from its routes by

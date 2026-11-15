@@ -1,0 +1,1 @@
+The permission card titles a `remote-execution` request "This computer", the name Imbue Studio's own request dialog and Settings section use for the user's computer, instead of falling back to the raw request type.

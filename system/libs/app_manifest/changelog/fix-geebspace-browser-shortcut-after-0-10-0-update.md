@@ -1,0 +1,1 @@
+`default_shortcut` in `app.toml` can be one table, as before, or several as `[[default_shortcut]]`. Each must name a launch path the app declares, and no launch path may appear twice. `AppManifest.default_shortcuts` and `RegistryRow.default_shortcuts` are now tuples. A registry entry written before this change, with one `default_shortcut` table, is read as a list of one.

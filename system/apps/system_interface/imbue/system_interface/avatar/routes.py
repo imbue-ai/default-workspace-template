@@ -27,6 +27,7 @@ from imbue.system_interface.avatar.selection import AvatarSelection
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
+from imbue.system_interface.shell.route_helpers import IMAGE_CONTENT_SECURITY_POLICY
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
@@ -36,8 +37,6 @@ from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 _MAX_REGISTRATION_BYTES: Final[int] = MAX_SVG_BYTES * 6 + 16384
 _SVG_MIMETYPE: Final[str] = "image/svg+xml"
 _PNG_MIMETYPE: Final[str] = "image/png"
-# The image is isolated by the browser's image mode; the policy also covers a direct visit to the route.
-_IMAGE_CSP: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 _SOURCE_CSP: Final[str] = "default-src 'none'; sandbox"
 
 
@@ -85,7 +84,7 @@ def avatar_image(design_id: str) -> ResponseReturnValue:
         return detail_response(f"No avatar design {design_id!r}", HTTP_NOT_FOUND)
     rendered = render_design_svg(source, _mood_argument(), request.args.get("preview") == "1", design_id)
     response = Response(rendered, mimetype=_SVG_MIMETYPE)
-    response.headers["Content-Security-Policy"] = _IMAGE_CSP
+    response.headers["Content-Security-Policy"] = IMAGE_CONTENT_SECURITY_POLICY
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "no-cache"
     return response

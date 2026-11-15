@@ -3,12 +3,12 @@
 from pathlib import Path
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
-from getting_started.pages import build_pages_blueprint
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from getting_started.pages import build_pages_app
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
 from getting_started.testing import catalog_document
@@ -28,9 +28,7 @@ def _client(
         cache_path=tmp_path / "template_catalog.json",
         fetcher=fetcher if fetcher is not None else FakeTemplateCatalogFetcher(),
     )
-    app = Flask("getting-started-under-test", static_folder=None)
-    app.register_blueprint(build_pages_blueprint(static_directory, store, contract_path))
-    return app.test_client()
+    return build_pages_app(static_directory, store, contract_path).test_client()
 
 
 def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_it(tmp_path: Path) -> None:
@@ -116,3 +114,10 @@ def test_the_contract_module_is_served_from_this_origin_once_the_shell_has_built
 
 def test_the_app_describes_its_api_the_way_its_manifest_says(tmp_path: Path) -> None:
     assert_api_schema_describes_app(_client(tmp_path), _MANIFEST_PATH)
+
+
+def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(tmp_path: Path) -> None:
+    """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
+    from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
+    app_schema.request_guard)."""
+    assert_request_guard_refuses_unknown_provenance(_client(tmp_path), "GET", "/api/health")

@@ -76,7 +76,7 @@ describe("the chat header", () => {
       chatId: "agent-3",
       agentIds: [],
       status: "working",
-      isProvisional: true,
+      kind: "provisional",
     };
     root = document.createElement("div");
     document.body.appendChild(root);

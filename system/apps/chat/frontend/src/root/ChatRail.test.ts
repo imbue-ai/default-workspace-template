@@ -16,6 +16,7 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
+import { setParticipantsForTesting } from "../models/Participants";
 import { ChatRail, rowMenuRows } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
@@ -62,6 +63,68 @@ describe("ChatRail status marks", () => {
     expect(dotClassOf("agent-turn")).not.toContain("chat-rail-dot--dashed");
     expect(dotClassOf("agent-idle")).not.toMatch(/chat-rail-dot--(dashed|pulse)/);
     expect(rail.querySelector('[data-chat-id="agent-wait"]')?.getAttribute("data-status")).toBe("background");
+  });
+
+  it("leaves idle and stopped chats an empty slot, and dims only the stopped row", () => {
+    const rail = mount([chatRowFixture("agent-idle"), chatRowFixture("agent-stopped", { status: "stopped" })]);
+
+    for (const chatId of ["agent-idle", "agent-stopped"]) {
+      const dot = rail.querySelector(`[data-chat-id="${chatId}"] .chat-rail-dot`)!;
+      expect(dot.tagName).toBe("SPAN");
+      expect(dot.childElementCount).toBe(0);
+      expect(dotClassOf(chatId)).not.toMatch(/\b(bg-|border)/);
+    }
+    expect(rail.querySelector('[data-chat-id="agent-stopped"]')?.className).toContain("opacity-50");
+    expect(rail.querySelector('[data-chat-id="agent-idle"]')?.className).not.toContain("opacity-50");
+  });
+});
+
+describe("ChatRail participant photos", () => {
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("shows who has written in a chat only when two or more have, stepping aside under the pointer", () => {
+    const rail = mount([
+      chatRowFixture("agent-shared", { participants: ["user:josh-1", "user:bob-2"] }),
+      chatRowFixture("agent-solo", { participants: ["user:josh-1"] }),
+      chatRowFixture("agent-quiet"),
+    ]);
+    const photos = rail.querySelector('[data-chat-row-people="agent-shared"]');
+    expect(photos).not.toBeNull();
+    expect(photos?.querySelectorAll("[data-participant-picture]")).toHaveLength(2);
+    // Out of the way on hover, where the pencil and the kebab come out.
+    expect(photos?.className).toContain("group-hover:hidden");
+    expect(rail.querySelector('[data-chat-row-people="agent-solo"]')).toBeNull();
+    expect(rail.querySelector('[data-chat-row-people="agent-quiet"]')).toBeNull();
+  });
+
+  it("folds the owner's two keys into one owner before counting and drawing", () => {
+    setParticipantsForTesting(null, [
+      {
+        key: "user:josh-1",
+        kind: "person",
+        display_name: "Josh",
+        profile_picture_url: "https://p.example/josh.png",
+        email: null,
+        handle: "Josh",
+        color: "#000",
+        is_owner: true,
+        is_connected: true,
+        last_seen: null,
+        last_input_at: null,
+      },
+    ]);
+    const rail = mount([
+      chatRowFixture("agent-solo-owner", { participants: ["owner", "user:josh-1"] }),
+      chatRowFixture("agent-with-visitor", { participants: ["owner", "user:bob-2"] }),
+    ]);
+    // The owner annotated before the workspace was shared and after is one person, never a stack of two.
+    expect(rail.querySelector('[data-chat-row-people="agent-solo-owner"]')).toBeNull();
+    // Folded, the pre-share key draws the owner's picture.
+    const photos = rail.querySelector('[data-chat-row-people="agent-with-visitor"]');
+    expect(photos?.querySelectorAll("[data-participant-picture]")).toHaveLength(2);
+    expect(photos?.querySelector("img")?.getAttribute("src")).toBe("https://p.example/josh.png");
   });
 });
 
@@ -120,8 +183,8 @@ describe("ChatRail main chat", () => {
   });
 
   it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
-    const waiting = chatRowFixture("agent-waiting", { isProvisional: true, status: "idle" });
-    const creating = chatRowFixture("agent-creating", { isProvisional: true, status: "working" });
+    const waiting = chatRowFixture("agent-waiting", { kind: "provisional", status: "idle" });
+    const creating = chatRowFixture("agent-creating", { kind: "provisional", status: "working" });
     const context = chatRailAttrsFixture({ rows: [waiting, creating] });
     const rail = mount([waiting, creating]);
 
@@ -137,5 +200,27 @@ describe("ChatRail main chat", () => {
     ).toEqual(["rename", "make-main", "delete"]);
     expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
     expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).not.toBeNull();
+  });
+});
+
+describe("ChatRail rooms", () => {
+  it("draws a room with the people glyph and its mention mark, and offers it rename, stop or restart, and delete", () => {
+    const lounge = chatRowFixture("room-0123456789abcdef", { kind: "room", title: "Lounge", hasMention: true });
+    const busy = chatRowFixture("room-fedcba9876543210", { kind: "room", title: "Hall", status: "working" });
+    const stopped = chatRowFixture("room-0000000000000001", { kind: "room", title: "Attic", status: "stopped" });
+    const rail = mount([lounge, busy]);
+
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] .chat-rail-room-glyph')).not.toBeNull();
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] .chat-rail-dot')).toBeNull();
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] [data-chat-row-mention]')).not.toBeNull();
+    // While an agent the room asked works, the room wears the working dot, as any chat does.
+    expect(dotClassOf("room-fedcba9876543210")).toContain("chat-rail-dot--pulse");
+    expect(rail.querySelector('[data-chat-id="room-fedcba9876543210"] [data-chat-row-mention]')).toBeNull();
+    const context = chatRailAttrsFixture({ rows: [lounge, busy, stopped] });
+    const labelsOf = (row: ChatRow): string[] =>
+      rowMenuRows(context, row).map((menuRow) => (menuRow.kind === "action" ? menuRow.label : "-"));
+    // A room's reader is stopped and restarted from the menu like any chat's agent, and never made the main chat.
+    expect(labelsOf(lounge)).toEqual(["Rename", "Stop room", "-", "Delete room"]);
+    expect(labelsOf(stopped)).toEqual(["Rename", "Restart room", "-", "Delete room"]);
   });
 });

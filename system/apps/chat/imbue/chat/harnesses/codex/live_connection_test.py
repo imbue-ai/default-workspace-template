@@ -24,6 +24,7 @@ from imbue.chat.harnesses.codex.ledger import MessageState
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.chat.harnesses.codex.model import open_subscribed_codex_client
 from imbue.chat.harnesses.model import read_model_identity
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import ThreadInfo
 from imbue.mngr_codex.app_server_client import TransportClosedError
@@ -148,6 +149,34 @@ def test_reader_carries_a_committed_user_message_through_to_delivered(tmp_path: 
     assert user_turns[0]["type"] == "user_message"
     assert user_turns[0]["content"] == "hello"
     assert user_turns[0]["event_id"] == f"codex-user-cid-{client_id}"
+    connection.stop()
+
+
+def test_reader_keeps_the_reply_streamed_on_the_agents_thread_only(tmp_path: Path) -> None:
+    transport = _LocalTransport()
+    client = _bound_client(transport)
+    connection = CodexLiveConnection.build(
+        tmp_path,
+        on_queue_snapshot=lambda snapshot: None,
+        on_user_turn=lambda event: None,
+        model_state_path=tmp_path / "model.json",
+        open_client=lambda _: client,
+    )
+    assert connection is not None
+    assert connection.read_streamed_reply() is None
+
+    for thread_id, delta in (("thread-1", "Tides "), ("thread-other", "not this"), ("thread-1", "rise")):
+        transport.push(
+            {
+                "jsonrpc": "2.0",
+                "method": "item/agentMessage/delta",
+                "params": {"threadId": thread_id, "itemId": "msg-1", "delta": delta},
+            }
+        )
+
+    assert _wait_until(
+        lambda: connection.read_streamed_reply() == StreamedReply(message_id="msg-1", text="Tides rise")
+    )
     connection.stop()
 
 

@@ -8,6 +8,9 @@ from flask.testing import FlaskClient
 from workspace_layout.testing import FakeShell
 
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.client_activity import client_activity_report
+from imbue.chat.client_activity import is_client_activity_reportable
+from imbue.chat.client_activity import record_client_message_activity
 from imbue.chat.documents import CHAT_AGENT_ID_META_NAME
 from imbue.chat.documents import CHAT_ID_META_NAME
 from imbue.chat.documents import CHAT_SESSION_ID_META_NAME
@@ -15,10 +18,7 @@ from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.documents import TERMINAL_LABEL_META_NAME
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.primitives import ChatId
-from imbue.chat.server import client_activity_report
 from imbue.chat.server import create_application
-from imbue.chat.server import is_client_activity_reportable
-from imbue.chat.server import record_client_message_activity
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state

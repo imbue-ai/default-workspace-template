@@ -6,6 +6,7 @@ thread, so the scan/cursor/two-phase logic is tested without timing flakiness.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +34,13 @@ from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 _STATUS_RUNNING = 2
 _STATUS_DONE = 3
+_STATUS_GENERATING = 8
 _TYPE_USER = 14
 _TYPE_PLANNER = 15
 # The live tool-step type on agy 1.1.20: every tool call arrives as 132, whatever the
@@ -239,7 +244,7 @@ def _flushing_watcher(
             next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: is_alive)
+    watcher.set_flush_hooks(_send, lambda: is_alive, lambda text, sent_after: None)
     return watcher
 
 
@@ -331,7 +336,7 @@ def test_a_partial_commit_resolves_ENTRIES_not_lines(tmp_path: Path) -> None:
         append_step(_conv_db_path(tmp_path, conv), (2, _TYPE_USER, _STATUS_DONE, _user_payload("foo\nbar")))
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher._collect_new_events()
     watcher._publish_turn_state()
     watcher._queue.enqueue("foo\nbar", "t0")
@@ -445,7 +450,7 @@ def test_the_queue_entry_departs_before_its_turn_arrives(tmp_path: Path) -> None
         next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = lambda _agent_id, events: order.append("transcript")
 
@@ -507,7 +512,7 @@ def test_the_poll_loop_cannot_emit_the_turn_before_its_chip_departs(tmp_path: Pa
         order.append("transcript")
         emitted.extend(events)
 
-    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = _on_events
 
@@ -624,10 +629,91 @@ def test_a_loader_reads_a_settled_conversation_with_no_thread_and_releases_what_
     assert [event["type"] for event in events] == ["user_message", "assistant_message"]
     assert {event["agent_id"] for event in events} == {agent_id}
     assert loader.get_total_event_count() == 2
-    assert loader._thread is None and loader._observer is None
+    assert loader._thread is None and loader._active_watch_observer is None
     assert loader._connections != {}
     loader.close()
     assert loader._connections == {}
+
+
+_NO_SOURCES = ReplyDraftSources(capture_pane=lambda: None, read_streamed_reply=lambda: None)
+
+
+def test_reply_draft_is_the_planner_step_agy_is_writing(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000001"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides rise ")),
+        ],
+    )
+    events = watcher._collect_new_events()
+
+    assert [e["type"] for e in events] == ["user_message"]
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:0:user", text="Tides rise")
+
+
+def test_reply_draft_follows_the_row_and_is_dropped_when_the_reply_lands(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000002"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides")),
+        ],
+    )
+    watcher._collect_new_events()
+    set_step_status(db, 1, _STATUS_GENERATING, _planner_payload("Tides rise twice"))
+    watcher._collect_new_events()
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(
+        after_event_id=f"{conv}:0:user", text="Tides rise twice"
+    )
+
+    set_step_status(db, 1, _STATUS_DONE, _planner_payload("Tides rise twice a day."))
+    events = watcher._collect_new_events()
+
+    assert [e.get("text") for e in events] == ["Tides rise twice a day."]
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:1:assistant", text="")
+
+
+def test_reply_draft_is_kept_while_a_later_row_is_mid_write(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000003"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides rise")),
+        ],
+    )
+    watcher._collect_new_events()
+    set_step_status(db, 1, _STATUS_GENERATING, _tag_len_overrun())
+    watcher._collect_new_events()
+
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:0:user", text="Tides rise")
+
+
+def test_reply_draft_is_empty_once_the_newest_row_is_not_a_planner_step_being_written(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000004"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("list files")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Let me look")),
+        ],
+    )
+    watcher._collect_new_events()
+    append_step(db, (2, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload("", short="Running ls")))
+    watcher._collect_new_events()
+
+    draft = watcher.read_reply_draft(_NO_SOURCES)
+    assert draft is not None and draft.text == ""
 
 
 # Model switches: typed by the same worker, alone, between turns
@@ -653,7 +739,52 @@ def _repick_while_typing(tmp_path: Path, watcher: AntigravitySessionWatcher) -> 
             _pick(tmp_path, "gemini-3.8-flash", "low")
         return send(text)
 
-    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True)
+    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True, lambda text, sent_after: None)
+
+
+def _parked_then_committed_watcher(
+    tmp_path: Path, conv: str, sent: list[str], resent: list[tuple[str, float]]
+) -> AntigravitySessionWatcher:
+    """A watcher whose first send of a block parks and whose later ones commit, recording what it notes as resent."""
+    watcher = _flushing_watcher(tmp_path, conv, sent, does_commit=False)
+    watcher._delivery_witness_seconds = 0.1
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+
+    def _send(text: str) -> bool:
+        sent.append(text)
+        if len(sent) > 1:
+            append_step(_conv_db_path(tmp_path, conv), (100, _TYPE_USER, _STATUS_DONE, _user_payload(text)))
+        return True
+
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
+    return watcher
+
+
+def test_a_block_that_lands_on_a_later_pass_is_noted_as_sent_again(tmp_path: Path) -> None:
+    sent: list[str] = []
+    resent: list[tuple[str, float]] = []
+    watcher = _parked_then_committed_watcher(tmp_path, "conv-repeat", sent, resent)
+    watcher._queue.enqueue("hello", "t0")
+
+    watcher._attempt_flush()
+    first_pass_ended_at = time.time()
+    assert (sent, resent) == (["hello"], [])
+
+    watcher._attempt_flush()
+    assert sent == ["hello", "hello"]
+    ((text, sent_after),) = resent
+    assert text == "hello"
+    # A first copy that landed during the first pass still counts as this message.
+    assert sent_after < first_pass_ended_at - TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 
 def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]) -> None:
@@ -667,7 +798,7 @@ def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]
             raise SendFailedError("the agent could not be found")
         return send(text)
 
-    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True)
+    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True, lambda text, sent_after: None)
 
 
 def _close_turn(tmp_path: Path, conv: str, watcher: AntigravitySessionWatcher) -> None:

@@ -1,0 +1,1 @@
+`InventoryApp` (the shell's `app` object) carries `uses_microphone`, whether the shell delegates the microphone to the app's frames; it defaults to false, so an answer from a shell that predates it still parses.

@@ -250,7 +250,9 @@ def test_the_helper_source_is_the_template_repository_at_the_exact_tag_or_else_t
     )
     git_output(repo, "tag", "v9.9.9")
     assert template_source_ref(repo) == "v9.9.9"
-    assert helper_source_url(repo).startswith("https://raw.githubusercontent.com/imbue-ai/default-workspace-template/v9.9.9/")
+    assert helper_source_url(repo).startswith(
+        "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/v9.9.9/"
+    )
     # Work the workspace does after its initial commit does not move the template commit.
     (repo / "later.txt").write_text("x\n")
     commit_all(repo, "A commit after the tag")
@@ -275,7 +277,9 @@ def test_the_template_commit_is_the_one_the_workspace_was_created_from_or_last_u
     assert template_commit(repo) == template
     assert template_source_ref(repo) == "v2.0.0"
     assert template_ref(repo) == "v2.0.0"
-    assert helper_source_url(repo).startswith("https://raw.githubusercontent.com/imbue-ai/default-workspace-template/v2.0.0/")
+    assert helper_source_url(repo).startswith(
+        "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/v2.0.0/"
+    )
     # An update-self merge names the upstream commit it merged as its second parent.
     git_output(repo, "checkout", "-q", "-b", "upstream", template)
     (repo / "upstream.txt").write_text("newer template\n")

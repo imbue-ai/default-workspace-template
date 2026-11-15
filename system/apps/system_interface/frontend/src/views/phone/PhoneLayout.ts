@@ -4,8 +4,8 @@
  * and a window's menu or an app's launch rows open as the desktop's menus do. What it shows is the store's
  * (``state.phone``); the sheets' text and highlight and which menu is open are this view's own.
  *
- * The layout is sized to the visual viewport rather than the layout one, so the bar rides above a soft keyboard
- * instead of under it.
+ * The layout is sized to the visual viewport rather than the layout one, so a soft keyboard leaves the page above
+ * it in view; the bar steps aside while the keyboard is up, so the page reaches down to the keyboard.
  */
 
 import m from "mithril";
@@ -33,6 +33,7 @@ import { stoppedPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
+import { isSoftKeyboardUp, readViewport } from "./softKeyboard";
 import { StartSheet } from "./StartSheet";
 import { WindowsSheet } from "./WindowsSheet";
 
@@ -61,6 +62,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
   let startQuery = "";
   let startHighlight: number | null = null;
   let root: HTMLElement | null = null;
+  let isKeyboardUp = false;
   const menu = createMenu({
     placement: "below",
     role: "menu",
@@ -78,6 +80,15 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     if (root === null || !viewport) return;
     root.style.top = `${viewport.offsetTop}px`;
     root.style.height = `${viewport.height}px`;
+    syncKeyboard();
+  }
+
+  function syncKeyboard(): void {
+    const reading = readViewport();
+    const isUp = reading !== null && isSoftKeyboardUp(reading, isKeyboardUp);
+    if (isUp === isKeyboardUp) return;
+    isKeyboardUp = isUp;
+    m.redraw();
   }
 
   function openMenuAt(next: PhoneMenu, target: HTMLElement): void {
@@ -252,29 +263,32 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 : null,
             ],
           ),
-          m(PhoneBar, {
-            pill: phonePillOf(state),
-            count: openWindowCount(state),
-            avatar: state.avatar,
-            onHome: () => store.goHome(),
-            onPill: () => {
-              windowQuery = "";
-              store.openPhoneSheet("windows");
-            },
-            onPillLongPress: (target) => {
-              if (shownWindow !== null) openMenuAt({ kind: "window", windowId: shownWindow.id }, target);
-            },
-            onNew: () => {
-              startQuery = "";
-              startHighlight = null;
-              store.openPhoneSheet("start");
-            },
-            thresholdPx,
-          }),
+          isKeyboardUp
+            ? null
+            : m(PhoneBar, {
+                pill: phonePillOf(state),
+                count: openWindowCount(state),
+                avatar: state.avatar,
+                onHome: () => store.goHome(),
+                onPill: () => {
+                  windowQuery = "";
+                  store.openPhoneSheet("windows");
+                },
+                onPillLongPress: (target) => {
+                  if (shownWindow !== null) openMenuAt({ kind: "window", windowId: shownWindow.id }, target);
+                },
+                onNew: () => {
+                  startQuery = "";
+                  startHighlight = null;
+                  store.openPhoneSheet("start");
+                },
+                thresholdPx,
+              }),
           m(Toasts, {
             toasts: store.toasts.current(),
-            placementClass:
-              "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
+            placementClass: isKeyboardUp
+              ? "absolute bottom-(--desk-toast-gap)"
+              : "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
           }),
           sheetView(store),
           menuRows === null ? null : menu.view(menuRows),

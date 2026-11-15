@@ -1,11 +1,20 @@
-"""What an app's own tests assert about the document it serves (``app_schema.api_schema``)."""
+"""What an app's own tests assert about the document it serves (``app_schema.api_schema``) and about the request
+guard ahead of its routes (``app_schema.request_guard``)."""
 
 import inspect
 from pathlib import Path
+from typing import Any, Final
 
 from app_manifest.manifest import load_manifest
 from flask.testing import FlaskClient
 from openapi_spec_validator import validate
+from workspace_layout.identity import (
+    FETCH_MODE_HEADER,
+    FETCH_SITE_HEADER,
+    IDENTITY_HEADER,
+    OTHER_ORIGIN_REFUSAL,
+    UNTRUSTED_LOOPBACK_REFUSAL,
+)
 
 from app_schema.api_schema import (
     API_SCHEMA_ENDPOINT,
@@ -19,6 +28,18 @@ from app_schema.api_schema import (
 
 # A view that reads its body through Flask directly bypasses ``parse_request_body`` and so the route table.
 _RAW_BODY_READS = ("request.get_json(", "request.json", ".get_json(")
+
+# The fetch metadata a browser sends for a page of another origin's fetch, and the header a proxy stamps on the
+# owner's request.
+CROSS_SITE_FETCH_HEADERS: Final[dict[str, str]] = {
+    FETCH_SITE_HEADER: "cross-site",
+    FETCH_MODE_HEADER: "cors",
+}
+OWNER_IDENTITY_HEADERS: Final[dict[str, str]] = {IDENTITY_HEADER: '{"owner":true}'}
+# A Host that is not loopback: the one a page reaching loopback through a rebound name sends, and the one a proxy
+# keeps on a request it stamped.
+REBOUND_BASE_URL: Final[str] = "http://rebound.example:8090"
+FORWARDED_BASE_URL: Final[str] = "http://app-x.agent-1.localhost:8421"
 
 
 def _is_schema_endpoint(endpoint: str) -> bool:
@@ -55,6 +76,36 @@ def _views_reading_their_body_raw(
         if any(marker in source for marker in _RAW_BODY_READS):
             offenders.append(f"{rule.endpoint} ({openapi_path})")
     return sorted(set(offenders))
+
+
+def assert_request_guard_refuses_unknown_provenance(
+    client: FlaskClient, method: str, path: str, **request_kwargs: Any
+) -> None:
+    """The request guard (``app_schema.request_guard``) is ahead of ``path``: the request is refused with 403 when
+    a browser marks it as a page of another origin's and when it is header-less under a Host that is not loopback,
+    both before its view runs, and reaches its view when a proxy stamped it, whatever Host the proxy kept.
+
+    ``request_kwargs`` go to every probe (a JSON body, say). The proxied probe runs the view, so name a request the
+    app answers freely.
+    """
+    cross_site = client.open(
+        path, method=method, headers=CROSS_SITE_FETCH_HEADERS, **request_kwargs
+    )
+    assert cross_site.status_code == 403, cross_site.data
+    assert cross_site.get_json() == {"detail": OTHER_ORIGIN_REFUSAL}
+    rebound = client.open(
+        path, method=method, base_url=REBOUND_BASE_URL, **request_kwargs
+    )
+    assert rebound.status_code == 403, rebound.data
+    assert rebound.get_json() == {"detail": UNTRUSTED_LOOPBACK_REFUSAL}
+    proxied = client.open(
+        path,
+        method=method,
+        headers=OWNER_IDENTITY_HEADERS,
+        base_url=FORWARDED_BASE_URL,
+        **request_kwargs,
+    )
+    assert proxied.status_code == 200, proxied.data
 
 
 def assert_api_schema_describes_app(client: FlaskClient, manifest_path: Path) -> None:

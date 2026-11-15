@@ -1,0 +1,1 @@
+The weekly check's "disk nearly full" finding now reads the disk through `disk-headroom`, so on a cloud machine it also fires when the machine's disk quota, which `df` cannot see, is what is nearly full. Where `disk-headroom` cannot run it falls back to `df`.

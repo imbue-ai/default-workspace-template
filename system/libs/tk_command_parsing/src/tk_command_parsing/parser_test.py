@@ -2,17 +2,24 @@
 
 These pin the behaviour the gate hooks in ``system/scripts/`` rely on --
 ``agent_tk_standalone_check.py`` (segments and verbs) and
-``agent_latchkey_request_check.py`` (segment words and ``terminator``) --
-plus the ``extract_create_titles`` / ``flag_values`` surface the
-package exposes for callers that need step titles out of a ``tk create --step``
-command. The cases that motivated moving off regexes -- quoted operators, escaped
-quotes inside titles, a tk verb merely mentioned inside another command's
-argument, and the ``--flag=value`` form -- are covered explicitly.
+``agent_latchkey_request_check.py`` (segment words and ``terminator``), and
+the ``command_words`` that ``agent_block_pipe_tail_head_check.py`` and
+``agent_block_foreground_sleep_check.py`` read -- plus the
+``extract_create_titles`` / ``flag_values`` surface the package exposes for
+callers that need step titles out of a ``tk create --step`` command. The cases
+that motivated moving off regexes -- quoted operators, escaped quotes inside
+titles, a tk verb merely mentioned inside another command's argument, and the
+``--flag=value`` form -- are covered explicitly.
 """
 
 from __future__ import annotations
 
-from tk_command_parsing.parser import extract_create_titles, flag_values, parse_command
+from tk_command_parsing.parser import (
+    command_words,
+    extract_create_titles,
+    flag_values,
+    parse_command,
+)
 
 
 def _verbs(command: str) -> list[str | None]:
@@ -158,3 +165,20 @@ def test_extract_titles_preserves_escaped_quotes_in_title() -> None:
 def test_extract_titles_handles_joined_step_form() -> None:
     """The `--step=value` form yields the title; the old regex missed it."""
     assert extract_create_titles('tk create --step="equals form"') == ["equals form"]
+
+
+def test_command_words_skip_assignments_and_keywords_before_the_command() -> None:
+    parsed = parse_command(
+        "for i in 1 2; do A=1 sleep 30; done; if x; then { ! cat f; }; fi; echo do"
+    )
+    assert parsed is not None
+    assert [command_words(seg) for seg in parsed.segments] == [
+        ["for", "i", "in", "1", "2"],
+        ["sleep", "30"],
+        ["done"],
+        ["x"],
+        ["cat", "f"],
+        ["}"],
+        ["fi"],
+        ["echo", "do"],
+    ]
