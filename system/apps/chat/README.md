@@ -999,10 +999,20 @@ every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten
 in place, and only final words reach the saved draft. The box is read-only while
 listening; Enter or Send finishes the words first and then sends; Escape drops
-the words that are not yet final. The mic carries every state (a ring while the
-model downloads, a spinner while starting and stopping, the neutral pressed tint
-with its capsule filling to the input level while listening), and a problem is
-told in a notice over the composer. The library is `system/libs/workspace_voice/`
+the words that are not yet final. Until the speech model is on the device the
+mic offers its one-time download as a step of its own: the glyph sits faint with
+a warning badge on its corner, the tooltip names the download's size, and a press
+downloads without listening (at mount the page asks its own Cache Storage whether
+the files of the variant this device runs are there). While the model loads, for
+that download and for every later start, the mic eases into a `Loading voice
+model` label with the download's progress as a bar under it, the composer's box
+is marked `data-composer-state="blocked-loading"`, and the text box is disabled
+and dimmed under a scrim while the paperclip and Send stay live; when the load
+ends the label eases back into the mic and the text box takes focus again. Two
+short bell tones say when the microphone is open. The mic carries the other
+states too (a spinner while starting and stopping, the neutral pressed tint with
+its capsule filling to the input level while listening), and a problem is told
+in a notice over the composer. The library is `system/libs/workspace_voice/`
 (its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
 mic and the notice, and `MessageInput.ts` drives the dictation and writes its
 words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)

@@ -12,6 +12,7 @@ function mountButton(overrides: Partial<DictationButtonAttrs> = {}) {
   const attrs: DictationButtonAttrs = {
     state: "idle",
     progress: null,
+    setUp: null,
     shortcutLabel: "Cmd+Shift+M",
     disabled: false,
     onToggle: vi.fn(),
@@ -40,6 +41,16 @@ describe("dictationTooltip", () => {
       "Downloading speech model, 44% of 64 MB",
     );
     expect(dictationProgressPercent({ loadedBytes: 5, totalBytes: 0 })).toBe(0);
+  });
+
+  it("offers the model's download, with its size when known, while the model is not on this device", () => {
+    expect(dictationTooltip("idle", null, "Cmd+Shift+M", { totalBytes: 250_000_000 })).toBe(
+      "Set up dictation: one-time 238 MB download (Cmd+Shift+M)",
+    );
+    expect(dictationTooltip("idle", null, "Ctrl+Shift+M", { totalBytes: null })).toBe(
+      "Set up dictation: one-time download (Ctrl+Shift+M)",
+    );
+    expect(dictationTooltip("listening", null, "Cmd+Shift+M", { totalBytes: 1 })).toBe("Stop dictation (Cmd+Shift+M)");
   });
 });
 
@@ -84,6 +95,55 @@ describe("DictationButton", () => {
       expect(button.querySelector(".dictation-glyph")).toBeNull();
       unmountViews();
     }
+  });
+
+  it("offers the model's download first, as a faint mic with a warning badge, until the model is here", () => {
+    vi.useFakeTimers();
+    const { button } = mountButton({ setUp: { totalBytes: 250_000_000 } });
+    expect(button.getAttribute("aria-label")).toBe("Set up dictation");
+    expect(button.querySelector("svg.dictation-glyph")!.classList.contains("text-faint")).toBe(true);
+    const badge = button.querySelector<HTMLElement>(".dictation-setup-badge")!;
+    expect(badge.classList.contains("text-warning")).toBe(true);
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(hoverTooltipText(button)).toBe("Set up dictation: one-time 238 MB download (Cmd+Shift+M)");
+    unmountViews();
+    const unsized = mountButton({ setUp: { totalBytes: null } });
+    expect(hoverTooltipText(unsized.button)).toBe("Set up dictation: one-time download (Cmd+Shift+M)");
+    unmountViews();
+    const downloaded = mountButton();
+    expect(downloaded.button.getAttribute("aria-label")).toBe("Dictate");
+    expect(downloaded.button.querySelector(".dictation-setup-badge")).toBeNull();
+    expect(downloaded.button.querySelector("svg.dictation-glyph")!.classList.contains("text-faint")).toBe(false);
+  });
+
+  it("eases into a label with the download's progress while the model loads, and back to the mic after", () => {
+    const { root, button } = mountButton({
+      state: "loading",
+      progress: { loadedBytes: 1, totalBytes: 4 },
+      setUp: { totalBytes: 4 },
+    });
+    const morph = root.querySelector<HTMLElement>(".dictation-morph")!;
+    expect(morph.hasAttribute("data-dictation-loading")).toBe(true);
+    expect(morph.classList.contains("grid-cols-[1fr]")).toBe(true);
+    const label = morph.querySelector<HTMLElement>(".dictation-morph-label")!;
+    expect(label.textContent).toBe("Loading voice model");
+    expect(label.getAttribute("aria-hidden")).toBe("true");
+    expect(label.getAttribute("data-hover-tooltip")).toBe("Downloading speech model, 25% of 4 B");
+    expect(morph.querySelector<HTMLElement>(".dictation-morph-bar")!.style.width).toBe("25%");
+    // The mic fades under the label and keeps its ring; the label is the signal now, so the set-up badge goes.
+    expect(morph.querySelector<HTMLElement>(".dictation-morph-mic")!.classList.contains("opacity-0")).toBe(true);
+    expect(button.querySelector(".dictation-ring-arc")).not.toBeNull();
+    expect(button.querySelector(".dictation-setup-badge")).toBeNull();
+    unmountViews();
+    const rested = mountButton();
+    const restedMorph = rested.root.querySelector<HTMLElement>(".dictation-morph")!;
+    expect(restedMorph.hasAttribute("data-dictation-loading")).toBe(false);
+    expect(restedMorph.classList.contains("grid-cols-[0fr]")).toBe(true);
+    expect(restedMorph.querySelector(".dictation-morph-label")).not.toBeNull();
+    expect(restedMorph.querySelector<HTMLElement>(".dictation-morph-mic")!.classList.contains("opacity-0")).toBe(
+      false,
+    );
+    expect(rested.button.querySelector(".dictation-setup-badge")).toBeNull();
   });
 
   it("gives the meter back when the glyph leaves", () => {

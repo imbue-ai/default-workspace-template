@@ -109,6 +109,7 @@ const mocks = vi.hoisted(() => {
       state: "idle",
       isHeld: false,
       start: vi.fn(async () => {}),
+      prepare: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
       cancel: vi.fn(async () => {}),
       retryHeld: vi.fn(),
@@ -119,6 +120,7 @@ const mocks = vi.hoisted(() => {
       state: string;
       isHeld: boolean;
       start: ReturnType<typeof vi.fn>;
+      prepare: ReturnType<typeof vi.fn>;
       stop: ReturnType<typeof vi.fn>;
       cancel: ReturnType<typeof vi.fn>;
       retryHeld: ReturnType<typeof vi.fn>;
@@ -128,12 +130,16 @@ const mocks = vi.hoisted(() => {
     dictationEvents: null as null | {
       onStateChange(state: string): void;
       onProgress(loadedBytes: number, totalBytes: number): void;
+      onEngineReady(): void;
       onLevel(level: number): void;
       onFinalWords(words: string): void;
       onTentativeWords(words: string): void;
       onUtteranceEnd(): void;
       onProblem(problem: unknown): void;
     },
+    // What the probe at mount says of the speech model: on this device unless a test says otherwise.
+    speechModelProbe: vi.fn(async () => ({ isDownloaded: true, totalBytes: 250_000_000, device: "wasm" })),
+    readyChime: { wake: vi.fn(), play: vi.fn() },
   };
 });
 
@@ -291,6 +297,10 @@ vi.mock("@imbue/workspace-voice/src/support", async (importOriginal) => ({
     return { engineId: "moonshine-base", preferredDevice: null, assetBase: "https://chat.test/assets/voice/" };
   },
 }));
+vi.mock("@imbue/workspace-voice/src/downloadProbe", () => ({
+  probeEngineDownload: () => mocks.speechModelProbe(),
+}));
+vi.mock("@imbue/workspace-voice/src/readyChime", () => ({ createReadyChime: () => mocks.readyChime }));
 
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
@@ -2465,6 +2475,9 @@ describe("MessageInput dictation", () => {
     mocks.dictationEvents = null;
     mocks.dictationDeviceClasses = [];
     mocks.screenWakeWanted = [];
+    mocks.speechModelProbe.mockResolvedValue({ isDownloaded: true, totalBytes: 250_000_000, device: "wasm" });
+    mocks.readyChime.wake.mockClear();
+    mocks.readyChime.play.mockClear();
     localStorage.clear();
   });
 
@@ -2477,6 +2490,19 @@ describe("MessageInput dictation", () => {
     const component = MessageInput();
     const render = () => component.view!({ attrs: { chatId: CHAT } } as never);
     return { component, render };
+  }
+
+  /** Put the composer on the page as mounting does, which asks the probe about the speech model and waits for its
+   *  answer. The page's window is a stub the dictation hooks can register on. */
+  async function mountOnPage(render: () => unknown): Promise<void> {
+    vi.stubGlobal("window", { addEventListener: () => undefined, removeEventListener: () => undefined });
+    const root = findByClass(render(), "message-input mx-auto")!;
+    (root.attrs!.oncreate as () => void)();
+    await flushAsync();
+  }
+
+  function composerBox(tree: unknown): AnyVnode {
+    return findByAttr(tree, "data-part", "chat.composer")!;
   }
 
   /** Press the mic, and have the engine report the state a start reaches. */
@@ -2644,6 +2670,78 @@ describe("MessageInput dictation", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("offers the model's download as a step of its own while it is not on this device, then dictation", async () => {
+    mocks.speechModelProbe.mockResolvedValue({ isDownloaded: false, totalBytes: 250_000_000, device: "wasm" });
+    const { render } = composer();
+    await mountOnPage(render);
+    const setUp = findByAttr(render(), "aria-label", "Set up dictation");
+    expect(setUp, "the mic should offer the download").toBeTruthy();
+    // The size is formatted by the mocked attachments module here; DictationButton's own tests read the real one.
+    expect(setUp!.attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: one-time .+ download \(/);
+    (setUp!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.prepare).toHaveBeenCalledTimes(1);
+    expect(mocks.dictation!.start).not.toHaveBeenCalled();
+    // While the model loads the box is blocked and says so; the buttons beside it stay live.
+    setDictationState("loading");
+    let tree = render();
+    expect(composerBox(tree).attrs!["data-composer-state"]).toBe("blocked-loading");
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+    expect(findByClass(tree, "message-input-scrim")).toBeDefined();
+    expect(findByAttr(tree, "aria-label", "Attach files")?.attrs?.disabled).toBe(false);
+    expect(findByAttr(tree, "data-dictation-state", "loading")?.attrs?.disabled).toBe(false);
+    mocks.dictationEvents!.onEngineReady();
+    setDictationState("idle");
+    tree = render();
+    expect(composerBox(tree).attrs!["data-composer-state"]).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
+    expect(findByClass(tree, "message-input-scrim")).toBeUndefined();
+    const mic = findByAttr(tree, "aria-label", "Dictate");
+    expect(mic, "the mic should offer dictation now").toBeTruthy();
+    (mic!.attrs!.onclick as () => void)();
+    expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+    expect(mocks.dictation!.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts dictation at the first press once the model is on this device", async () => {
+    const { render } = composer();
+    await mountOnPage(render);
+    expect(findByAttr(render(), "aria-label", "Set up dictation")).toBeUndefined();
+    startDictating(render);
+    expect(mocks.dictation!.prepare).not.toHaveBeenCalled();
+  });
+
+  it("keeps the plain mic when the probe cannot answer", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.speechModelProbe.mockRejectedValue(new Error("no storage"));
+    const { render } = composer();
+    await mountOnPage(render);
+    expect(findByAttr(render(), "aria-label", "Dictate")).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("wakes the chime at the press and rings it as listening begins", () => {
+    const { render } = composer();
+    startDictating(render, "starting");
+    expect(mocks.readyChime.wake).toHaveBeenCalledTimes(1);
+    expect(mocks.readyChime.play).not.toHaveBeenCalled();
+    setDictationState("listening");
+    expect(mocks.readyChime.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the box focus back when the model's load ends", () => {
+    const { render } = composer();
+    const textarea = { style: {}, scrollHeight: 28, clientHeight: 28, focus: vi.fn() };
+    (findByTag(render(), "textarea")!.attrs!.oncreate as (vnode: unknown) => void)({ dom: textarea });
+    expect(textarea.focus).toHaveBeenCalledTimes(1);
+    startDictating(render, "loading");
+    (findByTag(render(), "textarea")!.attrs!.onupdate as (vnode: unknown) => void)({ dom: textarea });
+    expect(textarea.focus).toHaveBeenCalledTimes(1);
+    setDictationState("idle");
+    (findByTag(render(), "textarea")!.attrs!.onupdate as (vnode: unknown) => void)({ dom: textarea });
+    expect(textarea.focus).toHaveBeenCalledTimes(2);
   });
 
   it("toggles dictation from the shortcut anywhere on the page, and lets go of it when the composer leaves", () => {

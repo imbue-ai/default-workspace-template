@@ -95,8 +95,10 @@ import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { createDictation } from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
 import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
+import { probeEngineDownload } from "@imbue/workspace-voice/src/downloadProbe";
 import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
+import { createReadyChime } from "@imbue/workspace-voice/src/readyChime";
 import {
   describeHost,
   dictationShortcutChord,
@@ -105,6 +107,7 @@ import {
   isDictationSupported,
   pageDictationOptions,
 } from "@imbue/workspace-voice/src/support";
+import type { PageDictationOptions } from "@imbue/workspace-voice/src/support";
 import { DictationButton, dictationNotice, dictationProgressPercent } from "./DictationButton";
 import type { DictationProgress } from "./DictationButton";
 
@@ -451,6 +454,16 @@ function isAppleKeyboard(): boolean {
 // The mounted composer's hook for the page going out of view, which stops its dictation and keeps the words.
 let mountedDictationHide: (() => void) | null = null;
 
+// The chime that says the microphone is open: one for the page, since a browser caps the audio contexts a page
+// may hold and every open chat panel mounts a composer of its own.
+const readyChime = createReadyChime();
+
+/** The dictation this page runs; the page's own URL roots the runtime's files, and a document-less test has none. */
+function dictationPageOptions(): PageDictationOptions {
+  const pageUrl = typeof location === "undefined" ? "" : location.href;
+  return pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass());
+}
+
 /** Stop the page's dictation, keeping the words it heard: what the page does when the shell says it is hidden. */
 export function stopDictationWhenHidden(): void {
   mountedDictationHide?.();
@@ -484,14 +497,26 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
   );
 }
 
+/** What the composer's box is in the middle of, which the parts inside it take their look from: blocked while
+ *  the speech model loads (the text box disabled under a scrim, the mic a label), or nothing. */
+type ComposerState = "blocked-loading";
+
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
  *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. */
-function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
+function composeRow(
+  leading: m.Children | undefined,
+  composerState: ComposerState | null,
+  boxChildren: m.Children[],
+): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
     m(
       "div",
-      { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") },
+      {
+        class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`,
+        ...appPartAttrs("chat", "composer"),
+        "data-composer-state": composerState ?? undefined,
+      },
       boxChildren,
     ),
   ]);
@@ -636,6 +661,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let isSendPendingAfterDictation = false;
   // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
   let isComposerDisabledNow = false;
+  // Whether the speech model is on this device: what the probe at mount said (null until it answers), and true
+  // after any load since. While false the mic offers the download as a step of its own, sized by the probe.
+  let isSpeechModelDownloaded: boolean | null = null;
+  let speechModelDownloadBytes: number | null = null;
 
   /** Write the dictation's words into the box: the live span, with the caret at its end so the words stay in
    *  view, and only the final words to the saved draft. */
@@ -663,11 +692,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
   function ensureDictation(): Dictation {
     if (dictation !== null) return dictation;
-    // The page's own URL roots the runtime's files; a document-less test has none.
-    const pageUrl = typeof location === "undefined" ? "" : location.href;
     const wakeLock = createScreenWakeLock(browserWakeLockHost());
     screenWakeLock = wakeLock;
-    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass()), {
+    dictation = createDictation(dictationPageOptions(), {
       onStateChange: (state) => {
         // Held through loading, starting and listening, and let go once idle.
         wakeLock.setWanted(state !== "idle");
@@ -678,6 +705,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // Once idle the words are ordinary text; the next dictation opens a span of its own.
         if (state === "idle") dictationSpan = null;
+        if (state === "listening") readyChime.play();
         m.redraw();
       },
       onProgress: (loadedBytes, totalBytes) => {
@@ -689,7 +717,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m.redraw();
         }
       },
-      onEngineReady: () => undefined,
+      onEngineReady: () => {
+        isSpeechModelDownloaded = true;
+        m.redraw();
+      },
       onLevel: (level) => setMeterLevel?.(level),
       onFinalWords: (words) => {
         if (dictationSpan === null) return;
@@ -715,7 +746,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     return dictation;
   }
 
-  /** The mic and the shortcut: start from idle, stop while listening, nothing in between. */
+  /** Ask whether the speech model is on this device, so the mic can offer its download as a step of its own. */
+  function probeSpeechModel(): void {
+    probeEngineDownload(dictationPageOptions()).then(
+      (probe) => {
+        isSpeechModelDownloaded = probe.isDownloaded;
+        speechModelDownloadBytes = probe.totalBytes;
+        m.redraw();
+      },
+      (error: unknown) => console.warn(`Could not tell whether the speech model is downloaded: ${String(error)}`),
+    );
+  }
+
+  /** The mic and the shortcut: from idle, the model's download alone while it is not on this device, else start;
+   *  stop while listening; nothing in between. */
   function toggleDictation(): void {
     if (currentChatId === null || isComposerDisabledNow) return;
     const running = ensureDictation();
@@ -725,6 +769,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     }
     if (running.state !== "idle") return;
     dictationProblem = null;
+    // The press is the user gesture after which the browser lets the page sound.
+    readyChime.wake();
+    if (isSpeechModelDownloaded === false) {
+      void running.prepare();
+      return;
+    }
     openDictationSpan();
     void running.start();
   }
@@ -766,6 +816,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", disposeDictation);
     mountedDictationHide = stopDictationKeepingWords;
+    probeSpeechModel();
   }
 
   function detachDictationFromPage(): void {
@@ -1967,6 +2018,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
+      // While the speech model loads the box is blocked: the text box disabled and dimmed under a scrim, the mic
+      // the label that says why. The paperclip and Send stay live.
+      const isBlockedByLoading = dictationState === "loading";
+      const isTextboxDisabled = isComposerDisabled || isBlockedByLoading;
       // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
       if (isSendPendingAfterDictation && !isDictating) {
         isSendPendingAfterDictation = false;
@@ -2035,6 +2090,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           }),
           composeRow(
             vnode.attrs.leading,
+            isBlockedByLoading ? "blocked-loading" : null,
             // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
             [
               mentionPopover({
@@ -2072,13 +2128,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                               ? "Type to queue more messages..."
                               : "Type a message...",
                     rows: 1,
-                    disabled: isComposerDisabled,
+                    disabled: isTextboxDisabled,
                     readonly: isDictating,
                     value: messageText,
                     oncreate: (textareaVnode: m.VnodeDOM) => {
                       messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                       mountedComposerTextarea = messageTextareaElement;
-                      wasComposerDisabled = isComposerDisabled;
+                      wasComposerDisabled = isTextboxDisabled;
                       refitComposer();
                       focusMessageTextarea();
                     },
@@ -2087,8 +2143,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       mountedComposerTextarea = messageTextareaElement;
                       refitComposer(isTypingUntilRedraw);
                       isTypingUntilRedraw = false;
-                      if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
-                      wasComposerDisabled = isComposerDisabled;
+                      if (wasComposerDisabled && !isTextboxDisabled) focusMessageTextarea();
+                      wasComposerDisabled = isTextboxDisabled;
                     },
                     onremove: () => {
                       if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
@@ -2109,6 +2165,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     onkeydown: handleKeydown,
                     onpaste: handlePaste,
                   }),
+                  // Over the text box, in its cell, so it follows the box into the full-width row when stacked.
+                  isBlockedByLoading
+                    ? m("div", {
+                        class:
+                          "message-input-scrim pointer-events-none col-start-2 row-start-1 self-stretch rounded-md " +
+                          "bg-fill-hover group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1",
+                        "aria-hidden": "true",
+                      })
+                    : null,
                   m(
                     Button,
                     {
@@ -2174,6 +2239,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       ? m(DictationButton, {
                           state: dictationState,
                           progress: dictationProgress,
+                          setUp: isSpeechModelDownloaded === false ? { totalBytes: speechModelDownloadBytes } : null,
                           shortcutLabel: dictationShortcutLabel(isAppleKeyboard()),
                           disabled: isComposerDisabled,
                           onToggle: toggleDictation,

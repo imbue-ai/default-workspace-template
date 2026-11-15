@@ -1,9 +1,12 @@
 /**
  * The composer's mic (the workspace-voice-input spec, D5): one button that carries every state of dictation, with
- * no bar and no timer. While listening its capsule fills from the bottom with the input level, drawn inside the
- * glyph so nothing in the toolbar moves; while the speech model downloads a ring around it shows the progress;
- * starting and stopping show a spinner. The level is set imperatively, through the setter the button hands its
- * owner, since it changes every frame and a redraw per frame would redraw the whole page.
+ * no bar and no timer. Until the speech model is on this device the mic offers its one-time download as a step of
+ * its own: the glyph faint, a warning badge on its corner, and a press that downloads without listening. While
+ * the model loads the button eases into a label with the download's progress as a bar under it, and eases back
+ * when the load ends. While listening its capsule fills from the bottom with the input level, drawn inside the
+ * glyph so nothing in the toolbar moves; starting and stopping show a spinner. The level is set imperatively,
+ * through the setter the button hands its owner, since it changes every frame and a redraw per frame would redraw
+ * the whole page.
  *
  * Beside it, the notice the composer shows over itself when dictation has something to say, in the style of its
  * provider notice.
@@ -12,7 +15,7 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { MIC_CAPSULE_PATH, iconPaths, spinnerIcon } from "@imbue/workspace-ui/src/components/icons";
+import { MIC_CAPSULE_PATH, alertDotIcon, iconPaths, spinnerIcon } from "@imbue/workspace-ui/src/components/icons";
 import type { DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
 import { formatFileSize } from "../models/attachments";
 
@@ -21,16 +24,30 @@ export interface DictationProgress {
   totalBytes: number;
 }
 
-/** The whole-number percent of a download, for the tooltip and the ring. */
+/** The one-time download the mic offers while the speech model is not on this device; ``totalBytes`` is null
+ *  when its size is not known. */
+export interface DictationSetUp {
+  totalBytes: number | null;
+}
+
+/** The whole-number percent of a download, for the tooltip, the ring and the label's bar. */
 export function dictationProgressPercent(progress: DictationProgress | null): number {
   if (progress === null || progress.totalBytes <= 0) return 0;
   return Math.min(100, Math.floor((100 * progress.loadedBytes) / progress.totalBytes));
 }
 
-export function dictationTooltip(state: DictationState, progress: DictationProgress | null, shortcut: string): string {
+export function dictationTooltip(
+  state: DictationState,
+  progress: DictationProgress | null,
+  shortcut: string,
+  setUp: DictationSetUp | null = null,
+): string {
   switch (state) {
     case "idle":
-      return `Dictate (${shortcut})`;
+      if (setUp === null) return `Dictate (${shortcut})`;
+      return setUp.totalBytes === null || setUp.totalBytes <= 0
+        ? `Set up dictation: one-time download (${shortcut})`
+        : `Set up dictation: one-time ${formatFileSize(setUp.totalBytes)} download (${shortcut})`;
     case "loading":
       return progress === null || progress.totalBytes <= 0
         ? "Downloading speech model"
@@ -55,6 +72,9 @@ const ARIA_LABELS: Record<DictationState, string> = {
 export interface DictationButtonAttrs {
   state: DictationState;
   progress: DictationProgress | null;
+  /** The download the mic offers first, while the model is not on this device; null once it is, and until that
+   *  is known. */
+  setUp: DictationSetUp | null;
   shortcutLabel: string;
   disabled: boolean;
   onToggle(): void;
@@ -68,6 +88,27 @@ const CAPSULE_BOTTOM = 15;
 const CAPSULE_HEIGHT = 13;
 const RING_RADIUS = 12.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+// The morph: a grid of one column holding the label, 0fr at rest and 1fr while loading, so the wrapper grows from
+// the mic's 28px to the label's own width with no measuring; the mic sits over its right end and fades.
+const MORPH_CLASS =
+  "dictation-morph relative inline-grid h-[28px] min-w-[28px] shrink-0 transition-[grid-template-columns] " +
+  "duration-[250ms] ease-[ease] motion-reduce:transition-none";
+const LABEL_CLASS =
+  "dictation-morph-label flex h-[28px] min-w-0 flex-col justify-center overflow-hidden px-1 font-mono " +
+  "text-(length:--font-size-helper) leading-[1.25] tracking-[0.02em] text-secondary select-none whitespace-nowrap " +
+  "cursor-default";
+// The fade is on a span of its own rather than on the button, whose recipe carries a transition utility already;
+// two on one element resolve by their order in the compiled bundle.
+const MIC_CLASS =
+  "dictation-morph-mic absolute top-0 right-0 transition-[opacity,scale] duration-[250ms] ease-[ease] " +
+  "motion-reduce:transition-none";
+const MIC_HIDDEN_CLASS = "pointer-events-none scale-[0.6] opacity-0";
+// Centred on the 16px glyph's bottom-right corner inside the 28px button, ringed in the composer's background so
+// it separates from the glyph.
+const BADGE_CLASS =
+  "dictation-setup-badge pointer-events-none absolute top-[17px] left-[17px] flex h-2.5 w-2.5 rounded-full " +
+  "bg-composer text-warning shadow-[0_0_0_1.5px_var(--color-composer)]";
 
 let instanceCounter = 0;
 
@@ -84,11 +125,11 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
     levelRect.setAttribute("height", height.toFixed(2));
   };
 
-  const glyph = (attrs: DictationButtonAttrs): m.Vnode =>
+  const glyph = (attrs: DictationButtonAttrs, isFaint: boolean): m.Vnode =>
     m(
       "svg",
       {
-        class: "dictation-glyph",
+        class: isFaint ? "dictation-glyph text-faint" : "dictation-glyph",
         width: 16,
         height: 16,
         viewBox: "0 0 24 24",
@@ -161,28 +202,60 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
     );
   };
 
+  const badge = (): m.Vnode => m("span", { class: BADGE_CLASS, "aria-hidden": "true" }, m.trust(alertDotIcon(10)));
+
+  const label = (progress: DictationProgress | null, tooltip: string): m.Vnode =>
+    m("span", { class: LABEL_CLASS, "aria-hidden": "true", ...hoverTooltipAttrs(tooltip, "above") }, [
+      m("span", "Loading voice model"),
+      m("span", {
+        class: "dictation-morph-bar mt-0.5 h-0.5 bg-accent",
+        style: { width: `${dictationProgressPercent(progress)}%` },
+      }),
+    ]);
+
   return {
     view(vnode) {
-      const { state, progress, shortcutLabel, disabled, onToggle } = vnode.attrs;
+      const { state, progress, setUp, shortcutLabel, disabled, onToggle } = vnode.attrs;
       const isBusy = state === "starting" || state === "stopping";
+      const isLoading = state === "loading";
+      const isSetUpOffered = state === "idle" && setUp !== null;
+      const tooltip = dictationTooltip(state, progress, shortcutLabel, setUp);
       return m(
-        Button,
+        "span",
         {
-          variant: "ghost",
-          icon: true,
-          sm: true,
-          pressed: state === "listening",
-          // A download or a spinner is not a press: the button waits, explained by its tooltip.
-          readonly: state === "loading" || isBusy,
-          disabled,
-          extra: "message-input-dictate-button relative shrink-0 overflow-visible",
-          "aria-label": ARIA_LABELS[state],
-          "aria-pressed": state === "listening" ? "true" : "false",
-          "data-dictation-state": state,
-          ...hoverTooltipAttrs(dictationTooltip(state, progress, shortcutLabel), "above"),
-          onclick: () => onToggle(),
+          class: `${MORPH_CLASS} ${isLoading ? "grid-cols-[1fr]" : "grid-cols-[0fr]"}`,
+          "data-dictation-loading": isLoading ? "" : undefined,
         },
-        [isBusy ? m.trust(spinnerIcon(16)) : glyph(vnode.attrs), state === "loading" ? ring(progress) : null],
+        [
+          label(progress, tooltip),
+          m(
+            "span",
+            { class: isLoading ? `${MIC_CLASS} ${MIC_HIDDEN_CLASS}` : MIC_CLASS },
+            m(
+              Button,
+              {
+                variant: "ghost",
+                icon: true,
+                sm: true,
+                pressed: state === "listening",
+                // A download or a spinner is not a press: the button waits, explained by its tooltip.
+                readonly: isLoading || isBusy,
+                disabled,
+                extra: "message-input-dictate-button relative shrink-0 overflow-visible",
+                "aria-label": isSetUpOffered ? "Set up dictation" : ARIA_LABELS[state],
+                "aria-pressed": state === "listening" ? "true" : "false",
+                "data-dictation-state": state,
+                ...hoverTooltipAttrs(tooltip, "above"),
+                onclick: () => onToggle(),
+              },
+              [
+                isBusy ? m.trust(spinnerIcon(16)) : glyph(vnode.attrs, isSetUpOffered),
+                isLoading ? ring(progress) : null,
+                isSetUpOffered ? badge() : null,
+              ],
+            ),
+          ),
+        ],
       );
     },
   };
