@@ -35,6 +35,8 @@ export interface DictationEvents {
   onStateChange(state: DictationState): void;
   /** The model's download, while the state is ``loading``. */
   onProgress(loadedBytes: number, totalBytes: number): void;
+  /** The engine is loaded, by a start or a prepare: its files are on this device and checked. */
+  onEngineReady(): void;
   /** The input level, 0 to 1, smoothed, every frame while listening. */
   onLevel(level: number): void;
   /** Words that are final, to add after the final words so far and save. */
@@ -78,6 +80,9 @@ export interface Dictation {
   readonly isHeld: boolean;
   /** From idle: load the engine, open the microphone, listen. Settles when listening, or when it could not. */
   start(): Promise<void>;
+  /** From idle: load the engine (the download, the first time) and idle again without opening the microphone,
+   *  so the download can be its own step. Settles when the engine is ready, or when it could not be. */
+  prepare(): Promise<void>;
   /** Release the microphone, finish the words already heard, then idle. */
   stop(): Promise<void>;
   /** Release the microphone and drop every word that is not final; the final words stay. */
@@ -155,6 +160,8 @@ export function createDictation(
   let pendingFinalize: Promise<void> | null = null;
   // Bumped by cancel and dispose, so nothing from before them lands.
   let runId = 0;
+  // Whether the load in flight is a prepare's, which holds no microphone and so yields to no other page.
+  let isPreparing = false;
   let lastPreviewAt = 0;
   let level = 0;
   let lastFrameAt = 0;
@@ -295,7 +302,7 @@ export function createDictation(
       if (type !== "dictation-started" || token === sessionToken) return;
       // Another dictation started somewhere in the workspace: this one yields, keeping what it heard.
       if (state === "listening") void stop();
-      else if (state === "loading" || state === "starting") void cancel();
+      else if (state === "starting" || (state === "loading" && !isPreparing)) void cancel();
     };
   };
 
@@ -304,12 +311,9 @@ export function createDictation(
     events.onProblem(problem);
   };
 
-  const start = async (): Promise<void> => {
-    if (state !== "idle") return;
-    if (scheduler.isHeld) discardHeld();
-    events.onProblem(null);
-    runId += 1;
-    const run = runId;
+  /** Load the engine as ``loading`` for run ``run``; whether it is ready and the run still stands. A load that
+   *  fails is told as a problem and idles. */
+  const loadEngine = async (run: number): Promise<boolean> => {
     setState("loading");
     try {
       await ensureClient().load(options.preferredDevice, (loadedBytes, totalBytes) => {
@@ -317,9 +321,33 @@ export function createDictation(
       });
     } catch (error) {
       if (runId === run) fail(problemForLoadError(error));
-      return;
+      return false;
     }
-    if (runId !== run) return;
+    if (runId !== run) return false;
+    events.onEngineReady();
+    return true;
+  };
+
+  const prepare = async (): Promise<void> => {
+    if (state !== "idle") return;
+    events.onProblem(null);
+    runId += 1;
+    const run = runId;
+    isPreparing = true;
+    try {
+      if (await loadEngine(run)) setState("idle");
+    } finally {
+      isPreparing = false;
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    if (state !== "idle") return;
+    if (scheduler.isHeld) discardHeld();
+    events.onProblem(null);
+    runId += 1;
+    const run = runId;
+    if (!(await loadEngine(run))) return;
     setState("starting");
     try {
       const created = await deps.createDetector({
@@ -401,6 +429,7 @@ export function createDictation(
       return scheduler.isHeld;
     },
     start,
+    prepare,
     stop,
     cancel,
     retryHeld,

@@ -39,6 +39,7 @@ function recordingStore(): PinnedFileStore & { pruned: [string, string[]][] } {
   const pruned: [string, string[]][] = [];
   return {
     pruned,
+    has: async () => false,
     read: async () => null,
     write: async () => undefined,
     prune: async (prefix, keep) => void pruned.push([prefix, [...keep].sort()]),

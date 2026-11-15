@@ -13,11 +13,14 @@ class FakeClient implements EngineWorkerClient {
   readonly engineId = "moonshine-base";
   isDead = false;
   loadError: Error | null = null;
+  /** A load waits on this, when set, after reporting its progress: a download still running. */
+  loadGate: Promise<void> | null = null;
   readonly jobs: { audio: Float32Array; resolve(text: string): void; reject(error: Error): void }[] = [];
   load = vi.fn(async (_device: unknown, onProgress: (l: number, t: number) => void): Promise<"wasm"> => {
     if (this.loadError !== null) throw this.loadError;
     onProgress(50, 100);
     onProgress(100, 100);
+    if (this.loadGate !== null) await this.loadGate;
     return "wasm";
   });
   transcribe(audio: Float32Array): Promise<TranscriptionResult> {
@@ -60,6 +63,7 @@ class FakeChannel implements DictationChannel {
 interface Recorder extends DictationEvents {
   states: DictationState[];
   progress: [number, number][];
+  engineReadies: number;
   levels: number[];
   finals: string[];
   tentatives: string[];
@@ -71,6 +75,7 @@ function recorder(): Recorder {
   const record: Recorder = {
     states: [],
     progress: [],
+    engineReadies: 0,
     levels: [],
     finals: [],
     tentatives: [],
@@ -78,6 +83,9 @@ function recorder(): Recorder {
     problems: [],
     onStateChange: (state) => void record.states.push(state),
     onProgress: (loaded, total) => void record.progress.push([loaded, total]),
+    onEngineReady: () => {
+      record.engineReadies += 1;
+    },
     onLevel: (level) => void record.levels.push(level),
     onFinalWords: (words) => void record.finals.push(words),
     onTentativeWords: (words) => void record.tentatives.push(words),
@@ -98,6 +106,7 @@ function harness() {
   const channel = new FakeChannel();
   const events = recorder();
   const detectors: FakeDetector[] = [];
+  const getStream = vi.fn(async () => ({}) as MediaStream);
   let now = 1000;
   const clock = { advance: (ms: number) => (now += ms) };
   const dictation = createDictation(
@@ -110,7 +119,7 @@ function harness() {
         detectors.push(detector);
         return detector;
       },
-      getStream: async () => ({}) as MediaStream,
+      getStream,
       isMicrophoneAllowedByFrame: () => true,
       now: () => now,
       createChannel: () => channel,
@@ -124,7 +133,16 @@ function harness() {
       detector().frame(level);
     }
   };
-  return { client, channel, events, dictation, detector, detectors, speak, clock };
+  return { client, channel, events, dictation, detector, detectors, getStream, speak, clock };
+}
+
+/** A load gate the test opens when it chooses: a download still running. */
+function holdLoad(client: FakeClient): () => void {
+  let release: () => void = () => undefined;
+  client.loadGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return release;
 }
 
 beforeEach(() => {
@@ -141,10 +159,70 @@ describe("dictation", () => {
       [100, 100],
     ]);
     expect(client.load).toHaveBeenCalledWith(null, expect.any(Function));
+    expect(events.engineReadies).toBe(1);
     expect(detector().start).toHaveBeenCalledTimes(1);
     expect(detector().options.assetBase).toBe(ASSET_BASE);
     expect(channel.posted).toEqual([{ type: "dictation-started", token: expect.any(String) }]);
     expect(events.problems).toEqual([null]);
+  });
+
+  it("prepares: loads the engine and idles again without opening the microphone", async () => {
+    const { client, events, dictation, detectors, getStream } = harness();
+    await dictation.prepare();
+    expect(events.states).toEqual(["loading", "idle"]);
+    expect(events.progress).toEqual([
+      [50, 100],
+      [100, 100],
+    ]);
+    expect(events.engineReadies).toBe(1);
+    expect(client.load).toHaveBeenCalledTimes(1);
+    expect(detectors).toEqual([]);
+    expect(getStream).not.toHaveBeenCalled();
+    expect(events.problems).toEqual([null]);
+    // The start that follows loads the prepared engine at once, then opens the microphone.
+    await dictation.start();
+    expect(events.states).toEqual(["loading", "idle", "loading", "starting", "listening"]);
+    expect(events.engineReadies).toBe(2);
+  });
+
+  it("tells a prepare's failed download as it tells a start's, and idles", async () => {
+    const { client, events, dictation } = harness();
+    client.loadError = new EngineLoadError("config.json does not match its pinned SHA-256", "config.json");
+    await dictation.prepare();
+    expect(events.states).toEqual(["loading", "idle"]);
+    expect(events.problems[1]).toMatchObject({
+      kind: "download",
+      canRetry: true,
+      message: expect.stringContaining("config.json"),
+    });
+    expect(events.engineReadies).toBe(0);
+  });
+
+  it("holds a prepare through another page's start, and calls it off on cancel", async () => {
+    const { client, channel, events, dictation } = harness();
+    await dictation.start();
+    await dictation.stop();
+    let release = holdLoad(client);
+    const prepared = dictation.prepare();
+    await settled();
+    expect(dictation.state).toBe("loading");
+    // A dictation starting elsewhere wants the microphone, which a prepare does not hold.
+    channel.hear({ type: "dictation-started", token: "another-page" });
+    await settled();
+    expect(dictation.state).toBe("loading");
+    release();
+    await prepared;
+    expect(dictation.state).toBe("idle");
+    expect(events.engineReadies).toBe(2);
+    release = holdLoad(client);
+    const cancelled = dictation.prepare();
+    await settled();
+    await dictation.cancel();
+    expect(dictation.state).toBe("idle");
+    release();
+    await cancelled;
+    expect(events.engineReadies).toBe(2);
+    expect(events.states.slice(-2)).toEqual(["loading", "idle"]);
   });
 
   it("previews the utterance's words as a tail, then lands them as final words when it ends", async () => {

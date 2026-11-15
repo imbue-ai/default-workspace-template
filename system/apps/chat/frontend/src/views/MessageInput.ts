@@ -689,6 +689,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m.redraw();
         }
       },
+      onEngineReady: () => undefined,
       onLevel: (level) => setMeterLevel?.(level),
       onFinalWords: (words) => {
         if (dictationSpan === null) return;
