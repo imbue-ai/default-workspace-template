@@ -113,8 +113,8 @@ takes, and every second past the real finish is time your lead and the user
 wait for nothing. Wait on the work itself instead:
 
 - Run it in the foreground when the command ends when the work does.
-- Otherwise start it with `run_in_background` and carry on with other work;
-  its report wakes you when it ends.
+- Otherwise start it with `system/scripts/workspace_bare_scripts/run_in_background.py`
+  and carry on with other work; its report wakes you when it ends.
 - When neither applies, check its status (a status endpoint, a file, a log
   line) between other pieces of work, and act as soon as it shows done.
 

@@ -21,7 +21,7 @@ path in `task_file`. Pass that exact path to the parser, which sets
 reporting:
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 Then read the whole task file. It is the only brief you get: whatever the lead
@@ -76,8 +76,8 @@ put the result in your report. `select-tests` only prints the commands; run
 what it prints:
 
 ```bash
-uv run app-manifest select-tests --diff-base <the commit before your work> > "/var/tmp/test-gate-$MNGR_AGENT_ID.sh"
-python3 system/scripts/run_in_background.py --description "Run the test gate" -- bash "/var/tmp/test-gate-$MNGR_AGENT_ID.sh"
+uv run --no-sync app-manifest select-tests --diff-base <the commit before your work> > "/var/tmp/test-gate-$MNGR_AGENT_ID.sh"
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Run the test gate" -- bash "/var/tmp/test-gate-$MNGR_AGENT_ID.sh"
 ```
 
 ## Step 5: Report
