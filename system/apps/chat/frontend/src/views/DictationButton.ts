@@ -94,8 +94,10 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const MORPH_CLASS =
   "dictation-morph relative inline-grid h-[28px] min-w-[28px] shrink-0 transition-[grid-template-columns] " +
   "duration-[250ms] ease-[ease] motion-reduce:transition-none";
+// No padding on the label itself: a 0fr column still holds its item's padding, and that 8px strip would show the
+// first letter beside the mic at rest, so the padding sits on the text's own box inside the clipped label.
 const LABEL_CLASS =
-  "dictation-morph-label flex h-[28px] min-w-0 flex-col justify-center overflow-hidden px-1 font-mono " +
+  "dictation-morph-label flex h-[28px] min-w-0 flex-col justify-center overflow-hidden font-mono " +
   "text-(length:--font-size-helper) leading-[1.25] tracking-[0.02em] text-secondary select-none whitespace-nowrap " +
   "cursor-default";
 // The fade is on a span of its own rather than on the button, whose recipe carries a transition utility already;
@@ -104,10 +106,10 @@ const MIC_CLASS =
   "dictation-morph-mic absolute top-0 right-0 transition-[opacity,scale] duration-[250ms] ease-[ease] " +
   "motion-reduce:transition-none";
 const MIC_HIDDEN_CLASS = "pointer-events-none scale-[0.6] opacity-0";
-// Centred on the 16px glyph's bottom-right corner inside the 28px button, ringed in the composer's background so
-// it separates from the glyph.
+// Centred on the 16px glyph's bottom-right corner inside the 28px button (the offsets count from inside the
+// button's 1px border), ringed in the composer's background so it separates from the glyph.
 const BADGE_CLASS =
-  "dictation-setup-badge pointer-events-none absolute top-[17px] left-[17px] flex h-2.5 w-2.5 rounded-full " +
+  "dictation-setup-badge pointer-events-none absolute top-[16px] left-[16px] flex h-2.5 w-2.5 rounded-full " +
   "bg-composer text-warning shadow-[0_0_0_1.5px_var(--color-composer)]";
 
 let instanceCounter = 0;
@@ -205,13 +207,17 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
   const badge = (): m.Vnode => m("span", { class: BADGE_CLASS, "aria-hidden": "true" }, m.trust(alertDotIcon(10)));
 
   const label = (progress: DictationProgress | null, tooltip: string): m.Vnode =>
-    m("span", { class: LABEL_CLASS, "aria-hidden": "true", ...hoverTooltipAttrs(tooltip, "above") }, [
-      m("span", "Loading voice model"),
-      m("span", {
-        class: "dictation-morph-bar mt-0.5 h-0.5 bg-accent",
-        style: { width: `${dictationProgressPercent(progress)}%` },
-      }),
-    ]);
+    m(
+      "span",
+      { class: LABEL_CLASS, "aria-hidden": "true", ...hoverTooltipAttrs(tooltip, "above") },
+      m("span", { class: "flex flex-col px-1" }, [
+        m("span", "Loading voice model"),
+        m("span", {
+          class: "dictation-morph-bar mt-0.5 h-0.5 bg-accent",
+          style: { width: `${dictationProgressPercent(progress)}%` },
+        }),
+      ]),
+    );
 
   return {
     view(vnode) {
