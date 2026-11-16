@@ -171,7 +171,7 @@ use it:
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "api.example.com", "scheme": "https"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
 ```
 

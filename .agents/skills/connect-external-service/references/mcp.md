@@ -100,7 +100,7 @@ it up again from scratch, sign-in included.
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read", "write"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
 ```
 
