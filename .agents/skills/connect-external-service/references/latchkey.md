@@ -263,9 +263,7 @@ rules (references/mcp.md).
 
 Every command above is routed through the latchkey gateway at
 `$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as a transient outage; it
-usually helps if the user restarts the Imbue Studio app. Requests to `/permissions` and
-`/permission-requests` are routed to the user's computer, so they fail while it
-is offline.
+usually helps if the user restarts the Imbue Studio app.
 
 ## Proxying requests through the user's desktop
 
