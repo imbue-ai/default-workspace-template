@@ -274,9 +274,6 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Files app: a small Flask server over the workspace's files. It
     # holds little memory and supervisord restarts it if shed.
     "files": 75,
-    # The Markdown Editor: a small Flask page over one markdown file at a time. Every save is
-    # on disk at once and the page rereads the file, so a shed costs one reload.
-    "markdown-editor": 76,
     # The Routines app: a small Flask page over the routines library's state. It stores nothing
     # of its own, so a shed costs one reload.
     "routines": 78,

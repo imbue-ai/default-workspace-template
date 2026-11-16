@@ -56,7 +56,6 @@ _BUILTIN_SERVICE_ORDER = (
     "cron",
     "screen",
     "files",
-    "markdown-editor",
     "routines",
     "getting-started",
     "style-guide",

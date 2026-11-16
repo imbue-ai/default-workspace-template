@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Every markdown file listed in MD_CORPUS opens and, untouched, saves back byte for byte.
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";

@@ -1,0 +1,390 @@
+/* A markdown file's view page: the bar of modes, formatting and review controls, the document, and the popover a
+   suggestion or comment opens. Everything is drawn from the design tokens, so every theme reaches it; the redline
+   colours are the success, danger and warning tokens. */
+
+.files-markdown {
+  --files-markdown-insert-bg: var(--c-success-bg);
+  --files-markdown-insert-ink: var(--c-success);
+  --files-markdown-delete-bg: var(--c-danger-bg);
+  --files-markdown-delete-ink: var(--c-danger);
+  --files-markdown-comment-bg: var(--c-warning-bg);
+  --files-markdown-comment-edge: var(--c-warning);
+  min-height: 100%;
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  font-family: var(--font-sans);
+}
+
+.files-markdown [hidden] {
+  display: none !important;
+}
+
+/* The bar sticks to the top of the page's scroll area, and wraps onto more rows in a narrow window. */
+.files-markdown-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.files-markdown-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 4px;
+  padding: 4px 12px;
+}
+
+.files-markdown-mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 1px;
+  margin-right: 6px;
+}
+
+.files-markdown-mode-switch button[aria-checked="true"] {
+  background: var(--c-fill-active);
+}
+
+.files-markdown-gap {
+  width: 10px;
+}
+
+.files-markdown-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--c-border);
+  font-size: var(--font-size-helper);
+  color: var(--c-text-secondary);
+}
+
+.files-markdown-save-status {
+  margin-left: 10px;
+  min-width: 52px;
+  font-size: var(--font-size-helper);
+  color: var(--c-text-faint);
+}
+
+.files-markdown-save-status[data-tone="error"] {
+  color: var(--c-danger);
+}
+
+.files-markdown-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 6px 16px;
+  font-size: var(--font-size-helper);
+  background: var(--c-warning-bg);
+  border-top: 1px solid var(--c-border);
+}
+
+.files-markdown-banner[data-tone="info"] {
+  background: var(--c-success-bg);
+}
+
+.files-markdown-banner-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------------- document */
+
+.files-markdown-document {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 24px 120px;
+}
+
+.files-markdown-front-matter {
+  margin: 22px 0 0;
+  font-size: var(--font-size-helper);
+  color: var(--c-text-secondary);
+}
+
+.files-markdown-front-matter summary {
+  cursor: pointer;
+}
+
+.files-markdown-front-matter pre {
+  font-family: var(--font-mono);
+  background: var(--c-bg-code);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.files-markdown .tiptap {
+  outline: none;
+  font-size: 17px;
+  line-height: 1.65;
+  padding-top: 18px;
+  word-wrap: break-word;
+}
+
+.files-markdown .tiptap > * + * {
+  margin-top: 0.75em;
+}
+
+.files-markdown .tiptap :is(h1, h2, h3, h4) {
+  font-family: var(--font-display, var(--font-sans));
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.4em 0 0.4em;
+}
+
+.files-markdown .tiptap h1 {
+  font-size: 1.85em;
+}
+
+.files-markdown .tiptap h2 {
+  font-size: 1.4em;
+}
+
+.files-markdown .tiptap h3 {
+  font-size: 1.18em;
+}
+
+.files-markdown .tiptap h4 {
+  font-size: 1em;
+}
+
+.files-markdown .tiptap > :first-child {
+  margin-top: 0.4em;
+}
+
+.files-markdown .tiptap p {
+  margin: 0.6em 0;
+}
+
+.files-markdown .tiptap :is(ul, ol) {
+  padding-left: 1.4em;
+  margin: 0.6em 0;
+}
+
+.files-markdown .tiptap ul {
+  list-style: disc;
+}
+
+.files-markdown .tiptap ol {
+  list-style: decimal;
+}
+
+.files-markdown .tiptap li > p {
+  margin: 0.15em 0;
+}
+
+.files-markdown .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+
+.files-markdown .tiptap ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.5em;
+}
+
+.files-markdown .tiptap ul[data-type="taskList"] li > div > p {
+  margin: 0;
+}
+
+.files-markdown .tiptap ul[data-type="taskList"] li > label {
+  flex: none;
+  margin-top: 0.15em;
+}
+
+.files-markdown .tiptap blockquote {
+  margin: 0.8em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--c-border-strong);
+  color: var(--c-text-secondary);
+}
+
+.files-markdown .tiptap a {
+  color: var(--c-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.files-markdown .tiptap code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--c-bg-code);
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+}
+
+.files-markdown .tiptap pre {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--c-bg-code);
+  border: 1px solid var(--c-border-code);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.files-markdown .tiptap pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.files-markdown .tiptap pre.source-block {
+  background: transparent;
+  border: 1px dashed var(--c-border);
+  color: var(--c-text-secondary);
+  white-space: pre-wrap;
+}
+
+.files-markdown .tiptap hr {
+  border: none;
+  border-top: 1px solid var(--c-border);
+  margin: 1.6em 0;
+}
+
+.files-markdown .tiptap table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.8em 0;
+  width: 100%;
+}
+
+.files-markdown .tiptap :is(th, td) {
+  border: 1px solid var(--c-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.files-markdown .tiptap th {
+  background: var(--c-surface-secondary);
+  font-weight: 600;
+}
+
+.files-markdown .tiptap :is(td, th) > p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- suggestions and comments */
+
+.files-markdown ins.suggestion {
+  text-decoration: none;
+  background: var(--files-markdown-insert-bg);
+  color: var(--files-markdown-insert-ink);
+  border-bottom: 1px solid var(--c-success-border);
+  cursor: pointer;
+}
+
+.files-markdown del.suggestion {
+  text-decoration: line-through;
+  text-decoration-color: var(--files-markdown-delete-ink);
+  background: var(--files-markdown-delete-bg);
+  color: var(--files-markdown-delete-ink);
+  cursor: pointer;
+}
+
+.files-markdown :is(ins, del).suggestion:has(> p, > li, > ul, > ol, > h1, > h2, > h3, > blockquote) {
+  display: block;
+  border-bottom: none;
+  border-left: 3px solid currentColor;
+  padding-left: 8px;
+}
+
+.files-markdown span.comment {
+  background: var(--files-markdown-comment-bg);
+  border-bottom: 2px solid var(--files-markdown-comment-edge);
+  cursor: pointer;
+}
+
+.files-markdown span.comment-note {
+  display: inline-block;
+  width: 1.05em;
+  height: 0.95em;
+  margin: 0 0.12em;
+  vertical-align: -0.05em;
+  border-radius: 3px 3px 3px 0;
+  background: var(--files-markdown-comment-edge);
+  cursor: pointer;
+}
+
+/* The plugin's pilcrows where a paragraph break was added or removed. */
+.files-markdown :is([data-suggestion-boundary], .suggestion-pilcrow) {
+  color: var(--c-text-faint);
+}
+
+/* ---------------------------------------------------------------- popover */
+
+.files-markdown-popover {
+  position: fixed;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 360px;
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--c-shadow-overlay);
+  padding: 10px 12px;
+  font-size: var(--font-size-row);
+}
+
+.files-markdown-popover-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--c-text-secondary);
+  font-size: var(--font-size-tag);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.files-markdown-popover-comment {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+
+.files-markdown-popover-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.files-markdown-popover :is(textarea, input) {
+  width: 100%;
+  font: inherit;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  padding: 6px 8px;
+}
+
+.files-markdown-popover textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.files-markdown-signature {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--c-text-secondary);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .files-markdown .tiptap {
+    font-size: 16px;
+  }
+}

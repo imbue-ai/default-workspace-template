@@ -1424,7 +1424,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="APP=PATH",
         help="An app's already-built static/ bundle from the worker (the artifact "
         "the worker validated): system_interface=<path>, chat=<path>, "
-        "getting_started=<path>, files=<path>, routines=<path>, style_guide=<path>, markdown_editor=<path>, or screen=<path>, once per app. "
+        "getting_started=<path>, files=<path>, routines=<path>, style_guide=<path>, or screen=<path>, once per app. "
         "Installed as-is only when every "
         "app's is given and verified; a live build is the fallback.",
     )

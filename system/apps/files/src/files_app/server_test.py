@@ -216,6 +216,41 @@ def test_a_put_writes_the_file_creating_its_folders_and_keeping_its_mode(tmp_pat
     assert sorted(path.name for path in root.iterdir()) == ["new", "run.sh"]
 
 
+def test_a_save_naming_its_version_writes_only_over_that_version_and_answers_the_new_one(tmp_path: Path) -> None:
+    client = _app(None, tmp_path)
+    plan = tmp_path / "root" / "plan.md"
+    plan.write_text("# Plan\n")
+    opened = client.get("/plan.md")
+    version = opened.headers["ETag"]
+    assert client.head("/plan.md").headers["ETag"] == version
+
+    saved = client.put("/plan.md", data=b"# Plan{++ v2++}\n", headers={"If-Match": version})
+    assert saved.status_code == 201
+    assert plan.read_text() == "# Plan{++ v2++}\n"
+    assert saved.headers["ETag"] != version
+    assert client.head("/plan.md").headers["ETag"] == saved.headers["ETag"]
+
+    # An agent rewrote the file after the editor last read it: the editor's save, from the older version, is refused.
+    stale = client.put("/plan.md", data=b"lost\n", headers={"If-Match": version})
+    assert stale.status_code == 412
+    assert stale.get_data(as_text=True) == "/plan.md was changed since it was opened."
+    assert plan.read_text() == "# Plan{++ v2++}\n"
+    # A file that is gone is refused too, rather than made again.
+    plan.unlink()
+    assert client.put("/plan.md", data=b"back\n", headers={"If-Match": version}).status_code == 412
+    assert not plan.exists()
+
+
+def test_a_save_naming_its_version_is_refused_on_a_computer(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-write-/Users/kim/plan.md"], folders={})
+    computer.files["/Users/kim/plan.md"] = b"old"
+    response = _app(computer, tmp_path).put(
+        f"/__remote/{DEVICE}/Users/kim/plan.md", data=b"new", headers={"If-Match": '"anything"'}
+    )
+    assert response.status_code == 501
+    assert computer.files["/Users/kim/plan.md"] == b"old"
+
+
 def test_saving_a_linked_file_writes_the_file_it_names_and_keeps_the_link(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
     root = tmp_path / "root"

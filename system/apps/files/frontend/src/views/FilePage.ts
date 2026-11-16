@@ -1,6 +1,7 @@
 /**
- * A file's own page: `?view` shows it (a picture, a player, a PDF, or its text), `?edit` opens its text in an editor
- * that saves back with Cmd/Ctrl+S. It is a window of its own, closed when done with, so the header names the file and
+ * A file's own page: `?view` shows it (a picture, a player, a PDF, or its text; a markdown file formatted, to suggest
+ * edits to and comment on, `markdown/MarkdownDocument.ts`), `?edit` opens its text in an editor that saves back with
+ * Cmd/Ctrl+S. It is a window of its own, closed when done with, so the header names the file and
  * carries what can be done to it, with no way off to the folder.
  */
 
@@ -16,10 +17,11 @@ import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import { isTextLike, previewKindOf } from "../models/fileKinds";
+import { isMarkdown, isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
+import type { MarkdownDocument } from "../markdown/MarkdownDocument";
 import { Dialogs } from "./dialogs";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
@@ -41,8 +43,27 @@ export class FilePageModel {
   isDeleted = false;
   size: number | null = null;
   readonly dialogs = new Dialogs();
+  /** Whether this is a markdown file's view page, which draws and saves the file itself. */
+  readonly isMarkdownView: boolean;
+  /** That page's editor, once its code (loaded only for it) has arrived. */
+  markdown: MarkdownDocument | null = null;
 
-  constructor(readonly options: FilePageOptions) {}
+  constructor(readonly options: FilePageOptions) {
+    const name = nameOf(options.path);
+    this.isMarkdownView =
+      options.page === "view" && previewKindOf(name, options.isText) === "text" && isMarkdown(name);
+  }
+
+  /** Load the markdown editor's code and open the file in it, inside `host`. */
+  async mountMarkdown(host: HTMLElement): Promise<void> {
+    const { MarkdownDocument } = await import("../markdown/MarkdownDocument");
+    this.markdown = new MarkdownDocument({
+      path: this.options.path,
+      canSave: !isLiveShared(this.options.path),
+      onChange: () => m.redraw(),
+    });
+    await this.markdown.mount(host);
+  }
 
   get isDirty(): boolean {
     return this.text.status === "ready" && this.draft !== this.text.saved;
@@ -60,7 +81,7 @@ export class FilePageModel {
         m.redraw();
       })
       .catch(() => undefined);
-    if (!this.showsText) return;
+    if (!this.showsText || this.isMarkdownView) return;
     try {
       const text = await server.readText(this.options.path);
       this.text = { status: "ready", saved: text };
@@ -72,6 +93,7 @@ export class FilePageModel {
   }
 
   async save(): Promise<void> {
+    if (this.markdown !== null) return this.markdown.saveNow();
     if (!this.isDirty || this.isSaving) return;
     const content = this.draft;
     this.isSaving = true;
@@ -141,6 +163,13 @@ function body(page: FilePageModel): m.Children {
       m("div", { class: "type-helper text-faint" }, "You can close this window."),
     ]);
   }
+  if (page.isMarkdownView) {
+    return m("div.files-markdown-host", {
+      class: "h-full overflow-auto",
+      oncreate: ({ dom }: m.VnodeDOM) => void page.mountMarkdown(dom as HTMLElement),
+      onremove: () => page.markdown?.destroy(),
+    });
+  }
   switch (preview) {
     case "image":
       return m(
@@ -205,7 +234,8 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
         }
       };
       onBeforeUnload = (event) => {
-        if (page.isDirty) event.preventDefault();
+        if (page.markdown?.isDirty) void page.markdown.saveNow();
+        if (page.isDirty || page.markdown?.isDirty) event.preventDefault();
       };
       document.addEventListener("keydown", onKeydown);
       window.addEventListener("beforeunload", onBeforeUnload);
@@ -220,7 +250,8 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
       const { path, page: kind } = page.options;
       const name = nameOf(path);
       // The server calls any small file that decodes as text editable; Edit is offered only on one named as text.
-      const canEdit = page.showsText && page.text.status === "ready" && isTextLike(name);
+      // A markdown file's view page draws the file itself; Edit opens its source.
+      const canEdit = isTextLike(name) && (page.isMarkdownView || (page.showsText && page.text.status === "ready"));
       return m("div.files-file-page", { class: "flex h-screen min-h-0 flex-col bg-surface text-primary" }, [
         m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
           m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [

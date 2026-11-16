@@ -58,11 +58,6 @@ STYLE_GUIDE_DIR = "system/apps/style_guide"
 
 STYLE_GUIDE_FRONTEND_DIR = f"{STYLE_GUIDE_DIR}/frontend"
 
-# The Markdown Editor, whose page its own server serves from inside its package.
-MARKDOWN_EDITOR_DIR = "system/apps/markdown_editor"
-
-MARKDOWN_EDITOR_FRONTEND_DIR = f"{MARKDOWN_EDITOR_DIR}/frontend"
-
 # The frontends' shared library (source only: each app's build compiles what it imports) and
 # the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
 FRONTEND_LIB_DIR = "system/libs/workspace_ui"
@@ -83,7 +78,6 @@ NPM_MANIFEST_PATHS = frozenset(
         f"{ROUTINES_FRONTEND_DIR}/package.json",
         f"{SCREEN_FRONTEND_DIR}/package.json",
         f"{STYLE_GUIDE_FRONTEND_DIR}/package.json",
-        f"{MARKDOWN_EDITOR_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
 )
@@ -106,7 +100,6 @@ FRONTEND_SOURCE_DIRS = (
     ROUTINES_FRONTEND_DIR,
     SCREEN_FRONTEND_DIR,
     STYLE_GUIDE_FRONTEND_DIR,
-    MARKDOWN_EDITOR_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
 
@@ -181,8 +174,6 @@ SCREEN_STATIC_DIR = f"{SCREEN_DIR}/src/screen/static"
 SCREEN_FRONTEND_BUILD_INDEX = f"{SCREEN_STATIC_DIR}/index.html"
 STYLE_GUIDE_STATIC_DIR = f"{STYLE_GUIDE_DIR}/src/style_guide_app/static"
 STYLE_GUIDE_FRONTEND_BUILD_INDEX = f"{STYLE_GUIDE_STATIC_DIR}/index.html"
-MARKDOWN_EDITOR_STATIC_DIR = f"{MARKDOWN_EDITOR_DIR}/src/markdown_editor_app/static"
-MARKDOWN_EDITOR_FRONTEND_BUILD_INDEX = f"{MARKDOWN_EDITOR_STATIC_DIR}/index.html"
 
 
 class FrontendBundle(NamedTuple):
@@ -246,13 +237,6 @@ FRONTEND_BUNDLES = (
         STYLE_GUIDE_FRONTEND_DIR,
         STYLE_GUIDE_STATIC_DIR,
         STYLE_GUIDE_FRONTEND_BUILD_INDEX,
-    ),
-    FrontendBundle(
-        "markdown_editor",
-        "markdown_editor_bundle",
-        MARKDOWN_EDITOR_FRONTEND_DIR,
-        MARKDOWN_EDITOR_STATIC_DIR,
-        MARKDOWN_EDITOR_FRONTEND_BUILD_INDEX,
     ),
 )
 

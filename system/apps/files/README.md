@@ -31,6 +31,11 @@ both offer the verbs `sources.py` names. For either:
   its file, and keeping a written-over file's mode), swapped in whole so an upload
   cut short leaves the old file; MKCOL makes a folder; MOVE renames, never over
   something already there; DELETE removes;
+- a workspace file's bytes carry an `ETag` that moves whenever the file is
+  written, and a PUT with `If-Match` writes only when the file is still at that
+  version (412 otherwise, and for a file that is gone) and answers the version it
+  wrote; a computer's files refuse `If-Match` (501), since the check can't be
+  made there;
 - a path that isn't there is answered with `404.html` when a page was asked for
   (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
   and in plain words otherwise.
@@ -183,7 +188,28 @@ a second one opening. Outside the workspace the page opens in place. A file's
 window is for that file alone and is closed when done with: it offers no way
 back to the folder, and deleting the file leaves it saying so. A view page draws images, video, audio, and PDFs in the browser's own
 viewers and text as text; an edit page is a text editor that saves with Save or
-Cmd/Ctrl+S. Both offer Download, Rename, Copy Path, and Delete, and a view page
+Cmd/Ctrl+S.
+
+A markdown file's view page shows it formatted, for reading and reviewing the
+plans and notes agents write (`frontend/src/markdown/`, loaded only for that
+page). It opens in **Suggest** mode: what the person types and deletes becomes
+tracked suggestions, and any selection can be commented on; **Edit** changes the
+file directly and **Read** changes nothing (the mode is kept per browser). Both
+are saved inside the file as CriticMarkup (`{++added++}`, `{--removed--}`,
+`{==text==}{>>comment<<}`, read and written by `critic.ts`), so the agent that
+reads the file next sees them in place; a suggestion is accepted or rejected by
+clicking it, or all at once from the bar. Saving is automatic, a second after the
+last edit. The file is split into top-level blocks with the editor's own `marked`
+lexer, and every block the person did not touch is written back byte for byte
+(`blocks.ts`, `document.ts`), so the editor never reformats an agent's file and
+opening one writes nothing. Each save is a PUT with `If-Match`: when an agent
+rewrote the file in between, the save is refused and the page offers to load the
+new version or keep its own; while nothing is unsaved the page checks the file's
+version every 4 seconds and shows a rewrite as it lands. A file read live from a
+computer opens in Read mode, since its saves can't be checked. The editor is
+Tiptap 3 with its markdown extension and the open
+`@handlewithcare/prosemirror-suggest-changes` plugin; Edit opens the file's
+source in the text editor, as for any text file. Both offer Download, Rename, Copy Path, and Delete, and a view page
 of text an Edit icon beside Download.
 
 `frontend/public/404.html` is Files' own "not found" page, copied into the
@@ -215,6 +241,10 @@ frontend's own vitest suites sit beside its sources (`npm test` at `system/`).
 folder (`conftest.py`, with the shares stubbed) and drives the app in Chromium:
 the three views, selection, rename, delete, new folders, uploads by picker and
 by drop, the sidebar's rows and resizing, the phone layout, and the file
-pages. The shell's
+pages; `test_files_markdown.py` (marked `browser` too) drives a markdown file's
+view page: suggestions, comments, accepting them, an agent's rewrite while the
+page is open, and Read mode. `frontend/src/markdown/corpus.test.ts` checks that
+every file listed in `$MD_CORPUS` (one path per line) opens and saves back byte
+for byte untouched; it is skipped when the variable is unset. The shell's
 `test_e2e.py` runs the Files server to check that files open in workspace
 windows.

@@ -70,6 +70,9 @@ _CHUNK: Final[int] = 64 * 1024
 _HASHED_ASSET: Final[re.Pattern[str]] = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)$")
 _A_YEAR_IN_SECONDS: Final[int] = 365 * 24 * 60 * 60
 _NO_MOVE_TO_COMPUTER: Final[str] = "Moving isn't supported on files shared from your computer."
+_NO_CONDITIONAL_SAVE_ON_COMPUTER: Final[str] = (
+    "Saving only if unchanged isn't supported on files shared from your computer."
+)
 _NO_GATEWAY: Final[str] = "This workspace isn't connected to Imbue Studio, so it can't reach your computers."
 # Queries that ask for data or a download rather than a page, so a failure is answered in plain words.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
@@ -84,7 +87,10 @@ _FILE_VERBS: Final[dict[str, str]] = {
         "a folder's page or a file's bytes; ``?json`` the path's page data, ``?download`` a file's bytes as an "
         "attachment, ``?zip`` a folder as a zip"
     ),
-    "PUT": "the file's new bytes, as the body; answers no body",
+    "PUT": (
+        "the file's new bytes, as the body; answers no body. With ``If-Match`` (a workspace file only) the file is "
+        "written only when still at that version, else 412, and the answer's ETag is the version written"
+    ),
     "DELETE": "removes the path; answers no body",
 }
 ROUTE_TABLE: RouteTable = {
@@ -183,8 +189,17 @@ def create_app(
                     read.headers["Content-Disposition"] = content_disposition("attachment", PurePosixPath(path).name)
                 return read
             if request.method == "PUT":
-                source.write(path, _request_body(), request.content_length)
-                return _text("", 201)
+                if "If-Match" not in request.headers:
+                    source.write(path, _request_body(), request.content_length)
+                    return _text("", 201)
+                # A save that names the version it started from (the markdown editor's) is checked against the file
+                # as it is now, and answered with the version it wrote. Only the workspace's own files can be.
+                if source is not local:
+                    return _text(_NO_CONDITIONAL_SAVE_ON_COMPUTER, 501)
+                written = local.write_if_unchanged(path, _request_body(), request.content_length, request.if_match)
+                response = _text("", 201)
+                response.set_etag(written)
+                return response
             if request.method == "MKCOL":
                 source.make_folder(path)
                 return _text("", 201)

@@ -12,8 +12,7 @@
     "apps/screen/frontend",
     "apps/files/frontend",
     "apps/routines/frontend",
-    "apps/style_guide/frontend",
-    "apps/markdown_editor/frontend"
+    "apps/style_guide/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",
