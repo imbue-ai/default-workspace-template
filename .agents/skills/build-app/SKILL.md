@@ -481,6 +481,37 @@ The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
 placeholder with your real routes.
 
+### Build what was asked first
+
+The usable site is the smallest app that does what the user asked for, on their
+real data: the views and controls their request names, and the raw-record
+affordance below. Everything else you can think of waits: further filters and
+groupings, a second view, an enrichment pass over the data (matching records
+across sources by similarity, summarising or classifying them with a model),
+cosmetic refinement beyond a clean first screenshot. The user has seen nothing
+until this build is on their screen, and each extra is minutes of that wait.
+Once they have reacted to the working app an extra is a cheap follow-up, so
+offer it in one line of your reply rather than building it unasked. Fix what
+the first screenshot shows broken or unreadable, and leave polish to the
+follow-ups and the harden pass.
+
+Read outside data once. The pull you explore is the pull the app starts from:
+once a small probe has shown you the shape, write the app's own fetcher, run
+it in the background (`run_in_background.py`), and write the next file while it
+runs, instead of exploring with throwaway scripts and fetching everything again
+for the app. A refresh path that pulls everything again is checked after the
+reply, not before it.
+
+### What the app's checks hold your code to
+
+The scaffold's ratchets (`test_<package>_ratchets.py`) are part of the test gate,
+and they fail on: `print` (use `logging`), an import inside a function, a
+relative import, `while True`, `time.sleep`, `global`, a bare or broad `except`,
+raising a built-in exception (define the app's own), `asyncio`, `dataclasses`
+(use a pydantic model), a TODO comment, and any `ty` type error (annotate empty
+containers: `items: list[dict[str, Any]] = []`). Write to them from the first
+line; code written without them costs a second pass after the gate reports.
+
 ### The mock frame stays until the app is really hooked up
 
 Confirming the mock does not take the frame down. The app stays framed through
@@ -616,8 +647,10 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 (above), drop `--open` / `--refresh` and end the call with `mock_frame.py refresh
 --app <name>` instead. Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
-route needs exercising, append one `curl` to the same tool call. Test files
-and the test gate belong to Step 5's background pass, not to the chat turn.
+route needs exercising, append one `curl` to the same tool call. New test files
+belong to Step 5's background pass, not to the chat turn, and the test gate
+AGENTS.md has a chat run goes to the background after the app is on screen:
+your reply does not wait for it.
 
 If verification surfaces something unexpected (connection refused,
 a window stuck on the loading page, broken WebSockets), see
