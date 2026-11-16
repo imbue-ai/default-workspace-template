@@ -858,6 +858,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
 
+@pytest.mark.timeout(60, func_only=False)
 def test_a_chat_seen_this_session_shows_its_conversation_without_waiting_on_its_transcript(
     tmp_path: Path, page: Page
 ) -> None:
