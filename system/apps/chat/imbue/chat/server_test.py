@@ -1408,18 +1408,22 @@ def test_a_rooms_send_never_carries_the_pending_seed(tmp_path: Path, signed_in_a
     assert kept is not None and kept.is_seed_pending is True
 
 
-def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _client_with_chat_still_called_chat_n(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    completion: ScriptedOneShotCompletion,
+) -> tuple[FlaskClient, RecordingMngrMessenger, list[tuple[ChatId, str]]]:
+    """A client whose chat ``agent_id`` still wears "Chat 4", the messenger its sends reach, and the renames its
+    namer makes from what ``completion`` answers."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_id = "agent-00000000000000000000000000000731"
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
         )
-    completion = ScriptedOneShotCompletion(["Five days in Rome"])
     renames: list[tuple[ChatId, str]] = []
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
@@ -1433,12 +1437,40 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         executor=InlineExecutor(),
     )
     client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+    return client, messenger, renames
+
+
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000731"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, _messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
 
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
 
     assert response.status_code == 200
     assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
     assert renames == [(ChatId(agent_id), "Five days in Rome")]
+
+
+def test_a_dictated_message_names_its_chat_from_the_words_alone_and_reaches_the_agent_with_its_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000738"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
+    dictated = (
+        "Help me plan 5 days in Rome\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": dictated})
+
+    assert response.status_code == 200
+    assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
+    assert renames == [(ChatId(agent_id), "Five days in Rome")]
+    assert messenger.sent == [(agent_id, dictated)]
 
 
 def _client_with_account_labeled_chat(

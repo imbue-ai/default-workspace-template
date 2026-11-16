@@ -118,6 +118,7 @@ from imbue.chat.compaction_status import compact_command_instructions
 from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
 from imbue.chat.config import Config
+from imbue.chat.dictation_note import without_dictation_notes
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
@@ -839,9 +840,10 @@ class _SendAccepted(FrozenModel):
 
 
 def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) -> None:
-    """Hand a message the user sent to a chat to the namer, which names a chat still called "Chat N" from it."""
+    """Hand a message the user sent to a chat to the namer, which names a chat still called "Chat N" from it: the
+    words alone, since the note a dictated message carries is addressed to the chat's own model."""
     if state.chat_namer is not None:
-        state.chat_namer.consider_message(chat_id, message)
+        state.chat_namer.consider_message(chat_id, without_dictation_notes(message))
 
 
 # The send-failure kind a chat whose account was signed out answers with. The composer already
