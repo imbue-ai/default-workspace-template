@@ -136,6 +136,13 @@ class _LiveServices(MutableModel):
             self.current = _build_live_service(self.base, self.supervisor)
         return self.current
 
+    def ensure_running(self) -> _LiveService:
+        """The current life with its stack running, started on demand as a page load starts it."""
+        built = self.ensure_service()
+        built.service.ensure_started()
+        built.wait_until_running()
+        return built
+
     def shutdown(self, reason: str) -> None:
         """End the current life (if any) and wait for its X server to take its socket with it, so the next life's
         start finds a free display rather than a stale socket."""
@@ -243,10 +250,7 @@ def live(live_base: Path, live_supervisor: SubprocessSupervisor) -> Iterator[_Li
 @pytest.fixture
 def running(live: _LiveServices) -> _LiveService:
     """The current service life with its stack running, started on demand as a page load starts it."""
-    built = live.ensure_service()
-    built.service.ensure_started()
-    built.wait_until_running()
-    return built
+    return live.ensure_running()
 
 
 def test_the_stack_starts_on_first_demand_and_neko_answers(live: _LiveServices) -> None:
@@ -423,9 +427,7 @@ def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its
     # checkpoints only its own page.
     live.shutdown("a fresh life with no saved browsers")
     live.forget_saved_browsers()
-    built = live.ensure_service()
-    built.service.ensure_started()
-    built.wait_until_running()
+    built = live.ensure_running()
     service, client = built.service, built.client
     page_url = f"{page_server_url}/start"
     answer = client.post("/launch/browser", json={"url": page_url})
