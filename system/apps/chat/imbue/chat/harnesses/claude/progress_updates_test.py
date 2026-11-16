@@ -1,58 +1,51 @@
 import base64
 
-from imbue.chat.harnesses.claude.progress_updates import is_progress_update_signature
+import pytest
+
 from imbue.chat.harnesses.claude.progress_updates import progress_update_text
+from imbue.chat.harnesses.claude.progress_updates import thinking_block_kind
 from imbue.chat.testing import thinking_block_signature
 
 
-def test_a_narration_signature_is_a_progress_update() -> None:
-    assert is_progress_update_signature(thinking_block_signature("narration"))
+@pytest.mark.parametrize(
+    ("signature", "kind"),
+    [
+        (thinking_block_signature("narration"), b"narration"),
+        (thinking_block_signature("thinking"), b"thinking"),
+        (thinking_block_signature("narration").rstrip("="), b"narration"),
+        (base64.b64encode(b"\x0a\x09narration").decode(), None),
+        ("not base64 !!", None),
+        (base64.b64encode(b"\xff\xff\xff").decode(), None),
+        ("", None),
+    ],
+)
+def test_thinking_block_kind_reads_the_kind_field_or_nothing(signature: str, kind: bytes | None) -> None:
+    assert thinking_block_kind(signature) == kind
 
 
-def test_a_reasoning_signature_is_not_a_progress_update() -> None:
-    assert not is_progress_update_signature(thinking_block_signature("thinking"))
+def _thinking(text: str, signature: str | None) -> dict[str, object]:
+    block: dict[str, object] = {"type": "thinking", "thinking": text}
+    if signature is not None:
+        block["signature"] = signature
+    return block
 
 
-def test_a_signature_without_its_padding_still_decodes() -> None:
-    signature = thinking_block_signature("narration").rstrip("=")
-    assert is_progress_update_signature(signature)
-
-
-def test_the_word_narration_outside_the_kind_field_is_not_a_progress_update() -> None:
-    assert not is_progress_update_signature(base64.b64encode(b"\x0a\x09narration").decode())
-
-
-def test_undecodable_signatures_are_not_progress_updates() -> None:
-    assert not is_progress_update_signature("not base64 !!")
-    assert not is_progress_update_signature(base64.b64encode(b"\xff\xff\xff").decode())
-    assert not is_progress_update_signature("")
-
-
-def test_progress_update_text_is_the_trimmed_text_of_a_narration_block() -> None:
-    block = {
-        "type": "thinking",
-        "thinking": "The data is in; matching by topic next.\n\n",
-        "signature": thinking_block_signature("narration"),
-    }
+def test_a_narration_block_shows_its_trimmed_text() -> None:
+    block = _thinking("The data is in; matching by topic next.\n\n", thinking_block_signature("narration"))
     assert progress_update_text(block) == "The data is in; matching by topic next."
 
 
-def test_progress_update_text_is_empty_for_reasoning_empty_and_other_blocks() -> None:
-    assert (
-        progress_update_text(
-            {
-                "type": "thinking",
-                "thinking": "I'm weighing two options.",
-                "signature": thinking_block_signature("thinking"),
-            }
-        )
-        == ""
-    )
-    assert (
-        progress_update_text({"type": "thinking", "thinking": "", "signature": thinking_block_signature("narration")})
-        == ""
-    )
-    assert progress_update_text({"type": "thinking", "thinking": "No signature here."}) == ""
+def test_a_reasoning_block_is_hidden_even_with_text() -> None:
+    assert progress_update_text(_thinking("I'm weighing two options.", thinking_block_signature("thinking"))) == ""
+
+
+@pytest.mark.parametrize("signature", [None, "not base64 !!", base64.b64encode(b"\x0a\x09narration").decode()])
+def test_a_block_whose_kind_cannot_be_read_shows_its_text(signature: str | None) -> None:
+    assert progress_update_text(_thinking("Checking the skills next.", signature)) == "Checking the skills next."
+
+
+def test_empty_blocks_and_other_block_types_show_nothing() -> None:
+    assert progress_update_text(_thinking("", thinking_block_signature("narration"))) == ""
     assert (
         progress_update_text({"type": "text", "text": "Hello", "signature": thinking_block_signature("narration")})
         == ""

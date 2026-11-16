@@ -7,12 +7,14 @@ shows it in its terminal as an ordinary message. Its text is the readable summar
 under ``thinking.display`` "updates" (an interactive Claude Code session's default) or
 "summarized"; under "omitted" it is empty, and an empty one has nothing to show.
 
-Under "summarized" every reasoning block carries text too, so text alone does not make a block a
-progress update. The block's ``signature`` says which kind it is: it is a protobuf message whose
-field 2 holds a message whose field 1 holds a message whose field 8 is the block kind, the string
-``narration`` for a progress update and ``thinking`` for reasoning. Claude Code classifies blocks
-by reading the same field. The layout is not a documented API, so a signature that does not
-decode that way is read as reasoning, which keeps it hidden.
+Under "updates" only progress updates carry text, so any thinking block with text is one (the
+rule Anthropic's docs give). Under "summarized" every reasoning block carries text too; the block's
+``signature`` tells them apart. It is a protobuf message whose field 2 holds a message whose field 1
+holds a message whose field 8 is the block kind: ``narration`` for a progress update, ``thinking``
+for reasoning. Claude Code classifies blocks by reading the same field. The layout is not a
+documented API, so only a signature that positively decodes to ``thinking`` hides a block with
+text: if the layout changes, reasoning summaries show (a visible failure, and only with summaries
+on) rather than progress updates silently disappearing.
 """
 
 import base64
@@ -22,7 +24,7 @@ from typing import Final
 
 from imbue.imbue_common.pure import pure
 
-_PROGRESS_UPDATE_KIND: Final[bytes] = b"narration"
+_REASONING_KIND: Final[bytes] = b"thinking"
 
 # The field path from the decoded signature down to the block kind.
 _BLOCK_KIND_FIELD_PATH: Final[tuple[int, ...]] = (2, 1, 8)
@@ -75,26 +77,28 @@ def _length_delimited_field(message: bytes, field_number: int) -> bytes | None:
 
 
 @pure
-def is_progress_update_signature(signature: str) -> bool:
-    """Whether a thinking block's ``signature`` marks it as a progress update."""
+def thinking_block_kind(signature: str) -> bytes | None:
+    """The block kind a thinking block's ``signature`` carries, or None when it does not decode."""
     try:
         value: bytes | None = base64.b64decode(signature + "=" * (-len(signature) % 4), validate=True)
         for field_number in _BLOCK_KIND_FIELD_PATH:
             if value is None:
-                return False
+                return None
             value = _length_delimited_field(value, field_number)
     except (binascii.Error, ValueError, _MalformedProtobufError):
-        return False
-    return value == _PROGRESS_UPDATE_KIND
+        return None
+    return value
 
 
 @pure
 def progress_update_text(block: dict[str, Any]) -> str:
-    """The text to show for a content block that is a progress update with text, else ""."""
+    """The text to show for a thinking block with text that is not marked as reasoning, else ""."""
     if block.get("type") != "thinking":
         return ""
     text = block.get("thinking")
-    signature = block.get("signature")
-    if not isinstance(text, str) or not text.strip() or not isinstance(signature, str):
+    if not isinstance(text, str) or not text.strip():
         return ""
-    return text.strip() if is_progress_update_signature(signature) else ""
+    signature = block.get("signature")
+    if isinstance(signature, str) and thinking_block_kind(signature) == _REASONING_KIND:
+        return ""
+    return text.strip()
