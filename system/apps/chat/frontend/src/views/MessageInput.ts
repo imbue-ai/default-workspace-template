@@ -162,7 +162,8 @@ function withoutNulCharacters(draft: string): string {
 /** The kind the notice handles a failed send as. A send that got no answer may have been delivered
  *  before its answer was lost, so it is handled as one mngr could not confirm. */
 function noticeKindOf(sendError: unknown): SendFailureKind {
-  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
+  const isUnanswered = isUnansweredRequest(sendError) || describeRequestFailure(sendError).cause === "not_answered";
+  return isUnanswered ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {
@@ -182,7 +183,7 @@ function composerHintKey(chatId: string): string {
 const pendingComposerPrepends = new Map<string, string>();
 
 // What the failure notice says about a send, in place of mngr's reason, which is written for its own
-// command line. "unknown" keeps that reason: it is the only account of what went wrong.
+// command line. "unknown" is worded by failureSentence instead; the reason stays behind See details either way.
 const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
   input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
   agent_unreachable: "The agent isn't running and didn't start.",
@@ -1218,9 +1219,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
         } catch (err) {
-          // The backend confirms delivery before resolving, so a rejection means the message was
-          // NOT accepted. A /compact the server declined to run gets the declined-command notice
-          // rather than the failure notice, since retrying at once cannot change it.
+          // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
+          // confirm, may have reached the agent anyway (noticeKindOf). A /compact the server declined
+          // to run gets the declined-command notice rather than the failure notice, since retrying
+          // at once cannot change it.
           const failure = describeRequestFailure(err);
           const told = failureSentence(failure, "Your message wasn't delivered");
           const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
