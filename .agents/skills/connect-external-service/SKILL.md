@@ -11,7 +11,8 @@ metadata:
 Every way of reaching something outside this workspace on the user's behalf, in
 the order to try them. Take the **first workable row** and say in one or two
 sentences which you chose and why. The user may be non-technical: decide, then
-explain; do not ask them to choose a mechanism.
+explain; do not ask them to choose a mechanism. Before setting up a new
+connection for the given service, make sure you do not already have a working one.
 
 ## The routing table
 
