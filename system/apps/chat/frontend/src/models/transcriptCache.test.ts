@@ -205,6 +205,21 @@ describe("the transcript cache", () => {
     expect(readCachedTranscript("chat-new")).not.toBeNull();
   });
 
+  it("drops a chat viewed longest ago rather than grow past the budget when it changes", () => {
+    writeCachedTranscript("chat-old", makeEvents(1, "e", "s".repeat(1_000)), 0, 1);
+    const ids = fillBudget("chat-");
+    expect(readCachedTranscript("chat-old")).not.toBeNull();
+
+    writeCachedTranscript("chat-old", makeEvents(1, "e", "s".repeat(20_000)), 0, 1, {
+      heightPx: 20_000,
+      charsPerPx: 4,
+    });
+
+    expect(readCachedTranscript("chat-old")).toBeNull();
+    expect(ids.every((chatId) => readCachedTranscript(chatId) !== null)).toBe(true);
+    expect(ids.reduce((sum, chatId) => sum + storedChars(chatId), 0)).toBeLessThanOrEqual(TOTAL_BUDGET_CHARS);
+  });
+
   it("makes room over quota by dropping the least recently viewed other chats", () => {
     const content = "y".repeat(1000);
     vi.stubGlobal("sessionStorage", memoryStorage(2800));

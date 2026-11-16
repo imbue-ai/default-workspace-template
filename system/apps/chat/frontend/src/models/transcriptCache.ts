@@ -249,15 +249,17 @@ export function writeCachedTranscript(
     const index = readIndex(storage);
     const position = index.findIndex((entry) => entry.id === chatId);
     const others = index.filter((entry) => entry.id !== chatId);
-    if (encoded === null) {
+    // Room is made from the chats viewed longer ago than this one, never from those viewed since.
+    const newer = position === -1 ? [] : others.slice(0, position);
+    const older = position === -1 ? others : others.slice(position);
+    const newerChars = newer.reduce((sum, entry) => sum + entry.chars, 0);
+    // A chat that the ones viewed since already crowd out of the budget is itself the one to go.
+    if (encoded === null || newerChars + encoded.length > TOTAL_BUDGET_CHARS) {
       storage.removeItem(entryKey(chatId));
       writeIndex(storage, others);
       return;
     }
-    // Room is made from the chats viewed longer ago than this one, never from those viewed since.
-    const newer = position === -1 ? [] : others.slice(0, position);
-    const older = position === -1 ? others : others.slice(position);
-    evictForRoom(storage, older, encoded.length + newer.reduce((sum, entry) => sum + entry.chars, 0));
+    evictForRoom(storage, older, encoded.length + newerChars);
     for (;;) {
       try {
         storage.setItem(entryKey(chatId), encoded);
