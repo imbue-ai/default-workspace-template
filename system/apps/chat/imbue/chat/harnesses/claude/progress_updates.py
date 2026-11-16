@@ -97,4 +97,5 @@ def progress_update_text(block: dict[str, Any]) -> str:
     signature = block.get("signature")
     if not isinstance(text, str) or not text.strip() or not isinstance(signature, str):
         return ""
-    return text.strip() if is_progress_update_signature(signature) else ""
+    # Experiment: show every thinking block that carries text, progress update or reasoning alike.
+    return text.strip()
