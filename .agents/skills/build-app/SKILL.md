@@ -616,8 +616,12 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 (above), drop `--open` / `--refresh` and end the call with `mock_frame.py refresh
 --app <name>` instead. Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
-route needs exercising, append one `curl` to the same tool call. Test files
-and the test gate belong to Step 5's background pass, not to the chat turn.
+route needs exercising, append one `curl` to the same tool call. New test files
+belong to Step 5's background pass, not to the chat turn. The test gate for the
+change (`uv run --no-sync app-manifest select-tests --diff-base <the commit before
+the change>`, once the change is committed) runs in the background, through
+`system/scripts/workspace_bare_scripts/run_in_background.py`: start it last, once
+the app is on the user's screen, and write your reply without waiting for it.
 
 If verification surfaces something unexpected (connection refused,
 a window stuck on the loading page, broken WebSockets), see
