@@ -110,11 +110,6 @@ export enum UserMessageKind {
    * own rail, since that is who was told.
    */
   Notice = "notice",
-  /**
-   * The Stop hook sending the agent back to the workspace folder, which, with the `cd` it
-   * answers with, shows as one chip in the agent's chip rows.
-   */
-  ReturnToRoot = "return-to-root",
 }
 
 export interface KindSpec {
@@ -225,17 +220,6 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "like a SystemChip: a tick, the lead in medium weight ('Background task " +
       "completed:'), then the summary in plain secondary text. Nothing to expand " +
       "-- the summary is the whole of it.",
-  },
-  [UserMessageKind.ReturnToRoot]: {
-    rail: Rail.Assistant,
-    boundary: false,
-    isTurn: false,
-    netVisual:
-      "No row on the user rail, and no break in the timeline: an open step stays open and " +
-      "nothing carries over. The hook and the agent's lone `cd` after it are one chip in the " +
-      "agent's chip rows ('Back to the workspace folder', folder glyph), placed like a " +
-      "compaction's: at its transcript position, or after the reply when it landed after one. " +
-      "Its panel says why it happened and shows the command (see return-to-root-chip.ts).",
   },
 };
 

@@ -18,8 +18,6 @@ import {
   type LiveCompaction,
 } from "./turn-grouping";
 import { landedCompaction, runningCompaction } from "./compaction-chips";
-import { isStatusPart, type StatusPart } from "./message-renderers";
-import type { ReturnToRootPart } from "./return-to-root-chip";
 import type { RequestResolution } from "./message-classification";
 
 function userMsg(
@@ -1704,116 +1702,6 @@ describe("system chips and notices break the timeline", () => {
     const node = handoffNodeOf(sections[0].items[0]);
     expect(node.events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
     expect(node.switch?.event_id).toBe("sw1");
-  });
-});
-
-/** The repo-root Stop hook's feedback, as the backend classifies it. */
-function returnToRootHook(ts: string, id: string): UserMessageEvent {
-  return userMsg(ts, "Stop hook feedback:\n[[ -e .git ] || exit 2]: Return to the repo root ...", id, {
-    display: "return_to_root",
-    non_turn_tail: true,
-  });
-}
-
-/** The agent's lone `cd`, stamped by the backend as a call that only changes directory. */
-function cdMsg(ts: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
-  const message = bashMsg(ts, "cd /home/user/workspace", callId, id);
-  return {
-    ...message,
-    tool_calls: [
-      {
-        ...message.tool_calls[0],
-        is_directory_change: true,
-        action_verb: "ran",
-        action_target: "cd /home/user/workspace",
-      },
-    ],
-  };
-}
-
-function returnToRootPartsOf(statusParts: readonly StatusPart[]): ReturnToRootPart[] {
-  return statusParts.filter((part): part is ReturnToRootPart => part.type === "return-to-root");
-}
-
-// The repo-root Stop hook fires once the agent's work is done, and the agent answers with a lone
-// `cd`. That is housekeeping, not a turn: no break, no carried-over step, one chip after the reply.
-describe("the return to the workspace folder", () => {
-  const stepLeftOpen = [
-    userMsg("t0", "go"),
-    tkMsg("t1", "tk start s1", "k1"),
-    result("t1", "k1", startOut("s1", "Look into it")),
-    workMsg("t2", "Bash", "w1"),
-    result("t2", "w1", "ok"),
-    assistantText("t3", "Here is what I found so far; I'll pick this up next.", "wrapup"),
-  ];
-
-  it("folds the hook and the cd into one chip after the reply, leaving an open step drawn once", () => {
-    const events = [...stepLeftOpen, returnToRootHook("t4", "rr1"), cdMsg("t5", "cd1"), result("t5", "cd1", "")];
-    const sections = run(events);
-    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0"]);
-    const steps = stepItems(sections[0].items);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].status).toBe("active");
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
-    expect(sections[0].items.map((i) => i.kind)).toEqual(["step"]);
-    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
-    const [part] = returnToRootPartsOf(sections[0].trailing_status);
-    expect(part.hook.event_id).toBe("rr1");
-    expect(part.cd?.call.tool_call_id).toBe("cd1");
-  });
-
-  // While the hook runs, the agent is busy again, but its work is over: the reply stays the reply,
-  // the step it left open does not spin, and nothing moves when the cd lands.
-  it("keeps the reply and settles the step while the agent is still answering the hook", () => {
-    const hooked = [...stepLeftOpen, returnToRootHook("t4", "rr1")];
-    for (const events of [hooked, [...hooked, cdMsg("t5", "cd1")]]) {
-      const sections = run(events, /* idle */ false);
-      expect(sections).toHaveLength(1);
-      expect(stepItems(sections[0].items)[0].is_frontier).toBe(false);
-      expect(sections[0].live_step_id).toBeNull();
-      expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
-      expect(returnToRootPartsOf(sections[0].trailing_status)).toHaveLength(1);
-    }
-    expect(returnToRootPartsOf(run(hooked, false)[0].trailing_status)[0].cd).toBeNull();
-  });
-
-  // The hook tells the agent to say nothing, but an agent that does anyway still stays in its turn.
-  it("keeps what the agent says after the cd in the same turn, below the chip", () => {
-    const events = [
-      ...stepLeftOpen,
-      returnToRootHook("t4", "rr1"),
-      cdMsg("t5", "cd1"),
-      result("t5", "cd1", ""),
-      assistantText("t6", "Back at the repo root.", "after"),
-    ];
-    const sections = run(events);
-    expect(sections).toHaveLength(1);
-    expect(stepItems(sections[0].items)).toHaveLength(1);
-    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
-    const ungrouped = sections[0].items.find((i) => i.kind === "ungrouped");
-    expect(ungrouped?.kind === "ungrouped" && ungrouped.events.map((e) => e.event_id)).toEqual(["wrapup", "rr1"]);
-  });
-
-  it("does not fold an answer that does more than change directory", () => {
-    const events = [
-      userMsg("t0", "go"),
-      assistantText("t1", "Done.", "answer"),
-      returnToRootHook("t2", "rr1"),
-      bashMsg("t3", "cd /home/user/workspace && git status", "c1"),
-      result("t3", "c1", "clean"),
-    ];
-    const sections = run(events);
-    expect(sections).toHaveLength(1);
-    const ungrouped = sections[0].items.filter((i) => i.kind === "ungrouped");
-    expect(ungrouped.flatMap((i) => (i.kind === "ungrouped" ? i.events.map((e) => e.event_id) : []))).toEqual([
-      "answer",
-      "rr1",
-      "a-c1",
-    ]);
-    expect(
-      returnToRootPartsOf(ungrouped.flatMap((i) => (i.kind === "ungrouped" ? i.events : [])).filter(isStatusPart))[0]
-        .cd,
-    ).toBeNull();
   });
 });
 

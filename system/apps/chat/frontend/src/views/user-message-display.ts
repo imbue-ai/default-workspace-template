@@ -310,8 +310,8 @@ function renderResentNote(eventId: string): m.Vnode {
  * Render a `user_message`: a person's turn or a bash-mode command and its output as a top-level
  * row, a system chip or notice as a piece of the stretch of the agent's output it lands in, on
  * the bubbles' text edge and the stretch's line, or `null` when it draws nothing
- * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction or the
- * repo-root Stop hook, whose chips the transcript walk places in the agent's chip rows). `previousTurn` is the
+ * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
+ * whose chips the transcript walk places in the agent's chip rows). `previousTurn` is the
  * person's turn on the row just above a person's turn, if any: a run of one person's turns
  * names them once.
  */
@@ -321,7 +321,7 @@ export function renderUserMessage(
   previousTurn: UserMessageEvent | null = null,
 ): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
-  if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage || kind === UserMessageKind.ReturnToRoot) {
+  if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage) {
     return null;
   }
   const messageClass = isPersonsChipMessage(event)

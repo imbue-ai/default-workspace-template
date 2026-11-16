@@ -34,12 +34,11 @@ import {
   renderPermissionItem,
   rendersAsChip,
   buildToolResultsWithSkillExpansions,
-  isStatusPart,
   type RunPart,
-  type StatusPart,
 } from "./message-renderers";
 import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage, isPersonsChipMessage } from "./message-classification";
+import type { CompactionPart } from "./compaction-chips";
 import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderFramedHandoffNode } from "./handoff-node";
@@ -100,7 +99,7 @@ interface TurnPart {
 /** The calls among `events` that show as chips. */
 function chipCallIdsOf(events: readonly RunPart[], toolResults: Map<string, ToolResultEvent>): string[] {
   return events.flatMap((event) =>
-    isStatusPart(event)
+    event.type === "compaction"
       ? []
       : event.tool_calls.filter((call) => rendersAsChip(call, toolResults)).map((call) => call.tool_call_id),
   );
@@ -197,14 +196,14 @@ function buildRows(
     parts.push(part);
     isLastTurnOpen = true;
   };
-  // The status parts that landed after a turn's reply: a chip run of their own below it.
-  const addTrailingStatus = (statusParts: StatusPart[]): void => {
-    if (statusParts.length === 0) return;
+  // The compactions that landed after a turn's reply: a chip run of their own below it.
+  const addTrailingCompactions = (compactions: CompactionPart[]): void => {
+    if (compactions.length === 0) return;
     addPart({
-      key: statusParts[0].event_id,
+      key: compactions[0].event_id,
       estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
-      anchorEventId: runAnchorEventId(statusParts[0]),
-      render: (isStretchHead) => renderAssistantRunRow(statusParts, toolResults, chatId, isStretchHead),
+      anchorEventId: runAnchorEventId(compactions[0]),
+      render: (isStretchHead) => renderAssistantRunRow(compactions, toolResults, chatId, isStretchHead),
       chipCallIds: [],
     });
   };
@@ -269,7 +268,7 @@ function buildRows(
           toolResults,
         ),
       });
-      addTrailingStatus(section.trailing_status);
+      addTrailingCompactions(section.trailing_status);
       continue;
     }
 
@@ -367,7 +366,7 @@ function buildRows(
         chipCallIds: chipCallIdsOf([event], toolResults),
       });
     }
-    addTrailingStatus(section.trailing_status);
+    addTrailingCompactions(section.trailing_status);
   }
   const isTailOpen = isLastTurnOpen;
   endTurn();

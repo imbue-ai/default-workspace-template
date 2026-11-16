@@ -25,10 +25,9 @@ import type { PermissionResolution, RequestResolution, SecretResolution } from "
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
 import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-card";
-import { ToolChipGroup, type ChipEntry, type StatusChip } from "./ToolChipGroup";
+import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
-import { returnToRootChips, type ReturnToRootPart } from "./return-to-root-chip";
 import { STRETCH_PIECES_CLASS, STRETCH_TEXT_EDGE_CLASS, renderAgentProse } from "./machine-bubbles";
 import { railNodeAttrs } from "./agent-rail";
 import { runningCallElapsed, runningToolCall } from "./ActivityIndicator";
@@ -294,29 +293,16 @@ export function rendersAsChip(toolCall: ToolCall, toolResults: Map<string, ToolR
   return !rendersAsCard(toolCall, toolResults.get(toolCall.tool_call_id) ?? null);
 }
 
-/** Something that happened to the agent, shown as chips in its chip rows: a compaction, or the
- *  agent going back to the workspace folder at the end of its turn. */
-export type StatusPart = CompactionPart | ReturnToRootPart;
-
-/** One member of an assistant run: an assistant event, or a status part, whose chips
+/** One member of an assistant run: an assistant event, or a compaction, whose chips
  *  join the run's chip row like a tool call's. */
-export type RunPart = AssistantMessageEvent | StatusPart;
-
-/** Whether a run part is a status part rather than an assistant event. */
-export function isStatusPart(part: RunPart): part is StatusPart {
-  return part.type !== "assistant_message";
-}
-
-function statusPartChips(part: StatusPart): StatusChip[] {
-  return part.type === "compaction" ? compactionChips(part) : returnToRootChips(part);
-}
+export type RunPart = AssistantMessageEvent | CompactionPart;
 
 /** Whether a part's entire contribution to a run is chips: no thinking
  *  toggle, no prose, and every call one that chips rather than cards. Nothing
  *  in such a part can break a chip row, which is what lets a consecutive run
- *  of them share one (see buildRows). A status part is chips alone. */
+ *  of them share one (see buildRows). A compaction is chips alone. */
 export function isChipOnlyEvent(event: RunPart, toolResults: Map<string, ToolResultEvent>): boolean {
-  if (isStatusPart(event)) return true;
+  if (event.type === "compaction") return true;
   if (event.has_thinking) return false;
   if (event.text) return false;
   const toolCalls = event.tool_calls || [];
@@ -683,9 +669,9 @@ export function renderAssistantRun(
   };
 
   for (const event of events) {
-    if (isStatusPart(event)) {
-      pendingChips.push(...statusPartChips(event));
-      isNoticeUnderRow ||= event.type === "compaction" && event.isNoticeAnchor;
+    if (event.type === "compaction") {
+      pendingChips.push(...compactionChips(event));
+      isNoticeUnderRow ||= event.isNoticeAnchor;
       continue;
     }
     appendEventParts(
