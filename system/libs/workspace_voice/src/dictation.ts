@@ -1,8 +1,11 @@
 /**
- * One page's dictation (the workspace-voice-input spec, D3 to D5 and D8): the states its mic button shows, the
- * detector that hears utterances, the streaming turn and the one inference lane that turn words out of them,
- * and the engine worker those words come from. It tells the composer what it hears as final words (which the
- * composer saves) and an unfinished tail (which it only shows).
+ * One composer's dictation (the workspace-voice-input spec, D3 to D5 and D8): its states from the press to the
+ * last word, the detector that hears utterances, and the streaming turn and the one inference lane that turn
+ * words out of them. It tells the composer what it hears as final words (which the composer saves) and an
+ * unfinished tail (which it only shows).
+ *
+ * The speech model is the page's (``speechModel.ts``), not the dictation's: a dictation needs it loaded, loads
+ * nothing itself, and transcribes on the page's port to the engine worker.
  *
  * The words of a turn land in order: head slices and drained chunks are committed one after another, and a turn
  * whose words are still landing when the next begins keeps appending its final words ahead of the newer turn's
@@ -16,27 +19,25 @@ import type { MicrophoneProblem } from "./microphone";
 import { CommitDiscardedError, TranscriptionScheduler } from "./scheduler";
 import type { SpeechDetector, SpeechDetectorOptions } from "./speechDetector";
 import { createSpeechDetector, FRAME_MS } from "./speechDetector";
+import { getSpeechModels } from "./speechModel";
 import { StreamingTurn, frameRms } from "./streamingTurn";
 import type { EngineWorkerClient } from "./workerClient";
-import { EngineLoadError, EngineWorkerLostError, connectEngineWorker, openEngineWorkerPort } from "./workerClient";
+import { EngineLoadError, EngineWorkerLostError } from "./workerClient";
 
-export type DictationState = "idle" | "loading" | "starting" | "listening" | "stopping";
+export type DictationState = "idle" | "starting" | "listening" | "stopping";
 
 export type DictationProblemKind = MicrophoneProblem["kind"] | "download" | "engine" | "lost" | "held";
 
 export interface DictationProblem {
   readonly kind: DictationProblemKind;
   readonly message: string;
-  /** Whether a Retry can help: for held words it runs them again; otherwise it starts dictation again. */
+  /** Whether a Retry can help: for held words it runs them again; otherwise it asks again for what failed, the
+   *  speech model's load or the dictation's start. */
   readonly canRetry: boolean;
 }
 
 export interface DictationEvents {
   onStateChange(state: DictationState): void;
-  /** The model's download, while the state is ``loading``. */
-  onProgress(loadedBytes: number, totalBytes: number): void;
-  /** The engine is loaded, by a start or a prepare: its files are on this device and checked. */
-  onEngineReady(): void;
   /** The input level, 0 to 1, smoothed, every frame while listening. */
   onLevel(level: number): void;
   /** Words that are final, to add after the final words so far and save. */
@@ -66,7 +67,8 @@ export interface DictationChannel {
 }
 
 export interface DictationDeps {
-  connect(engineId: EngineId, assetBase: string): EngineWorkerClient;
+  /** The page's port to the engine's worker, asked for at every job: the page connects again after a loss. */
+  connect(options: DictationOptions): EngineWorkerClient;
   createDetector(options: SpeechDetectorOptions): Promise<SpeechDetector>;
   getStream(): Promise<MediaStream>;
   isMicrophoneAllowedByFrame(): boolean | null;
@@ -78,18 +80,17 @@ export interface Dictation {
   readonly state: DictationState;
   /** Whether words are held after failing to transcribe, waiting for Retry or Discard. */
   readonly isHeld: boolean;
-  /** From idle: load the engine, open the microphone, listen. Settles when listening, or when it could not. */
+  /** From idle: open the microphone and listen. Settles when listening, or when it could not. The speech model
+   *  must be loaded already: the composer asks the page's speech models (``speechModel.ts``) for it first. */
   start(): Promise<void>;
-  /** From idle: load the engine (the download, the first time) and idle again without opening the microphone,
-   *  so the download can be its own step. Settles when the engine is ready, or when it could not be. */
-  prepare(): Promise<void>;
   /** Release the microphone, finish the words already heard, then idle. */
   stop(): Promise<void>;
   /** Release the microphone and drop every word that is not final; the final words stay. */
   cancel(): Promise<void>;
   retryHeld(): void;
   discardHeld(): void;
-  /** The surface is going away: release everything, silently. */
+  /** The surface is going away: release the microphone and drop what is unfinished, silently. The port to the
+   *  engine's worker is the page's, and stays. */
   dispose(): void;
 }
 
@@ -118,7 +119,7 @@ export function smoothLevel(shown: number, target: number, dtMs: number): number
 
 export function defaultDictationDeps(): DictationDeps {
   return {
-    connect: (engineId, assetBase) => connectEngineWorker(engineId, assetBase, openEngineWorkerPort),
+    connect: (options) => getSpeechModels().engine(options),
     createDetector: (options) => createSpeechDetector(options),
     getStream: () => navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS),
     isMicrophoneAllowedByFrame: () => isMicrophoneAllowedByFrame(document),
@@ -128,7 +129,9 @@ export function defaultDictationDeps(): DictationDeps {
   };
 }
 
-function problemForLoadError(error: unknown): DictationProblem {
+/** A failed load of the speech model as a problem to tell the user; ``error`` is what a request for the model
+ *  (``SpeechModels.request``) rejected with. */
+export function describeSpeechModelLoadError(error: unknown): DictationProblem {
   if (error instanceof EngineLoadError && error.filePath !== null) {
     return {
       kind: "download",
@@ -152,7 +155,6 @@ export function createDictation(
   const windowSeconds = engineWindowSeconds(spec);
   const sessionToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let state: DictationState = "idle";
-  let client: EngineWorkerClient | null = null;
   let detector: SpeechDetector | null = null;
   let activeTurn: StreamingTurn | null = null;
   // The turn whose hypothesis the tail shows, so a turn's late words replace its own tail and no other's.
@@ -160,8 +162,6 @@ export function createDictation(
   let pendingFinalize: Promise<void> | null = null;
   // Bumped by cancel and dispose, so nothing from before them lands.
   let runId = 0;
-  // Whether the load in flight is a prepare's, which holds no microphone and so yields to no other page.
-  let isPreparing = false;
   let lastPreviewAt = 0;
   let level = 0;
   let lastFrameAt = 0;
@@ -172,11 +172,6 @@ export function createDictation(
     if (state === next) return;
     state = next;
     events.onStateChange(next);
-  };
-
-  const ensureClient = (): EngineWorkerClient => {
-    if (client === null || client.isDead) client = deps.connect(options.engineId, options.assetBase);
-    return client;
   };
 
   const releaseDetector = async (): Promise<void> => {
@@ -197,7 +192,7 @@ export function createDictation(
     }
   };
 
-  const scheduler = new TranscriptionScheduler((audio) => ensureClient().transcribe(audio), {
+  const scheduler = new TranscriptionScheduler((audio) => deps.connect(options).transcribe(audio), {
     onHeld: () => {
       // The words wait, in order, for Retry or Discard; meanwhile nothing more is heard.
       void releaseDetector();
@@ -302,7 +297,7 @@ export function createDictation(
       if (type !== "dictation-started" || token === sessionToken) return;
       // Another dictation started somewhere in the workspace: this one yields, keeping what it heard.
       if (state === "listening") void stop();
-      else if (state === "starting" || (state === "loading" && !isPreparing)) void cancel();
+      else if (state === "starting") void cancel();
     };
   };
 
@@ -311,43 +306,12 @@ export function createDictation(
     events.onProblem(problem);
   };
 
-  /** Load the engine as ``loading`` for run ``run``; whether it is ready and the run still stands. A load that
-   *  fails is told as a problem and idles. */
-  const loadEngine = async (run: number): Promise<boolean> => {
-    setState("loading");
-    try {
-      await ensureClient().load(options.preferredDevice, (loadedBytes, totalBytes) => {
-        if (runId === run) events.onProgress(loadedBytes, totalBytes);
-      });
-    } catch (error) {
-      if (runId === run) fail(problemForLoadError(error));
-      return false;
-    }
-    if (runId !== run) return false;
-    events.onEngineReady();
-    return true;
-  };
-
-  const prepare = async (): Promise<void> => {
-    if (state !== "idle") return;
-    events.onProblem(null);
-    runId += 1;
-    const run = runId;
-    isPreparing = true;
-    try {
-      if (await loadEngine(run)) setState("idle");
-    } finally {
-      isPreparing = false;
-    }
-  };
-
   const start = async (): Promise<void> => {
     if (state !== "idle") return;
     if (scheduler.isHeld) discardHeld();
     events.onProblem(null);
     runId += 1;
     const run = runId;
-    if (!(await loadEngine(run))) return;
     setState("starting");
     try {
       const created = await deps.createDetector({
@@ -429,7 +393,6 @@ export function createDictation(
       return scheduler.isHeld;
     },
     start,
-    prepare,
     stop,
     cancel,
     retryHeld,
@@ -442,8 +405,6 @@ export function createDictation(
       void releaseDetector();
       channel?.close();
       channel = null;
-      client?.dispose();
-      client = null;
       state = "idle";
     },
   };

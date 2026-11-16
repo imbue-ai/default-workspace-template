@@ -99,13 +99,16 @@ import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
-import { createDictation } from "@imbue/workspace-voice/src/dictation";
+import { QueryObserver, skipToken } from "@tanstack/query-core";
+import { createDictation, describeSpeechModelLoadError } from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
 import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
 import { probeEngineDownload } from "@imbue/workspace-voice/src/downloadProbe";
 import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
 import { createReadyChime } from "@imbue/workspace-voice/src/readyChime";
+import { getSpeechModels, getVoiceQueryClient } from "@imbue/workspace-voice/src/speechModel";
+import type { SpeechModel, SpeechModelProgress } from "@imbue/workspace-voice/src/speechModel";
 import {
   describeHost,
   dictationShortcutChord,
@@ -116,7 +119,7 @@ import {
 } from "@imbue/workspace-voice/src/support";
 import type { PageDictationOptions } from "@imbue/workspace-voice/src/support";
 import { DictationButton, dictationNotice, dictationProgressPercent } from "./DictationButton";
-import type { DictationProgress } from "./DictationButton";
+import type { DictationButtonState } from "./DictationButton";
 
 export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
@@ -470,7 +473,8 @@ function isAppleKeyboard(): boolean {
   return typeof navigator !== "undefined" && isApplePlatform(navigator);
 }
 
-// The mounted composer's hook for the page going out of view, which stops its dictation and keeps the words.
+// The mounted composer's hook for the page going out of view, which stops its dictation, keeping the words, and
+// dismisses a load of the speech model it is showing.
 let mountedDictationHide: (() => void) | null = null;
 
 // The chime that says the microphone is open: one for the page, since a browser caps the audio contexts a page
@@ -483,7 +487,8 @@ function dictationPageOptions(): PageDictationOptions {
   return pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass());
 }
 
-/** Stop the page's dictation, keeping the words it heard: what the page does when the shell says it is hidden. */
+/** Stop the page's dictation, keeping the words it heard, and dismiss a load of the speech model it is showing:
+ *  what the page does when the shell says it is hidden. */
 export function stopDictationWhenHidden(): void {
   mountedDictationHide?.();
 }
@@ -517,7 +522,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 }
 
 /** What the composer's box is in the middle of, which the parts inside it take their look from: blocked while
- *  the speech model loads (the text box disabled under a scrim, the mic a label), or nothing. */
+ *  the speech model's load is shown (the text box disabled under a scrim, the mic a label), or nothing. */
 type ComposerState = "blocked-loading";
 
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
@@ -667,12 +672,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // state is mirrored here for the view, with the engine's own the truth for what a press does.
   let dictation: Dictation | null = null;
   let dictationState: DictationState = "idle";
-  let dictationProgress: DictationProgress | null = null;
-  let lastShownProgressPercent = -1;
   let dictationProblem: DictationProblem | null = null;
   // The stretch of the box the dictation owns, from the caret it started at; null while none runs.
   let dictationSpan: LiveSpan | null = null;
-  // Keeps a phone's screen awake while a dictation runs: a locked screen hides the page and stops the words.
+  // Keeps a phone's screen awake while a dictation runs or the speech model's load is shown: a locked screen
+  // hides the page, which stops the words and takes the load's display down.
   let screenWakeLock: ScreenWakeLock | null = null;
   // Fills the mic's capsule, handed over by the button while its glyph is in the document.
   let setMeterLevel: ((level: number) => void) | null = null;
@@ -680,8 +684,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let isSendPendingAfterDictation = false;
   // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
   let isComposerDisabledNow = false;
-  // Whether the speech model is on this device: what the probe at mount said (null until it answers), and true
-  // after any load since. While false the mic offers the download as a step of its own, sized by the probe.
+  // The page's speech model, which dictation needs loaded and every composer of the page shares: its load and
+  // the load's progress as the page's cache holds them, observed for as long as the composer is on the page.
+  let speechModelLoad: QueryObserver<SpeechModel, Error> | null = null;
+  let speechModelProgress: QueryObserver<SpeechModelProgress | null, Error> | null = null;
+  let stopObservingSpeechModel: (() => void) | null = null;
+  let lastShownProgressPercent = -1;
+  // Whether this composer is showing the model's load: from the press that asked for it until the load settles
+  // or the user dismisses it. The load is the page's, and runs on either way.
+  let isWatchingModelLoad = false;
+  // Whether the page has found out, since the composer mounted, what state the model is in. Until then the mic
+  // is drawn as ready, so a model that is loaded never flashes the badge.
+  let isSpeechModelStateKnown = false;
+  // Whether the model's files are on this device: what the probe at mount said (null until it answers), and true
+  // once the model has been seen loaded. While false a load is a download, sized by the probe.
   let isSpeechModelDownloaded: boolean | null = null;
   let speechModelDownloadBytes: number | null = null;
 
@@ -711,33 +727,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
   function ensureDictation(): Dictation {
     if (dictation !== null) return dictation;
-    const wakeLock = createScreenWakeLock(browserWakeLockHost());
-    screenWakeLock = wakeLock;
     dictation = createDictation(dictationPageOptions(), {
       onStateChange: (state) => {
-        // Held through loading, starting and listening, and let go once idle.
-        wakeLock.setWanted(state !== "idle");
         dictationState = state;
-        if (state !== "loading") {
-          dictationProgress = null;
-          lastShownProgressPercent = -1;
-        }
+        syncScreenWakeLock();
         // Once idle the words are ordinary text; the next dictation opens a span of its own.
         if (state === "idle") dictationSpan = null;
         if (state === "listening") readyChime.play();
-        m.redraw();
-      },
-      onProgress: (loadedBytes, totalBytes) => {
-        dictationProgress = { loadedBytes, totalBytes };
-        // A download reports every chunk; the ring and the tooltip move by whole percents.
-        const percent = dictationProgressPercent(dictationProgress);
-        if (percent !== lastShownProgressPercent) {
-          lastShownProgressPercent = percent;
-          m.redraw();
-        }
-      },
-      onEngineReady: () => {
-        isSpeechModelDownloaded = true;
         m.redraw();
       },
       onLevel: (level) => setMeterLevel?.(level),
@@ -768,66 +764,181 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     return dictation;
   }
 
-  /** Ask whether the speech model is on this device, so the mic can offer its download as a step of its own. */
-  function probeSpeechModel(): void {
-    probeEngineDownload(dictationPageOptions()).then(
-      (probe) => {
-        isSpeechModelDownloaded = probe.isDownloaded;
-        speechModelDownloadBytes = probe.totalBytes;
-        m.redraw();
-      },
-      (error: unknown) => console.warn(`Could not tell whether the speech model is downloaded: ${String(error)}`),
+  function isSpeechModelLoaded(): boolean {
+    return speechModelLoad?.getCurrentResult().status === "success";
+  }
+
+  /** Whether the model's load is drawn: this composer is watching it, and it is still running. */
+  function isModelLoadShown(): boolean {
+    return (
+      isWatchingModelLoad && !isSpeechModelLoaded() && speechModelLoad?.getCurrentResult().fetchStatus === "fetching"
     );
   }
 
-  /** The mic and the shortcut: from idle, the model's download alone while it is not on this device, else start;
-   *  stop while listening; nothing in between. */
-  function toggleDictation(): void {
+  /** What the mic shows: dictation's own state while one runs, else the speech model's as this composer sees it. */
+  function micState(): DictationButtonState {
+    if (dictationState !== "idle") return dictationState;
+    if (isModelLoadShown()) return "loading";
+    return isSpeechModelLoaded() || !isSpeechModelStateKnown ? "ready" : "load-needed";
+  }
+
+  /** Follow the page's speech model from mount: observe its load and the load's progress in the page's cache,
+   *  and find out what state it is in, on this device (the probe) and in the workspace's worker. */
+  function observeSpeechModel(): void {
+    const options = dictationPageOptions();
+    const models = getSpeechModels();
+    const queryClient = getVoiceQueryClient();
+    // Not enabled: an observer that is would start the load by subscribing.
+    speechModelLoad = new QueryObserver<SpeechModel, Error>(queryClient, {
+      ...models.loadQueryOptions(options),
+      enabled: false,
+    });
+    // The progress is written into the cache as the worker reports it, so its query has nothing to fetch with.
+    speechModelProgress = new QueryObserver<SpeechModelProgress | null, Error>(queryClient, {
+      queryKey: models.progressQueryKey(options),
+      queryFn: skipToken,
+    });
+    const stopObservingLoad = speechModelLoad.subscribe((result) => {
+      // A loaded model's files are on this device, whatever the probe said at mount.
+      if (result.status === "success") isSpeechModelDownloaded = true;
+      m.redraw();
+    });
+    const stopObservingProgress = speechModelProgress.subscribe((result) => {
+      // A download reports every chunk; the bar and the tooltip move by whole percents.
+      const percent = result.data == null ? -1 : dictationProgressPercent(result.data);
+      if (percent !== lastShownProgressPercent) {
+        lastShownProgressPercent = percent;
+        m.redraw();
+      }
+    });
+    stopObservingSpeechModel = () => {
+      stopObservingLoad();
+      stopObservingProgress();
+    };
+    probeEngineDownload(options)
+      .then((probe) => {
+        isSpeechModelDownloaded = probe.isDownloaded;
+        speechModelDownloadBytes = probe.totalBytes;
+        return models.discover(options, probe.isDownloaded);
+      })
+      .then(
+        () => {
+          isSpeechModelStateKnown = true;
+          m.redraw();
+        },
+        (error: unknown) => console.warn(`Could not tell what state the speech model is in: ${String(error)}`),
+      );
+  }
+
+  /** Keep the screen awake while this composer has something running in front of the user: a dictation, or a
+   *  load of the speech model it is showing. A load dismissed to run on in the background holds nothing. */
+  function syncScreenWakeLock(): void {
+    screenWakeLock ??= createScreenWakeLock(browserWakeLockHost());
+    screenWakeLock.setWanted(dictationState !== "idle" || isWatchingModelLoad);
+  }
+
+  /** The load this composer asked for has settled. One still shown ends, and says why if it failed; one
+   *  dismissed since ends unremarked, its failure left for the press that asks again. */
+  function handleModelLoadSettled(failure: DictationProblem | null): void {
+    if (isWatchingModelLoad) {
+      isWatchingModelLoad = false;
+      if (failure !== null) dictationProblem = failure;
+    }
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /** Ask the page for the speech model and show its load until it settles or is dismissed. A load already
+   *  running is joined, and shown from where it has got to. */
+  function watchModelLoad(): void {
+    isWatchingModelLoad = true;
+    dictationProblem = null;
+    getSpeechModels()
+      .request(dictationPageOptions())
+      .then(
+        () => handleModelLoadSettled(null),
+        (error: unknown) => handleModelLoadSettled(describeSpeechModelLoadError(error)),
+      );
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /**
+   * Stop showing the speech model's load and hand the box back for typing. The load itself runs on, since
+   * nothing cancels one, and the mic becomes ready by itself when it ends.
+   *
+   * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
+   * too. The triggers: a press on the loading label; a press on the dimmed text box (``handleScrimPress``);
+   * Escape from the page (``handleLoadingEscape``); the mic or its shortcut pressed while the load is shown
+   * (``handleMicPress``); the page going out of view (``handlePageHidden``); and the composer turning to another
+   * chat, or leaving the page.
+   */
+  function dismissModelLoad(): void {
+    if (!isWatchingModelLoad) return;
+    isWatchingModelLoad = false;
+    syncScreenWakeLock();
+    m.redraw();
+  }
+
+  /** A press on the dimmed text box dismisses the load and puts the caret where the press landed. */
+  function handleScrimPress(event: MouseEvent): void {
+    dismissModelLoad();
+    // Drawn now rather than at the next frame: the scrim comes off the text box, which its own update enables
+    // and focuses, before the browser is asked what lies under the press.
+    m.redraw.sync();
+    const textarea = messageTextareaElement;
+    if (textarea === null || typeof document.caretPositionFromPoint !== "function") return;
+    const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+    if (position === null || position.offsetNode !== textarea) return;
+    textarea.setSelectionRange(position.offset, position.offset);
+  }
+
+  /** The mic and the shortcut. While dictating, a press stops it. Otherwise a press dismisses a load that is
+   *  shown, dictates when the model is loaded, and asks for the model when it is not: a press that loads never
+   *  goes on to listen by itself. */
+  function handleMicPress(): void {
     if (currentChatId === null || isComposerDisabledNow) return;
-    const running = ensureDictation();
-    if (running.state === "listening") {
-      void running.stop();
+    if (dictation !== null && dictation.state !== "idle") {
+      if (dictation.state === "listening") void dictation.stop();
       return;
     }
-    if (running.state !== "idle") return;
-    dictationProblem = null;
+    if (isModelLoadShown()) {
+      dismissModelLoad();
+      return;
+    }
     // The press is the user gesture after which the browser lets the page sound.
     readyChime.wake();
-    if (isSpeechModelDownloaded === false) {
-      void running.prepare();
+    if (!isSpeechModelLoaded()) {
+      watchModelLoad();
       return;
     }
     openDictationSpan();
-    void running.start();
+    void ensureDictation().start();
   }
 
   /** Stop and keep the words heard so far; a dictation still starting has none, so it is called off. */
   function stopDictationKeepingWords(): void {
     if (dictation === null) return;
     if (dictation.state === "listening") void dictation.stop();
-    else if (dictation.state === "loading" || dictation.state === "starting") void dictation.cancel();
+    else if (dictation.state === "starting") void dictation.cancel();
   }
 
   function disposeDictation(): void {
     dictation?.dispose();
     dictation = null;
-    // Disposal reaches idle without a state change of its own.
-    screenWakeLock?.setWanted(false);
-    screenWakeLock = null;
     dictationState = "idle";
-    dictationProgress = null;
     dictationProblem = null;
     dictationSpan = null;
     isSendPendingAfterDictation = false;
+    // Disposal reaches idle without a state change of its own.
+    syncScreenWakeLock();
   }
 
-  /** Escape while the model loads calls the load off. The text box is disabled then, so its own Escape cannot;
-   *  this one answers from the mic the press left focused or from no control at all, and leaves a key meant for
-   *  another control (a menu, a dialog) alone. */
+  /** Escape while the model's load is shown dismisses it. The text box is disabled then, so its own Escape
+   *  cannot; this one answers from the composer (the label, or the mic the press left focused) or from no control
+   *  at all, and leaves a key meant for another control (a menu, a dialog) alone. */
   function handleLoadingEscape(event: KeyboardEvent): boolean {
-    if (event.key !== "Escape" || event.defaultPrevented || dictation === null || dictation.state !== "loading") {
-      return false;
-    }
+    if (event.key !== "Escape" || event.defaultPrevented || !isModelLoadShown()) return false;
     const target = event.target;
     if (target == null) return false;
     const isFromPage = target === document || target === document.documentElement || target === document.body;
@@ -835,7 +946,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       typeof Element !== "undefined" && target instanceof Element && target.closest(".message-input") !== null;
     if (!isFromPage && !isFromComposer) return false;
     event.preventDefault();
-    void dictation.cancel();
+    dismissModelLoad();
     return true;
   }
 
@@ -843,28 +954,39 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (handleLoadingEscape(event)) return;
     if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
     event.preventDefault();
-    toggleDictation();
+    handleMicPress();
+  }
+
+  /** The page went out of view: its dictation stops, keeping the words, and a load it was showing is dismissed. */
+  function handlePageHidden(): void {
+    stopDictationKeepingWords();
+    dismissModelLoad();
   }
 
   function handleVisibilityChange(): void {
-    if (document.visibilityState === "hidden") stopDictationKeepingWords();
+    if (document.visibilityState === "hidden") handlePageHidden();
   }
 
   /** The shortcut works anywhere in the chat page, and the page going away takes the dictation with it: hidden
-   *  keeps the words, closed drops the unfinished ones. */
+   *  keeps the words, closed drops the unfinished ones. The page's speech model is followed from here on. */
   function attachDictationToPage(): void {
     document.addEventListener("keydown", handleDictationShortcut);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", disposeDictation);
-    mountedDictationHide = stopDictationKeepingWords;
-    probeSpeechModel();
+    mountedDictationHide = handlePageHidden;
+    observeSpeechModel();
   }
 
   function detachDictationFromPage(): void {
     document.removeEventListener("keydown", handleDictationShortcut);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("pagehide", disposeDictation);
-    if (mountedDictationHide === stopDictationKeepingWords) mountedDictationHide = null;
+    if (mountedDictationHide === handlePageHidden) mountedDictationHide = null;
+    stopObservingSpeechModel?.();
+    stopObservingSpeechModel = null;
+    speechModelLoad = null;
+    speechModelProgress = null;
+    dismissModelLoad();
     disposeDictation();
   }
 
@@ -1074,8 +1196,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       if (currentChatId !== chatId) {
-        // A dictation belongs to the chat it started in.
+        // A dictation belongs to the chat it started in, and so does the showing of a load asked for from it.
         disposeDictation();
+        dismissModelLoad();
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         const persistedHint = localStorage.getItem(composerHintKey(chatId));
@@ -1958,16 +2081,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /** What dictation has to say, over the composer: Retry runs held words again, or starts dictation again. */
+      /** What dictation has to say, over the composer: Retry runs held words again, or is the mic pressed again,
+       *  which asks for the speech model when its load failed and starts dictation when the microphone did. */
       function renderDictationNotice(problem: DictationProblem): m.Children {
         return dictationNotice(problem, {
           onRetry: () => {
-            if (dictation?.isHeld) {
-              dictation.retryHeld();
-            } else {
-              dictationProblem = null;
-              toggleDictation();
-            }
+            if (dictation?.isHeld) dictation.retryHeld();
+            else handleMicPress();
             m.redraw();
           },
           onDiscard: () => {
@@ -2083,9 +2203,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
-      // While the speech model loads the box is blocked: the text box disabled and dimmed under a scrim, the mic
-      // the label that says why. The paperclip and Send stay live.
-      const isBlockedByLoading = dictationState === "loading";
+      // While the speech model's load is shown the box is blocked: the text box disabled and dimmed under a scrim,
+      // the mic the label that says why. The paperclip and Send stay live.
+      const isBlockedByLoading = isModelLoadShown();
       const isTextboxDisabled = isComposerDisabled || isBlockedByLoading;
       // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
       if (isSendPendingAfterDictation && !isDictating) {
@@ -2230,13 +2350,16 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     onkeydown: handleKeydown,
                     onpaste: handlePaste,
                   }),
-                  // Over the text box, in its cell, so it follows the box into the full-width row when stacked.
+                  // Over the text box, in its cell, so it follows the box into the full-width row when stacked,
+                  // and takes the press the disabled text box cannot. Positioned, because the dimmed text box is
+                  // less than opaque, and such an element paints over any that is not positioned.
                   isBlockedByLoading
                     ? m("div", {
                         class:
-                          "message-input-scrim pointer-events-none col-start-2 row-start-1 self-stretch rounded-md " +
+                          "message-input-scrim relative col-start-2 row-start-1 cursor-text self-stretch rounded-md " +
                           "bg-fill-hover group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1",
                         "aria-hidden": "true",
+                        onclick: handleScrimPress,
                       })
                     : null,
                   m(
@@ -2302,12 +2425,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       : null,
                     isDictationShown
                       ? m(DictationButton, {
-                          state: dictationState,
-                          progress: dictationProgress,
-                          setUp: isSpeechModelDownloaded === false ? { totalBytes: speechModelDownloadBytes } : null,
+                          state: micState(),
+                          progress: speechModelProgress?.getCurrentResult().data ?? null,
+                          download:
+                            isSpeechModelDownloaded === false ? { totalBytes: speechModelDownloadBytes } : null,
                           shortcutLabel: dictationShortcutLabel(isAppleKeyboard()),
                           disabled: isComposerDisabled,
-                          onToggle: toggleDictation,
+                          onPress: handleMicPress,
+                          onDismissLoading: dismissModelLoad,
                           onMeter: (setLevel) => {
                             setMeterLevel = setLevel;
                           },

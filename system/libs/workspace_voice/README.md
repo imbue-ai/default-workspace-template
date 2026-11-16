@@ -62,17 +62,19 @@ is the one surface that uses it.
 - `src/scheduler.ts`: the one inference lane: commits in audio order ahead of
   the newest preview, a failed commit retried twice in place, and the words
   held for Retry or Discard when it keeps failing.
-- `src/dictation.ts`: what a composer drives: start, prepare (the engine's
-  load, and so the first-time download, on its own, idling again without the
-  microphone), stop, cancel, and the events it draws from (the state, the
-  download's progress, the engine coming ready, the input level, final words,
-  the unfinished tail, and problems). One dictation runs per workspace: a
-  start anywhere stops the one running elsewhere; a prepare holds no
-  microphone, so it runs on.
+- `src/dictation.ts`: what a composer drives once the speech model is loaded:
+  start, stop, cancel, and the events it draws from (the state, the input
+  level, final words, the unfinished tail, and problems). A dictation loads
+  nothing itself: the composer asks the page's speech models for the model
+  first, and the dictation transcribes on the page's port to the engine
+  worker, which it leaves open when it is disposed.
+  `describeSpeechModelLoadError` puts a failed load in the words a composer
+  shows. One dictation runs per workspace: a start anywhere stops the one
+  running elsewhere.
 - `src/readyChime.ts`: the two short bell tones a composer plays as dictation
-  reaches listening, so a user who looked away while the model loaded knows
-  when to speak; woken from the press, since the browser lets a page sound
-  only after a gesture.
+  reaches listening, so a user who pressed the mic and looked away knows when
+  to speak; woken from the press, since the browser lets a page sound only
+  after a gesture.
 - `src/liveSpan.ts`: where the words land in a box of text: at the caret, the
   unfinished tail rewritten in place, only final words saved, and words fitted
   to the sentence around them.

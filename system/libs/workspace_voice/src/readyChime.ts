@@ -1,7 +1,7 @@
 /**
  * The chime that says the microphone is open: two short bell tones, played as dictation reaches ``listening``, so
- * a user who pressed the mic and looked away while the model loaded knows the moment to speak. Written against
- * the slice of the Web Audio API it uses, so a test can hand in a fake and read the tones it schedules.
+ * a user who pressed the mic and looked away while it opened knows the moment to speak. Written against the
+ * slice of the Web Audio API it uses, so a test can hand in a fake and read the tones it schedules.
  *
  * A browser lets a page make sound only after a user gesture, so the context is made (or resumed) by ``wake`` from
  * the press that starts dictation, and ``play`` only schedules on what ``wake`` left; where there is no context,

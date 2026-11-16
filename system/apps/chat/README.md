@@ -999,28 +999,53 @@ every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten
 in place, and only final words reach the saved draft. The box is read-only while
 listening; Enter or Send finishes the words first and then sends; Escape drops
-the words that are not yet final. Until the speech model is on the device the
-mic offers its one-time download as a step of its own: the glyph sits faint with
-a warning badge on its corner, the tooltip names the download's size, and a press
-downloads without listening (at mount the page asks its own Cache Storage whether
-the files of the variant this device runs are there). While the model loads, for
-that download and for every later start, the mic eases into a `Loading voice
-model` label with the download's progress as a bar under it, the composer's box
-is marked `data-composer-state="blocked-loading"`, and the text box is disabled
-and dimmed under a scrim while the paperclip and Send stay live; when the load
-ends the label eases back into the mic and the text box takes focus again. Two
-short bell tones say when the microphone is open. The mic carries the other
-states too (a spinner while starting and stopping, the neutral pressed tint with
-its capsule filling to the input level while listening), and a problem is told
-in a notice over the composer. The library is `system/libs/workspace_voice/`
-(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
-mic and the notice, and `MessageInput.ts` drives the dictation and writes its
-words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
-and Hugging Face's hosts (see `create_application`), the manifest declares
-`uses_microphone`, and the root's inner frames allow the microphone. For a
-side-by-side evaluation, a browser's `localStorage` may name another registered
-engine under `workspace-voice:engine` and insist on a device (`webgpu` or
-`wasm`) under `workspace-voice:device`.
+the words that are not yet final.
+
+The speech model's load and dictation are two things. The model is the page's:
+one managed load, kept in step across the workspace's pages by the worker that
+holds the model. Dictation is the composer's, needs the model loaded, and loads
+nothing itself. The mic shows one of six states, named by its
+`data-dictation-state`:
+
+- `load-needed`: the model is not loaded. The glyph sits faint with a warning
+  badge on its corner, and the tooltip says what a press sets up: the one-time
+  download with its size, when the page's own Cache Storage does not hold the
+  files of the variant this device runs, or the load of files already here. A
+  press asks for the model and shows its load; it never goes on to listen by
+  itself.
+- `loading`: the load is shown. The mic eases into a `Loading voice model` label
+  with the download's progress as a bar under it, the composer's box is marked
+  `data-composer-state="blocked-loading"`, and the text box is disabled and
+  dimmed under a scrim while the paperclip and Send stay live.
+- `ready`: the model is loaded, and a press dictates at once.
+- `starting`, `listening`, `stopping`: a dictation is running (a spinner while
+  starting and stopping, the neutral pressed tint with its capsule filling to the
+  input level while listening). Two short bell tones say when the microphone is
+  open.
+
+A shown load can be dismissed: a press on the label, a press on the dimmed text
+box (which puts the caret where the press landed), Escape, the mic's shortcut,
+or the page going out of view. Dismissing hands the box back for typing and
+cancels nothing: the load runs on with the mic `load-needed`, and a press shows
+it again from where it has got to. A load that ends while shown leaves the mic
+`ready` and gives the text box focus back; one that fails is told in a notice
+over the composer, whose Retry asks again. A load that ends after a dismissal
+turns the mic `ready` with no sound and no notice, and one that fails then says
+nothing. A model loaded from another page of the workspace turns this page's mic
+`ready` as well. Until a page has found out the model's state as its composer
+mounts, the mic is drawn `ready`, so a loaded model never flashes the badge.
+
+A problem with the microphone or with words that could not be transcribed is
+told in the same notice. The library is `system/libs/workspace_voice/` (its
+README has the pieces); `frontend/src/views/DictationButton.ts` draws the mic
+and the notice, and `MessageInput.ts` follows the page's speech model, drives
+the dictation, and writes its words. The page's policy admits the model's
+WebAssembly (`'wasm-unsafe-eval'`) and Hugging Face's hosts (see
+`create_application`), the manifest declares `uses_microphone`, and the root's
+inner frames allow the microphone. For a side-by-side evaluation, a browser's
+`localStorage` may name another registered engine under
+`workspace-voice:engine` and insist on a device (`webgpu` or `wasm`) under
+`workspace-voice:device`.
 
 Speech recognition mishears, so a message sent from a draft that dictation wrote
 into tells the model so: it ends with a dictation note, a short paragraph in a
