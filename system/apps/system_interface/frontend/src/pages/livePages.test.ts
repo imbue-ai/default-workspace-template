@@ -11,7 +11,6 @@
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MockInstance } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
@@ -48,9 +47,10 @@ import {
 import {
   LivePagesLayer,
   DESKTOP_ROOT_ATTRIBUTE,
+  FOCUS_WATCH_INTERVAL_MS,
   PAGE_FRAME_ALLOW,
-  SHELL_PROMPT_SETTLE_FRAMES,
-  WATCHER_RAISE_HOLD_FRAMES,
+  SHELL_PROMPT_SETTLE_TICKS,
+  WATCHER_RAISE_HOLD_TICKS,
   pageFrameAllow,
 } from "./livePages";
 
@@ -68,20 +68,18 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
-/** The animation frames requested and not yet run: the tests run them by hand. */
-let pendingFrames: Map<number, FrameRequestCallback>;
-let frameSpies: MockInstance[];
+/** Longer than the schedule the shell posts a raised window's page its focus grants over. */
+const FOCUS_GRANT_SCHEDULE_MS = 2000;
 
-/** Run every animation frame requested so far. */
-function runFrame(): void {
-  const due = [...pendingFrames.values()];
-  pendingFrames.clear();
-  for (const callback of due) callback(0);
+/** Let the watcher run ``count`` ticks, and every other timer due by then. */
+function tick(count = 1): void {
+  vi.advanceTimersByTime(count * FOCUS_WATCH_INTERVAL_MS);
 }
 
-/** Run the animation frames the shell takes to be past a prompt. */
+/** Let the shell post every focus grant it has pending, then the watcher run the ticks that put a landing past them. */
 function pastThePromptSettle(): void {
-  for (let frame = 0; frame <= SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+  vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+  tick(SHELL_PROMPT_SETTLE_TICKS + 1);
 }
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
@@ -245,18 +243,7 @@ beforeEach(async () => {
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
-  pendingFrames = new Map();
-  let lastFrameId = 0;
-  frameSpies = [
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      lastFrameId += 1;
-      pendingFrames.set(lastFrameId, callback);
-      return lastFrameId;
-    }),
-    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((frameId) => {
-      pendingFrames.delete(frameId);
-    }),
-  ];
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   layer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
   layer.start();
   await store.start(NO_LINK);
@@ -266,7 +253,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  for (const spy of frameSpies) spy.mockRestore();
+  vi.useRealTimers();
   resetEmbedderRelayForTesting();
   resetThemeClientForTests();
   resetPresenceForTesting();
@@ -1350,7 +1337,6 @@ describe("raising the window the document's focus lands in", () => {
   }
 
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     store.restoreWindow("win-2");
     layer.reconcile();
   });
@@ -1358,7 +1344,6 @@ describe("raising the window the document's focus lands in", () => {
   afterEach(() => {
     strayFrame?.remove();
     strayFrame = null;
-    vi.useRealTimers();
   });
 
   it("raises the window of an unfocused page the focus landed in, once, from the window's blur", () => {
@@ -1368,19 +1353,18 @@ describe("raising the window the document's focus lands in", () => {
     window.dispatchEvent(new Event("blur"));
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
     expect(topWindowId()).toBe("win-1");
-    runFrame();
-    runFrame();
+    tick(2);
     expect(raise).toHaveBeenCalledTimes(1);
   });
 
-  it("raises the window of a frame the focus moved into from another frame, on the next frame", () => {
+  it("raises the window of a frame the focus moved into from another frame, on the next tick", () => {
     frameOf("win-2").focus();
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     // Fires nothing on the shell's document.
     frameOf("win-1").focus();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
     expect(topWindowId()).toBe("win-1");
   });
@@ -1388,39 +1372,39 @@ describe("raising the window the document's focus lands in", () => {
   it("raises nothing for the focused window's frame, nor for a frame that is no page of the shell's", () => {
     frameOf("win-2").focus();
     window.dispatchEvent(new Event("blur"));
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     strayFrame = document.createElement("iframe");
     document.body.appendChild(strayFrame);
     strayFrame.focus();
     window.dispatchEvent(new Event("blur"));
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
   it("does not raise the window the shell just moved the focus away from", () => {
     frameOf("win-2").focus();
-    runFrame();
+    tick();
     // The focus stays in win-2's page until the next reconcile.
     store.raiseWindow("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
     layer.reconcile();
     expect(document.activeElement).toBe(host);
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
   });
 
   it("raises nothing during a gesture, nor while another window is being moved", () => {
     layer.setGestureActive(true);
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     layer.setGestureActive(false);
     host.focus();
     store.beginWindowMove("win-2", { x: 100, y: 60 });
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
@@ -1430,7 +1414,7 @@ describe("raising the window the document's focus lands in", () => {
     layer.reconcile();
     expect(activeFocusedWindowId(store.getState())).toBe("win-b");
     blurIntoFrameOf("win-a");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-b");
     expect(store.toasts.current()).toEqual([]);
   });
@@ -1439,7 +1423,7 @@ describe("raising the window the document's focus lands in", () => {
     layer.setOverview({ scaleOf: () => 0.5 });
     layer.reconcile();
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
@@ -1447,7 +1431,7 @@ describe("raising the window the document's focus lands in", () => {
     store.minimizeWindow("win-1");
     layer.reconcile();
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     store.restoreWindow("win-1");
     store.raiseWindow("win-2");
@@ -1455,7 +1439,7 @@ describe("raising the window the document's focus lands in", () => {
 
     layer.setTornOutWindow("win-1");
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     layer.setTornOutWindow(null);
 
@@ -1464,7 +1448,7 @@ describe("raising the window the document's focus lands in", () => {
     layer.reconcile();
     expect(isParked(wrapperOf("win-1"))).toBe(true);
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
@@ -1472,7 +1456,7 @@ describe("raising the window the document's focus lands in", () => {
     store.setThemeMetrics(METRICS, { isPhone: false, isTouch: true });
     layer.reconcile();
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
@@ -1480,29 +1464,29 @@ describe("raising the window the document's focus lands in", () => {
     layer.setMountPolicy({ kind: "shown", windowId: "win-1", alsoKeep: [] });
     layer.reconcile();
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 
-  it("takes a landing that answers the shell:shown just posted to the page for no press: no raise, the focus handed back by the next frame", () => {
+  it("takes a landing that answers the shell:shown just posted to the page for no press: no raise, the focus handed back by the next tick", () => {
     const raise = vi.spyOn(store, "raiseWindow");
     load("win-1");
     blurIntoFrameOf("win-1");
     expect(raise).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(frameOf("win-1"));
-    runFrame();
+    tick();
     expect(raise).not.toHaveBeenCalled();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     expect(document.activeElement).toBe(host);
   });
 
-  it("hands the focus back on the next frame for a landing the window's blur took for an answer at the last settle frame", () => {
+  it("hands the focus back on the next tick for a landing the window's blur took for an answer at the last settle tick", () => {
     const raise = vi.spyOn(store, "raiseWindow");
     load("win-1");
-    for (let frame = 0; frame < SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+    tick(SHELL_PROMPT_SETTLE_TICKS);
     blurIntoFrameOf("win-1");
     expect(raise).not.toHaveBeenCalled();
-    runFrame();
+    tick();
     expect(raise).not.toHaveBeenCalled();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     expect(document.activeElement).toBe(host);
@@ -1510,24 +1494,25 @@ describe("raising the window the document's focus lands in", () => {
 
   it("takes a press that comes after a landing the blur took for an answer, once that landing is gone", () => {
     load("win-1");
-    for (let frame = 0; frame < SHELL_PROMPT_SETTLE_FRAMES; frame += 1) runFrame();
+    tick(SHELL_PROMPT_SETTLE_TICKS);
     blurIntoFrameOf("win-1");
     host.focus();
-    runFrame();
+    tick();
     blurIntoFrameOf("win-1");
     expect(topWindowId()).toBe("win-1");
   });
 
   it("takes a landing that answers the latest ttyd-focus posted to the page for no press, however late the post", () => {
+    const grants = spyOnFrame("win-2");
     // A later grant to win-2 goes out just before the user chooses win-1.
-    vi.advanceTimersByTime(0);
-    pastThePromptSettle();
-    vi.advanceTimersByTime(300);
+    const scheduleTicks = FOCUS_GRANT_SCHEDULE_MS / FOCUS_WATCH_INTERVAL_MS;
+    for (let count = 0; grantsSeen(grants) < 2 && count < scheduleTicks; count += 1) tick();
+    expect(grantsSeen(grants)).toBe(2);
     store.raiseWindow("win-1");
     layer.reconcile();
     const raise = vi.spyOn(store, "raiseWindow");
     frameOf("win-2").focus();
-    runFrame();
+    tick();
     expect(raise).not.toHaveBeenCalled();
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
     expect(document.activeElement).toBe(host);
@@ -1540,10 +1525,69 @@ describe("raising the window the document's focus lands in", () => {
     expect(topWindowId()).toBe("win-1");
   });
 
+  describe.each([
+    ["just after a tick", 1],
+    ["halfway between two ticks", FOCUS_WATCH_INTERVAL_MS / 2],
+    ["just before a tick", FOCUS_WATCH_INTERVAL_MS - 1],
+  ])("with the shell's message to a page posted %s", (_phase, postPhaseMs) => {
+    /** How long the page takes to answer the message by taking the focus. */
+    const ANSWER_DELAY_MS = 5;
+
+    /** Tell win-1's page it is shown, ``postPhaseMs`` after a tick. */
+    function postThePrompt(): void {
+      tick();
+      vi.advanceTimersByTime(postPhaseMs);
+      load("win-1");
+    }
+
+    /** Let the time from the post to just after the watcher's tick ``ticks`` past it go by. */
+    function pastTheTick(ticks: number): void {
+      vi.advanceTimersByTime(ticks * FOCUS_WATCH_INTERVAL_MS - postPhaseMs + 1);
+    }
+
+    it("takes the page's answer for no press when the focus comes from another frame", () => {
+      const raise = vi.spyOn(store, "raiseWindow");
+      frameOf("win-2").focus();
+      postThePrompt();
+      vi.advanceTimersByTime(ANSWER_DELAY_MS);
+      frameOf("win-1").focus();
+      tick();
+      expect(raise).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(host);
+    });
+
+    it("takes the page's answer for no press when the focus comes from the shell's own document", () => {
+      const raise = vi.spyOn(store, "raiseWindow");
+      postThePrompt();
+      vi.advanceTimersByTime(ANSWER_DELAY_MS);
+      blurIntoFrameOf("win-1");
+      tick();
+      expect(raise).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(host);
+    });
+
+    it("raises for a press from another frame that the watcher reads one tick past the settle", () => {
+      frameOf("win-2").focus();
+      postThePrompt();
+      pastTheTick(SHELL_PROMPT_SETTLE_TICKS);
+      frameOf("win-1").focus();
+      expect(topWindowId()).toBe("win-2");
+      tick();
+      expect(topWindowId()).toBe("win-1");
+    });
+
+    it("raises for a press from the shell's own document one tick past the settle", () => {
+      postThePrompt();
+      pastTheTick(SHELL_PROMPT_SETTLE_TICKS + 1);
+      blurIntoFrameOf("win-1");
+      expect(topWindowId()).toBe("win-1");
+    });
+  });
+
   it("detects a press in a page the shell handed the focus back from", () => {
     load("win-1");
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(document.activeElement).toBe(host);
     pastThePromptSettle();
     blurIntoFrameOf("win-1");
@@ -1555,19 +1599,19 @@ describe("raising the window the document's focus lands in", () => {
     layer.reconcile();
     expect(topWindowId()).toBe("win-1");
     frameOf("win-2").focus();
-    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
+    tick(WATCHER_RAISE_HOLD_TICKS - 1);
     expect(topWindowId()).toBe("win-1");
-    runFrame();
+    tick();
     expect(topWindowId()).toBe("win-2");
   });
 
   it("starts no hold for a raise the store refused, and applies the landing as soon as the store takes it", () => {
     store.beginWindowMove("win-2", { x: 100, y: 60 });
     blurIntoFrameOf("win-1");
-    runFrame();
+    tick();
     expect(topWindowId()).toBe("win-2");
     store.endWindowMove({ x: 100, y: 60 });
-    runFrame();
+    tick();
     expect(topWindowId()).toBe("win-1");
   });
 
@@ -1575,58 +1619,60 @@ describe("raising the window the document's focus lands in", () => {
     blurIntoFrameOf("win-1");
     layer.reconcile();
     const grants = spyOnFrame("win-1");
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(1);
     frameOf("win-2").focus();
-    runFrame();
-    vi.advanceTimersByTime(2000);
-    expect(grantsSeen(grants)).toBe(0);
-    for (let frame = 1; frame < WATCHER_RAISE_HOLD_FRAMES; frame += 1) runFrame();
-    expect(topWindowId()).toBe("win-2");
+    tick();
+    // The store refuses the raise the hold put off, so win-1 stays the window the grants were for.
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    expect(grantsSeen(grants)).toBe(1);
+    expect(topWindowId()).toBe("win-1");
   });
 
-  it("raises a few times, not on every frame, for two pages that each take the focus back when they lose it", () => {
+  it("raises a few times, not on every tick, for two pages that each take the focus back when they lose it", () => {
     const raise = vi.spyOn(store, "raiseWindow");
-    const frames = 6 * WATCHER_RAISE_HOLD_FRAMES;
-    for (let frame = 0; frame < frames; frame += 1) {
+    const ticks = 6 * WATCHER_RAISE_HOLD_TICKS;
+    for (let count = 0; count < ticks; count += 1) {
       const unfocused = topWindowId() === "win-1" ? "win-2" : "win-1";
       frameOf(unfocused).focus();
-      runFrame();
+      tick();
       layer.reconcile();
     }
     expect(raise.mock.calls.length).toBeGreaterThan(1);
-    expect(raise.mock.calls.length).toBeLessThanOrEqual(frames / WATCHER_RAISE_HOLD_FRAMES + 1);
+    expect(raise.mock.calls.length).toBeLessThanOrEqual(ticks / WATCHER_RAISE_HOLD_TICKS + 1);
   });
 
-  it("reads nothing from the store in a frame while the focus rests in the focused window's page or outside every frame", () => {
+  it("reads nothing from the store in a tick while the focus rests in the focused window's page or outside every frame", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     const getState = vi.spyOn(store, "getState");
     host.focus();
-    runFrame();
+    tick();
     frameOf("win-2").focus();
-    runFrame();
+    tick();
     expect(getState).not.toHaveBeenCalled();
-    runFrame();
+    tick();
     expect(getState).not.toHaveBeenCalled();
   });
 
-  it("looks at one frame at a time, and lets the loop of a layer that a newer one replaces go", () => {
-    runFrame();
-    runFrame();
-    expect(pendingFrames.size).toBe(1);
+  it("keeps one watcher timer, and stops the watcher of a layer that a newer one replaces", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    const timers = vi.getTimerCount();
+    tick(2);
+    expect(vi.getTimerCount()).toBe(timers);
     new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
-    expect(pendingFrames.size).toBe(1);
-    runFrame();
-    expect(pendingFrames.size).toBe(1);
+    expect(vi.getTimerCount()).toBe(timers);
+    // The newer layer has no pages yet, so only the replaced layer's watcher could raise for this landing.
+    frameOf("win-1").focus();
+    tick();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
   });
 });
 
 describe("the focus grants a raised window's page is sent", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     store.restoreWindow("win-2");
     layer.reconcile();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it("posts the focused window's page the grant three times over the retry schedule", () => {
@@ -1644,7 +1690,7 @@ describe("the focus grants a raised window's page is sent", () => {
     store.raiseWindow("win-1");
     layer.reconcile();
     const nextGrants = spyOnFrame("win-1");
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
     expect(grantsSeen(nextGrants)).toBe(3);
   });
@@ -1653,7 +1699,7 @@ describe("the focus grants a raised window's page is sent", () => {
     const grants = spyOnFrame("win-2");
     vi.advanceTimersByTime(100);
     store.raiseWindow("win-1");
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
   });
 
@@ -1661,7 +1707,7 @@ describe("the focus grants a raised window's page is sent", () => {
     const grants = spyOnFrame("win-2");
     vi.advanceTimersByTime(100);
     new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
   });
 });
@@ -1789,14 +1835,6 @@ describe("input reports for the heartbeat (the app-usage-signals spec, sections 
   function pastTheFocusThrottle(): void {
     vi.setSystemTime(Date.now() + 21_000);
   }
-
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
 
   it("notes a page's shell:input with its window and app", () => {
     store.restoreWindow("win-2");

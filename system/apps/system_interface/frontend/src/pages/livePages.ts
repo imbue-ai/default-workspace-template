@@ -117,13 +117,16 @@ const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
 
-/** How many animation frames after the shell posts a page a message it may answer by taking the focus (``shell:shown``,
- *  ``ttyd-focus``) a focus landing in the page is taken for that answer, and no press. */
-export const SHELL_PROMPT_SETTLE_FRAMES = 3;
+/** How often the watcher reads which frame holds the document's focus. */
+export const FOCUS_WATCH_INTERVAL_MS = 100;
 
-/** How many animation frames after the watcher raises a window it raises no other, so pages that take the focus back
+/** How many watcher ticks after the shell posts a page a message it may answer by taking the focus (``shell:shown``,
+ *  ``ttyd-focus``) a focus landing in the page is taken for that answer, and no press. */
+export const SHELL_PROMPT_SETTLE_TICKS = 2;
+
+/** How many watcher ticks after the watcher raises a window it raises no other, so pages that take the focus back
  *  when they lose it do not turn every press into a fight over the stack. */
-export const WATCHER_RAISE_HOLD_FRAMES = 12;
+export const WATCHER_RAISE_HOLD_TICKS = 3;
 
 // A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
 // invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
@@ -163,9 +166,9 @@ interface LivePage {
   hasCapabilities: boolean;
   /** When focus landing in the page was last reported, for the throttle; 0 before any. */
   lastFocusReportedAt: number;
-  /** The animation frame the shell last posted the page a message it may answer by taking the focus in; null before
+  /** The watcher tick the shell last posted the page a message it may answer by taking the focus in; null before
    *  any. */
-  lastFocusPromptFrame: number | null;
+  lastFocusPromptTick: number | null;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
   /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
@@ -236,11 +239,11 @@ export class LivePagesLayer implements PageDriver {
   private lastFocusedWindowId: string | null = null;
   /** Drops the ``ttyd-focus`` posts still pending for the window last focused. */
   private cancelFrameFocus: () => void = () => undefined;
-  /** The animation frames the watcher has run. */
-  private watchedFrames = 0;
-  /** The frame the watcher last raised a window in; null before any. */
-  private lastWatcherRaiseFrame: number | null = null;
-  /** The page whose landing the window's blur took for an answer to a prompt: the next frame hands its focus back. */
+  /** The ticks the watcher has run. */
+  private watchedTicks = 0;
+  /** The tick the watcher last raised a window in; null before any. */
+  private lastWatcherRaiseTick: number | null = null;
+  /** The page whose landing the window's blur took for an answer to a prompt: the next tick hands its focus back. */
   private pageToHandBack: LivePage | null = null;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
@@ -282,18 +285,15 @@ export class LivePagesLayer implements PageDriver {
       this.raiseWindowOfActiveFrame(false);
     };
     window.addEventListener("blur", onWindowBlur);
-    // A focus move from one frame to another fires no event on this document, so each animation frame reads it too.
-    let frameRequest = 0;
-    const watchActiveFrame = (): void => {
-      frameRequest = requestAnimationFrame(watchActiveFrame);
-      this.watchedFrames += 1;
+    // A focus move from one frame to another fires no event on this document, so a timer reads it too.
+    const watchTimer = setInterval(() => {
+      this.watchedTicks += 1;
       this.raiseWindowOfActiveFrame(true);
       this.pageToHandBack = null;
-    };
-    frameRequest = requestAnimationFrame(watchActiveFrame);
+    }, FOCUS_WATCH_INTERVAL_MS);
     stopWatchingFrameFocus = () => {
       window.removeEventListener("blur", onWindowBlur);
-      cancelAnimationFrame(frameRequest);
+      clearInterval(watchTimer);
       this.cancelFrameFocus();
     };
   }
@@ -647,7 +647,7 @@ export class LivePagesLayer implements PageDriver {
     this.cancelFrameFocus = requestFrameFocus(page.wrapper, {
       isStillWanted: () => this.isFocusHolder(page.windowId),
       onPosted: () => {
-        page.lastFocusPromptFrame = this.watchedFrames;
+        page.lastFocusPromptTick = this.watchedTicks;
       },
     });
     // However the window was raised: somebody put it on screen, and a page that binds no contract will say
@@ -680,14 +680,14 @@ export class LivePagesLayer implements PageDriver {
     // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
     if (page.windowId === activeFocusedWindowId(state)) return;
     if (page === this.pageToHandBack || this.isAnswerToPrompt(page)) {
-      // The focus cannot be handed back from inside the blur event; the next frame does.
+      // The focus cannot be handed back from inside the blur event; the next tick does.
       if (canHandBack) this.host.focus({ preventScroll: true });
       else this.pageToHandBack = page;
       return;
     }
     if (
-      this.lastWatcherRaiseFrame !== null &&
-      this.watchedFrames - this.lastWatcherRaiseFrame < WATCHER_RAISE_HOLD_FRAMES
+      this.lastWatcherRaiseTick !== null &&
+      this.watchedTicks - this.lastWatcherRaiseTick < WATCHER_RAISE_HOLD_TICKS
     ) {
       // A press set aside is the user moving on: the focused window's pending grants must not take the focus from it.
       this.cancelFrameFocus();
@@ -696,14 +696,13 @@ export class LivePagesLayer implements PageDriver {
     this.store.raiseWindow(page.windowId);
     const isRaised = activeFocusedWindowId(this.store.getState()) === page.windowId;
     // A raise the store refuses starts no hold.
-    if (isRaised) this.lastWatcherRaiseFrame = this.watchedFrames;
+    if (isRaised) this.lastWatcherRaiseTick = this.watchedTicks;
   }
 
   /** Whether a focus landing in the page now is its answer to a message the shell just posted it. */
   private isAnswerToPrompt(page: LivePage): boolean {
     return (
-      page.lastFocusPromptFrame !== null &&
-      this.watchedFrames - page.lastFocusPromptFrame <= SHELL_PROMPT_SETTLE_FRAMES
+      page.lastFocusPromptTick !== null && this.watchedTicks - page.lastFocusPromptTick <= SHELL_PROMPT_SETTLE_TICKS
     );
   }
 
@@ -859,7 +858,7 @@ export class LivePagesLayer implements PageDriver {
       isCloseChordCapable: false,
       hasCapabilities: false,
       lastFocusReportedAt: 0,
-      lastFocusPromptFrame: null,
+      lastFocusPromptTick: null,
       greetedDesktopId: null,
       greetedIsViewing: false,
       lastSentVisibility: null,
@@ -993,7 +992,7 @@ export class LivePagesLayer implements PageDriver {
     // Nothing until the page has had its handshake: before its load there is nobody listening.
     if (page.greetedDesktopId === null || page.lastSentVisibility === isVisible) return;
     page.lastSentVisibility = isVisible;
-    if (isVisible) page.lastFocusPromptFrame = this.watchedFrames;
+    if (isVisible) page.lastFocusPromptTick = this.watchedTicks;
     sendToChildFrame(page.frame, isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
   }
 

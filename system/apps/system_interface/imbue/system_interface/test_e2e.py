@@ -96,6 +96,9 @@ _NEGATIVE_SETTLE_MS = 1000
 # Longer than the shell takes to post its focus grants to a window it has raised.
 _FOCUS_GRANT_SCHEDULE_MS = 1500
 
+# Longer than the shell goes on taking a focus landing in a page for that page's answer to a message it posted it.
+_PROMPT_SETTLE_MS = 500
+
 # The stub app the machine offers: an app with one launch path, ``new`` at ``/new``, and a
 # focus-mode default shortcut for it. Its pages are the stand-ins the stub serves at every other path.
 _STUB_APP_NAME = "docs"
@@ -712,26 +715,35 @@ def _now_ms(page: Page) -> float:
     return page.evaluate("() => performance.timeOrigin + performance.now()")
 
 
-def _wait_out_the_focus_grants(page: Page, raised_at: float) -> None:
-    """Wait until the grants the shell posts to a window it raised at ``raised_at`` (``_now_ms``) have all been posted."""
+def _wait_until(page: Page, deadline: float) -> None:
+    """Wait until the page's clock (``_now_ms``) is past ``deadline``."""
     page.wait_for_function(
         "(deadline) => performance.timeOrigin + performance.now() > deadline",
-        arg=raised_at + _FOCUS_GRANT_SCHEDULE_MS,
+        arg=deadline,
         timeout=15000,
         polling=100,
     )
 
 
-def _after_animation_frames(page: Page, frames: int = 3) -> None:
-    """Let the page run ``frames`` animation frames: the shell looks at the document's focus once in each."""
-    page.evaluate(
-        """(frames) => new Promise((resolve) => {
-          let left = frames;
-          const tick = () => (--left <= 0 ? resolve(undefined) : requestAnimationFrame(tick));
-          requestAnimationFrame(tick);
-        })""",
-        frames,
-    )
+def _wait_out_the_focus_grants(page: Page, raised_at: float) -> None:
+    """Wait until the grants the shell posts to a window it raised at ``raised_at`` (``_now_ms``) have all been posted."""
+    _wait_until(page, raised_at + _FOCUS_GRANT_SCHEDULE_MS)
+
+
+def _wait_out_the_prompt_settle(page: Page, prompted_by: float) -> None:
+    """Wait until a press into a page the shell last posted a message by ``prompted_by`` (``_now_ms``) is a press to
+    the shell, and no answer to that message."""
+    _wait_until(page, prompted_by + _PROMPT_SETTLE_MS)
+
+
+def _wait_for_focus_handed_back(page: Page) -> None:
+    """Wait until the document's focus rests on the pages host, where the shell puts the focus it takes out of a page."""
+    page.wait_for_function("() => document.activeElement?.classList.contains('live-pages') === true", timeout=15000)
+
+
+def _is_focus_out_of_page(page: Page, window_id: str) -> bool:
+    """Whether the document's focus is anywhere but in the window's page."""
+    return page.evaluate("(id) => document.activeElement?.getAttribute('data-live-page') !== id", window_id)
 
 
 def _wait_for_stored_top(server: E2EServer, client_id: str, window_id: str) -> None:
@@ -1656,6 +1668,7 @@ def test_pressing_a_lower_window_reaches_its_page_and_raises_it(e2e_server: E2ES
 
     first_frame = _page_frame(page, first)
     assert first_frame.evaluate("() => window.__presses") == 0
+    _wait_out_the_prompt_settle(page, _now_ms(page))
     page.mouse.click(*_content_point(page, first))
     first_frame.wait_for_function("() => window.__presses === 1", timeout=15000)
     expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
@@ -1678,6 +1691,7 @@ def test_a_right_click_on_an_unfocused_window_opens_its_pages_own_menu_and_raise
     first, _second = _open_a_second_window_over_the_first(page, e2e_server)
     first_frame = _page_frame(page, first)
 
+    _wait_out_the_prompt_settle(page, _now_ms(page))
     page.mouse.click(*_content_point(page, first), button="right")
     expect(first_frame.locator("[data-context-menu]")).to_be_visible(timeout=15000)
     expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
@@ -1730,7 +1744,7 @@ def test_the_wheel_over_an_unfocused_window_scrolls_its_page_without_raising_it(
     page.mouse.move(*_content_point(page, first))
     page.mouse.wheel(0, 300)
     first_frame.wait_for_function("() => window.__wheels > 0 && window.scrollY > 0", timeout=15000)
-    _after_animation_frames(page)
+    assert _is_focus_out_of_page(page, first)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, second)).to_have_attribute("data-focused", "true")
 
@@ -1807,6 +1821,7 @@ def test_pressing_a_lower_window_moves_the_keyboard_to_its_page(e2e_server: E2ES
     page.keyboard.type("typed")
     assert second_frame.input_value("#held") == "typed"
 
+    _wait_out_the_prompt_settle(page, _now_ms(page))
     page.mouse.click(*_content_point(page, first))
     expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
     page.keyboard.type("ab")
@@ -1829,6 +1844,8 @@ def test_a_late_focus_grant_to_a_raised_terminal_does_not_undo_a_later_raise_of_
         _land(page, server)
         terminal, plain = _open_a_terminal_like_window_under_a_plain_one(page, server)
         client_id = _client_id(page)
+        # The plain window's own grants are over, so a press on it afterwards answers none of them.
+        _wait_out_the_focus_grants(page, _now_ms(page))
 
         raised_at = _now_ms(page)
         page.mouse.click(*_content_point(page, terminal))
@@ -1843,7 +1860,7 @@ def test_a_late_focus_grant_to_a_raised_terminal_does_not_undo_a_later_raise_of_
         expect(_window(page, plain)).to_have_attribute("data-focused", "true", timeout=15000)
 
         _wait_out_the_focus_grants(page, raised_at)
-        _after_animation_frames(page)
+        assert _is_focus_out_of_page(page, terminal)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
         _wait_for_stored_top(server, client_id, plain)
@@ -1865,11 +1882,12 @@ def test_reloading_the_shell_leaves_the_top_window_on_top_over_a_terminal_like_w
         page.reload()
         _land(page, server)
         _pty_frame(page, terminal).wait_for_function("() => window.__grants > 0", timeout=15000)
-        _after_animation_frames(page)
+        _wait_for_focus_handed_back(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
         _wait_for_stored_top(server, client_id, plain)
 
+        _wait_out_the_prompt_settle(page, _now_ms(page))
         page.mouse.click(*_content_point(page, terminal))
         expect(_window(page, terminal)).to_have_attribute("data-focused", "true", timeout=15000)
         _wait_for_stored_top(server, client_id, terminal)
@@ -1896,7 +1914,7 @@ def test_a_round_trip_through_another_desktop_leaves_the_top_window_on_top_over_
         _pty_frame(page, terminal).wait_for_function(
             "(before) => window.__grants > before", arg=grants_before, timeout=15000
         )
-        _after_animation_frames(page)
+        _wait_for_focus_handed_back(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
         _wait_for_stored_top(server, client_id, plain)
@@ -1927,7 +1945,7 @@ def test_an_agent_reloading_a_terminal_like_window_beneath_the_top_one_leaves_th
             "() => window.__beforeRefresh === undefined && window.__handshake !== undefined", timeout=15000
         )
         _pty_frame(page, terminal).wait_for_function("() => window.__grants > 0", timeout=15000)
-        _after_animation_frames(page)
+        _wait_for_focus_handed_back(page)
         expect(_window(page, plain)).to_have_attribute("data-focused", "true")
         expect(_window(page, terminal)).to_have_attribute("data-focused", "false")
         _wait_for_stored_top(server, client_id, plain)
