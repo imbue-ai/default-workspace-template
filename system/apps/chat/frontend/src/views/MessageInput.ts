@@ -183,7 +183,7 @@ function composerHintKey(chatId: string): string {
 const pendingComposerPrepends = new Map<string, string>();
 
 // What the failure notice says about a send, in place of mngr's reason, which is written for its own
-// command line. "unknown" keeps that reason: it is the only account of what went wrong.
+// command line. "unknown" is worded by failureSentence instead; the reason stays behind See details either way.
 const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
   input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
   agent_unreachable: "The agent isn't running and didn't start.",
