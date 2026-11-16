@@ -18,7 +18,7 @@ from terminal_app.testing import (
     render_browser_wrapper_page,
 )
 
-pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.browser, pytest.mark.timeout(60), pytest.mark.flaky]
 
 _SHELL_URL: Final[str] = "http://shell.test/"
 _CONTRACT_URL: Final[str] = f"http://{BROWSER_WRAPPER_HOST}/_static/app_contract.js"
@@ -41,12 +41,15 @@ window.sendTheme = (theme, revision) => {{
 window.stopSending = () => clearInterval(sending);
 </script></body></html>"""
 
-# The contract's shape the wrapper uses: ``connectToShell`` with its handlers, here only ``onTheme`` wired.
+# The contract's shape the wrapper uses: ``connectToShell`` with its handlers, ``onTheme`` wired and the shell's
+# greeting given at once, since a framed wrapper points its pty frame only once the shell has said whether the
+# window is viewed.
 _CONTRACT_MODULE: Final[str] = """export function connectToShell(handlers) {
   addEventListener("message", (event) => {
     if (event.source !== parent || event.data?.type !== "shell:theme") return;
     handlers.onTheme?.(event.data.theme, event.data.revision ?? "");
   });
+  handlers.onHandshake?.({ clientId: "shell-client", isViewing: false });
   return { location() {}, focused() {} };
 }"""
 
@@ -105,8 +108,15 @@ def _pty_frame(context: BrowserContext) -> tuple[Frame, Frame]:
     wrapper = page.frame(url=BROWSER_WRAPPER_URL)
     assert wrapper is not None
     wrapper.wait_for_load_state()
-    pty = page.frame(url=BROWSER_PTY_URL)
+    # The pty frame is pointed once the contract module is up and has greeted the page, after the wrapper's load.
+    wrapper.wait_for_function("document.getElementById('pty').src !== ''", timeout=5000)
+    # The iframe's own frame, followed until it reaches the pty page: with its src just set, the frame can still be on
+    # its first blank document, so a lookup by URL can miss it.
+    pty_element = wrapper.query_selector("#pty")
+    assert pty_element is not None
+    pty = pty_element.content_frame()
     assert pty is not None
+    pty.wait_for_url(BROWSER_PTY_URL, timeout=5000)
     pty.wait_for_load_state()
     return page.main_frame, pty
 

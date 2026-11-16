@@ -1,11 +1,12 @@
 /**
- * The desktop's root: the backdrop with its windows and live pages, the taskbar, the launcher
- * menu, the floating menus, the settings dialog, and the avatar chooser, wired to one
- * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
- * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists),
- * measures the backdrop for the store, binds the gesture source to the document, and hosts the
- * live-page layer, reconciling it after every redraw. A phone-sized viewport gets the phone layout instead
- * (plan-phone-interface.md), over the same store and the same live-page layer.
+ * The desktop's root: the backdrop with its windows and live pages (or the overview over them), the taskbar,
+ * the launcher menu, the floating menus, the wallpaper chooser, the avatar chooser, and the viewing chrome,
+ * wired to one ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
+ * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists, the
+ * desktop whose wallpaper chooser is up, and the overview's tiling as the last redraw computed it), measures the
+ * backdrop for the store, binds the gesture source to the document, and hosts the live-page layer, reconciling
+ * it after every redraw. A phone-sized viewport gets the phone layout instead (plan-phone-interface.md), over
+ * the same store and the same live-page layer.
  */
 
 import m from "mithril";
@@ -20,9 +21,21 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
+import { ONLY_DESKTOP_REASON } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
-import { appShortcutOf, draftRowsOf, launchPathOf } from "../model/launch";
+import { appShortcutsOf, draftRowsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
+import {
+  SYSTEM_MONITOR_APP_NAME,
+  SYSTEM_MONITOR_PAGES,
+  currentResourceGauge,
+  isResourceGaugeStale,
+  saveSettings as saveResourceGaugeSettings,
+  startCardRefresh,
+  stopCardRefresh,
+  systemMonitorPathOf,
+  type GaugeResource,
+} from "../model/resourceGauge";
 import type {
   AppRecord,
   AppTheming,
@@ -32,6 +45,11 @@ import type {
   WallpaperListing,
 } from "../model/records";
 import { shortcutKey } from "../model/records";
+import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
+import { needsYou, workingOn } from "../model/ChatsActivity";
+import { leftBehindDesktops, ownerEntryOf } from "../model/Ownership";
+import { getOwnIdentity, getOwnParticipant } from "../model/Presence";
+import { getRoster, rosterEntry } from "../model/Roster";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -39,12 +57,15 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   barEntries,
   desktopById,
   draftTargetOf,
+  effectiveWindowTitle,
   entryLook,
   floatingEntries,
   openableApps,
+  isEntryFloating,
   pinnedWindowOf,
 } from "../reducers/desktopState";
 import {
@@ -55,7 +76,7 @@ import {
   secondaryTextRow,
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
-import { findShortcut, nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
+import { findShortcut } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
@@ -64,15 +85,15 @@ import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog, designOwnDisabledReason } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import {
-  DesktopSettingsDialog,
-  ONLY_DESKTOP_REASON,
-  THEME_DESIGN_PROMPT,
-  THEME_PREVIEW_APP,
-  isSameWallpaper,
-} from "./DesktopSettingsDialog";
 import { BootFailureNotice } from "./FailureLine";
+import type { BackdropLetterbox } from "./Backdrop";
+import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { ResourceGaugeDialog } from "./ResourceGaugeDialog";
+import { ResourceCard } from "./tray/ResourceCard";
 import { LauncherMenu } from "./LauncherMenu";
+import { GRID_SHARE, gridFor, overviewPresentationOf } from "./Overview";
+import type { OverviewAttrs, OverviewGrid, OverviewTile } from "./Overview";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
 import { applyRectStyle } from "./pixelStyle";
@@ -84,6 +105,7 @@ import { TourCard } from "./TourCard";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
+import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import {
   MENU_MIN_WIDTH,
   openShareSettings,
@@ -94,7 +116,12 @@ import {
 } from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
-import { SQUIGGLE_GLYPHS } from "./squiggles";
+import { AgentCard } from "./tray/AgentCard";
+import { BubbleLayer } from "./tray/BubbleLayer";
+import { PersonCard } from "./tray/PersonCard";
+import { createTrayCardHover } from "./tray/TrayCard";
+import type { OpenCard } from "./tray/TrayCard";
+import type { ViewingChipAttrs } from "./tray/ViewingChip";
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
@@ -103,9 +130,16 @@ type OpenMenu =
   | { readonly kind: "size"; readonly windowId: string }
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
-  | { readonly kind: "app-shortcut"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
-  | { readonly kind: "desktops" }
-  | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
+  | {
+      readonly kind: "app-shortcut";
+      readonly app: string;
+      readonly launch: string;
+      readonly referenceRows: readonly MenuRow[];
+    }
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2). */
+  | { readonly kind: "backdrop"; readonly referenceRows: readonly MenuRow[] }
+  /** A desktop thumbnail's menu in the overview. */
+  | { readonly kind: "overview-desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
@@ -149,10 +183,13 @@ const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 
 /** Marks the backdrop, the area above the taskbar whose pixels the desktop's frames are fractions of. */
 export const BACKDROP_AREA_ATTRIBUTE = "data-backdrop-area";
+/** On the desktop layout's root while a fullscreen window is on the active desktop's screen. */
+export const FULLSCREEN_WINDOW_ATTRIBUTE = "data-fullscreen-window";
 
-interface SettingsDialogState {
-  readonly desktopId: string;
-  readonly isDeleting: boolean;
+/** The overview's tiles as computed for one redraw: the pages are laid over them at the grid's scale. */
+interface OverviewTiling {
+  readonly tiles: readonly OverviewTile[];
+  readonly grid: OverviewGrid;
 }
 
 interface AvatarChooserState {
@@ -181,7 +218,16 @@ function isApplePlatform(): boolean {
 
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
-  let settingsDialog: SettingsDialogState | null = null;
+  /** The desktop whose wallpaper chooser is up. */
+  let wallpaperDialogDesktopId: string | null = null;
+  /** The desktop whose theme chooser is up. */
+  let themeDialogDesktopId: string | null = null;
+  /** Whether the keyboard shortcuts dialog is up. */
+  let isKeyboardShortcutsDialogOpen = false;
+  /** Whether the resource gauge's settings dialog is up. */
+  let isResourceGaugeDialogOpen = false;
+  /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
+  let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
   let wallpapers: WallpaperListing[] | null = null;
   let launcherQuery = "";
@@ -207,6 +253,15 @@ export function App(): m.Component<AppAttrs> {
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
   let tour: TourController | null = null;
+  // The tray's card: which entry's, and the hover bookkeeping that opens and closes it.
+  const trayCard = createTrayCardHover((card) => {
+    // A person's card reads what they are looking at as it opens (the multiplayer spec, section 6.3).
+    if (card?.kind === "person" && store !== null) void store.refreshClients();
+    // The resource card shows exact figures, which the tray's pushes are too coarse for: it fetches while open.
+    if (card?.kind === "resources") startCardRefresh(() => m.redraw());
+    else stopCardRefresh();
+    m.redraw();
+  });
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -277,10 +332,14 @@ export function App(): m.Component<AppAttrs> {
       m.redraw();
       return;
     }
-    // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
+    // One layer per Escape: a dialog (the wallpaper chooser, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
-    if (store?.isLauncherOpen() === true) {
+    if (store?.isOverviewOpen() === true) {
+      // A rename in progress takes its own Escape (the input stops the key); the overview takes the next.
+      closeOverview();
+      m.redraw();
+    } else if (store?.isLauncherOpen() === true) {
       closeLauncher();
       m.redraw();
     } else if (selectedShortcutKey !== null) {
@@ -374,13 +433,19 @@ export function App(): m.Component<AppAttrs> {
    *  Re-measuring per frame is the placement a drag already does, driven by the transition
    *  instead of by the pointer. */
   function followTravellingWindows(): void {
+    let hasTravelEnded = false;
     for (const windowId of [...travellingWindows.keys()]) {
       // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
       // transitions cancelled on a chrome already out of the document, where the event never reaches the
       // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
-      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
-      else pages?.placePage(windowId);
+      if (windowElement(windowId) === null) {
+        travellingWindows.delete(windowId);
+        hasTravelEnded = true;
+      } else {
+        pages?.placePage(windowId);
+      }
     }
+    if (hasTravelEnded && travellingWindows.size === 0) pages?.reconcile();
     travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
   }
 
@@ -402,6 +467,8 @@ export function App(): m.Component<AppAttrs> {
     travellingWindows.delete(windowId);
     // Where the chrome landed, not the last value a frame happened to catch on the way.
     pages?.placePage(windowId);
+    // A window that travelled over another's page covers it only once it has landed.
+    if (travellingWindows.size === 0) pages?.reconcile();
   }
 
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
@@ -605,9 +672,18 @@ export function App(): m.Component<AppAttrs> {
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const app = appByName(state, window.app);
+    const isImmersive = current.getImmersive() !== null;
     return windowMenuRows(app, {
       size: sizeActionsOf(current, windowId),
       onSized: () => menu.close(),
+      fullscreen: {
+        isFullscreen: placementOf(state.layout, windowId).state === "FULLSCREEN",
+        toggleFullscreen: () => current.toggleFullscreen(windowId),
+        isImmersive,
+        immersive: current.getCanImmerse()
+          ? () => (isImmersive ? current.leaveImmersive(windowId) : current.requestImmersive(windowId))
+          : null,
+      },
       share: app === undefined || app.critical ? null : () => openShareSettings(app),
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
@@ -634,7 +710,7 @@ export function App(): m.Component<AppAttrs> {
     const look = entryLook(state, window, appByName(state, window.app));
     return taskbarEntryMenuRows({
       isMinimized: placement.is_minimized,
-      isMaximized: placement.state === "MAXIMIZED",
+      isMaximized: placement.state === "MAXIMIZED" || placement.state === "FULLSCREEN",
       isDetached: placement.is_detached,
       show: () => current.showDetachedWindow(windowId),
       showGhost: () => current.showWindowGhost(windowId),
@@ -650,10 +726,9 @@ export function App(): m.Component<AppAttrs> {
           : {
               look,
               setMode: (mode) => void current.setEntryMode(window.app, mode),
-              setStyle: (style) => void current.setEntryStyle(window.app, style),
               changeAvatar: () => openAvatarChooser(current),
             },
-      desktopShortcut: desktopShortcutRow(current, window.app),
+      desktopShortcut: desktopShortcutRow(current, window.app, null),
     });
   }
 
@@ -711,14 +786,16 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** Add the app's own shortcut (``appShortcutOf``) to the desktop on screen, or take it off when it is there; null
-   *  with no desktop, no such app, or no shortcut the app may have. */
-  function desktopShortcutRow(current: DesktopStore, appName: string): MenuRow | null {
+  /** Add one of the app's own shortcuts (``appShortcutsOf``) to the desktop on screen, or take it off when it is
+   *  there: the one of ``launch``, or the app's first with none named; null with no desktop, no such app, or no such
+   *  shortcut the app may have. */
+  function desktopShortcutRow(current: DesktopStore, appName: string, launch: string | null): MenuRow | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
     const app = appByName(state, appName);
-    const own = app === undefined ? null : appShortcutOf(app);
-    if (desktop === null || own === null) return null;
+    const shortcuts = app === undefined ? [] : appShortcutsOf(app);
+    const own = launch === null ? shortcuts[0] : shortcuts.find((shortcut) => shortcut.launch === launch);
+    if (desktop === null || own === undefined) return null;
     if (findShortcut(desktop, appName, own.launch) !== undefined) {
       return removeFromDesktopRow(current, appName, own.launch);
     }
@@ -730,69 +807,91 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string): MenuRow[] | null {
-    const row = desktopShortcutRow(current, appName);
+  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string, launch: string): MenuRow[] | null {
+    const row = desktopShortcutRow(current, appName, launch);
     return row === null ? null : [row];
   }
 
-  function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
-    const state = current.getState();
-    const active = state.activeDesktopId;
-    const isOnlyDesktop = state.desktops.length <= 1;
+  function closeOverview(): void {
+    store?.closeOverview();
+  }
+
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, the wallpaper, the
+   *  theme, and the keyboard shortcuts. While viewing somebody else's desktop (section 8.3) only the new desktop and
+   *  the shortcuts stay: the overview button is hidden too, and the wallpaper and the theme are the viewed desktop's,
+   *  not the viewer's to change, while the shortcuts are the viewer's own wherever they are. */
+  function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
+    const active = current.getState().activeDesktopId;
+    const isViewing = current.viewedDesktop() !== null;
     return [
       {
         kind: "action",
         key: "new-desktop",
         label: "New desktop",
+        onSelect: () => void current.createNextDesktop(),
+      },
+      {
+        kind: "action",
+        key: "show-all-desktops",
+        label: "Show all desktops",
+        isDisabled: isViewing,
+        onSelect: () => current.openOverview(),
+      },
+      { kind: "divider" },
+      {
+        kind: "action",
+        key: "change-wallpaper",
+        label: "Change wallpaper...",
+        isDisabled: active === null || isViewing,
+        onSelect: () => openWallpaperChooser(active),
+      },
+      {
+        kind: "action",
+        key: "change-theme",
+        label: "Change theme...",
+        isDisabled: active === null || isViewing,
         onSelect: () => {
-          const glyphIndex = nextGlyphIndex(
-            state.desktops.map((desktop) => desktop.glyph),
-            SQUIGGLE_GLYPHS.length,
-          );
-          void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+          if (active !== null) themeDialogDesktopId = active;
         },
       },
       { kind: "divider" },
       {
         kind: "action",
-        key: "settings",
-        label: "Desktop settings...",
-        isDisabled: active === null,
-        onSelect: () => openSettings(active, false),
+        key: "keyboard-shortcuts",
+        label: "Keyboard shortcuts...",
+        onSelect: () => {
+          isKeyboardShortcutsDialogOpen = true;
+        },
       },
-      {
-        kind: "action",
-        key: "delete",
-        label: "Delete desktop...",
-        tone: "danger",
-        isDisabled: active === null || isOnlyDesktop,
-        tooltip: isOnlyDesktop ? ONLY_DESKTOP_REASON : undefined,
-        onSelect: () => openSettings(active, true),
-      },
+      ...resourceGaugeSettingsRows("resource-gauge", "Resource gauge..."),
     ];
   }
 
-  function rowsOfDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
+  /** A thumbnail's menu in the overview: a rename for the viewer's own desktops, and the deletion, confirmed in
+   *  place over the thumbnail. */
+  function rowsOfOverviewDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
+    const isOwn = current.ownDesktops().some((desktop) => desktop.id === desktopId);
+    const rows: MenuRow[] = isOwn
+      ? [
+          {
+            kind: "action",
+            key: "rename",
+            label: "Rename",
+            onSelect: () => current.setOverviewRenamingId(desktopId),
+          },
+        ]
+      : [];
     const isOnlyDesktop = current.getState().desktops.length <= 1;
-    return [
-      {
-        kind: "action",
-        key: "switch",
-        label: "Switch to this desktop",
-        onSelect: () => void current.switchDesktop(desktopId),
-      },
-      { kind: "action", key: "settings", label: "Settings...", onSelect: () => openSettings(desktopId, false) },
-      { kind: "divider" },
-      {
-        kind: "action",
-        key: "delete",
-        label: "Delete...",
-        tone: "danger",
-        isDisabled: isOnlyDesktop,
-        tooltip: isOnlyDesktop ? ONLY_DESKTOP_REASON : undefined,
-        onSelect: () => openSettings(desktopId, true),
-      },
-    ];
+    rows.push({
+      kind: "action",
+      key: "delete",
+      label: "Delete desktop...",
+      tone: "danger",
+      isDisabled: isOnlyDesktop,
+      tooltip: isOnlyDesktop ? ONLY_DESKTOP_REASON : undefined,
+      onSelect: () => current.setOverviewDeletingId(desktopId),
+    });
+    return rows;
   }
 
   /** The rows of whichever menu is open, or null once what it was opened for has gone. */
@@ -807,19 +906,19 @@ export function App(): m.Component<AppAttrs> {
       case "shortcut":
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
       case "app-shortcut":
-        return withReferenceRows(rowsOfAppShortcutMenu(current, open.app), open.referenceRows);
-      case "desktops":
-        return rowsOfDesktopsMenu(current);
-      case "desktop":
-        return withReferenceRows(rowsOfDesktopMenu(current, open.desktopId), open.referenceRows);
+        return withReferenceRows(rowsOfAppShortcutMenu(current, open.app, open.launch), open.referenceRows);
+      case "backdrop":
+        return withReferenceRows(rowsOfBackdropMenu(current), open.referenceRows);
+      case "overview-desktop":
+        return withReferenceRows(rowsOfOverviewDesktopMenu(current, open.desktopId), open.referenceRows);
       case "element":
         return [...open.rows];
     }
   }
 
-  function openSettings(desktopId: string | null, isDeleting: boolean): void {
+  function openWallpaperChooser(desktopId: string | null): void {
     if (desktopId === null) return;
-    settingsDialog = { desktopId, isDeleting };
+    wallpaperDialogDesktopId = desktopId;
     // Read on every open: a file dropped into the wallpapers directory shows up, and a read that failed
     // last time is tried again; the last list stays on screen meanwhile.
     void fetchWallpapers()
@@ -831,6 +930,179 @@ export function App(): m.Component<AppAttrs> {
         wallpapers ??= [];
       })
       .finally(() => m.redraw());
+  }
+
+  /** Move the one avatar creature out of the tray: the pinned chat entry goes floating for this client. */
+  function floatAvatar(current: DesktopStore): void {
+    const entry = avatarPinnedEntryOf(current.getState());
+    if (entry === null) return;
+    void current.setEntryMode(entry.window.app, "floating");
+  }
+
+  /** The tray agent entry's right-click menu: the card's actions, the way the floating creature offers its own. */
+  function trayAgentMenuRows(current: DesktopStore): MenuRow[] {
+    return [
+      { kind: "action", key: "change-avatar", label: "Change avatar...", onSelect: () => openAvatarChooser(current) },
+      { kind: "action", key: "float", label: "Float", onSelect: () => floatAvatar(current) },
+    ];
+  }
+
+  /** The box of a speaker's tray entry, where its bubble's arrow points. */
+  function trayEntryRect(speaker: string): DOMRect | null {
+    const selector =
+      speaker === WORKSPACE_AGENT_KEY ? "[data-tray-agent]" : `[data-tray-person="${CSS.escape(speaker)}"]`;
+    return document.querySelector(selector)?.getBoundingClientRect() ?? null;
+  }
+
+  function trayCardView(current: DesktopStore, open: OpenCard, now: Date): m.Children {
+    const state = current.getState();
+    const frame = { anchor: trayCard.anchor(), onEnter: trayCard.enterCard, onLeave: trayCard.leaveCard };
+    if (open.kind === "agent") {
+      return m(AgentCard, {
+        ...frame,
+        avatar: state.avatar,
+        workspaceName: state.workspaceName,
+        workingOn: workingOn(),
+        needsYou: needsYou(),
+        onChangeAvatar: () => {
+          trayCard.close();
+          openAvatarChooser(current);
+        },
+        onFloat: () => {
+          trayCard.close();
+          floatAvatar(current);
+        },
+        onOpenChat: (chatId) => {
+          trayCard.close();
+          void current.showChat(chatId);
+        },
+      });
+    }
+    if (open.kind === "resources") {
+      const view = currentResourceGauge();
+      if (view === null) return null;
+      return m(ResourceCard, {
+        ...frame,
+        view,
+        isStale: isResourceGaugeStale(now.getTime()),
+        now,
+        canChangeSettings: isViewerOwner(),
+        onOpen: (resource) => openSystemMonitorOn(current, resource),
+        onOpenSettings: () => {
+          trayCard.close();
+          isResourceGaugeDialogOpen = true;
+        },
+      });
+    }
+    const entry = rosterEntry(open.key);
+    if (entry === null) return null;
+    return m(PersonCard, {
+      ...frame,
+      entry,
+      isOwn: entry.key === getOwnParticipant(),
+      now,
+      clients: current.getClients(),
+      desktops: state.desktops,
+      apps: state.apps,
+      activeDesktopId: state.activeDesktopId,
+      onOpenDesktop: (desktopId) => {
+        trayCard.close();
+        void current.switchDesktop(desktopId);
+      },
+      onNewDesktop: () => {
+        trayCard.close();
+        void current.createNextDesktop();
+      },
+    });
+  }
+
+  /** The overview's tiles: the active desktop's windows front-most first, at the rectangles they render at. */
+  function overviewTilingOf(current: DesktopStore): OverviewTiling {
+    const state = current.getState();
+    const desktop = activeDesktop(state);
+    const tiles: OverviewTile[] = [];
+    for (const placement of [...activePlacements(state)].reverse()) {
+      const window = desktop?.windows.find((candidate) => candidate.id === placement.window_id);
+      if (window === undefined || placement.is_detached) continue;
+      const app = appByName(state, window.app);
+      tiles.push({
+        window,
+        app,
+        title: effectiveWindowTitle(state, window, app),
+        rect: current.renderedRect(placement),
+        isMinimized: placement.is_minimized,
+      });
+    }
+    const backdrop = current.getBackdropSize();
+    const metrics = current.getMetrics();
+    const gridHeight = backdrop.height * GRID_SHARE;
+    return {
+      tiles,
+      grid: gridFor(
+        tiles.map((tile) => tile.rect),
+        backdrop.width,
+        gridHeight,
+        metrics,
+      ),
+    };
+  }
+
+  function overviewAttrs(current: DesktopStore, desktop: Desktop, tiling: OverviewTiling): OverviewAttrs {
+    const state = current.getState();
+    const ownDesktops = current.ownDesktops();
+    const leftBehind = leftBehindDesktops(state.desktops, getRoster(), getOwnIdentity());
+    current.ensureOverviewLayouts([...ownDesktops, ...leftBehind]);
+    return {
+      desktop,
+      tiles: tiling.tiles,
+      grid: tiling.grid,
+      backdrop: current.getBackdropSize(),
+      metrics: current.getMetrics(),
+      ownDesktops,
+      leftBehind,
+      apps: state.apps,
+      layoutOf: (desktopId) => current.overviewLayoutOf(desktopId),
+      confirmingDeleteId: current.getOverviewDeletingId(),
+      renamingId: current.getOverviewRenamingId(),
+      onRaiseWindow: (windowId) => current.restoreWindow(windowId),
+      onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
+      onBeginRename: (desktopId) => current.setOverviewRenamingId(desktopId),
+      onEndRename: () => current.setOverviewRenamingId(null),
+      onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
+      onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
+      onDesktopContextMenu: (desktopId, x, y, target) => {
+        openMenuAt(
+          { kind: "overview-desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
+          anchorForPoint(x, y),
+        );
+      },
+      onConfirmDelete: (desktopId) => {
+        current.setOverviewDeletingId(null);
+        void current.deleteDesktop(desktopId);
+      },
+      onKeepDesktop: () => current.setOverviewDeletingId(null),
+      onNewDesktop: () => void current.createNextDesktop(),
+      onClose: closeOverview,
+    };
+  }
+
+  /** The viewing chrome's chip (the multiplayer spec, section 8.3), or null on one of the viewer's own desktops. */
+  function viewingChipAttrs(current: DesktopStore, viewed: Desktop | null): ViewingChipAttrs | null {
+    if (viewed === null) return null;
+    const owner = ownerEntryOf(viewed, getRoster());
+    return {
+      desktop: viewed,
+      owner,
+      color: owner?.color ?? "var(--c-text-faint)",
+      onStopViewing: () => void current.stopViewing(),
+    };
+  }
+
+  /** The letterbox a viewed desktop is drawn in (section 8.3), in the owner's colour, or null when the desktop is
+   *  the viewer's own or its owner's backdrop size is unknown. */
+  function letterboxAttrs(current: DesktopStore, viewing: ViewingChipAttrs | null): BackdropLetterbox | null {
+    const box = current.viewingLetterbox();
+    return viewing === null || box === null ? null : { box, color: viewing.color };
   }
 
   function openAvatarChooser(current: DesktopStore): void {
@@ -875,30 +1147,84 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function settingsDialogView(current: DesktopStore, dialog: SettingsDialogState): m.Children {
-    const desktop = desktopById(current.getState(), dialog.desktopId);
+  function wallpaperDialogView(current: DesktopStore, desktopId: string): m.Children {
+    const desktop = desktopById(current.getState(), desktopId);
     if (desktop === null) return null;
-    return m(DesktopSettingsDialog, {
+    return m(WallpaperChooserDialog, {
       desktop,
       wallpapers,
-      isDeleting: dialog.isDeleting,
-      isOnlyDesktop: current.getState().desktops.length <= 1,
       wordFailure: (whatFailed, error) => current.failureNotice(whatFailed, error),
-      onSave: async (name, color, glyph, wallpaper, themeChoice) => {
-        await current.updateDesktopSettings(desktop.id, name, color, glyph);
+      onSave: async (wallpaper) => {
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
+        wallpaperDialogDesktopId = null;
+      },
+      onCancel: () => {
+        wallpaperDialogDesktopId = null;
+      },
+    });
+  }
+
+  /** Whether the viewer is the workspace's owner, whose alone the gauge's settings are (the warnings notify them). */
+  function isViewerOwner(): boolean {
+    const identity = getOwnIdentity();
+    return identity === null || identity.owner;
+  }
+
+  /** The row that opens the gauge's settings, for the owner once the gauge has arrived; no row otherwise. */
+  function resourceGaugeSettingsRows(key: string, label: string): MenuRow[] {
+    if (!isViewerOwner() || currentResourceGauge() === null) return [];
+    return [
+      {
+        kind: "action",
+        key,
+        label,
+        onSelect: () => {
+          isResourceGaugeDialogOpen = true;
+        },
+      },
+    ];
+  }
+
+  function openSystemMonitorOn(current: DesktopStore, resource: GaugeResource): void {
+    trayCard.close();
+    void current.showAppPage(SYSTEM_MONITOR_APP_NAME, systemMonitorPathOf(resource), SYSTEM_MONITOR_PAGES);
+  }
+
+  function resourceGaugeDialogView(): m.Children {
+    const view = currentResourceGauge();
+    if (view === null) return null;
+    return m(ResourceGaugeDialog, {
+      settings: view.settings,
+      onSave: (settings) => saveResourceGaugeSettings(settings, () => m.redraw()),
+      onClose: () => {
+        isResourceGaugeDialogOpen = false;
+      },
+    });
+  }
+
+  function keyboardShortcutsDialogView(): m.Children {
+    return m(KeyboardShortcutsDialog, {
+      onClose: () => {
+        isKeyboardShortcutsDialogOpen = false;
+      },
+    });
+  }
+
+  function themeDialogView(current: DesktopStore, desktopId: string): m.Children {
+    const desktop = desktopById(current.getState(), desktopId);
+    if (desktop === null) return null;
+    return m(ThemeChooserDialog, {
+      desktop,
+      wordFailure: (whatFailed, error) => current.failureNotice(whatFailed, error),
+      onSave: async (themeChoice) => {
         // A theme made the workspace's default is worn by this desktop as the default, not as its own.
         if (themeChoice.isWorkspaceDefault) await current.setDefaultTheme(themeChoice.theme);
         const ownTheme = themeChoice.isWorkspaceDefault ? null : themeChoice.theme;
         if (ownTheme !== desktop.theme) await current.setDesktopTheme(desktop.id, ownTheme);
-        settingsDialog = null;
-      },
-      onDelete: async () => {
-        await current.deleteDesktop(desktop.id);
-        settingsDialog = null;
+        themeDialogDesktopId = null;
       },
       onCancel: () => {
-        settingsDialog = null;
+        themeDialogDesktopId = null;
       },
       themes: current.isThemeCatalogKnown() ? current.getThemeCatalog() : null,
       previewApp: appByName(current.getState(), THEME_PREVIEW_APP) ?? null,
@@ -906,7 +1232,7 @@ export function App(): m.Component<AppAttrs> {
         draftTargetOf(current.getState()) === null
           ? null
           : () => {
-              settingsDialog = null;
+              themeDialogDesktopId = null;
               void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
             },
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
@@ -941,7 +1267,10 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function launcherMenu(current: DesktopStore): LauncherMenuRows {
-    return launcherRowsOf(current.getState(), launcherQuery);
+    return launcherRowsOf(current.getState(), launcherQuery, {
+      ownership: { roster: getRoster(), identity: getOwnIdentity() },
+      isViewing: current.viewedDesktop() !== null,
+    });
   }
 
   /** The row Enter runs: where the arrows or a hover left the highlight while that row is still shown and
@@ -1019,6 +1348,9 @@ export function App(): m.Component<AppAttrs> {
       case "maximize":
         current.setWindowState(windowId, "MAXIMIZED");
         return;
+      case "fullscreen":
+        current.toggleFullscreen(windowId);
+        return;
       case "restore":
         current.toggleMaximized(windowId);
         return;
@@ -1027,6 +1359,9 @@ export function App(): m.Component<AppAttrs> {
         return;
       case "refresh":
         current.refreshWindow(windowId);
+        return;
+      case "app-chat":
+        void current.openAppChat(windowId);
         return;
       case "menu":
         // A press while this menu is up lands on the menu's own sheet and closes it there, so the
@@ -1084,6 +1419,15 @@ export function App(): m.Component<AppAttrs> {
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
       if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
+      // The pages lie over the overview's tiles while it is up, at the scale this redraw tiled them at, and step
+      // aside while a deletion is being confirmed over the thumbnails.
+      const tiling = overviewTiling;
+      if (tiling === null) {
+        pages?.setOverview(null);
+      } else {
+        const confirmingDeleteId = store === null ? null : store.getOverviewDeletingId();
+        pages?.setOverview(overviewPresentationOf(tiling.tiles, tiling.grid, confirmingDeleteId));
+      }
       pages?.reconcile();
     },
     onremove() {
@@ -1095,6 +1439,8 @@ export function App(): m.Component<AppAttrs> {
       detachGestures?.();
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
+      trayCard.dispose();
+      stopCardRefresh();
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -1147,6 +1493,13 @@ export function App(): m.Component<AppAttrs> {
         );
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
+      const roster = getRoster();
+      const now = new Date();
+      const pinnedChat = avatarPinnedEntryOf(state);
+      const openCard = trayCard.current();
+      const viewed = current.viewedDesktop();
+      const viewing = viewingChipAttrs(current, viewed);
+      overviewTiling = desktop !== null && current.isOverviewOpen() ? overviewTilingOf(current) : null;
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
@@ -1157,8 +1510,11 @@ export function App(): m.Component<AppAttrs> {
         {
           ...partAttrs("desktop"),
           class:
-            "app-layout flex h-dvh flex-col bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+            "app-layout relative flex h-dvh flex-col bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          // A fullscreen window paints over the taskbar's band, which the backdrop otherwise clips (style.css).
+          [FULLSCREEN_WINDOW_ATTRIBUTE]: current.isFullscreenShown() ? "" : undefined,
           style: wallpaperStyle,
+          "data-viewing": viewed === null ? undefined : viewed.id,
         },
         [
           m(UpdateStalenessBanner),
@@ -1208,6 +1564,14 @@ export function App(): m.Component<AppAttrs> {
                         anchorForPoint(point.x, point.y),
                       );
                     },
+                    onBackdropContextMenu: (point, target) => {
+                      openMenuAt(
+                        { kind: "backdrop", referenceRows: referenceRowsFor(current, target, point.x, point.y) },
+                        anchorForPoint(point.x, point.y),
+                      );
+                    },
+                    overview: overviewTiling === null ? null : overviewAttrs(current, desktop, overviewTiling),
+                    letterbox: letterboxAttrs(current, viewing),
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                     onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
                     onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
@@ -1225,9 +1589,9 @@ export function App(): m.Component<AppAttrs> {
                     onHighlight: (index) => {
                       launcherHighlight = index;
                     },
-                    onAppShortcutContextMenu: (app, x, y, target) => {
+                    onAppShortcutContextMenu: (app, launch, x, y, target) => {
                       openMenuAt(
-                        { kind: "app-shortcut", app, referenceRows: referenceRowsFor(current, target, x, y) },
+                        { kind: "app-shortcut", app, launch, referenceRows: referenceRowsFor(current, target, x, y) },
                         anchorForPoint(x, y),
                       );
                     },
@@ -1237,7 +1601,6 @@ export function App(): m.Component<AppAttrs> {
           ),
           m(Taskbar, {
             entries: barEntries(state),
-            avatar: state.avatar,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
             launcher: {
               query: launcherQuery,
@@ -1263,35 +1626,87 @@ export function App(): m.Component<AppAttrs> {
                 queueMicrotask(() => m.redraw.sync());
               },
             },
-            tray: {
-              desktops: state.desktops,
-              activeDesktopId: state.activeDesktopId,
-              isDesktopsMenuOpen: openMenu?.kind === "desktops",
-              onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
-              onOpenDesktopsMenu: (event) => {
-                if (openMenu?.kind === "desktops") menu.close();
-                else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
+            overview: {
+              isOpen: current.isOverviewOpen(),
+              onToggle: () => {
+                if (current.isOverviewOpen()) closeOverview();
+                else current.openOverview();
               },
-              onDesktopContextMenu: (desktopId, x, y, target) => {
-                openMenuAt(
-                  { kind: "desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
-                  anchorForPoint(x, y),
-                );
+            },
+            viewing,
+            tray: {
+              roster,
+              viewer: getOwnParticipant(),
+              now,
+              hopping: current.getHopping(),
+              ringed: current.viewedOwnerKeys(),
+              isShareOffered: current.getIsEmbedderPresent(),
+              avatar: state.avatar,
+              workspaceName: state.workspaceName,
+              isAgentAttending: pinnedChat !== null && pinnedChat.isFocused && !pinnedChat.isMinimized,
+              isAvatarFloating: pinnedChat !== null && isEntryFloating(pinnedChat),
+              onPersonClick: (entry) => {
+                trayCard.close();
+                void current.mentionPerson(entry.handle);
+              },
+              onAgentClick: () => {
+                trayCard.close();
+                void current.openAgentChat();
+              },
+              onAgentContextMenu: (x, y) => {
+                trayCard.close();
+                openMenuAt({ kind: "element", rows: trayAgentMenuRows(current) }, anchorForPoint(x, y));
+              },
+              onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
+              onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
+              onHoverEnd: trayCard.leaveEntry,
+              resourceGauge: {
+                view: currentResourceGauge(),
+                isStale: isResourceGaugeStale(now.getTime()),
+                onOpen: (resource) => openSystemMonitorOn(current, resource),
+                onContextMenu: (x, y) => {
+                  const rows = resourceGaugeSettingsRows("resource-gauge-settings", "Resource gauge settings...");
+                  if (rows.length === 0) return;
+                  trayCard.close();
+                  openMenuAt({ kind: "element", rows }, anchorForPoint(x, y));
+                },
+                onHoverStart: (element) => trayCard.enterEntry({ kind: "resources" }, element),
+                onHoverEnd: trayCard.leaveEntry,
               },
             },
             onEntryClick,
             onEntryContextMenu,
           }),
+          m(BubbleLayer, {
+            bubbles: current.getBubbles(),
+            anchorOf: trayEntryRect,
+            rosterEntry,
+            onOpen: (speaker) => current.openBubble(speaker),
+            onDismiss: (speaker) => current.dismissBubble(speaker),
+          }),
+          openCard === null ? null : trayCardView(current, openCard, now),
           m(Toasts, {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
             onDismiss: (id) => current.toasts.dismiss(id),
           }),
           menuRows === null ? null : menu.view(menuRows),
-          settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+          wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
+          themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
+          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
+          isResourceGaugeDialogOpen ? resourceGaugeDialogView() : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),
+          // Viewing somebody else's desktop: their colour all the way round, the taskbar included (the
+          // multiplayer spec, section 8.3); it runs into the chip at the bar's corner.
+          viewing === null || viewed === null
+            ? null
+            : m("div", {
+                "data-viewing-outline": viewed.id,
+                class: "pointer-events-none absolute inset-0 z-(--z-sticky) border-(length:--desk-viewing-outline)",
+                style: { borderColor: viewing.color },
+              }),
         ],
       );
     },

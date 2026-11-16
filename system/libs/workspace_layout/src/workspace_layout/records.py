@@ -20,6 +20,7 @@ from pydantic import model_validator
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShortcutTargetKind
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WallpaperKind
@@ -146,6 +147,11 @@ class Desktop(FrozenModel):
     wallpaper: Wallpaper | None = Field(description="The backdrop image; None draws the theme's default")
     shortcuts: tuple[DesktopShortcut, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[Window, ...] = Field(description="Every window on the desktop, in opening order")
+    owner: ParticipantKey | None = Field(
+        default=None,
+        description="Whose desktop this is by convention (the multiplayer spec, section 8.1): the key of the person "
+        "it was made for, or None for the workspace owner's, which every desktop from before the key was kept is",
+    )
 
 
 class WindowPlacement(FrozenModel):
@@ -153,7 +159,7 @@ class WindowPlacement(FrozenModel):
 
     window_id: WindowId = Field(description="The window placed")
     frame: Frame = Field(description="The frame, kept through every state so restore has somewhere to go")
-    state: WindowState = Field(description="Normal, snapped to a half, or maximized")
+    state: WindowState = Field(description="Normal, snapped to a half, maximized, or fullscreen")
     is_minimized: bool = Field(description="Whether the window is out of sight; orthogonal to the state")
     is_detached: bool = Field(
         default=False,
@@ -192,6 +198,18 @@ class EntryPresentation(FrozenModel):
     mode: EntryMode = Field(description="In the taskbar, or floating above the windows")
     style: PinStyle = Field(description="Plain, or the style the pin declares")
     position: FloatingPosition | None = Field(default=None, description="The floating position; None for the default")
+    is_window_shown: bool = Field(
+        default=True,
+        description="Whether this client lists the pinned window in its taskbar; False after the client closed it "
+        "(the window itself is only minimized, and showing it again lists it back)",
+    )
+
+
+class Viewport(FrozenModel):
+    """A client's backdrop area in CSS pixels: the box its window frames are fractions of."""
+
+    width: float = Field(gt=0, description="The backdrop's width in CSS pixels")
+    height: float = Field(gt=0, description="The backdrop's height in CSS pixels")
 
 
 class ClientRecord(FrozenModel):
@@ -203,6 +221,11 @@ class ClientRecord(FrozenModel):
     user_id: UserId | None = Field(
         default=None,
         description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",
+    )
+    participant: ParticipantKey | None = Field(
+        default=None,
+        description="Who the client last arrived as, under the multiplayer spec's keys (the owner's is ``owner`` on an "
+        "unshared workspace); None for a record from before the key was kept",
     )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
@@ -217,6 +240,12 @@ class ClientRecord(FrozenModel):
         ge=0,
         description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop: "
         "orders the client's desktop news",
+    )
+    viewport: Viewport | None = Field(
+        default=None,
+        description="The backdrop size the client's desktop layout last reported, which a window viewing one of its "
+        "desktops draws the layout at (the multiplayer spec, section 8.3); None for a client that never reported "
+        "one (a phone, a pulled-out window, or an older shell)",
     )
 
 

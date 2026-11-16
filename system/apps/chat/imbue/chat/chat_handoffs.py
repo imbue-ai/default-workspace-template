@@ -18,6 +18,7 @@ successor is created under a pre-minted id, so a retry after a failed pick adopt
 than creating another.
 """
 
+import os
 import shlex
 import string
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
+from imbue.chat.account_labels import ACCOUNT_LABEL_KEY
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import ActivityState
@@ -58,6 +60,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_PROMPT_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.room.transcript import render_transcript
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.models import AgentDestroyError
@@ -414,7 +417,7 @@ class HandoffDeps(FrozenModel):
     # Replace the record's handoff entry under the manager's lock, given the current record;
     # raises ``HandoffCancelledError`` when the record no longer carries this handoff.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the handoff and return None when none remain; atomic
+    # Move the next held send onto the delivered list, or clear the handoff and return None when none remain; atomic
     # with the message route's hold, so a send can never be appended to a handoff that just
     # finished. Raises ``HandoffCancelledError`` for another handoff.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
@@ -426,6 +429,9 @@ class HandoffDeps(FrozenModel):
     # Apply a model pick to a running agent, validated against its option set as the model
     # bar's own pick is; raises ``ModelApplyError`` with the reason the failed page shows.
     apply_model: Callable[[AgentInfo, ModelPick], None]
+    # Turn fast mode on for a successor with no pick, when the chat launches fast and the harness
+    # takes fast mode as a switch rather than from the launch template; never raises.
+    apply_launch_fast_mode: Callable[[ChatId, AgentInfo], None]
     # Interrupt the agent's turn and return its queue as one block (the stop button's path).
     drain_to_composer: Callable[[AgentInfo], str]
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
@@ -603,7 +609,8 @@ class HandoffRunner:
         if handoff.is_fresh_start:
             logger.info("Handoff of chat {}: the retiring agent had no user turn, so no summary is asked for", chat_id)
             return SummaryOutcome.SKIPPED
-        retiring_id = record.agents[-1].agent_id
+        retiring = record.agents[-1]
+        retiring_id = retiring.agent_id
         agent_info = self._deps.get_agent_info(retiring_id)
         if agent_info is None:
             logger.warning(
@@ -612,6 +619,12 @@ class HandoffRunner:
             return SummaryOutcome.MISSING
         path = summary_path(self._deps.chat_files_root, chat_id, handoff.retiring_seq)
         watcher = self._deps.ensure_watcher(agent_info)
+        # A room has nobody to ask: its summary is its transcript, written here (the multiplayer spec, section 7.6).
+        if retiring.harness is HarnessType.ROOM:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(render_transcript(watcher.get_all_events()), encoding="utf-8")
+            logger.info("Handoff of chat {}: the room's transcript is its summary, at {}", chat_id, path)
+            return SummaryOutcome.WRITTEN
         # A summary already at the path is either fresh (reused) or stale; a stale one stays
         # where it is, so the wait below has to tell the file the agent writes from it.
         stale_mtime = _non_empty_mtime(path)
@@ -624,7 +637,7 @@ class HandoffRunner:
         except SendFailedError as e:
             logger.warning("Handoff of chat {}: the summary request was refused: {}", chat_id, e.detail)
             return SummaryOutcome.MISSING
-        if sent is not SendOutcome.OK:
+        if not sent.is_delivered:
             logger.warning("Handoff of chat {}: the summary request did not land ({})", chat_id, sent.value)
             return SummaryOutcome.MISSING
         return self._await_summary(chat_id, handoff_id, retiring_id, path, stale_mtime)
@@ -805,13 +818,16 @@ class HandoffRunner:
                 "Handoff of chat {}: adopting agent {} from an earlier attempt", chat_id, handoff.next_agent_id
             )
             return existing
-        try:
-            account = self._deps.resolve_account(handoff.target_account_id)
-        except AccountError as e:
-            self._fail(
-                chat_id, handoff_id, f"The account the chat was moving to is gone: {e}", HandoffFailedStep.START
-            )
-            return None
+        # A room runs on no account (the multiplayer spec, section 7.6).
+        account_id = ""
+        if handoff.target_harness is not HarnessType.ROOM:
+            try:
+                account_id = self._deps.resolve_account(handoff.target_account_id).id
+            except AccountError as e:
+                self._fail(
+                    chat_id, handoff_id, f"The account the chat was moving to is gone: {e}", HandoffFailedStep.START
+                )
+                return None
         if handoff.prompt is None and not handoff.is_fresh_start:
             raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
         spec = SuccessorCreateSpec(
@@ -820,7 +836,7 @@ class HandoffRunner:
             agent_id=handoff.next_agent_id,
             harness=handoff.target_harness,
             project_id=handoff.project_label,
-            account_id=account.id,
+            account_id=account_id,
             extra_labels=(
                 f"chat_id={chat_id}",
                 f"chat_seq={handoff.next_seq}",
@@ -828,9 +844,9 @@ class HandoffRunner:
             ),
         )
         command = self._deps.build_create_command(spec)
-        first_error = self._run_create(chat_id, command)
+        first_error = self._run_create(chat_id, command, spec.harness)
         error = (
-            self._recreate_after_destroying_half_made(chat_id, handoff.next_agent_id, command)
+            self._recreate_after_destroying_half_made(chat_id, handoff.next_agent_id, command, spec.harness)
             if first_error is not None and is_duplicate_id_refusal(first_error, handoff.next_agent_id)
             else first_error
         )
@@ -843,11 +859,13 @@ class HandoffRunner:
         """Put the successor on the model the user picked, or fail the switch at that step. True when it is set.
 
         Runs before the successor's first message, on an agent that is up and idle, so the pick
-        governs the whole segment; a successor with no pick keeps its harness's default.
+        governs the whole segment; a successor with no pick keeps its harness's default model, and
+        runs fast when the chat launches fast.
         """
-        if handoff.model_pick is None:
-            return True
         successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
+        if handoff.model_pick is None:
+            self._deps.apply_launch_fast_mode(chat_id, successor_info)
+            return True
         try:
             self._deps.apply_model(successor_info, handoff.model_pick)
         except ModelApplyError as e:
@@ -871,7 +889,7 @@ class HandoffRunner:
         return successor_info
 
     def _recreate_after_destroying_half_made(
-        self, chat_id: ChatId, successor_id: str, command: list[str]
+        self, chat_id: ChatId, successor_id: str, command: list[str], harness: HarnessType
     ) -> str | None:
         """Destroy the half-made agent holding the successor's id and run the create once more.
 
@@ -885,7 +903,7 @@ class HandoffRunner:
             logger.warning(
                 "Handoff of chat {}: could not destroy the half-made agent {}: {}", chat_id, successor_id, e
             )
-        return self._run_create(chat_id, command)
+        return self._run_create(chat_id, command, harness)
 
     def _fail(self, chat_id: ChatId, handoff_id: str, error: str, step: HandoffFailedStep) -> None:
         """The failed phase (spec 5.10): the chat lists its retiring agent, the page shows why, and a retry reruns ``step``."""
@@ -900,14 +918,15 @@ class HandoffRunner:
             ),
         )
 
-    def _run_create(self, chat_id: ChatId, command: list[str]) -> str | None:
-        """Run the successor's create; None on success, else the notice the failed phase shows."""
+    def _run_create(self, chat_id: ChatId, command: list[str], harness: HarnessType) -> str | None:
+        """Run the successor's create on ``harness``; None on success, else the notice the failed phase shows."""
         output_tail = CreationOutputTail()
         logger.info("Handoff of chat {}: mngr create: {}", chat_id, shlex.join(command))
         try:
             result = run_local_command_modern_version(
                 command=command,
                 cwd=self._deps.work_dir,
+                env=create_command_env(harness, os.environ),
                 is_checked=False,
                 trace_output=True,
                 trace_on_line_callback=output_tail,
@@ -1012,8 +1031,9 @@ class HandoffRunner:
         the message route appends under, so a send that arrives during delivery is delivered
         by this loop rather than overtaking one still held. Raises ``HandoffStepError`` while
         the successor is untracked (a resume that ran before the observe stream listed it):
-        the sends stay on the record for the next resume rather than being popped with
-        nothing to receive them.
+        the sends stay on the record for the next resume rather than being taken with
+        nothing to receive them. A send that does not land leaves the delivered list again, so the
+        page stops showing it.
         """
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
@@ -1022,14 +1042,17 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
+            if not deliver_held_send(self._deps.deliver, successor_info, held, chat_id):
+                self._update_handoff(
+                    chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
+                )
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 
 def deliver_held_send(
     deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
-) -> None:
-    """Hand one held send to an agent through the message route's path.
+) -> bool:
+    """Hand one held send to an agent through the message route's path; whether it landed.
 
     A refusal or a miss is logged rather than raised: the send was answered 202 when it was
     held, and one that cannot land must not stop the ones behind it.
@@ -1044,13 +1067,13 @@ def deliver_held_send(
             agent_info.id,
             e.detail,
         )
-        return
+        return False
     if outcome is SendOutcome.WITHDRAWN:
         logger.info(
             "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
         )
-        return
-    if outcome is not SendOutcome.OK:
+        return False
+    if not outcome.is_delivered:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
             chat_id,
@@ -1058,14 +1081,38 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
+        return False
+    return True
+
+
+# The environment a room's ``mngr create`` carries, which the workspace's create guard
+# (``system/scripts/require_create_account.py``) honors: the one create that runs on no account.
+CREATE_WITHOUT_ACCOUNT_ENV: Final[str] = "MINDS_CREATE_WITHOUT_ACCOUNT"
+# mngr's opt-in for a ``-S`` that assigns over a list the local settings filled: a room's create clears the create
+# defaults' account label and environment on purpose (``ROOM_CREATE_SETTINGS``), and mngr refuses the clear as a
+# narrowing without it.
+ALLOW_SETTINGS_NARROWING_ENV: Final[str] = "MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"
+
+
+@pure
+def create_command_env(harness: HarnessType, environ: Mapping[str, str]) -> dict[str, str]:
+    """The environment a chat's ``mngr create`` runs with, for the manager's create and the handoff's: the
+    process's own, plus, for a room, the no-account mark and the opt-in its create needs to clear the create
+    defaults' account."""
+    if harness is not HarnessType.ROOM:
+        return dict(environ)
+    return {**environ, CREATE_WITHOUT_ACCOUNT_ENV: "1", ALLOW_SETTINGS_NARROWING_ENV: "true"}
 
 
 @pure
 def created_chat_agent_labels(
     display_name: str, account_id: str, project_label: str, extra_labels: Iterable[str]
 ) -> dict[str, str]:
-    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it."""
-    labels = {"user_created": "true", "display_name": display_name, "account": account_id}
+    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it;
+    a room, which runs on no account, carries no account label."""
+    labels = {"user_created": "true", "display_name": display_name}
+    if account_id:
+        labels[ACCOUNT_LABEL_KEY] = account_id
     if project_label:
         labels["project"] = project_label
     for label in extra_labels:

@@ -36,6 +36,7 @@ interface Guard {
 const GUARDS: Guard[] = [
   { script: join(SCRIPTS, "agent_prevent_commit_rewrite.sh"), match: /\bgit\b/ },
   { script: join(SCRIPTS, "agent_block_pipe_tail_head.sh"), match: /\b(tail|head)\b/ },
+  { script: join(SCRIPTS, "agent_block_foreground_sleep.sh"), match: /\bsleep\b/ },
   {
     script: join(SCRIPTS, "agent_latchkey_request_standalone.sh"),
     match: /permission-requests|request_secret\.py/,

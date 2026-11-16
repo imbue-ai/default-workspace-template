@@ -1,0 +1,1 @@
+`docs/system/analytics-collection.md` and the desktop-interface contract name the shell's `window_input` client-activity events: the heartbeat's `client_id` and `input_windows` fields (section 5.1), the event's shape and once-per-minute rule, and the client-activity log's archive rule (section 6).

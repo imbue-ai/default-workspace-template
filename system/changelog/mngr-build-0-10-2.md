@@ -1,0 +1,1 @@
+The workspace's mngr moves to the `minds-v0.10.2` release of mngr: the pin in `pyproject.toml` and `uv.lock` names the public mirror commit of the mngr the 0.10.2 desktop app ships, so a workspace built from this tag runs the same mngr the app drives it with. This is the first tag that pins the re-uploaded Fortress x64 asset and carries the Screen service's host-echo fix.

@@ -1,0 +1,1 @@
+- The Fix button opens its chat by calling the workspace's chat client (`message_chat`) in-process instead of running `system/scripts/message_chat.py --create`. The chat app's create route still bounds the wait. When the chat app cannot be reached, the button reports that rather than falling back to `mngr create`.

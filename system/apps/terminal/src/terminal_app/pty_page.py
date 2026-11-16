@@ -19,6 +19,11 @@ this script, inserted into that client when it is installed, listens for the wra
 A tap on the terminal (a touch that ends where it started, quickly) focuses xterm from that touch's own handler.
 iOS raises the soft keyboard only for a focus made inside a user gesture in the focused element's own frame, so
 the wrapper's posted ``ttyd-focus`` (which the patched client already handles) cannot raise it; this can.
+
+Typing happens here, on the pty's origin, and never reaches the wrapper's window, so the app contract the wrapper
+binds cannot see it. This script reports it instead, as the contract does for a page's own input: a pointer press
+or a key posts ``{type: "shell:input"}`` to the wrapper at most once per 20 seconds, and the wrapper hands it up to
+the shell, whose presence heartbeat reads activity off it (the multiplayer spec, section 4.3).
 """
 
 from typing import Final
@@ -41,7 +46,17 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
   // A touch that moves further or lasts longer is a scroll or a selection, not a tap.
   const TAP_SLOP_PX = 10;
   const TAP_MAX_MS = 500;
+  // How often at most this frame reports input to the wrapper: the app contract's own interval.
+  const INPUT_REPORT_INTERVAL_MS = 20000;
   const isFramed = window.parent !== window;
+  let lastInputReportAt = 0;
+
+  function reportInput() {
+    const now = Date.now();
+    if (now - lastInputReportAt < INPUT_REPORT_INTERVAL_MS) return;
+    lastInputReportAt = now;
+    window.parent.postMessage({ type: "shell:input" }, "*");
+  }
   let isCtrlArmed = false;
   let wrappedService = null;
   let isCtrlUnsupportedWarned = false;
@@ -139,6 +154,12 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
       term.input(sequence, true);
     }
   });
+
+  if (isFramed) {
+    for (const type of ["pointerdown", "keydown"]) {
+      window.addEventListener(type, reportInput, { capture: true, passive: true });
+    }
+  }
 
   window.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];

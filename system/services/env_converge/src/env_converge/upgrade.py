@@ -24,6 +24,13 @@ from env_converge.record import EnvConvergeError, read_apt_state
 
 _APT_TIMEOUT_SECONDS = 1800.0
 
+# How long apt itself waits for the dpkg lock instead of failing at once: an
+# env.d unit run by the boot-time converge (or any concurrent install) may
+# hold it for minutes. Well under _APT_TIMEOUT_SECONDS, so a genuinely wedged
+# lock still surfaces as this step's failure.
+_APT_LOCK_WAIT_SECONDS = 600
+_APT_LOCK_WAIT_OPTION = f"-oDPkg::Lock::Timeout={_APT_LOCK_WAIT_SECONDS}"
+
 
 class UpgradeCommandError(EnvConvergeError, RuntimeError):
     """Raised when a step of the upgrade fails."""
@@ -68,8 +75,11 @@ def run_upgrade(
             target_timestamp,
         ],
     )
-    _run_upgrade_step("apt_update", ["apt-get", "update", "-qq"])
-    _run_upgrade_step("apt_full_upgrade", ["apt-get", "full-upgrade", "-y", "-qq"])
+    _run_upgrade_step("apt_update", ["apt-get", _APT_LOCK_WAIT_OPTION, "update", "-qq"])
+    _run_upgrade_step(
+        "apt_full_upgrade",
+        ["apt-get", _APT_LOCK_WAIT_OPTION, "full-upgrade", "-y", "-qq"],
+    )
 
     # Units re-run at the new pins (the template merge may have bumped them),
     # then the record re-captures against the new base.

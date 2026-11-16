@@ -29,7 +29,7 @@ dev = [
     "inline-snapshot>=0.13",
     "ruff~=0.12.8",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]
@@ -86,7 +86,7 @@ fail_under = 80
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.ruff]
 line-length = 119

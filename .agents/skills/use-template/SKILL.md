@@ -121,6 +121,13 @@ git worktree add -q "$WT" HEAD
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
+- **An app from an older template** (one that is a root workspace member in the template's
+  layout, with no `uv.lock` of its own) needs converting to a standalone project with
+  `uv run --no-sync user-package-migration migrate`, once the root venv is synced
+  (`references/python-packaging-migration.md` in update-self, "A user app, service or
+  lib"); until then it fails to start. When resolving a conflict in the root
+  `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
+  globs.
 - **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
@@ -264,7 +271,7 @@ conversation:**
    work -- tell the user which package and why:
 
    - **it does not exist at this workspace's pinned timestamp** (the publisher
-     was on a different snapshot) -- offer `uv run env-converge upgrade`, which
+     was on a different snapshot) -- offer `uv run --no-sync env-converge upgrade`, which
      advances this workspace to its committed timestamp;
    - **cargo entries with rust absent** -- an upgrade will not help; rust has to
      be installed first.
@@ -274,17 +281,16 @@ conversation:**
    `connect-external-service` skill's `request_secret.py` with the entry's
    `file` and `variables` (and its `note` in your rationale), each in a tool
    call of its own, then end the turn. When a `Secret stored:` message arrives
-   for an entry, connect the `mcp-servers.json` servers that run under that
-   file (the wrapper in a local server's command, or a hosted server's
-   `secretsFile`) and start the programs that run under it. A `Secret
-   declined:` message leaves that server and program out; the install still
-   completes, and you tell the user what stays unstarted and why. Nothing in
-   `mcp-servers.json` connects on its own, so connect every other server in it
-   too: one that needs no credential right away, one that signs in once the
-   user has signed in (the skill's `references/mcp.md` covers each). A legacy
-   entry with only a `name` is one bare variable: request it as a file named
-   after the app. Then start the remaining services and get the app running
-   against THEIR data.
+   for an entry, start the programs that run under that file. A `Secret
+   declined:` message leaves that program out; the install still completes,
+   and you tell the user what stays unstarted and why. A template that still
+   carries an `mcp-servers.json` predates the current guidance: the servers in
+   it are not connected (a hosted one is a latchkey connection to request as
+   the `connect-external-service` skill's `references/mcp.md` says; one that
+   runs as a package is replaced by the service's API through that skill). A
+   legacy entry with only a `name` is one bare variable: request it as a file
+   named after the app. Then start the remaining services and get the app
+   running against THEIR data.
 4. **Definition of done for a data-backed app: the user can open it and see
    their OWN data.** A service that starts cleanly or an endpoint that returns
    200 is NOT done — open the app's actual output yourself and confirm it

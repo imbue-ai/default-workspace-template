@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves, shown framed as a mock, first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -36,8 +36,9 @@ Map of the flow:
   in business terms; a small plan; wait for approval.
 - **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
   service, serve a mock page from it and put that in front of the user (a page,
-  never a picture of one), loop to explicit confirmation of the look-and-feel.
-  Hard gate.
+  never a picture of one) inside the mock frame that labels it a UI sketch,
+  loop to explicit confirmation of the look-and-feel. Hard gate. The frame
+  stays until the app is really hooked up to its data.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
   *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
@@ -123,7 +124,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
   (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the System Monitor app) and `8081` (the browser service).
+  `8040` (the System Monitor app), `8083` (the Screen's CDP proxy) and `8090` (the
+  Screen service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -138,7 +140,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
+uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
@@ -172,13 +174,13 @@ Optional:
 - `--port`: explicit port; auto-picked if omitted.
 - `--extra-dep`: repeatable. Add libraries beyond `flask`/`flask-sock`
   (e.g. `--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
-- `--skip-uv-sync`: skip the final manifest check, tool install and
-  `uv sync --all-packages` (for fast iteration / dry runs).
+- `--skip-uv-sync`: skip the final manifest check and the app's own lock and
+  venv (for fast iteration / dry runs).
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the description is
 empty, spans lines or is over 200 characters, the requested port
-is taken, or the manifest check, the tool install or `uv sync` fails.
+is taken, or the manifest check, the app's `uv lock` or its `uv sync` fails.
 
 What gets generated:
 
@@ -203,16 +205,27 @@ What gets generated:
   shows and the user can run, pause and retime. A stopped app runs nothing until its next
   request, and the wake serves that request, not the work that was in
   flight. `forward_port.py --manifest`
-  reads it on every start; the scaffold checks it with `uv run app-manifest
+  reads it on every start; the scaffold checks it with `uv run --no-sync app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`
   -- a skill that drives it, a script, a doc -- is registered in the same file
   under `[[references]]` with a `note` naming the surface it uses.
-- `system/apps/<package>/pyproject.toml` -- declares
-  `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  the app's own tool environment exposes, and makes the directory its own
-  `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
-  for the ratchets' type check.
+- `system/apps/<package>/pyproject.toml` -- the app is a **standalone uv
+  project**, not a root workspace member: it declares
+  `[project.scripts] <name> = "<package>.runner:main"`, the entry point its own
+  sync installs into its own `.venv`; depends on the workspace's shared code
+  (`app-schema`) through an editable path source, so that code is shared live
+  and `imbue-common` comes from the root's mngr pin; makes the directory its
+  own `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
+  for the ratchets' type check; and carries the root's two-week supply-chain
+  cooldown (`[tool.uv] exclude-newer = "14 days"`), which a standalone project
+  does not inherit. Never add an `imbue-common` source of your own:
+  a second source for the same package fails to lock.
+- `system/apps/<package>/uv.lock` -- the app's own lock, seeded from the root
+  `uv.lock` so the app starts on the built-ins' versions and resolves from the
+  warm cache.
+- `system/apps/<package>/.venv` -- the app's own venv, a link to a directory
+  beside the uv cache (`system/scripts/workspace_bare_scripts/venv_links.py`).
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner_test.py` -- the one test every
   app starts with: its API document at `/api/schema` says what its manifest
@@ -256,18 +269,17 @@ What gets generated:
   zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated and installed -- no shared file is authored, which is what
-lets two agents scaffold two apps at once (`uv.lock` is the exception: `uv sync`
-regenerates it, but it is derived, so it stays out of a creation's footprint):
+What gets updated and installed -- no shared file is written, which is what
+lets two agents scaffold two apps at once:
 
-- Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
-  package up and `uv sync --all-packages` installs it, so a scaffolded app
-  needs no root entry at all.
+- Root `pyproject.toml` and `uv.lock` -- untouched. The root `members` names
+  only the built-in packages; an app it does not name is a standalone project,
+  so its dependencies never move the chat's or another app's.
 - `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec system/apps/<package>/.venv/bin/<name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -281,15 +293,15 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in `exec` of the app's own name, not `uv run <name>`, so
-  the app is the process supervisord tagged rather than a child of a wrapper;
-  supervisord resolves that name on PATH. The copy it finds is the console script
-  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
-  -e` puts the tool's own entry point under your HOME, which supervisord's
-  children do not have on PATH. So always sync with `--all-packages`: a
-  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
-  root dependency), deletes that script, and the next restart is a spawn error
-  with nothing to recover it.
+  Each start links the app's venv (a rebuilt root filesystem loses the venv's
+  directory, and uv refuses a dangling link), syncs it from the app's own lock
+  with `--locked` (about 30 ms when it is current, and no network), and then
+  execs the entry point from the app's own `.venv/bin`, not the name under
+  `uv run`, so the app is the process supervisord tagged rather than a child of
+  a wrapper. A lock that no longer matches the app's `pyproject.toml` (after a
+  hand edit), or a failed sync, fails the start with uv's error in the app's
+  stderr log, and nothing else: fix the lock (`uv lock` in the app's directory)
+  and restart.
 
   An app that needs a credential (an API key the user supplied through the
   `connect-external-service` skill's secret card) declares it in `app.toml` and
@@ -309,7 +321,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- system/apps/<package>/.venv/bin/<name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -325,15 +337,13 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
   `system/services/oom_priority/README.md`).
-- The app's own uv tool environment: the scaffold runs
-  `uv tool install -e system/apps/<package>`, which is what puts the
-  `<name>` entry point the program line runs on PATH. Every Python app
-  runs from its own tool rather than the root venv (the root venv is for
-  background services, agents, skills, and scripts), so a dependency you
-  add later needs `uv tool install -e system/apps/<package> --reinstall`
-  (see `update-app`). The root `pyproject.toml` is not edited: the
-  `system/apps/*` member glob already covers the package, and the final
-  `uv sync --all-packages` keeps the root lockfile current for it.
+- The app's own venv: the scaffold's `uv sync --locked` installs the package
+  (editable) and its `<name>` entry point into the app's `.venv`, which is what
+  the program line runs; its tests run from it too (the sync installs the `dev`
+  group). Add a dependency with `uv add <package>` **in the app's directory**:
+  that changes only the app's `pyproject.toml`, `uv.lock` and venv, never the
+  root lock or the chat's environment. A one-off run of one of the app's
+  commands is `uv run --no-sync --project system/apps/<package> <command>`.
 
 If you passed `--start` to `scaffold_flask_lib.py`, the service is already registered and running healthy.
 If you ran without `--start`, tell supervisord to pick up the new program:
@@ -377,10 +387,30 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
-  present -> take feedback -> update the mock so the change is *visible* ->
-  re-present. Do not accept feedback and move on having only asserted you'll apply
-  it.
+- **Show the mock inside the mock frame, never as the bare app.** A mock looks like
+  a finished app, so on its own it reads as one. The frame puts a "UI Sketch"
+  banner around it and a note under the banner saying what is not real yet; the
+  bare app stays out of the launcher while it is up. To the user it is a UI
+  sketch, the banner's word: never call it a mock in chat. Check the page, then
+  frame it and open the frame beside the chat, in one call:
+
+  ```bash
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/<name>-mock.png && uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name> --note "<what is not real yet>" --open
+  ```
+
+  The note is one plain sentence in the user's terms naming what is not real:
+  whether the content is made up or a sample of their real data (and how much of
+  it), and which controls do nothing yet ("Showing 20 of your emails as a sample;
+  refresh and archive don't work yet."). Never open the app itself (`verify_app.py
+  --open`, `workspace-layout open <name>`) while it is a mock.
+- Loop: present -> take feedback -> update the mock so the change is *visible* ->
+  re-present, with the restart call ending in `&& uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app
+  <name>` (and `--screenshot` dropped). `refresh` re-frames the app with the
+  frame's current note, which every restart needs, since the restart registers
+  the app as an ordinary app again. When what is real changes, end the call with
+  `mock_frame.py up --app <name> --note "<the new note>" --refresh` instead. Do
+  not accept feedback and move on having only asserted you'll apply it.
 - Loop until the user **explicitly confirms** the look-and-feel is right.
 
 The user may respond to the mock with a request for functionality that requires updated backend support.
@@ -450,6 +480,28 @@ the thorough testing and review gates happen in the background (Step 5), not her
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
 placeholder with your real routes.
+
+### The mock frame stays until the app is really hooked up
+
+Confirming the mock does not take the frame down. The app stays framed through
+this step for as long as any of it is still not real -- above all its data: an app
+showing a confirmed `sample.json` (the `fetch-process-show` hand-off) is still a
+mock until it reads from the real source (the crystallized pipeline's output, the
+live API), even once its routes are real. Each time a piece becomes real, update
+the note to say what still is not ("Your real inbox loads now; archive doesn't
+work yet."), with `mock_frame.py up --app <name> --note "..." --refresh` after the
+restart as in Step 1; a restart that changes nothing real ends with
+`mock_frame.py refresh --app <name>`.
+
+Once the app reads its real data and does what the user will use it for, take the
+frame down and open the app itself in its place:
+
+```bash
+uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py down --app <name> && uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --open
+```
+
+`down` closes the mock window, removes the frame, and puts the app back in the
+launcher.
 
 Every page is served under the starter's `Content-Security-Policy`
 (`CONTENT_SECURITY_POLICY` and the `after_request` that sets it; keep it, the app
@@ -531,18 +583,38 @@ Two cases, two patterns:
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
 
+### Renaming an app
+
+An app's `display_name` names more than its windows: every window's "Chat
+about this app" button opens the chat titled `<display_name> Chat` (the
+multiplayer spec, section 9). The button finds that chat again by the
+`app_chat` label it carries with the app's registered name, so a renamed app
+keeps its chat; its title is what no longer matches, so rename the chat too.
+`system/scripts/rename_chat.py` does it through the chat app's rename route
+(`POST /api/chats/<id>/rename`, beside the send route `message_chat.py` posts
+to):
+
+```bash
+python3 system/scripts/rename_chat.py --title "<old display name> Chat" --new-title "<new display name> Chat"
+```
+
+It exits 0 when the chat was renamed or there is no chat under the old title
+(nothing to do), and non-zero when the chat app is unreachable or refused.
+
 ## Step 3: Verify (one call)
 
 Both paths use the same verification recipe, and in a chat turn it is a single
 tool call. See [references/verify.md](references/verify.md) -- use
-`system/scripts/verify_app.py`:
+`system/scripts/workspace_scripts/verify_app.py`:
 
 ```bash
-python3 system/scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
 `--open` is Step 4 folded in; for an app already on the user's screen, use
-`--refresh` instead and drop `--screenshot`. Leave `--restart` out right after
+`--refresh` instead and drop `--screenshot`. While the mock frame is still up
+(above), drop `--open` / `--refresh` and end the call with `mock_frame.py refresh
+--app <name>` instead. Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
 route needs exercising, append one `curl` to the same tool call. Test files
 and the test gate belong to Step 5's background pass, not to the chat turn.
@@ -563,6 +635,10 @@ already does this; run it by hand only when verification was done another way:
 ```bash
 uv run --no-sync workspace-layout open <name> --beside
 ```
+
+While the mock frame is still up, the window the user has is the frame's, not the
+app's: surface it with `mock_frame.py up --app <name> --open`, and reload it with
+`mock_frame.py refresh --app <name>`, never `open` or `refresh` the app itself.
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
 conversation, taking half the backdrop at the chat's own height. The chat is
@@ -608,7 +684,7 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets over the
 extended tests, review gates -- runs in a **background harden worker**, never
 in the main agent. The test gate AGENTS.md has you run through
-`system/scripts/run_in_background.py` checks the app against the tests it
+`system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
 be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
@@ -732,13 +808,16 @@ Verification and gotchas references apply identically to this path.
 
 A wrapped tool's pages do not carry the shell page script, so a plain click
 on one of their links to a local service or another app navigates the tool's
-own window. If the tool can serve one more static file from its own origin
-and add a script to its pages (Jupyter's custom JS, a dev server's plugin
-hook), give it the contract: serve
+own window, and the workspace records only that somebody clicked into the
+app's window, never that they kept using it (the shell's `window_input`
+log, desktop contracts.md section 6). If the tool can serve one more static
+file from its own origin and add a script to its pages (Jupyter's custom JS,
+a dev server's plugin hook), give it the contract: serve
 `system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
 at `/_static/app_contract.js` and add
 `<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
-to its pages. If it can do neither, leave it as it is.
+to its pages, which also makes them report their input like a scaffolded
+app's. If it can do neither, leave it as it is.
 
 ## `forward_port.py` CLI reference
 
@@ -751,8 +830,7 @@ python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
 ```
 
-The script is standard-library only and runs under a plain `python3`, so
-registration never depends on the root venv.
+The script is standard-library only and runs under a plain `python3`.
 
 Flags:
 

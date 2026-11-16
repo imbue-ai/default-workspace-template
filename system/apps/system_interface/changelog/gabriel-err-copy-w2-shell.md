@@ -10,7 +10,7 @@ The workspace desktop says what failed in its own words, names apps as people kn
 
 - A stopped app's window says it isn't running and offers to ask an agent to start it (or to report a bug, for Chat); its shortcut and launcher row say the same. A window whose app is gone says so and offers to close it.
 
-- Delete is withheld from the only desktop, saying why. The avatar chooser retries its designs in place. The update notice says how long ago the update was, names what a rollback restarts by display name, and offers an agent to finish a rollback that left the restart to one.
+- Delete is withheld from the only desktop in the overview, saying why, and the wallpaper and theme choosers say what couldn't be changed with the reason behind "See details". The avatar chooser retries its designs in place. The update notice says how long ago the update was, names what a rollback restarts by display name, and offers an agent to finish a rollback that left the restart to one.
 
 - A stopped app's page says "Starting <name>..." without guessing a cause; one that couldn't start waits for Try again instead of reloading on its own, offers an agent to look at it, and keeps the log command behind "See details".
 

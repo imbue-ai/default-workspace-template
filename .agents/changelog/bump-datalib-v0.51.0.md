@@ -1,0 +1,1 @@
+The `datalib` skill now installs datalib v0.51.0. Every PDF re-renders once after the upgrade, because a PDF is now measured before it is read, and a crafted one cannot exhaust memory. The installer refuses a download it cannot check against its checksum, datalib's latchkey no longer pings a usage counter, and the time series card can align the starts of several runs.

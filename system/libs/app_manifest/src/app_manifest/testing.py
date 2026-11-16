@@ -59,9 +59,7 @@ def write_supervisord_conf(repo_root: Path, section_names: Sequence[str]) -> Pat
     return conf_path
 
 
-def write_supervisord_dropin(
-    repo_root: Path, file_stem: str, section_names: Sequence[str]
-) -> Path:
+def write_supervisord_dropin(repo_root: Path, file_stem: str, section_names: Sequence[str]) -> Path:
     """Create a ``system/supervisord.conf.d/<stem>.conf`` holding one empty block per section."""
     conf_path = repo_root / "system" / "supervisord.conf.d" / f"{file_stem}.conf"
     conf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +197,9 @@ def build_selection_workspace(repo_root: Path) -> None:
         "system/apps/chat/imbue/chat/test_e2e.py",
         "import pytest\n\npytestmark = pytest.mark.browser\n\n\ndef test_page() -> None:\n    pass\n",
     )
-    write_repo_file(repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n"
+    )
 
     # The npm workspace
     write_repo_file(
@@ -213,7 +213,12 @@ def build_selection_workspace(repo_root: Path) -> None:
         json.dumps(
             {
                 "name": "@workspace/ui",
-                "scripts": {"test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+                "scripts": {
+                    "test": "vitest run",
+                    "lint": "eslint src/",
+                    "format:check": "prettier --check src",
+                    "typecheck": "tsc --noEmit",
+                },
             }
         ),
     )
@@ -225,7 +230,13 @@ def build_selection_workspace(repo_root: Path) -> None:
             {
                 "name": "chat-frontend",
                 "dependencies": {"@workspace/ui": "0.1.0"},
-                "scripts": {"build": "tsc --noEmit && vite build", "test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+                "scripts": {
+                    "build": "tsc --noEmit && vite build",
+                    "test": "vitest run",
+                    "lint": "eslint src/",
+                    "format:check": "prettier --check src",
+                    "typecheck": "tsc --noEmit",
+                },
             }
         ),
     )
@@ -244,7 +255,9 @@ def build_selection_workspace(repo_root: Path) -> None:
     )
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
-    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n"
+    )
     commit_everything(repo_root, "workspace")
 
 
@@ -252,9 +265,7 @@ def declare_root_dependency(repo_root: Path, name: str) -> None:
     """Make the selection workspace's root project depend on the member ``name``."""
     root_pyproject = repo_root / "pyproject.toml"
     root_pyproject.write_text(
-        root_pyproject.read_text().replace(
-            'version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1
-        )
+        root_pyproject.read_text().replace('version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1)
     )
 
 

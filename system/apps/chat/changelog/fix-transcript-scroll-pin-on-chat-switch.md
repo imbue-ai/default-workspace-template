@@ -1,0 +1,1 @@
+Switching between chats no longer leaves the transcript blank and scrolled to the top. When a chat's frame is hidden and shown again (what happens whenever you click between chats), the browser resets its scroll position to the top; the transcript now re-pins to the newest message instead of getting stranded at the top until you scroll by hand.

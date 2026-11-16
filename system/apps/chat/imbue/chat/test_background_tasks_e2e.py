@@ -1,6 +1,6 @@
 """A chat waiting on a background task, end to end: the real runner, the real chat app, the real CLI.
 
-``system/scripts/run_in_background.py`` runs a command detached, writes its marker into the chat's
+``system/scripts/workspace_bare_scripts/run_in_background.py`` runs a command detached, writes its marker into the chat's
 directory, and delivers the report through ``message_chat.py`` to the chat app, which sends it on to
 the agent. Here the chat app is served the way a workspace serves it (``running_workspace``: real
 routes and a real state poller, over a recording messenger in place of ``mngr message``), so the
@@ -37,7 +37,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
-_RUNNER = _REPO_ROOT / "system" / "scripts" / "run_in_background.py"
+_RUNNER = _REPO_ROOT / "system" / "scripts" / "workspace_bare_scripts" / "run_in_background.py"
 _CLI = _REPO_ROOT / "system" / "scripts" / "background_tasks.py"
 _REPORT_TAG = "<background-task-report>"
 _SUCCESSOR_ID = "agent-5ecc5ecc5ecc5ecc5ecc5ecc5ecc5ecc"

@@ -1,0 +1,1 @@
+The terminal theme tests no longer fail now and then before they start. They looked up the terminal's frame by its address just after the page pointed it there, and could find nothing while the frame was still blank (about 1 run in 20). They now follow the frame itself until it reaches the terminal page. The tests are also marked flaky, so CI retries them.

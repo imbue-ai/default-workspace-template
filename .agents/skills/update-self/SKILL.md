@@ -44,12 +44,14 @@ and `recover` both fail. Confirm there is a recent one; this reads the
 service's log and waits for nothing:
 
 ```bash
-uv run host-backup-now --check
+uv run --no-sync host-backup-now --check
 ```
 
-Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 1 (no
-recent success: the service is down or its ticks fail) and 2 (not observable)
-mean there is **no** confirmed restore point. **None of them blocks the
+Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 4 (the
+account is out of backup storage, so the newest tick freed space instead of
+backing up and the last restore point is older than expected), 1 (no recent
+success: the service is down or its ticks fail) and 2 (not observable) mean
+there is **no** confirmed restore point. **None of them blocks the
 pass**: note which it was, carry it into the results message as a caveat, and
 continue -- git still holds every version of the tree. Do not stop to ask for
 a go-ahead.
@@ -60,7 +62,9 @@ what this run needs, with no confirmation and no preflight script, you may:
 
 - stop other chats and background agents, idle or running, through `run-status
   stop-chats` (5b, and earlier with `--agent <name>` when memory runs short),
-  which records each so the end of the pass starts it again with a note;
+  which records each so the end of the pass starts it again with a note. The
+  main chat is the exception: the chat app starts it again as soon as it stops,
+  so `stop-chats --agent` refuses it, and 5b only interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
   (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
@@ -267,12 +271,16 @@ reasons, and what an edit must preserve, are in
 PINNED_CEILING=""
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     resolve-target --local-tags --override "$REF" \
-    ${PINNED_CEILING:+--app-version "$PINNED_CEILING"} > /tmp/update-self-recheck.json || exit 1
+    ${PINNED_CEILING:+--app-version "$PINNED_CEILING"} > /tmp/update-self-recheck.json || exit $?
 cat /tmp/update-self-recheck.json
 ```
 
 Set `PINNED_CEILING` as Step 2 does: the `Ceiling:` of a message that pinned
 the update, else empty, so a pinned pass never asks the app here either.
+
+**If it exits non-zero, stop** and follow what it printed: an `error:` line is
+handled as a Step 2 error, and exit code 75 (a system Python too old for the
+target release) prints the whole procedure.
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
@@ -361,9 +369,9 @@ Per §6 of the worker guide: the report shapes come from
 `.agents/shared/references/worker-reporting.md`, but you write and push the
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
-scope escape hatch, a gate command shed for memory, or a §4b customization the
-update cannot keep), `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
+`question` (mid-flight gate: a genuine, unresolvable conflict, the
+§4a/§4b/§4c/§4d scope escape hatch, a gate command shed for memory, or a §4b
+customization the update cannot keep), `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
@@ -374,7 +382,7 @@ stays reachable for bug reports). A worker of that name in state `STOPPED` or
 conflict, resolved per the lease check in Step 1, never forced past. Plain
 `mngr` and `git` commands on purpose: this prose runs from the target's copy
 but launches with the workspace's own, possibly older, `create_worker.py`
-(`scripts/launcher_contract_test.py` pins what it may ask of it):
+(`python/update_self_skill/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -422,7 +430,7 @@ to this chat as a message that starts your next turn, whatever your harness. Run
 the staged skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-self --template worker \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 ```
@@ -434,8 +442,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
-    --description "Wait for the update's background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    --description "Wait for the update's background agent" --waiter -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
@@ -462,13 +470,14 @@ report, re-arm the poll. The last ends the pass, as below.
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
    a merge question; it is the hold below.
-2. **The worker's scope escape hatch** (its §4a, §4b or §4c): a process
+2. **The worker's scope escape hatch** (its §4a, §4b, §4c or §4d): a process
    question about whether its impact analysis runs, whether a validation item
-   runs, or whether and at what scope the review gates run. Answer it by the
-   rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. A `select-tests` output is not silence: what it
-   printed for a commit is that commit's whole gate. Escalate only if it
-   contains a real question of user intent.
+   runs, whether and at what scope the review gates run, or whether a changed
+   file needs the agents restarted. Answer it by the rule it names as written;
+   where the rule is silent, the fallback is more coverage, never less (for
+   §4d, a restart). A `select-tests` output is not silence: what it printed
+   for a commit is that commit's whole gate. Escalate only if it contains a
+   real question of user intent.
 3. **Its gate was shed for memory**, and it is asking for room to rerun. Free
    it yourself per `references/freeing-memory-for-an-update.md`, which says
    what this pass may stop and how much further a scheduled run may go, then
@@ -556,20 +565,22 @@ Their answer, whenever it comes, arrives in this chat: follow
 ### 5a. Audit the report
 
 The worker contract (the staged copy's `references/update-self-worker.md`,
-§4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
-review gates rule-driven and the report evidence-bearing. It must show which
-branch of the 4a and 4b rules applied (the footprint evidence --
-`has_local_footprint`, and per creation the scope files' verdicts when it is
-true -- and each validation item's condition and whether it held), and either
-show the clean-pull skip's three conditions held (`has_merge_work: false`, no
-impacted user-created code, no worker-authored in-branch edits beyond Step 1's
-rollback reverts as git made them or with a `both added` file taken at the
-target's version, shown by an empty diff against the landed merge) or carry
-the gate run's own evidence (fix commits kept or reverted, or a clean run,
-plus architecture-gate verdicts); a side-picked conflict must carry the
-discarded-side accounting. A report missing any of this -- including one that
-openly discloses skipping a gate outside the rule -- goes back to the worker
-via the Step 4 cycle (say what is missing, consume the report into
+§4a, §4b, §4c, §4d and §6) makes the impact analysis, the validation scope,
+the review gates and the agent-restart verdict rule-driven and the report
+evidence-bearing. It must show which branch of the 4a and 4b rules applied
+(the footprint evidence -- `has_local_footprint`, and per creation the scope
+files' verdicts when it is true -- and each validation item's condition and
+whether it held), and either show the clean-pull skip's three conditions held
+(`has_merge_work: false`, no impacted user-created code, no worker-authored
+in-branch edits beyond Step 1's rollback reverts as git made them or with a
+`both added` file taken at the target's version, shown by an empty diff
+against the landed merge) or carry the gate run's own evidence (fix commits
+kept or reverted, or a clean run, plus architecture-gate verdicts); a
+side-picked conflict must carry the discarded-side accounting; and it must
+carry the §4d **Agent restarts** verdict with the changed files that decided
+it. A report missing any of this -- including one that openly discloses
+skipping a gate outside the rule -- goes back to the worker via the Step 4
+cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly as
@@ -601,17 +612,18 @@ path below instead.
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
-`system/apps/routines/frontend/`, `system/apps/style_guide/frontend/`,
+`system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
+`system/apps/style_guide/frontend/`,
 `system/libs/workspace_ui/`,
 `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files, Routines and Style Guide frontends, the shared library,
+Getting Started, Files, Routines, Screen and Style Guide frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
 wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files, Routines and Style Guide frontends, `workspace_ui`, and the npm files count as both
+Started, Files, Routines, Screen and Style Guide frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
 `system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
@@ -622,6 +634,17 @@ and if any is held by another agent, release the ones you took and surface it
 instead of proceeding. Take them right before the apply, once the chats are
 paused and the last fast-forward check below has passed, so no catch-up round
 runs while you hold them, and release them afterwards.
+
+**The frontends must actually be rebuilt when an update touches them.** The
+served pages are the built `static/` bundles, not the source the update
+changed, and the shared `workspace_ui` library is compiled into every one of
+them (including behavior the shell depends on from every app page, like the
+`shell:input` activity reports its presence reads) -- an update applied
+without the rebuild leaves every page running the old code while the tree
+says otherwise. The apply command below does this itself (a change under any
+frontend source directory or `workspace_ui` re-emits the bundles); the rule
+matters when landing such an update any other way: never hand-apply one
+without running `npm run build` for every affected frontend.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
@@ -682,7 +705,9 @@ and is not resumed (`references/resuming-after-stuck.md`).
 Once the branch fast-forwards, **pause** every chat and background agent that
 is busy (mid-turn, or waiting on a background command), other than this chat
 and the update's own worker and anything under it. It records each one, so the
-resume below starts it again with a note:
+resume below starts it again with a note. A busy main chat is stopped too, but
+the chat app starts it again at once, idle, so it is interrupted rather than
+held, and the resume only sends it the note:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
@@ -727,10 +752,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, and the Style Guide's), append
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, and the Style Guide's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
 --worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
---worker-bundle style_guide=<path>` so the
+--worker-bundle screen=<path> --worker-bundle style_guide=<path>` so the
 exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
@@ -782,10 +807,29 @@ resumes), and how to honor a rollback request are in
 
 ### 5c. Carry out the report-driven remainder
 
+**After a successful apply, anything of the user's that is broken gets fixed,
+not reported.** This holds for every update. When something of theirs does not
+work on the landed tree -- a user program not RUNNING after the restart
+(`supervisorctl status`), a user app that fails its health route, a user skill
+that no longer imports, a consumer the report names that the update broke:
+
+1. Say what you are fixing in one short chat line ("One of your apps didn't
+   come back after the update -- fixing it now."). Nothing else changes in the
+   app or in `run.json`: the run is still in progress.
+2. Dispatch a repair worker with the evidence (the program's status and the
+   tail of its stderr log, the failing check's output, what the update changed
+   that it touches), through `launch-task` as in Step 4, with
+   `references/python-packaging-migration.md` named when the failure is one of
+   its symptoms.
+3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
+   the worker gives up. A give-up is still recorded as `UPDATED`, with a
+   `--detail` line naming what is still broken and what was tried, and the
+   results message says the same in plain words.
+
 - **`shared_runtime` live consumers** -- the apply's restart has already put
   every built-in service on the merged code. What the report can still name is
   a *user-created* consumer (an app or skill of theirs reading something the
-  update changed): check it, and carry any breakage into the results message.
+  update changed): check it, and fix any breakage as above.
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out
   (version pins live in `setup_system.sh`, already re-run; keep
   `agent_types.claude.version` in `.mngr/settings.toml` in sync). An
@@ -809,6 +853,36 @@ resumes), and how to honor a rollback request are in
   that outlives the window, an API another agent drives with no window),
   add `stop_when_no_windows = false` with a comment saying why, so the next
   pass does not ask again. Name each decision in the results message.
+- **Agent restarts** -- when the report's §4d verdict is `needed` (a harness
+  upgrade, new pi extensions, other config a harness loads once at start),
+  every running chat and background agent is still on what it loaded before
+  the apply. Restart the idle ones now; a restart keeps each conversation.
+  This chat and the update's worker are left out (this chat restarts last, in
+  §6), and so is every chat and background agent 5b paused and brought back
+  after the update landed, which started on what it installed, and every chat
+  room, whose agent runs no harness:
+
+  ```bash
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      restart-agents > data/.tasks/update-self/agent-restarts.json
+  cat data/.tasks/update-self/agent-restarts.json
+  ```
+
+  Its JSON lists what it `restarted`, what it `left_running` because the chat
+  app found it busy (`busy_with` says with what: working, waiting on a dialog,
+  switching to another agent, receiving a message, holding queued messages,
+  waiting on background work, or in a state the chat app cannot read), and
+  what `failed`. The chat app checks each chat at the moment of its restart,
+  so a chat mid-turn is left running, and so is one waiting on its harness's
+  own background work (a background shell, a subagent), which a restart would
+  end with no report. A restart does end a `run_in_background.py` command an
+  idle chat was waiting on; the command's runner outlives the restart and
+  sends the chat its report saying it was killed, so it can run it again. The
+  results message names each chat left running or failed, says it is still on
+  the previous version, and asks the user whether to interrupt and restart it
+  (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on a yes). A
+  non-zero exit with no JSON means no chat was restarted; say so in the same
+  place.
 
 ### 5d. Escalate the built-in defects this pass found
 
@@ -878,7 +952,7 @@ down with the preview script and close its window:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
 ```
 
 The close goes first: nothing takes a window away when its app leaves the registry, so
@@ -914,12 +988,32 @@ mv data/.tasks/update-self/reports/report.md \
 mngr stop update-self
 ```
 
-Release the leases and close the ticket last, each as its own tool call: `tk
+Then release the leases and close the ticket, each as its own tool call: `tk
 close` each `editing critical app <name>` lease 5b took, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
 Step 3b set a previous branch aside.
+
+**When the §4d verdict was `needed`, restart this chat too** -- even when §5c
+restarted no other chat -- after everything above, before showing the user this
+chat and ending the turn with the results message. It detaches a helper that
+waits for this turn to end, restarts this chat, and sends it a note asking you
+to confirm the restart to the user (and to repeat the offer for any chat left
+running or whose restart failed); when the restart does not happen, its note
+says so instead. `--reason` is the report's one-line **Agent restarts** summary
+of what the restart picks up, and `--restart-report` is the file §5c's
+`restart-agents` wrote (the note says the other chats were not restarted when
+it holds no report):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    restart-self --reason "<what the restart picks up, one plain line>" \
+    --restart-report data/.tasks/update-self/agent-restarts.json
+```
+
+The results message then says this chat restarts right after it. Do nothing
+after the turn ends: the note starts your next turn.
 
 **Last, whatever the outcome, show the user this chat** once its results (or
 its decision, or its `stuck` account) are ready to read, then end your turn

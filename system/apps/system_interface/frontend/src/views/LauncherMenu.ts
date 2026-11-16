@@ -24,7 +24,7 @@ import {
   menuDividerClass,
 } from "@imbue/workspace-ui/src/components/menu";
 import type { FailureNotice } from "../model/failures";
-import { appShortcutOf } from "../model/launch";
+import { appShortcutsOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
@@ -57,7 +57,8 @@ export interface LauncherSectionsAttrs {
   readonly onRun: (row: LauncherRow) => void;
   readonly onHighlight: (index: number) => void;
   /** Null in the phone's start sheet, which draws no desktop shortcuts to add or remove. */
-  readonly onAppShortcutContextMenu: ((app: string, x: number, y: number, target: Element) => void) | null;
+  readonly onAppShortcutContextMenu:
+    ((app: string, launch: string, x: number, y: number, target: Element) => void) | null;
 }
 
 export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"> {
@@ -151,12 +152,19 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         {
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
-          ...hoverTooltipAttrs(row.stoppedReason),
+          ...hoverTooltipAttrs(row.disabledReason ?? row.stoppedReason),
           oncontextmenu:
-            onAppShortcutContextMenu !== null && appShortcutOf(row.app)?.launch === row.launchPath.id
+            onAppShortcutContextMenu !== null &&
+            appShortcutsOf(row.app).some((shortcut) => shortcut.launch === row.launchPath.id)
               ? (event: MouseEvent) => {
                   event.preventDefault();
-                  onAppShortcutContextMenu(row.app.name, event.clientX, event.clientY, targetElementOf(event));
+                  onAppShortcutContextMenu(
+                    row.app.name,
+                    row.launchPath.id,
+                    event.clientX,
+                    event.clientY,
+                    targetElementOf(event),
+                  );
                 }
               : undefined,
         },
@@ -174,6 +182,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ...rowAttrs(row, index, attrs),
           "data-launcher-window": row.window.id,
           "data-minimized": row.isMinimized ? "true" : "false",
+          ...hoverTooltipAttrs(row.disabledReason),
         },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),
@@ -185,6 +194,10 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
           row.isOnActiveDesktop || attrs.isSheet ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
+          // Whose desktop the window is on, when it is not the viewer's (the multiplayer spec, section 8.2).
+          row.ownerName === null || attrs.isSheet
+            ? null
+            : m("span", { class: CAPTION_CLASS, "data-launcher-window-owner": "" }, row.ownerName),
           keys,
         ],
       );

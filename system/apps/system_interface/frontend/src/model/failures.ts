@@ -9,6 +9,9 @@ import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/fai
 import type { AppRecord } from "./records";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 
+/** Why the only desktop cannot be deleted, on its disabled Delete. */
+export const ONLY_DESKTOP_REASON = "You can't delete your only desktop. Add another one first.";
+
 /** A failure as a desktop surface shows it. */
 export interface FailureNotice {
   readonly message: string;

@@ -15,7 +15,7 @@ def _publish(
     return cgroup_meminfo.publish_once(cgroup_dir, target, kernel_release, 1760000000)
 
 
-def test_headroom_adds_only_the_inactive_file_cache_to_the_free_part(
+def test_headroom_adds_the_unmapped_file_cache_and_reclaimable_slab_to_the_free_part(
     tmp_path: Path,
 ) -> None:
     write_fake_cgroup(
@@ -23,16 +23,64 @@ def test_headroom_adds_only_the_inactive_file_cache_to_the_free_part(
         str(8 * _GIB),
         str(6 * _GIB),
         {
-            "anon": 5 * _GIB,
+            "anon": 4 * _GIB,
             "active_file": _GIB // 2,
             "inactive_file": _GIB // 4,
+            "file_mapped": _GIB // 8,
             "slab_reclaimable": _GIB // 4,
             "slab_unreclaimable": _GIB,
         },
     )
-    # Active file cache and reclaimable slab are what the kernel thrashes near the
-    # limit rather than frees, so they are not counted as available.
-    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (8 * _GIB, 2 * _GIB + _GIB // 4)
+    # 2 GiB free, plus both file lists less the mapped pages, plus the reclaimable slab.
+    reclaimable = _GIB // 4 + (_GIB // 2 - _GIB // 8) + _GIB // 4
+    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (
+        8 * _GIB,
+        2 * _GIB + reclaimable,
+    )
+
+
+def test_headroom_never_counts_mapped_file_pages_as_reclaimable(tmp_path: Path) -> None:
+    # More mapped than the active list holds (file_mapped also counts mapped
+    # shmem): the active list adds nothing, and the inactive list is not docked.
+    write_fake_cgroup(
+        tmp_path,
+        str(8 * _GIB),
+        str(7 * _GIB),
+        {"active_file": _GIB // 4, "inactive_file": _GIB // 8, "file_mapped": _GIB},
+    )
+    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (
+        8 * _GIB,
+        _GIB + _GIB // 8,
+    )
+
+
+def test_headroom_of_a_cgroup_filled_by_an_hourly_tree_walk_stays_above_the_shed_threshold(
+    tmp_path: Path,
+) -> None:
+    # Counters read from a 12 GiB runc workspace whose processes held 2.1 GiB while
+    # hourly backups of a 1.3-million-entry tree had filled the rest of the cap
+    # with file cache (nearly all of it re-read, so on the active list) and inodes.
+    limit = 12 * _GIB
+    write_fake_cgroup(
+        tmp_path,
+        str(limit),
+        "12250976256",
+        {
+            "anon": 2276810752,
+            "file": 7513858048,
+            "kernel": 2460278784,
+            "shmem": 53182464,
+            "file_mapped": 126877696,
+            "inactive_file": 760160256,
+            "active_file": 6699884544,
+            "slab_reclaimable": 2433877888,
+        },
+    )
+    available = 10400970624
+    assert cgroup_meminfo.read_cgroup_memory_headroom(tmp_path) == (limit, available)
+    # earlyoom sheds at 10% available (earlyoom.conf's -m 10,5); the inactive
+    # list alone would have put this cgroup at 10.8%, a tick from shedding.
+    assert available / limit > 0.8
 
 
 def test_headroom_is_clamped_to_the_limit_and_to_zero(tmp_path: Path) -> None:
@@ -69,8 +117,8 @@ def test_the_three_ways_a_cgroup_gives_no_headroom_are_told_apart(
         cgroup_meminfo.read_cgroup_memory_headroom(tmp_path)
         == cgroup_meminfo.PublishOutcome.UNREADABLE
     )
-    # memory.stat too: the gen-2 publisher skips the round rather than counting
-    # the inactive file cache as zero, and the two must stay in step.
+    # memory.stat too: the round is skipped rather than published with nothing
+    # counted as reclaimable.
     (tmp_path / "memory.current").write_text("4096\n")
     (tmp_path / "memory.stat").unlink()
     assert (
