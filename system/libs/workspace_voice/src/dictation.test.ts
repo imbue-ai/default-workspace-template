@@ -29,6 +29,8 @@ class FakeClient implements EngineWorkerClient {
     });
   }
   onUnloaded(): void {}
+  onMessage(): void {}
+  onLost(): void {}
   dispose(): void {
     this.isDead = true;
   }

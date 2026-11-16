@@ -31,7 +31,9 @@ is the one surface that uses it.
   origin and engine (a dedicated worker where the browser has none), which
   every chat page connects to; it gets the files, picks the device, loads the
   engine, transcribes one job at a time in arrival order, and keeps the engine
-  loaded for as long as a page of the workspace is open.
+  loaded for as long as a page of the workspace is open. It tells each page
+  what it already holds as the page connects, and every page each step of a
+  load, whichever page asked for it.
 - `src/devicePick.ts`: the device an engine runs on here (WebGPU with an
   adapter, else WebAssembly, the page's preference first), picked the same way
   by the worker for the load and by the page for the probe below.
@@ -39,6 +41,15 @@ is the one surface that uses it.
   asked by a page as its composer mounts: the files of the variant this device
   runs, looked for in the page's own Cache Storage, with the size the download
   would be. Presence alone; the load checks every file again.
+- `src/speechModel.ts`: the page's speech models, one managed load per engine
+  held in a TanStack Query cache (`@tanstack/query-core`). A surface observes
+  an engine's load, asks for it (one load runs however many ask, and a load in
+  flight is joined), reads the download's progress, finds out what the
+  workspace's worker already holds, and gets the page's port to transcribe
+  on, all from one place. The worker is the authority: what it tells the
+  page's port is mirrored into the cache, so a page learns a model came ready
+  whichever page asked, and a page that hears another ask for a model connects
+  to hear the worker load it.
 - `src/transformersEngine.ts`: the transformers.js adapter the worker loads an
   engine with, its caches off; imported by the worker alone, since it carries
   the speech runtime.
