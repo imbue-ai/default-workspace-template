@@ -192,6 +192,9 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   );
   if (!isConfirmed) return;
   const next = attrs.rows.find((candidate) => candidate.chatId !== row.chatId);
+  // Off the list before the selection moves: picking none fills the empty slot from the list, which would otherwise
+  // pick this chat again.
+  showPendingDelete(row.chatId);
   if (row.chatId === attrs.selectedChatId) attrs.onPick(next?.chatId ?? null);
   deleteChat(attrs, row);
 }
