@@ -796,10 +796,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     const anchorIndex = pendingRestore.anchorEventIndex;
     const { firstIndex, endIndex } = extent();
     const totalEvents = dataSource.getTotalEvents();
+    // Without a total the held window has no place in the transcript yet (one shown from the
+    // transcript cache is numbered from 0), so its indices cannot be matched to the anchor's.
     const isTargetLoaded =
       anchorIndex === null ||
-      (anchorIndex >= firstIndex && anchorIndex < endIndex) ||
-      (totalEvents !== null && anchorIndex >= totalEvents);
+      (totalEvents !== null && ((anchorIndex >= firstIndex && anchorIndex < endIndex) || anchorIndex >= totalEvents));
     if (!isTargetLoaded) {
       // Keep steering the fill toward the persisted location.
       pendingJumpIndex = anchorIndex;
