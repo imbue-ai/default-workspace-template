@@ -1,6 +1,6 @@
 """HTTP endpoints for `/api/secret-requests`: filing a secret request, and answering it from the card.
 
-The request script (``.agents/skills/connect-external-service/scripts/request_secret.py``)
+The request script (``.agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py``)
 files through the POST and prints what it gets back; the chat page's secret card submits
 or declines through the two verb routes and hydrates itself through the GET after a
 reload. The values a submit carries are handed to the store for the file write and

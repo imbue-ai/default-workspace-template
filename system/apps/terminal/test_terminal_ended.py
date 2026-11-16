@@ -105,11 +105,13 @@ def _shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
 
 def _open(context: BrowserContext) -> tuple[Page, Frame, Frame]:
     page = context.new_page()
-    page.goto(_SHELL_URL)
+    pty_url = f"http://{_PTY_LABEL}.{_WRAPPER_HOST}/?arg=_&arg=session&arg=terminal-1"
+    # A framed wrapper points its pty only once the shell's handshake has said whether the window is viewed.
+    with page.expect_event("framenavigated", predicate=lambda frame: frame.url == pty_url) as navigated:
+        page.goto(_SHELL_URL)
+    pty = navigated.value
     wrapper = page.frame(url=_WRAPPER_URL)
     assert wrapper is not None
-    pty = page.frame(url=f"http://{_PTY_LABEL}.{_WRAPPER_HOST}/?arg=_&arg=session&arg=terminal-1")
-    assert pty is not None
     pty.wait_for_function("window.term !== undefined && window.term.element !== undefined", timeout=5000)
     return page, wrapper, pty
 

@@ -34,3 +34,19 @@ The app icons are not Lucide's: every one is drawn for this workspace to the
 rules in `docs/system/app-icons.md`, and the Classic Mac and Windows 2000 themes' pixel-art
 icons under `system/themes/<theme>/icons/` were drawn for the workspace, most with
 Retro Diffusion and the Routines icons by hand.
+
+## The dictation's model and detector
+
+The chat's dictation (`system/libs/workspace_voice/`) runs two models on the
+user's own device. Neither is copied into this tree: the speech model is
+downloaded by the page from Hugging Face at a pinned commit and kept in the
+browser's own storage for the workspace, and the detector's model ships with
+the chat's build out of the npm package that carries it.
+
+- Moonshine Base, by Useful Sensors (<https://github.com/usefulsensors/moonshine>),
+  MIT-licensed, as exported to ONNX at
+  <https://huggingface.co/onnx-community/moonshine-base-ONNX>; the registry's
+  entry (`system/libs/workspace_voice/src/voice_models.json`) names the commit
+  and the licence.
+- Silero VAD, by Silero (<https://github.com/snakers4/silero-vad>), MIT-licensed,
+  as `@ricky0123/vad-web` bundles it (its own licence is in that package).

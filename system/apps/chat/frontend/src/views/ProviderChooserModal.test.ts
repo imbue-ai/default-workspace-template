@@ -124,6 +124,7 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
     name: "",
     label,
     reauth_method: "subscription",
+    signed_in_at: null,
   };
 }
 
@@ -170,6 +171,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
       {
         id: "a2",
@@ -183,6 +185,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic 2 (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const text = render();
@@ -213,6 +216,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const root = document.createElement("div");
@@ -385,6 +389,31 @@ describe("picking a signed-in account", () => {
 
     expect(root.textContent).toContain("Anthropic (Claude Code)");
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
+  });
+
+  it("offers a room under the providers when opened for a chat awaiting its first send, and hands it over", () => {
+    const onRoomChosen = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onRoomChosen, onDismissed });
+    const { root } = mount();
+
+    const text = root.textContent ?? "";
+    expect(text.indexOf("Chat room (no provider)")).toBeGreaterThan(text.indexOf("Anthropic (Claude Code)"));
+    root.querySelector<HTMLButtonElement>('[data-e2e="pick-room"]')!.click();
+
+    expect(onRoomChosen).toHaveBeenCalledOnce();
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("offers no room when opened to pick or add a provider", () => {
+    openProviderChooser({ onSignedIn: vi.fn() });
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
+    closeProviderChooser();
+
+    openProviderChooser();
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
   });
 });
 
@@ -563,7 +592,7 @@ describe("a sign-in finished in the browser", () => {
     expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
   });
 
-  it("shows no note on the one-time code, which does not need the setting", async () => {
+  it("shows no note on the one-time code, which carries none of its own", async () => {
     requestProviderRelay.mockResolvedValue(false);
     state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };

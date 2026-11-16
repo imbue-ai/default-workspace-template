@@ -1,0 +1,1 @@
+The disk view's figures now come from `disk_headroom`, so on a cloud machine free space is what the workspace can actually still write: the smaller of the disk's own free space and the room left under the machine's disk quota, which can run out first. The view's note says so.

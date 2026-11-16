@@ -11,7 +11,7 @@ from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.errors import ClientHasNoBodyCloseError, UnsafeDispatchPathError
-from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
+from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY, VIEWER_ARGUMENT
 from terminal_app.pty_page import TERMINAL_ENDED_OSC, add_pty_page_script
 
 # The dispatch scripts the ttyd dispatch snippet runs by URL key: ``?arg=_&arg=<key>&arg=...``
@@ -64,21 +64,28 @@ exit 1
 # CLEANUP: move agent.sh (the chat UI's terminal back face, ``?arg=_&arg=agent&arg=<name>``)
 # into the chat app (system/apps/chat), and stop installing it here, in the release after the
 # one that ships the workspace app model, once every workspace has restarted on it.
-_AGENT_SCRIPT: Final[str] = """#!/bin/bash
+_AGENT_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
 #
 # If a session name is provided as $1, use "$MNGR_PREFIX$1" as the target
 # session (so the Imbue Studio chat UI can deep-link to a specific sub-agent's
 # terminal by passing the agent name). Otherwise fall back to the current
 # tmux session -- useful when ttyd is invoked without args.
+# $2 = "{viewer_argument}" when the chat's window is being looked at on somebody else's desktop
+#      (the multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#      window by this client, as the session script attaches a viewer.
 set -euo pipefail
 if [ $# -gt 0 ] && [ -n "$1" ]; then
     TARGET_SESSION="${MNGR_PREFIX:-mngr-}$1"
 else
     TARGET_SESSION=$(tmux display-message -p '#{session_name}')
 fi
+ATTACH_FLAGS=()
+if [ "${2:-}" = "{viewer_argument}" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
-exec tmux attach -t "$TARGET_SESSION":0
+exec tmux attach "${ATTACH_FLAGS[@]}" -t "$TARGET_SESSION":0
 """
 
 _WORKDIR_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
@@ -100,6 +107,10 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
 #   $1 = session name (e.g. "terminal-1"), the terminal's name
 #   $2 = working directory to anchor a newly-created session in (may be "")
+#   $3 = "{viewer_argument}" when the window is being looked at on somebody else's desktop (the
+#        multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#        window by this client, so a viewer neither types into nor resizes the owner's terminal;
+#        a viewer never creates the session
 #
 # The terminal app records the tmux session id and creation time of every
 # terminal it created under the sessions directory, named by terminal; attaching
@@ -120,6 +131,10 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
+ATTACH_FLAGS=()
+if [ "${3:-}" = "{viewer_argument}" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
@@ -155,9 +170,15 @@ if [ -f "$SESSION_ID_FILE" ]; then
     if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
         LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
         if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
-            run_tmux attach-session -t "$SESSION_ID"
+            run_tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_ID"
         fi
     fi
+fi
+
+# A viewer never creates the session; tmux resolves a bare name by unique prefix, so the name is given exactly,
+# or a viewer of a lost terminal-1 would land on terminal-10.
+if [ ${#ATTACH_FLAGS[@]} -gt 0 ]; then
+    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "=$SESSION_NAME"
 fi
 
 WORKDIR_ARGS=()
@@ -190,7 +211,8 @@ def render_dispatch_snippet(commands_dir: Path) -> str:
 
 @pure
 def render_agent_script() -> str:
-    return _AGENT_SCRIPT
+    """The agent dispatch script, taking the viewer marker the session script takes."""
+    return _AGENT_SCRIPT_TEMPLATE.replace("{viewer_argument}", VIEWER_ARGUMENT)
 
 
 @pure
@@ -235,6 +257,7 @@ def render_session_script(sessions_dir: Path, oom_tag_script: Path) -> str:
         .replace("{ended}", ENDED_WITH_ERROR)
         .replace("{sessions_dir}", _shell_verbatim_path(sessions_dir))
         .replace("{session_command}", " ".join(build_session_command(oom_tag_script)))
+        .replace("{viewer_argument}", VIEWER_ARGUMENT)
     )
 
 

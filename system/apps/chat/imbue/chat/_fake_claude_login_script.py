@@ -14,14 +14,10 @@ import urllib.parse
 state = "fake-state"
 
 
-class CallbackServer(http.server.HTTPServer):
-    """The loopback listener, remembering whether its one callback carried the right code and state."""
+class Callback(http.server.BaseHTTPRequestHandler):
+    """The loopback listener's handler, remembering whether its one callback carried the right code and state."""
 
     succeeded = False
-
-
-class Callback(http.server.BaseHTTPRequestHandler):
-    server: CallbackServer
 
     def do_GET(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -30,13 +26,13 @@ class Callback(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", "https://platform.claude.com/oauth/code/success")
         self.send_header("Content-Length", "0")
         self.end_headers()
-        self.server.succeeded = ok
+        Callback.succeeded = ok
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
-server = CallbackServer(("127.0.0.1", 0), Callback)
+server = http.server.HTTPServer(("127.0.0.1", 0), Callback)
 port = server.server_address[1]
 redirect = urllib.parse.quote(f"http://localhost:{port}/callback", safe="")
 url = f"https://claude.ai/oauth/authorize?code=true&client_id=c&redirect_uri={redirect}&state={state}"
@@ -44,7 +40,7 @@ subprocess.run([os.environ["BROWSER"], url], check=True)
 print("Browser didn't open? Use the url below to sign in:", flush=True)
 print(url.replace("http%3A%2F%2Flocalhost", "https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode"), flush=True)
 server.handle_request()
-if server.succeeded:
+if Callback.succeeded:
     print("Login successful.", flush=True)
     sys.exit(0)
 print("Login failed: the callback did not match", flush=True)

@@ -16,7 +16,7 @@ export PATH="/root/.local/bin:$PATH"
 # baked warm uv/npm caches). Only setup_system (global-only effects) is skipped.
 
 # Pin uv to Python 3.12 for the venv below. The Docker base ships 3.12; on other
-# bases setup_system.sh fetched a uv-managed 3.12. Pinned on every base, because
+# bases uv downloads a managed 3.12. Pinned on every base, because
 # uv's default for an open-ended request moves with the uv release. Build-time
 # only: the runtime env (.mngr/settings.toml host_env__extend) does not set it.
 export UV_PYTHON=3.12
@@ -35,7 +35,10 @@ REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 # Pre-warm the uv wheel cache: install every third-party PyPI dep in the
 # lockfile, skipping workspace + local path packages (build_workspace.sh
 # registers those once the full source is present).
+# .venv is a link to a target beside the uv cache, created before the first sync
+# writes a real directory (see system/scripts/workspace_bare_scripts/venv_links.py).
 cd "$REPO_ROOT"
+python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/venv_links.py" ensure "$REPO_ROOT"
 mngr_git_auth_run uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
 # Frontend npm dependencies (exact, from the lockfile): one npm workspace for every

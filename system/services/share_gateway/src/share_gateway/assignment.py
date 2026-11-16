@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 import httpx
+from share_grants.json_values import is_json_object
 
-from share_gateway.json_values import is_json_object
 from share_gateway.log import log as _log
 
 _ASSIGNMENT_TIMEOUT_SECONDS = 30.0
@@ -21,13 +21,48 @@ _ASSIGNMENT_TIMEOUT_SECONDS = 30.0
 DEFAULT_POLL_SECONDS = 60
 
 
-class RelayAssignment:
-    """One assignment answer: the relay endpoints to tunnel to, plus the re-poll interval."""
+_MEDIA_PROTOCOLS = ("tcp", "udp")
 
-    def __init__(self, endpoint_by_relay_id: dict[str, tuple[str, int]], poll_seconds: int) -> None:
+
+class PublishedEndpoint:
+    """One published port of the workspace's host as the connector reports it: where a guest port is reachable."""
+
+    def __init__(self, host: str, port: int, protocol: str, guest_port: int) -> None:
+        self.host = host
+        self.port = port
+        # ``tcp`` or ``udp``, lower-case.
+        self.protocol = protocol
+        self.guest_port = guest_port
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PublishedEndpoint):
+            return NotImplemented
+        return vars(self) == vars(other)
+
+    def __repr__(self) -> str:
+        return f"PublishedEndpoint({vars(self)!r})"
+
+
+class RelayAssignment:
+    """One assignment answer: the relay endpoints to tunnel to, the re-poll interval, and the Screen's media
+    port and published endpoints when the connector knows them (specs/screen-studio-integration/spec.md
+    section 6.1)."""
+
+    def __init__(
+        self,
+        endpoint_by_relay_id: dict[str, tuple[str, int]],
+        poll_seconds: int,
+        media_port: int | None,
+        published_endpoints: list[PublishedEndpoint],
+    ) -> None:
         # relay_id -> (host, port) of that relay's tunnel-control endpoint.
         self.endpoint_by_relay_id = endpoint_by_relay_id
         self.poll_seconds = poll_seconds
+        # The relay port every frpc claims for the Screen's ``screen-media`` tcp proxy; None from a connector
+        # or a share without one, in which case no such proxy is rendered.
+        self.media_port = media_port
+        # The box's own published ports (a cloud workspace); empty for a local one.
+        self.published_endpoints = published_endpoints
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, RelayAssignment):
@@ -40,6 +75,30 @@ def _split_endpoint(endpoint: str) -> tuple[str, int] | None:
     if not separator or not host or not port_text.isdigit():
         return None
     return (host, int(port_text))
+
+
+def _parse_port(raw: object) -> int | None:
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and 0 < raw < 65536 else None
+
+
+def _parse_published_endpoints(raw_endpoints: object) -> list[PublishedEndpoint]:
+    """The ``published_endpoints`` entries that are whole; the key is absent from an older connector."""
+    if not isinstance(raw_endpoints, list):
+        return []
+    endpoints: list[PublishedEndpoint] = []
+    for entry in raw_endpoints:
+        if not is_json_object(entry):
+            continue
+        host = entry.get("host")
+        port = _parse_port(entry.get("port"))
+        guest_port = _parse_port(entry.get("guest_port"))
+        protocol = str(entry.get("protocol", "")).lower()
+        if not isinstance(host, str) or not host or port is None or guest_port is None:
+            continue
+        if protocol not in _MEDIA_PROTOCOLS:
+            continue
+        endpoints.append(PublishedEndpoint(host=host, port=port, protocol=protocol, guest_port=guest_port))
+    return endpoints
 
 
 def parse_assignment(body: object) -> RelayAssignment | None:
@@ -61,7 +120,12 @@ def parse_assignment(body: object) -> RelayAssignment | None:
         return None
     raw_poll = body.get("poll_seconds")
     poll_seconds = raw_poll if isinstance(raw_poll, int) and raw_poll > 0 else DEFAULT_POLL_SECONDS
-    return RelayAssignment(endpoint_by_relay_id=endpoint_by_relay_id, poll_seconds=poll_seconds)
+    return RelayAssignment(
+        endpoint_by_relay_id=endpoint_by_relay_id,
+        poll_seconds=poll_seconds,
+        media_port=_parse_port(body.get("media_port")),
+        published_endpoints=_parse_published_endpoints(body.get("published_endpoints")),
+    )
 
 
 def fetch_assignment(connector_url: str, relay_token: str) -> RelayAssignment | None:
@@ -108,6 +172,8 @@ def write_cached_assignment(cache_path: Path, assignment: RelayAssignment) -> No
             for relay_id, (host, port) in sorted(assignment.endpoint_by_relay_id.items())
         ],
         "poll_seconds": assignment.poll_seconds,
+        "media_port": assignment.media_port,
+        "published_endpoints": [vars(endpoint) for endpoint in assignment.published_endpoints],
     }
     cache_path.write_text(json.dumps(payload))
 

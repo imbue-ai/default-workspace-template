@@ -17,6 +17,7 @@ import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
+import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
@@ -50,10 +51,14 @@ export interface ShortcutIconAttrs {
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
-/** What a shortcut reads: its app's name, whatever its mode ("Terminal"); the launch path's label is the
- *  launcher tile's. */
+/** What a shortcut reads: its app's name, whatever its mode ("Terminal"), as the launcher tile reads the launch
+ *  path's label; a default shortcut after the app's first reads its launch path's label ("Browser" beside "Screen"),
+ *  so an app's own shortcuts can be told apart. */
 export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefined): string {
-  return app === undefined ? shortcut.target.app : app.display_name;
+  if (app === undefined) return shortcut.target.app;
+  const declaredIndex = appShortcutsOf(app).findIndex((own) => own.launch === shortcut.target.launch);
+  if (declaredIndex <= 0) return app.display_name;
+  return launchPathOf(app, shortcut.target.launch)?.label ?? app.display_name;
 }
 
 export const CONNECTING_TOOLTIP = "Connecting to the workspace...";

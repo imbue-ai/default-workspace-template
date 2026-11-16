@@ -1,0 +1,1 @@
+An app that stops when no window shows it now gets the full 60 seconds again each time its program restarts. Before, a restart did not reset the countdown, so an app restarted shortly before its 60 seconds ran out, such as `verify_app.py --restart` during `build-app`, was stopped a few seconds later, while its page was still loading.

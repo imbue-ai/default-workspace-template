@@ -1,4 +1,10 @@
+import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_frame_ancestors_policy
@@ -41,6 +47,7 @@ def _render(apps_toml: str = _APPS_TOML, chrome_origin: str = _CHROME_ORIGIN) ->
         https_port=8443,
         gateway_port=8791,
         chrome_origin=chrome_origin,
+        access_log_path=Path("/state/share_gateway/access.log"),
     )
 
 
@@ -250,6 +257,7 @@ def test_render_caddyfile_routes_the_agent_surface_and_strips_the_admission_toke
         https_port=8443,
         gateway_port=8791,
         chrome_origin="",
+        access_log_path=Path("/tmp/access.log"),
     )
     auth_block = rendered[rendered.index("@auth host auth-x7k9q2w1.alpha.example.com") :]
     assert "handle /_agent/* {" in auth_block.split("handle {")[0]
@@ -283,3 +291,59 @@ def test_caddyfile_hardens_every_response_including_the_error_path() -> None:
     # The appended frame-ancestors policy stays a plain (non-deferred) add: a
     # deferred set would overwrite a service's own CSP instead of composing.
     assert rendered.count("Content-Security-Policy") == 1
+
+
+def test_caddyfile_writes_a_bounded_access_log_without_headers_or_query_strings() -> None:
+    rendered = _render()
+
+    log_block = rendered[rendered.index("    log {") : rendered.index("    # Labels are semi-secret")]
+    assert "output file /state/share_gateway/access.log {" in log_block
+    assert "roll_size 8MiB" in log_block and "roll_keep 4" in log_block and "roll_keep_for 720h" in log_block
+    assert "wrap json" in log_block
+    assert "request>headers delete" in log_block
+    assert "resp_headers delete" in log_block
+    assert 'request>uri regexp `\\?.*$` ""' in log_block
+    # The log sits inside the site block, so it covers every origin of the share.
+    assert rendered.index("https://*.") < rendered.index("    log {")
+
+
+def _caddy_binary() -> str | None:
+    configured = os.environ.get("CADDY_BINARY", "")
+    if configured and Path(configured).exists():
+        return configured
+    return shutil.which("caddy")
+
+
+def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
+    """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
+    would start it. Skipped where no caddy is installed (CI); a workspace, where the gateway runs, has one."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(_render())
+
+    adapted = subprocess.run(
+        [caddy, "adapt", "--config", str(caddyfile), "--adapter", "caddyfile"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert adapted.returncode == 0, adapted.stderr
+    logs = json.loads(adapted.stdout)["logging"]["logs"]
+    (access_log,) = [log for name, log in logs.items() if name != "default"]
+    assert access_log["writer"] == {
+        "filename": "/state/share_gateway/access.log",
+        "output": "file",
+        "roll_keep": 4,
+        "roll_keep_days": 30,
+        "roll_size_mb": 8,
+    }
+    assert access_log["encoder"]["format"] == "filter" and access_log["encoder"]["wrap"] == {"format": "json"}
+    assert access_log["encoder"]["fields"] == {
+        "request>headers": {"filter": "delete"},
+        "request>tls": {"filter": "delete"},
+        "resp_headers": {"filter": "delete"},
+        "request>uri": {"filter": "regexp", "regexp": "\\?.*$"},
+    }

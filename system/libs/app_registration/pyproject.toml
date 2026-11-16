@@ -1,0 +1,23 @@
+[project]
+name = "app-registration"
+version = "0.1.0"
+description = "Registers and removes an app's row in the app registry (data/.state/apps.toml). Stdlib-only so every supervisord program line can run it under a bare python3."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app_registration"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.87",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

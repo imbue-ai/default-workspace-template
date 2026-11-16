@@ -60,8 +60,11 @@ _IRRELEVANT_PATHS = (
         # Every manifest the served environment was resolved from.
         ("system/apps/system_interface/pyproject.toml", True),
         ("pyproject.toml", True),
+        # The resource gauge reads memory and CPU through the memory guard's package.
+        ("system/services/oom_priority/pyproject.toml", True),
+        ("system/services/oom_priority/src/oom_priority/meminfo.py", True),
         # ... but not the manifests of another app's dependencies, which another process runs.
-        ("system/services/oom_priority/pyproject.toml", False),
+        ("system/libs/routines/pyproject.toml", False),
         ("system/libs/tk_command_parsing/pyproject.toml", False),
         # ... nor the root lockfile, which every scaffolded app relocks.
         ("uv.lock", False),
@@ -71,7 +74,7 @@ _IRRELEVANT_PATHS = (
         ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
         ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
         # Workspace libraries another app imports and this process does not.
-        ("system/services/oom_priority/src/oom_priority/bands.py", False),
+        ("system/libs/routines/src/routines/notifications.py", False),
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
@@ -199,30 +202,31 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
 
 def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
     # Scaffolding an app -- the routine action the build-app skill documents --
-    # writes the package under ``system/apps/``, writes the program's own
-    # ``system/supervisord.conf.d/<name>.conf`` drop-in, and relocks so the root
-    # lockfile covers the new workspace member.
+    # writes the package under ``system/apps/`` as a standalone project with its
+    # own ``uv.lock``, and the program's own
+    # ``system/supervisord.conf.d/<name>.conf`` drop-in.
     # None of that moves what this process resolved, so the banner must stay
     # down: firing on every app a user builds is how a banner stops being read.
     # Every file ``scaffold_flask_lib.py`` writes is listed, so a rule that
     # later caught any one of them fails here rather than in a user's
     # workspace. The root ``pyproject.toml`` is absent because the scaffold does
-    # not edit it -- the ``system/apps/*`` member glob picks the package up --
-    # which is why it can stay a staleness trigger.
+    # not edit it -- the app is not a root member -- which is why it can stay a
+    # staleness trigger.
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(
         repo,
         "scaffold a new app",
-        "uv.lock",
         "system/supervisord.conf.d/finances.conf",
         "system/apps/finances/pyproject.toml",
+        "system/apps/finances/uv.lock",
         "system/apps/finances/app.toml",
         "system/apps/finances/README.md",
         "system/apps/finances/icon.svg",
         "system/apps/finances/test_finances_ratchets.py",
         "system/apps/finances/src/finances/__init__.py",
         "system/apps/finances/src/finances/runner.py",
+        "system/apps/finances/src/finances/runner_test.py",
     )
     assert tracker.staleness() is None
 
@@ -451,7 +455,9 @@ def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
     interrupted apply to roll back.
     """
     repo_root = WORKSPACE_ROOT_DIRECTORY
-    script = _module_string_constants(repo_root / ".agents/skills/update-self/scripts/update_apply_contract.py")
+    script = _module_string_constants(
+        repo_root / ".agents/skills/update-self/python/update_self_skill/update_apply_contract.py"
+    )
     bootstrap = _module_string_constants(repo_root / "system/libs/bootstrap/src/bootstrap/manager.py")
 
     state_dir = script["STATE_DIR_REL"]

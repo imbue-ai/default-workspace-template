@@ -68,8 +68,14 @@ beforeEach(() => {
     onAvatarSelectionChanged: vi.fn(),
     onUpdateNoticeChanged: vi.fn(),
     onThemesChanged: vi.fn(),
+    onKeybindingsChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
+    onRosterUpdated: vi.fn(),
+    onClientsUpdated: vi.fn(),
+    onChatsActivity: vi.fn(),
+    onResourceGaugeChanged: vi.fn(),
+    onBubble: vi.fn(),
     onConnected: vi.fn(),
   };
   socket = new ShellSocket("client-1");
@@ -156,13 +162,15 @@ describe("ShellSocket", () => {
     });
     expect(handlers.onClientEntriesChanged).toHaveBeenCalledWith({
       clientId: "client-1",
-      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 }, is_window_shown: true } },
     });
     const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
     current().receive({ type: "presence_updated", users: [bob] });
+    current().receive({ type: "clients_updated" });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onPresenceUpdated).toHaveBeenCalledWith([bob]);
+    expect(handlers.onClientsUpdated).toHaveBeenCalledTimes(1);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({
       desktopId: "home",
       clientId: "client-1",
@@ -210,6 +218,13 @@ describe("ShellSocket", () => {
       WireShapeError,
     );
     expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands the pushed resource gauge to its handler as it came", () => {
+    current().open();
+    const view = { settings: { visibility: "always" }, alerts: [] };
+    current().receive({ type: "resource_gauge_changed", view });
+    expect(handlers.onResourceGaugeChanged).toHaveBeenCalledWith(view);
   });
 
   it("delivers the theme catalog the shell pushes, leaving out a malformed theme", () => {

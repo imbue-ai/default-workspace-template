@@ -1,0 +1,1 @@
+- Moved the Lima guest image (`[providers.lima]` `default_image_url_*`) to the Debian 13 genericcloud `20261026-2643` release, the one carrying the CVE-2026-98432 kernel fix (`linux` 6.12.113-1), matching the `mngr_lima` library default and the gen-2 slice guest image, so new desktop Lima VMs boot the fixed kernel.

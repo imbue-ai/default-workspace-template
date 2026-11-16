@@ -102,7 +102,7 @@ only through the tokens it uses.
 ## Check it
 
 ```bash
-uv run workspace-themes lint-app <package>
+uv run --no-sync workspace-themes lint-app <package>
 ```
 
 lists every literal color, font family, and shadow still in the app's sources, by file and line.
@@ -116,7 +116,7 @@ they look.
 
 The reply that shows the user the app ends with this question, next to asking whether to keep the
 change; never skip it. Ask whether they also want the app's icon drawn for each theme that
-has an icon style of its own (`uv run workspace-themes icon missing` names those themes and the
+has an icon style of its own (`uv run --no-sync workspace-themes icon missing` names those themes and the
 apps they have no icon for). Say plainly that each icon takes time to draw and costs tokens, and
 that without one the app keeps its standard icon, or one derived from it, under those themes.
 Draw them only when they say yes and the change is kept, with the `make-theme-icon` skill, in the background.

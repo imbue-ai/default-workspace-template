@@ -8,10 +8,13 @@ from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import FloatingPosition
+from workspace_layout.records import Viewport
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -50,11 +53,13 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "last_seen": "2026-09-04T00:02:00Z",
         "is_connected": True,
         "user_id": None,
+        "participant": None,
         "entries": {},
         "shown_history": [],
         "desktop_revision": 2,
+        "viewport": None,
     }
-    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
+    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 3
 
 
 def test_set_active_desktop_moves_a_recorded_client_and_refuses_an_unknown_one(tmp_path: Path) -> None:
@@ -119,8 +124,8 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
     both = store.set_entry_presentation(ClientId("c1"), AppName("notes"), bar, TEST_NOW + timedelta(minutes=4))
     assert both.entries == {"chat": floating, "notes": bar}
     assert client_view(both, False).model_dump(mode="json")["entries"] == {
-        "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}},
-        "notes": {"mode": "bar", "style": "plain", "position": None},
+        "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}, "is_window_shown": True},
+        "notes": {"mode": "bar", "style": "plain", "position": None, "is_window_shown": True},
     }
     stored = json.loads((tmp_path / CLIENTS_FILENAME).read_text())["clients"]["c1"]["entries"]
     assert set(stored) == {"chat", "notes"}
@@ -139,7 +144,9 @@ def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> N
     assert store.prune_unseen(TEST_NOW) == []
 
 
-def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_two(tmp_path: Path) -> None:
+def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_three(
+    tmp_path: Path,
+) -> None:
     """The tabbed shell's file carried a device kind and a view per client; a client that reported a desktop keeps
     it, one that never did lands on the desktop of its view's id (or the first desktop, when none has it)."""
     legacy = {
@@ -163,31 +170,109 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
 
     store.record_report(client_report("c3", "home"), TEST_NOW, is_redirected=False)
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
-    assert written["version"] == 2
+    assert written["version"] == 3
     assert set(written["clients"]) == {"viewer", "desktopper", "c3"}
     assert set(written["clients"]["viewer"]) == {
         "active_desktop",
         "last_seen",
         "user_id",
+        "participant",
         "entries",
         "shown_history",
         "desktop_revision",
         "desktop_moved_by",
+        "viewport",
     }
+
+
+def test_a_version_two_file_moves_every_pinned_entry_into_the_taskbar_once_and_a_later_choice_sticks(
+    tmp_path: Path,
+) -> None:
+    """A version-2 shell saved a pinned entry's then-default floating mode on any drag, so reading one puts every
+    entry in the taskbar with no position, keeping its style and shown flag; a choice made after it is kept."""
+    earlier = {
+        "version": 2,
+        "clients": {
+            "laptop": {
+                "active_desktop": "home",
+                "last_seen": "2026-10-20T00:00:00+00:00",
+                "entries": {
+                    "chat": {
+                        "mode": "floating",
+                        "style": "avatar",
+                        "position": {"x": 0.9, "y": 0.85},
+                        "is_window_shown": False,
+                    },
+                    "notes": {"mode": "floating", "style": "plain", "position": None},
+                },
+            },
+            "monitor": {"active_desktop": "home", "last_seen": "2026-10-21T00:00:00+00:00", "entries": {}},
+        },
+    }
+    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps(earlier))
+    store = ClientStore(state_directory=tmp_path)
+
+    laptop = store.get_client("laptop")
+    assert laptop is not None
+    assert laptop.entries == {
+        "chat": EntryPresentation(mode=EntryMode.BAR, style=PinStyle.AVATAR, position=None, is_window_shown=False),
+        "notes": EntryPresentation(mode=EntryMode.BAR, style=PinStyle.PLAIN, position=None),
+    }
+    monitor = store.get_client("monitor")
+    assert monitor is not None and monitor.entries == {}
+
+    # The first write saves the taskbar entries at version 3; floating the avatar again then survives fresh reads.
+    store.record_report(client_report("monitor", "home"), TEST_NOW, is_redirected=False)
+    written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
+    assert written["version"] == 3
+    assert written["clients"]["laptop"]["entries"]["chat"]["mode"] == "bar"
+    refloated = EntryPresentation(
+        mode=EntryMode.FLOATING, style=PinStyle.AVATAR, position=FloatingPosition(x=0.5, y=0.5)
+    )
+    store.set_entry_presentation(ClientId("laptop"), AppName("chat"), refloated, TEST_NOW + timedelta(minutes=1))
+    reread = ClientStore(state_directory=tmp_path).get_client("laptop")
+    assert reread is not None and reread.entries["chat"] == refloated
+
+
+def test_set_viewport_stores_a_recorded_clients_backdrop_size_which_its_reports_and_arrivals_keep(
+    tmp_path: Path,
+) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    store.record_report(client_report("c1", "home"), TEST_NOW, is_redirected=False)
+    assert store.list_clients()[0].viewport is None
+
+    recorded = store.set_viewport(ClientId("c1"), Viewport(width=1280, height=720), TEST_NOW + timedelta(minutes=1))
+    assert recorded.viewport == Viewport(width=1280, height=720)
+    assert recorded.last_seen == TEST_NOW + timedelta(minutes=1)
+    reported = store.record_report(client_report("c1", "work"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
+    assert reported.record.viewport == Viewport(width=1280, height=720)
+    arrived = store.record_arrival(
+        ClientId("c1"), None, ParticipantKey(OWNER_PARTICIPANT_KEY), DesktopId("home"), TEST_NOW + timedelta(minutes=3)
+    )
+    assert arrived.record.viewport == Viewport(width=1280, height=720)
+    # The newest size replaces the one before, and the record survives a fresh read of the file.
+    store.set_viewport(ClientId("c1"), Viewport(width=1440.5, height=900), TEST_NOW + timedelta(minutes=4))
+    reread = ClientStore(state_directory=tmp_path).get_client("c1")
+    assert reread is not None and reread.viewport == Viewport(width=1440.5, height=900)
+    with pytest.raises(ClientNotFoundError):
+        store.set_viewport(ClientId("missing"), Viewport(width=1, height=1), TEST_NOW)
 
 
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:
     (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 7, "clients": {}}))
     assert ClientStore(state_directory=tmp_path).list_clients() == []
-    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 2, "clients": "nope"}))
+    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 3, "clients": "nope"}))
     assert ClientStore(state_directory=tmp_path).list_clients() == []
 
 
 def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_the_user(tmp_path: Path) -> None:
     store = ClientStore(state_directory=tmp_path)
-    arrived = store.record_arrival(ClientId("c1"), UserId("user-alice"), DesktopId("alice"), TEST_NOW)
+    arrived = store.record_arrival(
+        ClientId("c1"), UserId("user-alice"), ParticipantKey("user:user-alice"), DesktopId("alice"), TEST_NOW
+    )
     assert arrived.is_active_desktop_changed is True
     assert arrived.record.user_id == "user-alice" and arrived.record.active_desktop == "alice"
+    assert arrived.record.participant == "user:user-alice"
     # The client_state report, made by a page that read the arrival's record, carries no user, so the recorded one
     # stays.
     reported = store.record_report(
@@ -196,10 +281,11 @@ def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_
         is_redirected=False,
     ).record
     assert reported.user_id == "user-alice" and reported.active_desktop == "home"
+    assert reported.participant == "user:user-alice"
     # Arriving again on the desktop the client is on changes nothing about the desktop.
     assert (
         store.record_arrival(
-            ClientId("c1"), UserId("user-alice"), DesktopId("home"), TEST_NOW
+            ClientId("c1"), UserId("user-alice"), ParticipantKey("user:user-alice"), DesktopId("home"), TEST_NOW
         ).is_active_desktop_changed
         is False
     )
@@ -229,7 +315,9 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     assert again.last_seen == TEST_NOW + timedelta(minutes=1)
     # A later report and arrival keep it, and it is what the store reads back.
     store.record_report(client_report("c1", "research"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
-    store.record_arrival(ClientId("c1"), None, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
+    store.record_arrival(
+        ClientId("c1"), None, OWNER_PARTICIPANT_KEY, DesktopId("home"), TEST_NOW + timedelta(minutes=3)
+    )
     reread = ClientStore(state_directory=tmp_path).get_client("c1")
     assert reread is not None and reread.shown_history == expected
     assert client_view(reread, False).model_dump(mode="json")["shown_history"] == list(expected)
@@ -267,4 +355,4 @@ def test_a_version_two_file_written_before_the_shown_history_reads_it_as_empty(t
     (client,) = store.list_clients()
     assert client.shown_history == ()
     assert store.record_shown(ClientId("c1"), WindowId(_window_id(1)), TEST_NOW).shown_history == (_window_id(1),)
-    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
+    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 3

@@ -43,7 +43,7 @@ class AntigravityHarnessSession(FileHarnessSession):
         self._sending_lock = threading.Lock()
         return self
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         """Hold the message. Always. This session never types into agy.
 
         Deciding here whether to type meant reading agy's state, releasing the lock (mngr
