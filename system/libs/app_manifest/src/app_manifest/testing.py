@@ -162,9 +162,10 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``corelib``) that another library (``midlib``) and the chat app depend on, an app
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
-    frontend depends on, a flat script and its test, a skill, the repo guards, and the check
-    that every supervisord block names its OOM band. The shell's modules are built, and ignored
-    by git, as in the live workspace; ``remove_shell_modules`` makes it a fresh worktree."""
+    frontend depends on, a flat script and its test, a skill, the repo guards, and the checks
+    that read every supervisord block (its OOM band, its critical-path wait). The shell's modules
+    are built, and ignored by git, as in the live workspace; ``remove_shell_modules`` makes it a
+    fresh worktree."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
     write_repo_file(repo_root, ".gitignore", f"{SHELL_APP_CONTRACT_PATH.parent.parent}/\n")
@@ -252,6 +253,11 @@ def build_selection_workspace(repo_root: Path) -> None:
         repo_root,
         "system/services/oom_priority/bin/oom_tag_service_test.py",
         "def test_every_program_has_a_band() -> None:\n    pass\n",
+    )
+    write_repo_file(
+        repo_root,
+        "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
+        "def test_no_critical_path_program_waits() -> None:\n    pass\n",
     )
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
