@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import webbrowser
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -104,9 +105,9 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
                     events=_read_session_events(file),
                 )
             )
-    session_ids = [session.session_id for session in sessions]
-    if len(set(session_ids)) != len(session_ids):
-        raise ReplayInputError("The same session was named more than once")
+    repeated = [session_id for session_id, count in Counter(s.session_id for s in sessions).items() if count > 1]
+    if repeated:
+        raise ReplayInputError(f"Named more than once: session {', '.join(repeated)}")
     return sessions
 
 
