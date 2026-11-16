@@ -230,6 +230,15 @@ export async function uploadAttachment(file: File): Promise<UploadedAttachment> 
   return makeUploadedAttachment(body.path, body.size);
 }
 
+/** The text of a previously-uploaded attachment, read back from the agent VM. Throws on a non-2xx response. */
+export async function readAttachmentText(attachment: UploadedAttachment): Promise<string> {
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    throw new Error(`Reading ${attachment.name} back failed (HTTP ${response.status})`);
+  }
+  return response.text();
+}
+
 /** Delete a previously-uploaded attachment from the agent VM. Best-effort: a
  *  failed request is swallowed since the caller is removing it from the UI
  *  regardless. */

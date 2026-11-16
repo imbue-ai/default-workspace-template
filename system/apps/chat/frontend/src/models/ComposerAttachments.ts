@@ -17,6 +17,7 @@ import m from "mithril";
 import { deleteAttachment } from "./attachments";
 import { forgetLocalImage } from "./attachments";
 import { isImagePath } from "./attachments";
+import { readAttachmentText } from "./attachments";
 import { rememberLocalImage } from "./attachments";
 import { uploadAttachment } from "./attachments";
 import type { UploadedAttachment } from "./attachments";
@@ -293,11 +294,7 @@ export async function unstagePastedText(chatId: string, localId: string): Promis
     if (item.uploaded === undefined) {
       throw new Error(`Attachment ${item.fileName} has neither its text nor an uploaded copy`);
     }
-    const response = await fetch(item.uploaded.url);
-    if (!response.ok) {
-      throw new Error(`Reading ${item.fileName} back failed (HTTP ${response.status})`);
-    }
-    text = await response.text();
+    text = await readAttachmentText(item.uploaded);
     if (!getComposerAttachments(chatId).some((attachment) => attachment.localId === localId)) return null;
   }
   removeComposerAttachment(chatId, localId);
