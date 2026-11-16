@@ -145,6 +145,20 @@ class _LiveServices(MutableModel):
         self.current = None
         assert wait_until(lambda: not Path(DISPLAY_SOCKET_PATH).exists(), 10.0)
 
+    def forget_saved_browsers(self) -> None:
+        """Delete the browsers' manifest and profiles, which outlive every life, so the next life restores none."""
+        assert self.current is None, "the saved browsers are forgotten between lives, not under a running fleet"
+        _browser_manifest_path(self.base).unlink(missing_ok=True)
+        shutil.rmtree(_browser_profile_root(self.base), ignore_errors=True)
+
+
+def _browser_manifest_path(base: Path) -> Path:
+    return base / "apps" / "browser" / "instances.json"
+
+
+def _browser_profile_root(base: Path) -> Path:
+    return base / "profiles"
+
 
 def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveService:
     """Build and start a service over ``base`` (the state dir, the browser's manifest and profile) the way
@@ -169,8 +183,8 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         launcher=SubprocessChromiumLauncher(),
         cdp_connector=WebSocketCdpConnector(),
         proxy_server=proxy_server,
-        manifest_store=ManifestStore(path=base / "apps" / "browser" / "instances.json"),
-        profile_root=base / "profiles",
+        manifest_store=ManifestStore(path=_browser_manifest_path(base)),
+        profile_root=_browser_profile_root(base),
         executable=FORTRESS_EXECUTABLE,
         install_check=describe_missing_browser_install,
         environment=screen_process_environment,
@@ -399,17 +413,21 @@ def page_server_url() -> Iterator[str]:
 
 @pytest.mark.browser
 def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its_tab(
-    running: _LiveService, page_server_url: str
+    live: _LiveServices, page_server_url: str
 ) -> None:
-    service, client = running.service, running.client
     missing = describe_missing_browser_install()
     if missing is not None:
         pytest.skip(missing)
+    # A browser an earlier test left (stopped, remembering its tabs) is saved beside the module's lives and a new
+    # life restores it in the background, so the test begins a fresh life with none saved: this launch then
+    # checkpoints only its own page.
+    live.shutdown("a fresh life with no saved browsers")
+    live.forget_saved_browsers()
+    built = live.ensure_service()
+    built.service.ensure_started()
+    built.wait_until_running()
+    service, client = built.service, built.client
     page_url = f"{page_server_url}/start"
-    # The module's fleet outlives each test, so a browser an earlier one left (stopped, remembering its tabs) is
-    # forgotten first, as the first-demand test begins a fresh life: this launch then checkpoints only its own page.
-    for earlier in service.fleet.browsers():
-        service.fleet.close_and_forget(earlier.name)
     answer = client.post("/launch/browser", json={"url": page_url})
     assert answer.status_code == 200, answer.get_json()
     assert answer.get_json() == {"path": "/"}
