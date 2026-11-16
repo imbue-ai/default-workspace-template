@@ -244,9 +244,9 @@ export interface TaskbarEntryMenuActions {
 }
 
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show
- *  and Bring back to desktop instead of those), then for a pinned entry
- *  Float or Move to taskbar (where the avatar creature lives) and the avatar chooser when the pin declares one,
- *  then Add to desktop or Remove from desktop, then Close. */
+ *  and Bring back to desktop instead of those), then for a pinned entry Float or Move to taskbar (where the
+ *  avatar creature lives) and the avatar chooser when the pin declares one, then Add to desktop or Remove from
+ *  desktop, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window or brings it back.
   const rows: MenuRow[] = actions.isDetached
