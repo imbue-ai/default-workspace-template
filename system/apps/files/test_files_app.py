@@ -717,8 +717,10 @@ def _stage_transform(page: Page) -> str:
 
 def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
     page.wait_for_function(
-        "([fitted, isFitted]) => (getComputedStyle(document.querySelector('.files-image-stage')).transform"
-        " === fitted) === isFitted",
+        """([fitted, isFitted]) => {
+            const transform = getComputedStyle(document.querySelector('.files-image-stage')).transform;
+            return (transform === fitted) === isFitted;
+        }""",
         arg=[_FITTED, is_fitted],
     )
 
@@ -726,8 +728,10 @@ def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
 def _wait_for_stage_scale(page: Page, scale: float) -> None:
     """Wait until the stage is drawn at ``scale``, within a hundredth of it."""
     page.wait_for_function(
-        "scale => Math.abs(new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform).a"
-        " - scale) < scale / 100",
+        """scale => {
+            const transform = getComputedStyle(document.querySelector('.files-image-stage')).transform;
+            return Math.abs(new DOMMatrix(transform).a - scale) < scale / 100;
+        }""",
         arg=scale,
     )
 
@@ -747,8 +751,8 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
     fitted = _image_box(page)
     pointer = _point_at(page, 0.75, 0.7)
 
-    # A plain scroll leaves a fitted picture alone (were it read as a pinch, the zoom below would not be e); a
-    # trackpad pinch reaches the page as many small Ctrl+wheel events.
+    # A plain scroll leaves a fitted picture alone (read as a pinch, it would carry the zoom below past e); a trackpad
+    # pinch reaches the page as many small Ctrl+wheel events.
     page.mouse.wheel(0, -120)
     page.keyboard.down("Control")
     for _ in range(10):
@@ -782,8 +786,7 @@ def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFile
     page.mouse.up()
     assert _stage_transform(page) == _FITTED
 
-    _point_at(page, 0.5, 0.5)
-    page.mouse.dblclick(*centre)
+    page.mouse.dblclick(*_point_at(page, 0.5, 0.5))
     _wait_for_stage_transform(page, is_fitted=False)
     zoomed = _image_box(page)
     _point_at(page, 0.5, 0.5)
@@ -808,7 +811,18 @@ def _view_box(page: Page) -> dict[str, float]:
     )
 
 
-def test_a_zoomed_image_scrolled_far_past_its_edge_still_covers_the_view(
+def _wait_for_image_at_view_corner(page: Page, view: dict[str, float]) -> None:
+    """Wait until the picture's bottom-right corner meets the view's: held at its own edges rather than leaving them."""
+    page.wait_for_function(
+        """view => {
+            const image = document.querySelector('.files-file-image').getBoundingClientRect();
+            return Math.abs(image.right - view.right) < 1 && Math.abs(image.bottom - view.bottom) < 1;
+        }""",
+        arg=view,
+    )
+
+
+def test_a_zoomed_image_scrolled_far_past_its_edge_or_its_window_shrunk_still_covers_the_view(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
     page = _wide_picture_page(open_files_page, files_root)
@@ -818,23 +832,16 @@ def test_a_zoomed_image_scrolled_far_past_its_edge_still_covers_the_view(
     for _ in range(10):
         page.mouse.wheel(400, 400)
 
-    # Held at its bottom-right corner: the picture's edges meet the view's rather than leaving it.
-    page.wait_for_function(
-        """() => {
-            const image = document.querySelector('.files-file-image').getBoundingClientRect();
-            const stage = document.querySelector('.files-image-stage');
-            const frame = stage.parentElement.getBoundingClientRect();
-            const style = getComputedStyle(stage.parentElement);
-            return Math.abs(image.right - (frame.right - parseFloat(style.paddingRight))) < 1
-                && Math.abs(image.bottom - (frame.bottom - parseFloat(style.paddingBottom))) < 1;
-        }"""
-    )
-    image = _image_box(page)
     view = _view_box(page)
+    _wait_for_image_at_view_corner(page, view)
+    image = _image_box(page)
     assert image["x"] < view["x"] and image["y"] < view["y"]
 
+    page.set_viewport_size({"width": 900, "height": 600})
+    _wait_for_image_at_view_corner(page, _view_box(page))
 
-def test_a_touch_pinch_out_past_the_fit_after_moving_leaves_the_image_fitted(
+
+def test_a_touch_pinch_out_past_the_fit_around_another_point_leaves_the_image_fitted(
     module_browser: Browser, files_origin: str, files_root: Path
 ) -> None:
     (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
@@ -850,16 +857,16 @@ def test_a_touch_pinch_out_past_the_fit_after_moving_leaves_the_image_fitted(
             points = [{"x": centre_x - spread, "y": 380, "id": 1}, {"x": centre_x + spread, "y": 380, "id": 2}]
             touch.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else points})
 
-        # Spread the fingers to zoom in, move them across to pan, then pinch them together past the fit.
+        # Pinch in around the middle, then lift and pinch out past the fit around a point to its left.
         fingers("touchStart", 195, 30)
         for spread in range(35, 160, 5):
             fingers("touchMove", 195, spread)
+        fingers("touchEnd", 195, 0)
         _wait_for_stage_transform(page, is_fitted=False)
-        for centre_x in range(195, 60, -5):
-            fingers("touchMove", centre_x, 160)
-        for spread in range(160, 5, -5):
-            fingers("touchMove", 60, spread)
-        fingers("touchEnd", 60, 0)
+        fingers("touchStart", 140, 140)
+        for spread in range(135, 0, -5):
+            fingers("touchMove", 140, spread)
+        fingers("touchEnd", 140, 0)
 
         _wait_for_stage_transform(page, is_fitted=True)
         assert _image_box(page) == pytest.approx(fitted)

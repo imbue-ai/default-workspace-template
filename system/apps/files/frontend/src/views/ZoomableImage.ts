@@ -8,11 +8,11 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import m from "mithril";
 
-/** How far past its fitted size a picture zooms in. */
-export const MAX_IMAGE_ZOOM = 8;
+/** The most a picture zooms in, as a multiple of its fitted size. */
+const MAX_IMAGE_ZOOM = 8;
 
 /** The zoom a double-click on a fitted picture goes to. */
-export const DOUBLE_CLICK_ZOOM = 2;
+const DOUBLE_CLICK_ZOOM = 2;
 
 /** How much a Ctrl+wheel delta changes the zoom, as an exponent per unit. */
 const PINCH_ZOOM_RATE = 0.01;
@@ -27,14 +27,14 @@ interface ZoomableImageAttrs {
   frameClass: string;
 }
 
-interface Pan {
+interface XY {
   x: number;
   y: number;
 }
 
-/** The pan nearest ``pan`` that keeps a picture ``imageSize`` across, zoomed by ``scale`` around the middle of a view
- *  ``viewSize`` across, covering the view, or centred in it when it is smaller. Pans are in the stage's own pixels. */
-export function panWithinView(pan: Pan, scale: number, imageSize: Pan, viewSize: Pan): Pan {
+/** The pan nearest `pan` that keeps a picture `imageSize` across, zoomed by `scale` around the middle of a view
+ *  `viewSize` across, covering the view, or centred in it when it is smaller. Pans are in the stage's own pixels. */
+function panWithinView(pan: XY, scale: number, imageSize: XY, viewSize: XY): XY {
   const within = (value: number, image: number, view: number): number => {
     const bound = Math.max(0, (scale * image - view) / (2 * scale));
     return Math.min(bound, Math.max(-bound, value));
@@ -42,9 +42,8 @@ export function panWithinView(pan: Pan, scale: number, imageSize: Pan, viewSize:
   return { x: within(pan.x, imageSize.x, viewSize.x), y: within(pan.y, imageSize.y, viewSize.y) };
 }
 
-/** Make ``stage``, which fills ``frame`` and centres ``image``, zoom and move inside it; the returned function undoes
- *  it. */
-export function attachZoom(frame: HTMLElement, stage: HTMLElement, image: HTMLImageElement): () => void {
+/** Make `stage`, which fills `frame` and centres `image`, zoom and move inside it; the returned function undoes it. */
+function attachZoom(frame: HTMLElement, stage: HTMLElement, image: HTMLImageElement): () => void {
   const zoom: PanzoomObject = Panzoom(stage, {
     minScale: 1,
     maxScale: MAX_IMAGE_ZOOM,
@@ -111,7 +110,10 @@ export function attachZoom(frame: HTMLElement, stage: HTMLElement, image: HTMLIm
   document.addEventListener("pointercancel", zoom.handleUp);
   stage.addEventListener("panzoomend", onGestureEnd);
   stage.addEventListener("panzoomchange", onChange);
+  const resizeObserver = new ResizeObserver(() => settle(false));
+  resizeObserver.observe(stage);
   return () => {
+    resizeObserver.disconnect();
     frame.removeEventListener("wheel", onWheel);
     frame.removeEventListener("dblclick", onDoubleClick);
     frame.removeEventListener("pointerdown", onPointerDown);
