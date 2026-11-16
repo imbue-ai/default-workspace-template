@@ -53,14 +53,18 @@ def _agent_id_for_session(session_id: str) -> str:
 def _read_session_events(path: Path) -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
     for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-        # A session file can carry lines that are not JSON objects; the parser only reads object records.
-        if not line.startswith("{"):
+        stripped = line.strip()
+        if not stripped:
             continue
+        # The app's parser skips a line it cannot decode (a claude killed mid-write leaves a truncated last
+        # record) and shows the rest, so the replay does too rather than refusing the file.
         try:
-            record = json.loads(line)
+            record = json.loads(stripped)
         except json.JSONDecodeError as e:
-            raise ReplayInputError(f"{path}:{line_number} is not valid JSON ({e})") from e
-        records.append(record)
+            logger.warning("Skipping {}:{}, which is not valid JSON ({})", path, line_number, e)
+            continue
+        if isinstance(record, dict):
+            records.append(record)
     return tuple(records)
 
 
