@@ -406,6 +406,10 @@ def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its
     if missing is not None:
         pytest.skip(missing)
     page_url = f"{page_server_url}/start"
+    # The module's fleet outlives each test: a browser an earlier test stopped relaunches on the tabs it remembers,
+    # ahead of the page this launch opens.
+    earlier = service.fleet.the_browser()
+    restored_tabs = tuple(earlier.last_known_tabs) if earlier is not None else ()
     answer = client.post("/launch/browser", json={"url": page_url})
     assert answer.status_code == 200, answer.get_json()
     assert answer.get_json() == {"path": "/"}
@@ -436,7 +440,7 @@ def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its
     service.fleet.checkpoint()
     manifest = service.fleet.manifest_store.read()
     assert manifest is not None
-    assert manifest.browsers[0].tabs == (page_url,)
+    assert manifest.browsers[0].tabs == (*restored_tabs, page_url)
     assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
     assert wait_until(lambda: chromium_window() is None, 30.0)
     assert client.get("/api/state").get_json()["chromium"]["state"] == "stopped"
