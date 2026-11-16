@@ -162,7 +162,8 @@ function withoutNulCharacters(draft: string): string {
 /** The kind the notice handles a failed send as. A send that got no answer may have been delivered
  *  before its answer was lost, so it is handled as one mngr could not confirm. */
 function noticeKindOf(sendError: unknown): SendFailureKind {
-  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
+  const isUnanswered = isUnansweredRequest(sendError) || describeRequestFailure(sendError).cause === "not_answered";
+  return isUnanswered ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {

@@ -1545,6 +1545,18 @@ describe("MessageInput send failure notice", () => {
     expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
   });
 
+  it("treats a gateway's reasonless 503 as a send nothing answered, not one that was refused", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Service Unavailable"), { code: 503, response: null }),
+    );
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't confirm your message arrived");
+    expect(text).not.toContain("Couldn't send your message");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Retry")).toBeUndefined();
+  });
+
   it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
     const component = MessageInput();
