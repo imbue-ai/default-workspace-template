@@ -310,6 +310,13 @@ def test_get_provisional_chats_initially_empty(agent_manager: AgentManager) -> N
     assert protos == []
 
 
+def test_the_shown_chat_ids_are_the_listed_chats_then_the_provisional_ones(agent_manager: AgentManager) -> None:
+    seed_agent_state(agent_manager, "agent-listed-1", name="Chat-1")
+    seed_failed_chat(agent_manager, ChatId("agent-provisional-2"), "Chat-2")
+
+    assert agent_manager.get_shown_chat_ids() == [ChatId("agent-listed-1"), ChatId("agent-provisional-2")]
+
+
 @pytest.mark.parametrize("chat_ref", ["", "   "])
 def test_a_blank_chat_ref_names_no_chat(agent_manager: AgentManager, chat_ref: str) -> None:
     """A route or instance key can hand the manager a blank id; that names nothing rather than

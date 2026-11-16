@@ -24,7 +24,7 @@ vi.mock("./presence", () => ({
 const ensureParticipants = vi.fn(() => Promise.resolve());
 vi.mock("./models/Participants", () => ({ ensureParticipants }));
 
-import { CHAT_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
+import { CHAT_ON_SCREEN, PROVIDER_CHOOSER_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
@@ -45,6 +45,7 @@ let connection: ShellConnection | null = null;
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   reportChatOnScreenOnce: typeof import("./shell").reportChatOnScreenOnce;
+  reportProviderChooserOnScreenOnce: typeof import("./shell").reportProviderChooserOnScreenOnce;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
   openSubagentView: typeof import("./shell").openSubagentView;
   presence: {
@@ -63,6 +64,7 @@ async function loadShell(): Promise<{
   return {
     connectChatToShell: shell.connectChatToShell,
     reportChatOnScreenOnce: shell.reportChatOnScreenOnce,
+    reportProviderChooserOnScreenOnce: shell.reportProviderChooserOnScreenOnce,
     startChatOnAccount: shell.startChatOnAccount,
     openSubagentView: shell.openSubagentView,
     presence,
@@ -249,6 +251,39 @@ describe("reportChatOnScreenOnce", () => {
 
     reportChatOnScreenOnce("agent-1", true);
     expect(chatOnScreenReports(parent)).toEqual([]);
+  });
+});
+
+describe("reportProviderChooserOnScreenOnce", () => {
+  function chooserReports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((data) => data.type === PROVIDER_CHOOSER_ON_SCREEN);
+  }
+
+  let layoutSpy: MockInstance | null = null;
+
+  afterEach(() => {
+    layoutSpy?.mockRestore();
+    layoutSpy = null;
+  });
+
+  it("reports once the root is shown and laid out, with no chat named, and only once", async () => {
+    const parent = framed();
+    layoutSpy = vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height: 0 } as DOMRect);
+    const { reportProviderChooserOnScreenOnce } = await loadShell();
+
+    reportProviderChooserOnScreenOnce(false);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([]);
+
+    layoutSpy.mockReturnValue({ height: 900 } as DOMRect);
+    reportProviderChooserOnScreenOnce(false);
+    expect(chooserReports(parent)).toEqual([]);
+
+    reportProviderChooserOnScreenOnce(true);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([{ type: PROVIDER_CHOOSER_ON_SCREEN }]);
   });
 });
 
