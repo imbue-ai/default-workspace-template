@@ -38,7 +38,7 @@ looked like. Ask only when the description leaves the look genuinely open.
 ## 2. Lay out the folder
 
 ```bash
-uv run workspace-themes new <id> --name "<Name>" --description "<one sentence>" --base <base>
+uv run --no-sync workspace-themes new <id> --name "<Name>" --description "<one sentence>" --base <base>
 ```
 
 `<id>` is lowercase with hyphens. Start from `standard` unless the new theme is a variation on
@@ -79,7 +79,7 @@ style, chrome setting, and icon its base has, and sets only what differs.
 ## 4. Check it
 
 ```bash
-uv run workspace-themes validate <id>
+uv run --no-sync workspace-themes validate <id>
 ```
 
 It prints `ok` or every problem with its file. Fix each, and run it again until it is clean. A
@@ -150,7 +150,7 @@ derives one from the app's standard icon (`derive` in `[icons]`), a stopgap rath
 look.
 
 ```bash
-uv run workspace-themes icon missing <id>
+uv run --no-sync workspace-themes icon missing <id>
 ```
 
 names the apps still without one. Make each with the `make-theme-icon` skill, in the background

@@ -1,0 +1,1 @@
+The workspace's mngr moves to the `minds-v0.10.1` release of mngr: the pin in `pyproject.toml` and `uv.lock` names the public mirror commit of the mngr the 0.10.1 desktop app ships, so a workspace built from this tag runs the same mngr the app drives it with.

@@ -1,0 +1,1 @@
+The vendored imbue-studio skill's cross-workspace verb table gains `minds-workspaces-account-settings` (saving a workspace's keyboard-shortcut changes to its account), synced from the pinned mngr commit for user-profile-state phase 3C.

@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import RECOVERY_MESSAGE
@@ -116,8 +117,8 @@ def _real_claude_chat(
 
 
 def _send(manager: AgentManager, agent: AgentInfo, text: str) -> None:
-    failure = manager.send_message_to_agent(AgentId(agent.id), text)
-    assert failure is None, f"mngr could not deliver {text!r}: {failure}"
+    result = manager.send_message_to_agent(AgentId(agent.id), text)
+    assert isinstance(result, SendDelivery), f"mngr could not deliver {text!r}: {result}"
 
 
 def _wait_until_queued(watcher: AgentSessionWatcher, text: str) -> None:
@@ -197,7 +198,7 @@ def test_a_tap_that_cancels_the_turn_a_queued_message_just_joined_sends_the_reco
 
             def send_recovery(text: str) -> bool:
                 recoveries.append(text)
-                return manager.send_message_to_agent(AgentId(agent.id), text) is None
+                return isinstance(manager.send_message_to_agent(AgentId(agent.id), text), SendDelivery)
 
             outcome = ClaudeAtomicShoulderTap.build(agent).tap(
                 watcher,

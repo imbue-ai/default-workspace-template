@@ -32,7 +32,7 @@ task's completion will start the next one.
   busy chat's agent as safe to stop.
 - `.agents/skills/launch-task/scripts/create_worker.py`'s worker idle check.
 
-`system/scripts/run_in_background.py` writes its own markers with a copy of the
+`system/scripts/workspace_bare_scripts/run_in_background.py` writes its own markers with a copy of the
 layout, since update-self's staged copy of it runs in workspaces that may predate
 this package; `run_in_background_test.py` pins the two together.
 

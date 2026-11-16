@@ -32,6 +32,8 @@ from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
@@ -45,6 +47,8 @@ from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -53,6 +57,9 @@ from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import DesktopView
 from workspace_layout.records import WindowView
+from workspace_layout.roster import RosterDocument
+from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import participant_color
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
@@ -111,7 +118,7 @@ def fake_desktop(
 def fake_app(
     name: str,
     launch_paths: Sequence[RegistryLaunchPath] = (),
-    default_shortcut: DefaultShortcut | None = None,
+    default_shortcuts: Sequence[DefaultShortcut] = (),
     is_internal: bool = False,
 ) -> InventoryApp:
     """A running app of the inventory, named for itself, served on a loopback port nothing listens on."""
@@ -125,8 +132,9 @@ def fake_app(
         program="",
         critical=False,
         stop_when_no_windows=False,
+        uses_microphone=False,
         launch_paths=tuple(launch_paths),
-        default_shortcut=default_shortcut,
+        default_shortcuts=tuple(default_shortcuts),
         launcher_rank=None,
         pin=None,
         message_handlers=(),
@@ -138,6 +146,35 @@ def fake_app(
 def empty_layout() -> DesktopLayoutView:
     """A client's layout of a desktop it never placed anything on."""
     return DesktopLayoutView(version=1, updated_at=None, placements=(), window_paths={})
+
+
+def roster_participant(
+    key: ParticipantKey,
+    *,
+    kind: ParticipantKind = ParticipantKind.PERSON,
+    display_name: str | None = None,
+    profile_picture_url: str | None = None,
+    email: str | None = None,
+    handle: str | None = None,
+    is_owner: bool = False,
+    is_connected: bool = True,
+) -> RosterParticipant:
+    """One entry of the roster a ``FakeShell`` answers: named and mentioned after the key's id part unless told
+    otherwise, coloured as the shell colours it, never seen."""
+    name = display_name if display_name is not None else str(key).split(":", 1)[-1]
+    return RosterParticipant(
+        key=key,
+        kind=kind,
+        display_name=name,
+        profile_picture_url=profile_picture_url,
+        email=email,
+        handle=handle if handle is not None else name,
+        color=participant_color(key),
+        is_owner=is_owner,
+        is_connected=is_connected,
+        last_seen=None,
+        last_input_at=None,
+    )
 
 
 class FakeShell(ShellLayoutInterface):
@@ -172,6 +209,11 @@ class FakeShell(ShellLayoutInterface):
     closes: list[WindowArgs] = Field(default_factory=list, description="Every close asked for")
     refreshes: list[RefreshArgs] = Field(default_factory=list, description="Every refresh asked for")
     activities: list[ClientActivityReport] = Field(default_factory=list, description="Every activity reported")
+    bubbles: list[BubblePost] = Field(default_factory=list, description="Every bubble posted")
+    chats_activity: list[ChatsActivityReport] = Field(default_factory=list, description="Every chats-activity report")
+    roster_document: RosterDocument = Field(
+        default_factory=lambda: RosterDocument(participants=()), description="The roster the shell answers"
+    )
 
     def _check(self, op: LayoutOp, client_id: ClientId | None) -> None:
         if self.error is not None:
@@ -245,6 +287,17 @@ class FakeShell(ShellLayoutInterface):
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
         self.activities.append(report)
+
+    def post_bubble(self, bubble: BubblePost) -> None:
+        self.bubbles.append(bubble)
+
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
+        self.chats_activity.append(report)
+
+    def roster(self) -> RosterDocument:
+        if self.listing_error is not None:
+            raise self.listing_error
+        return self.roster_document
 
 
 def describe_op_body_problem(body: Any) -> str | None:

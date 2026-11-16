@@ -14,6 +14,7 @@ vi.mock("mithril", () => ({
 import {
   addMessageSentListener,
   appendEvents,
+  countSentTurnsSince,
   appendForwardEvents,
   prependEvents,
   evictEvents,
@@ -31,6 +32,7 @@ import {
   getFirstOffset,
   getRenderVersion,
   getTotalEventCount,
+  hasUserTurnLandedSince,
   getEventDetailState,
   getEventDetailVersion,
   requestEventDetail,
@@ -39,6 +41,8 @@ import {
   isConversationNotFound,
   isMessageCarriedBySwitch,
   noteLoadedArrivals,
+  sentUserTurnIds,
+  userTurnIdsLandedSince,
   whenTranscriptLoadSettles,
   type AssistantMessageEvent,
   type ToolCall,
@@ -221,6 +225,72 @@ describe("appendEvents and the optimistic bubbles", () => {
     expect(isMessageCarriedBySwitch(chat, "m-trigger")).toBe(true);
     expect(isMessageCarriedBySwitch(chat, "m-other")).toBe(false);
     expect(isMessageCarriedBySwitch("no-such-chat", "m-trigger")).toBe(false);
+  });
+});
+
+describe("hasUserTurnLandedSince", () => {
+  function userTurn(id: string, content: string, source = "test"): TranscriptEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: id,
+      source,
+      message_uuid: id,
+      role: "user",
+      content,
+    };
+  }
+
+  it("finds a turn holding the sent text that was not there before the send", () => {
+    const chat = freshChat();
+    appendEvents(chat, [userTurn("before", "earlier")]);
+    const prior = sentUserTurnIds(chat);
+    expect(hasUserTurnLandedSince(chat, "did you get this?", prior)).toBe(false);
+
+    appendEvents(chat, [userTurn("queued", "something else"), userTurn("landed", "did you get this?\n")]);
+    expect(hasUserTurnLandedSince(chat, "did you get this?", prior)).toBe(true);
+  });
+
+  it("does not count a turn with the same text that was already there before the send", () => {
+    const chat = freshChat();
+    appendEvents(chat, [userTurn("old", "yes"), userTurn("after-old", "no")]);
+    const prior = sentUserTurnIds(chat);
+    expect(prior).toEqual(new Set(["old", "after-old"]));
+    appendEvents(chat, [userTurn("new", "maybe")]);
+    expect(hasUserTurnLandedSince(chat, "yes", prior)).toBe(false);
+  });
+
+  it("does not count a seeded turn, which no page sent", () => {
+    const chat = freshChat();
+    const prior = sentUserTurnIds(chat);
+    appendEvents(chat, [userTurn("seed-0", "hello", "seed")]);
+    expect(hasUserTurnLandedSince(chat, "hello", prior)).toBe(false);
+  });
+
+  it("lists every copy that landed since, oldest first, and none from before", () => {
+    const chat = freshChat();
+    appendEvents(chat, [userTurn("old-copy", "hello"), userTurn("before", "earlier")]);
+    const prior = sentUserTurnIds(chat);
+    appendEvents(chat, [userTurn("first", "hello"), userTurn("other", "something else"), userTurn("second", "hello")]);
+    expect(userTurnIdsLandedSince(getEventsForChat(chat), "hello", prior)).toEqual(["first", "second"]);
+  });
+});
+
+describe("countSentTurnsSince", () => {
+  function turn(id: string, timestamp: string, agentId: string, source = "test"): TranscriptEvent {
+    return { timestamp, type: "user_message", event_id: id, source, role: "user", content: id, agent_id: agentId };
+  }
+
+  it("counts the agent's turns from users' messages since the moment given, and nothing else", () => {
+    const chat = freshChat();
+    appendEvents(chat, [
+      turn("before", "2026-01-01T00:00:00Z", "agent-a"),
+      turn("other-agent", "2026-01-01T00:01:00Z", "agent-b"),
+      turn("seeded", "2026-01-01T00:01:00Z", "agent-a", "seed"),
+      turn("at", "2026-01-01T00:01:00Z", "agent-a"),
+      turn("after", "2026-01-01T00:02:00Z", "agent-a"),
+    ]);
+    expect(countSentTurnsSince(chat, "agent-a", "2026-01-01T00:01:00Z")).toBe(2);
   });
 });
 
@@ -851,6 +921,56 @@ describe("message-sent listeners", () => {
       mockRequest.mockResolvedValueOnce({});
       await sendMessage(agent, "again");
       expect(seen).toEqual([agent]);
+      expect(mockRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ is_single_send: false }) }),
+      );
+
+      mockRequest.mockResolvedValueOnce({});
+      await sendMessage(agent, "once", undefined, true);
+      expect(mockRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ is_single_send: true }) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("a send that got no answer", () => {
+  function sentIds(): unknown[] {
+    return mockRequest.mock.calls.map((call) => (call[0] as { body: { message_id: string } }).body.message_id);
+  }
+
+  it("is sent again under the same id until the chat app answers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    try {
+      mockRequest.mockClear();
+      mockRequest
+        .mockRejectedValueOnce({ code: 0, response: null })
+        .mockRejectedValueOnce({ code: 504, response: null })
+        .mockResolvedValueOnce({ status: "ok" });
+      const sent = sendMessage(freshChat(), "hello", "m-1");
+      await vi.runAllTimersAsync();
+      expect(await sent).toBe("ok");
+      expect(sentIds()).toEqual(["m-1", "m-1", "m-1"]);
+      const repeatFlags = mockRequest.mock.calls.map(
+        (call) => (call[0] as { body: { is_repeat: boolean } }).body.is_repeat,
+      );
+      expect(repeatFlags).toEqual([false, true, true]);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is not sent again when the chat app answered with a refusal", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    try {
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce({ code: 500, response: { detail: "the agent is in shell mode" } });
+      await expect(sendMessage(freshChat(), "hello", "m-1")).rejects.toMatchObject({ code: 500 });
+      expect(sentIds()).toEqual(["m-1"]);
     } finally {
       vi.unstubAllGlobals();
     }

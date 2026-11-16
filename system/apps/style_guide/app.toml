@@ -9,8 +9,9 @@ icon = "icon.svg"
 critical = false
 # One static page: the shell stops it once no window shows it and starts it again on the next request.
 stop_when_no_windows = true
-# A reference page for whoever designs the workspace's look; nothing is lost when the memory guard sheds it.
-priority = "user"
+# A reference page for whoever designs the workspace's look; nothing is lost when the memory guard sheds it, so its
+# own band sits right before System Monitor's, among the most expendable built-in apps.
+priority = "style-guide"
 # Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
 system = true
 
@@ -21,5 +22,6 @@ mode = "tokens"
 
 # A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is nothing to copy.
 [preview]
+command = ["style-guide-app"]
 env = {STYLE_GUIDE_APP_PORT = "{port:main}", STYLE_GUIDE_APP_HOST = "{host}"}
 health_path = "/api/health"

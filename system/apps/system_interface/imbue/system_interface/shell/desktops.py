@@ -3,6 +3,7 @@ the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_off
 
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -15,7 +16,9 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -24,6 +27,7 @@ from workspace_layout.records import ClientRecord
 from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import GridCell
+from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Wallpaper
 from workspace_layout.records import Window
 from workspace_themes.primitives import ThemeId
@@ -32,6 +36,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import AppsOfferedDocument
 from imbue.system_interface.shell.data_types import DefaultShortcutsOfferedDocument
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
@@ -40,8 +45,9 @@ from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
-from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
-from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets
+from imbue.system_interface.shell.desktop_document import first_default_shortcut_targets
+from imbue.system_interface.shell.desktop_document import shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import with_default_shortcuts_offered
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_shortcut
@@ -50,11 +56,14 @@ from imbue.system_interface.shell.desktop_document import with_window_location
 from imbue.system_interface.shell.desktop_document import with_window_opened
 from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
+from imbue.system_interface.shell.desktop_document import without_shortcuts_of_unregistered_apps
 from imbue.system_interface.shell.desktop_document import without_window
 from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
+from imbue.system_interface.shell.ownership import reordered_desktops
+from imbue.system_interface.shell.ownership import with_visitor_owners
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
@@ -65,17 +74,22 @@ DESKTOPS_FILENAME: Final[str] = "desktops.json"
 # The workspace's default theme and each desktop's own (workspace-themes plan section 5.2).
 DESKTOP_THEMES_FILENAME: Final[str] = "desktop_themes.json"
 DESKTOP_THEMES_FILE_VERSION: Final[int] = 1
-# The apps whose default shortcut the shell has offered (desktop plan section 3.2).
+# The default shortcuts the shell has offered (desktop plan section 3.2).
 DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
-DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 1
+DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 2
+# The record's version while it named apps (``AppsOfferedDocument``).
+_APPS_OFFERED_FILE_VERSION: Final[int] = 1
+# Written once the visitors' desktops from before desktop owners have been given their visitors, so the fill-in
+# runs on one start only: a visitor's record still names a desktop the owner deleted, whose id the owner may reuse.
+VISITOR_DESKTOPS_ADOPTED_FILENAME: Final[str] = "visitor_desktops_adopted"
 
 # The one desktop a fresh workspace starts with (desktop plan section 3.2).
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
 DEFAULT_DESKTOP_COLOR: Final[str] = "#2f6b4f"
 DEFAULT_DESKTOP_GLYPH: Final[int] = 0
 
-# Each glyph's signature colour, in glyph order: the frontend's ``SQUIGGLE_GLYPHS`` palette, which is what the
-# settings dialog offers, so a desktop the shell names itself wears a colour the dialog could have picked.
+# Each glyph's signature colour, in glyph order. The shell still fills both fields for a desktop it names itself,
+# since the record keeps them (the multiplayer spec, S7).
 DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
     "#F0603A",
     "#16A34A",
@@ -264,6 +278,17 @@ def find_desktop_by_name_or_id(desktops: Sequence[Desktop], requested: str) -> D
     return None
 
 
+def _target_sort_key(target: ShortcutTarget) -> tuple[str, str]:
+    return (str(target.app), str(target.launch))
+
+
+@pure
+def _offered_without_a_record(desktops: Sequence[Desktop], rows: Sequence[RegistryRow]) -> frozenset[ShortcutTarget]:
+    """What counts as offered when no record can be read: the first default shortcut of every app with a shortcut on
+    ``desktops``, as a record of apps would have said."""
+    return first_default_shortcut_targets(rows, frozenset(target.app for target in shortcut_targets_on(desktops)))
+
+
 class DesktopStore(MutableModel):
     """Reads and writes ``desktops.json``, ``desktop_themes.json`` and ``default_shortcuts_offered.json`` under the
     shell's state lock."""
@@ -318,48 +343,67 @@ class DesktopStore(MutableModel):
     def _offered_path(self) -> Path:
         return self.state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME
 
-    def _read_offered_unlocked(self) -> frozenset[AppName] | None:
-        """The apps recorded as offered, or None when the file is absent, unreadable, or of another version (logged)."""
+    def _read_offered_unlocked(self, rows: Sequence[RegistryRow]) -> frozenset[ShortcutTarget] | None:
+        """The targets recorded as offered, or None when the file is absent, unreadable, or of another version
+        (logged). A record of apps, written while an app had one default shortcut, offered each app's first one; it is
+        rewritten as those targets once there are rows to read them from, and reads as None until then."""
+        raw = read_json_object(self._offered_path())
+        if raw is not None and raw.get("version") == _APPS_OFFERED_FILE_VERSION:
+            legacy = parse_versioned_document(
+                raw, AppsOfferedDocument, _APPS_OFFERED_FILE_VERSION, self._offered_path()
+            )
+            if legacy is None or not rows:
+                return None
+            targets = first_default_shortcut_targets(rows, frozenset(legacy.apps))
+            self._write_offered_unlocked(targets)
+            return targets
         document = parse_versioned_document(
-            read_json_object(self._offered_path()),
-            DefaultShortcutsOfferedDocument,
-            DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION,
-            self._offered_path(),
+            raw, DefaultShortcutsOfferedDocument, DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION, self._offered_path()
         )
-        return frozenset(document.apps) if document is not None else None
+        return frozenset(document.targets) if document is not None else None
 
-    def _write_offered_unlocked(self, apps: AbstractSet[AppName]) -> None:
+    def _write_offered_unlocked(self, targets: AbstractSet[ShortcutTarget]) -> None:
+        ordered: list[ShortcutTarget] = sorted(targets, key=_target_sort_key)
         document = DefaultShortcutsOfferedDocument(
-            version=DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION, apps=tuple(sorted(apps))
+            version=DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION, targets=tuple(ordered)
         )
         write_json_atomic(self._offered_path(), document.model_dump(mode="json"))
 
-    def _record_offered_unlocked(self, apps: AbstractSet[AppName], desktops_before: Sequence[Desktop]) -> None:
-        """Add ``apps``, whose default shortcuts the desktops write that follows places, to the offered record; with no
-        record yet, or no desktop before that write, the record starts over from the apps with a shortcut on the
-        desktops before it. It is written first, so a failure between the two never leaves the record of replaced
-        desktops beside new ones."""
-        recorded = self._read_offered_unlocked()
-        kept = recorded if recorded is not None and desktops_before else apps_with_a_shortcut_on(desktops_before)
-        offered = kept | apps
+    def _record_offered_unlocked(
+        self, targets: AbstractSet[ShortcutTarget], desktops_before: Sequence[Desktop], rows: Sequence[RegistryRow]
+    ) -> None:
+        """Add ``targets``, whose default shortcuts the desktops write that follows places, to the offered record; with
+        no record yet, or no desktop before that write, the record starts over from what the desktops before it count
+        as offered. With no record, desktops before, and no rows to read their apps' defaults from, it stays unwritten
+        for the next reconcile with rows. It is written first, so a failure between the two never leaves the record of
+        replaced desktops beside new ones."""
+        recorded = self._read_offered_unlocked(rows)
+        if recorded is None and desktops_before and not rows:
+            return
+        kept = (
+            recorded if recorded is not None and desktops_before else _offered_without_a_record(desktops_before, rows)
+        )
+        offered = kept | targets
         if offered != recorded:
             self._write_offered_unlocked(offered)
 
     def list_desktops(self) -> list[Desktop]:
-        """Every desktop in creation order; an absent or unreadable file lists none (``ensure_default`` seeds one)."""
+        """Every desktop in display order (creation order, as ``reorder_desktops`` rearranged it); an absent or
+        unreadable file lists none (``ensure_default`` seeds one)."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
         return list(document.desktops) if document is not None else []
 
     def ensure_default(self, seed_shortcuts: Callable[[], Sequence[DesktopShortcut]]) -> list[Desktop]:
         """The desktops, after creating the default one when the file holds none (desktop plan section 3.2), with the
-        offered record started over from the apps of its seeded shortcuts and no desktop keeping a theme of its own."""
+        offered record started over from the targets of its seeded shortcuts and no desktop keeping a theme of its
+        own."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             if document is not None and document.desktops:
                 return list(document.desktops)
             seeded = DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(default_desktop(seed_shortcuts()),))
-            self._record_offered_unlocked(apps_with_a_shortcut_on(seeded.desktops), ())
+            self._write_offered_unlocked(shortcut_targets_on(seeded.desktops))
             self._forget_desktop_themes_unlocked(frozenset(self._read_themes_unlocked().theme_by_desktop_id))
             self._write_unlocked(seeded)
             logger.info(
@@ -369,27 +413,45 @@ class DesktopStore(MutableModel):
             )
             return list(seeded.desktops)
 
-    def ensure_default_shortcuts_offered(self, rows: Sequence[RegistryRow]) -> DesktopsChangeOutcome:
-        """The desktops, after every desktop holds the default shortcut of each registered app not yet offered
-        (``with_default_shortcuts_offered``) and those apps are recorded as offered; desktops.json is written only when
-        a desktop changed. With no record yet, the apps with a shortcut on any desktop count as offered."""
+    def reconcile_shortcuts_with(self, rows: Sequence[RegistryRow]) -> DesktopsChangeOutcome:
+        """The desktops, after every desktop drops the shortcuts of apps no row registers
+        (``without_shortcuts_of_unregistered_apps``) and holds each default shortcut not yet offered
+        (``with_default_shortcuts_offered``), with the record holding what is offered. Each dropped shortcut's target
+        leaves the record, so it is offered again if its app registers again; a default shortcut the user had already
+        taken off every desktop stays offered, so that removal sticks. desktops.json is written only when a desktop
+        changed. A registry with no rows is one nothing has registered in yet, never one every app left, so it drops
+        nothing and leaves the record as it is."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             desktops = document.desktops if document is not None else ()
             if not desktops:
                 return DesktopsChangeOutcome(desktops=desktops, is_written=False)
-            recorded = self._read_offered_unlocked()
-            offered = recorded if recorded is not None else apps_with_a_shortcut_on(desktops)
-            reconciled = tuple(with_default_shortcuts_offered(desktop, rows, offered) for desktop in desktops)
+            recorded = self._read_offered_unlocked(rows)
+            offered = recorded if recorded is not None else _offered_without_a_record(desktops, rows)
+            kept = (
+                tuple(without_shortcuts_of_unregistered_apps(desktop, rows) for desktop in desktops)
+                if rows
+                else desktops
+            )
+            dropped = shortcut_targets_on(desktops) - shortcut_targets_on(kept)
+            offered = offered - dropped
+            reconciled = tuple(with_default_shortcuts_offered(desktop, rows, offered) for desktop in kept)
             changed_count = sum(1 for after, before in zip(reconciled, desktops, strict=True) if after is not before)
             if changed_count:
                 self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=reconciled))
-            newly_offered = apps_with_a_default_shortcut(rows) - offered
-            if recorded is None or newly_offered:
+            newly_offered = default_shortcut_targets(rows) - offered
+            if rows and offered | newly_offered != recorded:
                 self._write_offered_unlocked(offered | newly_offered)
+        if dropped:
+            logger.info(
+                "Removed the desktop shortcuts of {}, which no app registry row names",
+                sorted({target.app for target in dropped}),
+            )
         if newly_offered:
             logger.info(
-                "Offered the default shortcuts of {} ({} desktop(s) changed)", sorted(newly_offered), changed_count
+                "Offered the default shortcuts {} ({} desktop(s) changed)",
+                sorted(f"{target.app}/{target.launch}" for target in newly_offered),
+                changed_count,
             )
         return DesktopsChangeOutcome(desktops=reconciled, is_written=changed_count > 0)
 
@@ -410,11 +472,36 @@ class DesktopStore(MutableModel):
         logger.info("Reconciled the pinned windows of {} desktop(s) for {} pinned app(s)", len(ensured), len(pins))
         return DesktopsChangeOutcome(desktops=ensured, is_written=True)
 
+    def adopt_visitor_desktops(self, owner_by_desktop_id: Mapping[DesktopId, ParticipantKey]) -> DesktopsChangeOutcome:
+        """The desktops after each one with no owner that ``owner_by_desktop_id`` names is given that owner, the first
+        time this runs in the workspace; written only when one was. Raises ShellStateError when it cannot record that
+        it ran, leaving the next call to run it again."""
+        marker_path = self.state_directory / VISITOR_DESKTOPS_ADOPTED_FILENAME
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            if marker_path.is_file():
+                return DesktopsChangeOutcome(desktops=desktops, is_written=False)
+            adopted = with_visitor_owners(desktops, owner_by_desktop_id)
+            is_written = adopted != desktops
+            if is_written:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=adopted))
+            write_json_atomic(marker_path, {})
+        return DesktopsChangeOutcome(desktops=adopted, is_written=is_written)
+
     def create_desktop(
-        self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut], windows: Sequence[Window]
+        self,
+        name: str,
+        color: str,
+        glyph: int,
+        shortcuts: Sequence[DesktopShortcut],
+        windows: Sequence[Window],
+        # Whose desktop it is: None for the workspace owner's (the multiplayer spec, section 8.1).
+        owner: ParticipantKey | None,
+        rows: Sequence[RegistryRow],
     ) -> Desktop:
-        """Register a new desktop with its seeded shortcuts (whose apps are recorded as offered) and pinned windows and
-        no wallpaper; two names that shorten to one id conflict."""
+        """Register a new desktop with its seeded shortcuts (whose targets are recorded as offered) and pinned windows
+        and no wallpaper; two names that shorten to one id conflict."""
         desktop = Desktop(
             id=slugify_desktop_name(name),
             name=validated_desktop_name(name),
@@ -423,12 +510,16 @@ class DesktopStore(MutableModel):
             wallpaper=None,
             shortcuts=tuple(shortcuts),
             windows=tuple(windows),
+            owner=owner,
         )
-        return self.add_desktop(desktop, apps_with_a_shortcut_on((desktop,)))
+        return self.add_desktop(desktop, shortcut_targets_on((desktop,)), rows)
 
-    def add_desktop(self, desktop: Desktop, default_shortcut_apps: AbstractSet[AppName]) -> Desktop:
-        """Append a fully formed desktop (a created or a seeded one), recording as offered the apps whose default
-        shortcut it holds and dropping any theme choice its id left behind; an id already taken conflicts."""
+    def add_desktop(
+        self, desktop: Desktop, offered_targets: AbstractSet[ShortcutTarget], rows: Sequence[RegistryRow]
+    ) -> Desktop:
+        """Append a fully formed desktop (a created or a seeded one), recording ``offered_targets`` (the default
+        shortcut targets it holds) as offered and dropping any theme choice its id left behind; an id already taken
+        conflicts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             existing_desktops = document.desktops if document is not None else ()
@@ -438,23 +529,39 @@ class DesktopStore(MutableModel):
                     f"Desktop name {desktop.name!r} conflicts with existing desktop {existing.name!r} "
                     f"(both shorten to '{desktop.id}')"
                 )
-            self._record_offered_unlocked(default_shortcut_apps, existing_desktops)
+            self._record_offered_unlocked(offered_targets, existing_desktops, rows)
             self._forget_desktop_themes_unlocked({desktop.id})
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
             )
         return desktop
 
-    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:
-        """Replace one desktop's display metadata; the id, wallpaper, shortcuts, and windows stay."""
+    def update_settings(self, desktop_id: str, name: str, color: str | None, glyph: int | None) -> Desktop:
+        """Rename one desktop, and replace its colour and glyph when given (the desktops phase shows neither; a
+        caller from before it still sends them); the id, owner, wallpaper, shortcuts, and windows stay."""
         return self._replace(
             desktop_id,
             lambda desktop: desktop.model_copy_update(
                 to_update(desktop.field_ref().name, validated_desktop_name(name)),
-                to_update(desktop.field_ref().color, validated_desktop_color(color)),
-                to_update(desktop.field_ref().glyph, validated_desktop_glyph(glyph)),
+                to_update(
+                    desktop.field_ref().color, validated_desktop_color(color) if color is not None else desktop.color
+                ),
+                to_update(
+                    desktop.field_ref().glyph, validated_desktop_glyph(glyph) if glyph is not None else desktop.glyph
+                ),
             ),
         )
+
+    def reorder_desktops(self, ordered_own_ids: Sequence[DesktopId], identity: RequestIdentity) -> list[Desktop]:
+        """Put the requester's own desktops in the order given, the others keeping their places (the multiplayer
+        spec, section 8.2); raises DesktopValueError for an order that is not exactly their own desktops."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            reordered = reordered_desktops(desktops, ordered_own_ids, identity)
+            if reordered != desktops:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=reordered))
+        return list(reordered)
 
     def set_wallpaper(self, desktop_id: str, wallpaper: Wallpaper | None) -> Desktop:
         return self._replace(

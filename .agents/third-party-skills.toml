@@ -1,0 +1,8 @@
+# Skills in .agents/skills/ that were installed or copied in from elsewhere (a skills
+# marketplace, another repository, a download), each with where it came from. The workspace
+# keeps them as they came: the root suite's checks on skills leave them out, and nothing
+# converts them to the workspace's layout. Every skill not listed here is held to those
+# checks.
+
+[skills]
+# pdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"

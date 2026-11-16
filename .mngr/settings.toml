@@ -48,8 +48,9 @@ host_env__extend = [
     # channel to third-party services that bypasses the latchkey gateway for
     # the services latchkey DOES support. MCP itself is not disallowed: for a
     # service latchkey has no builtin for, the connect-external-service skill
-    # connects that service's MCP server through mcpc, the workspace's shared
-    # MCP client, rather than through any one harness.
+    # connects that service's MCP server as a custom latchkey service, so its
+    # credential sits in the same store and is reachable from every harness,
+    # rather than through any one harness's own MCP config.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
@@ -226,7 +227,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # system/scripts/setup_system.sh. A mismatch only warns: a workspace's binary can
 # drift from the pin, and failing the create would block the very chat (the update
 # run) that repairs it. The same holds for every pinned harness below.
-version = "2.1.307"
+version = "2.1.323"
 version_mismatch = "WARN"
 # Do not provision a per-agent Claude config dir. A claude is bound to a
 # provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
@@ -265,6 +266,17 @@ Give every Bash call a `description`, `tk` calls included: a few plain words say
 [agent_types.main]
 parent_type = "command"
 command = "sleep infinity"
+
+# the "room" agent type: a chat room, a chat among the workspace's people with
+# no AI agent (the multiplayer spec, section 7.3). Its process is the room's
+# reader (system/scripts/workspace_bare_scripts/room_agent.py): what `mngr message <room>` types into
+# its pane is appended to the room's transcript, the common transcript under
+# the agent's state dir that `mngr transcript <room>` renders and the chat app
+# tails. The chat app creates one per room and appends people's messages to the
+# same transcript itself.
+[agent_types.room]
+parent_type = "command"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/workspace_bare_scripts/room_agent.py"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
 # its own base type (registered by the imbue-mngr-codex plugin, installed
@@ -315,7 +327,7 @@ auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
-version = "0.161.0"
+version = "0.169.0"
 version_mismatch = "WARN"
 model = "gpt-6.1-sol"
 fall_back_to_account_default_model = true
@@ -352,10 +364,13 @@ model_reasoning_effort = "medium"
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
-# Some catalog entries (gpt-6-sol) default to the `priority` (fast) tier, and codex's TUI applies
-# a model's default tier to every turn typed in the agent terminal when no tier is configured. So
-# pin standard speed; the `fast` create template's config_overrides__extend replaces it.
-config_overrides.service_tier = "default"
+# Do not pin `service_tier` here. The visible `--remote` TUI sends the configured tier with its
+# `thread/resume`, and the app-server rebuilds an idle thread whose tier differs from it, so the
+# pin would undo every fast-mode switch the chat made before the TUI attached (on create the TUI
+# attaches only after mngr clears its hook-trust screen, often after the first switch). With no
+# tier configured, turns sent over the app-server run at the standard tier until a switch sets
+# one. A turn typed in the agent terminal on a model whose catalog default is the `priority` tier
+# (gpt-6-sol) runs fast and leaves the thread fast; the model bar shows it.
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. The source is the
@@ -432,7 +447,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 [agent_types.opencode]
 auto_allow_permissions = true
 check_installation = false
-version = "1.19.4"
+version = "1.19.5"
 version_mismatch = "WARN"
 # Launch through the OOM band wrapper, like every other harness. opencode is the one
 # harness whose `command` is not a launch PREFIX but the binary itself: the plugin passes
@@ -598,8 +613,8 @@ host_log_dir = "/var/log/mngr"
 # libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
 # them together, uploading the new release with `minds-admin artifacts upload`
 # before landing the bump here).
-default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20261103-2651/debian-13-genericcloud-arm64-20261103-2651.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
@@ -663,8 +678,15 @@ type = "main"
 # bootstrap is the only extra_window. It runs first-boot setup (git config) and
 # then launches supervisord, which runs every background service (see
 # system/supervisord.conf; the opt-in github-sync service is added by its skill).
-# terminal is a supervisord service rather than its own window.
-extra_window = ["bootstrap='uv run bootstrap'"]
+# terminal is a supervisord service rather than its own window. A failed sync
+# (`;`, not `&&`) still boots on the existing venv, so the workspace stays
+# reachable for an agent to repair whatever broke it; bootstrap runs from
+# .venv/bin rather than under `uv run` so no uv process parents supervisord.
+# venv_links.py first makes .venv a link to a target beside the uv cache (so uv
+# hardlinks rather than copies), recreating a target a rebuilt root filesystem lost --
+# for the root and for every user package (each a standalone project); it syncs none of
+# the user packages, whose own programs sync them at start.
+extra_window = ["bootstrap='bash -c \"python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . $(python3 system/scripts/workspace_bare_scripts/user_packages.py list) ; uv sync --all-packages --frozen; exec .venv/bin/bootstrap\"'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in mngr's cli/common_opts.py), so the
@@ -693,6 +715,8 @@ extra_provision_command__extend = [
 # difference between the two, so the body lives here once and the overlay reuses
 # it -- nothing to keep in sync.
 [create_templates.docker]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
@@ -717,8 +741,9 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 #
 # `--restart=unless-stopped` brings the container back after a docker daemon
 # restart or host reboot; the container entrypoint then self-heals sshd, so the
-# host is reachable again without a manual `mngr start`. The agent itself is
-# relaunched by the Imbue Studio desktop client in this (debugging-oriented) mode.
+# host is reachable again without a manual `mngr start`, and runs the image's
+# container start hook (`system/scripts/minds_container_start_hook.sh`), which
+# relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
@@ -744,6 +769,8 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 
 # template for lima VM provider
 [create_templates.lima]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "lima"
 target_path = "/home/user/workspace/"
 idle_mode = "disabled"
@@ -819,6 +846,9 @@ extra_provision_command__extend = [
 # passed to mngr create as the Modal build arg `-b --timeout=<seconds>`) rather than
 # through a template overlay, since a template cannot name a connection instance.
 [create_templates.modal]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1): TCP alone, since Modal
+# tunnels carry TCP only and mngr refuses a UDP declaration before the sandbox exists.
+publish__extend = ["59000/tcp"]
 target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # sandbox instead runs until the max-age timeout the connection block sets
@@ -846,6 +876,8 @@ extra_provision_command__extend = [
 
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "vultr"
 target_path = "/home/user/workspace/"
 # ``--vps-region=sjc`` (Silicon Valley) instead of the mngr_vultr default
@@ -867,7 +899,8 @@ idle_mode = "disabled"
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
-# agent container back after a VPS reboot; the entrypoint then self-heals sshd.
+# agent container back after a VPS reboot; the entrypoint then self-heals sshd
+# and runs the image's container start hook, which relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
@@ -1011,6 +1044,8 @@ systemctl restart --no-block minds-autostart.service
 # `aws` / `imbue_cloud` templates. Declaring `provider = "ovh"` here used to make
 # slice bakes fail ("conflicting providers": the slice address vs this template).
 [create_templates.pool_host]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 # No plan / datacenter / sizing baked in: each pool-bake path appends its own per
 # invocation -- the OVH backend appends ``-b --vps-datacenter=<region>`` (plan
@@ -1025,8 +1060,9 @@ idle_mode = "disabled"
 # or the slice VM's own provisioning).
 #
 # `--restart=unless-stopped` brings the agent container back after a pool-VM
-# reboot; the container entrypoint then self-heals sshd. The agent itself is
-# relaunched by the outer boot unit installed below.
+# reboot; the container entrypoint then self-heals sshd and runs the image's
+# container start hook, which relaunches the services agent. The outer boot
+# unit installed below relaunches it after a VM reboot as well.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
@@ -1177,6 +1213,8 @@ systemctl restart --no-block minds-autostart.service
 
 # template for AWS EC2 VPS provider (aws mode)
 [create_templates.aws]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 # No `provider` declared: Imbue Studio addresses the create as
 # `system-services@<host>.aws_<hex>`, which selects the connection instance
@@ -1199,7 +1237,8 @@ idle_mode = "disabled"
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
-# agent container back after an EC2 reboot; the entrypoint then self-heals sshd.
+# agent container back after an EC2 reboot; the entrypoint then self-heals sshd
+# and runs the image's container start hook, which relaunches the services agent.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
@@ -1343,6 +1382,8 @@ systemctl restart --no-block minds-autostart.service
 # type come from that provider block (`default_zone` / `default_machine_type`)
 # plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` Imbue Studio passes.
 [create_templates.gcp]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
@@ -1352,8 +1393,6 @@ idle_mode = "disabled"
 # runtime-agnostic (harmless under plain runc; required under gVisor's runsc if
 # the provider block opts into it): see the aws template for the rationale.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
-# Same forwarding as the docker template; see comment there.
-pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
 # Install the outer-VM boot unit so the agent recovers after a VM reboot even
@@ -1496,6 +1535,8 @@ systemctl restart --no-block minds-autostart.service
 # VM size come from that provider block (`default_region` / `default_vm_size`)
 # plus the matching `-b --azure-region=` / `-b --azure-vm-size=` Imbue Studio passes.
 [create_templates.azure]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
@@ -1505,8 +1546,6 @@ idle_mode = "disabled"
 # runtime-agnostic (harmless under plain runc; required under gVisor's runsc if
 # the provider block opts into it): see the aws template for the rationale.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
-# Same forwarding as the docker template; see comment there.
-pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
 # Install the outer-VM boot unit so the agent recovers after a VM reboot even
@@ -1650,6 +1689,8 @@ systemctl restart --no-block minds-autostart.service
 # (`imbue_cloud_<user id>`), so it's not declared here -- the
 # `<name>@<host>.imbue_cloud_<user id>` address tells mngr where to land.
 [create_templates.imbue_cloud]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 # Leased pool hosts must never auto-shutdown -- the host is borrowed for a
 # whole user session, not a one-shot job.
 idle_mode = "disabled"
@@ -1718,23 +1759,21 @@ transfer = "none"
 output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
 
-# Fast: launches the fast-capable harnesses in fast mode so a new conversation
-# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
-# auto with its fast turns still to run (a new chat's mode is the workspace's
-# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# Fast: launches claude in fast mode so a new conversation feels responsive.
+# The chat app stacks it on a chat whose fast mode is on, or auto with its fast
+# turns still to run (a new chat's mode is the workspace's default,
+# `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# claude's `settings_overrides` is a SettingsPatchField (deep-merge marker on
+# the field), so a bare dotted path merges into the [agent_types.claude] block.
 #
-# The two fast settings are deliberately asymmetric: claude's
-# `settings_overrides` is a SettingsPatchField (deep-merge marker on the
-# field), so a bare dotted path merges into the [agent_types.claude] block.
-# codex's `config_overrides` is a PLAIN dict -- a bare dotted assignment trips
-# the settings-narrowing guard (it would drop the features/tools blocks), so
-# the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
-# inconsistency in either direction. Settings for whichever harness is not
-# resolved are inert, so this template is safe to stack with any --type.
+# Codex is deliberately absent: the chat app turns its fast mode on with a model
+# switch once the agent is up (`is_launch_fast_switched` in the chat app's
+# harness registry). A tier in codex's config is re-sent by the agent terminal
+# whenever it attaches, so it would undo auto mode's later switch to standard
+# speed after any restart.
 [create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
-    'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
 # Automation: the agent a skill routine runs in (system/libs/routines). The
@@ -1777,15 +1816,20 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Converge the venv for worker agents. A fresh git worktree (transfer =
-# "git-worktree" above) carries no .venv (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
-# lazily, with root-closure scope rather than --all-packages, racing whatever the agent
-# is doing (intermittent ModuleNotFoundError, e.g. imbue_common). Scoped to the worker
+# Converge the venv for worker agents. A fresh git worktree (transfer = "git-worktree"
+# above) carries no .venv (gitignored), and a worker's one-offs run `uv run --no-sync`,
+# which never builds one, so it is built here, once and with --all-packages. Scoped to the worker
 # role: a `-t worker` create resolves to type `claude` and applies THIS template, so the
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages"]
+# --frozen, so a lock that has drifted from pyproject.toml is never rewritten here; the
+# worker's session-start sync reports it instead. venv_links.py links the worktree's .venv
+# (and every user package's) beside the uv cache first, and sweeps the targets of worktrees
+# that are gone; each user package, a standalone project, is then synced from its own lock,
+# so its tests run `uv run --no-sync` in its directory. The root sync decides whether the
+# create succeeds; a user package whose sync fails is reported and stops only itself.
+extra_provision_command__extend = ["python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . $(python3 system/scripts/workspace_bare_scripts/user_packages.py list) ; uv sync --all-packages --frozen && (python3 system/scripts/workspace_bare_scripts/user_packages.py sync || true)"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Custom: a user-facing coding agent working in the user's OWN repo or
@@ -1830,9 +1874,9 @@ You are a coding agent in an Imbue Studio workspace container, but your working 
 
 Environment facts:
 
-- You appear as a chat in the Imbue Studio UI; the user reads your replies there. When a turn ends with a result the user will want to act on, notify them (at most once per turn; skip it for chitchat or mid-task progress): python3 /home/user/workspace/.agents/skills/notify-user/scripts/notify_user.py "<one sentence>"
+- You appear as a chat in the Imbue Studio UI; the user reads your replies there. When a turn ends with a result the user will want to act on, notify them (at most once per turn; skip it for chitchat or mid-task progress): python3 /home/user/workspace/.agents/skills/notify-user/python/notify_user_skill/notify_user.py "<one sentence>"
 - Absolute file paths in your replies render as links that open the workspace's file viewer; http://localhost:<port> URLs open in-workspace.
-- Workspace tooling (the `uv run ...` entry points of /home/user/workspace) must run FROM /home/user/workspace; `uv run` in your repo resolves your repo's own venv.
+- Workspace tooling (the `uv run --no-sync ...` entry points of /home/user/workspace) must run FROM /home/user/workspace; run from your repo, uv resolves your repo's own venv instead.
 - Model access is billed through the user's signed-in provider account; never read or modify ~/.minds/accounts/ or /home/user/workspace/data/.secrets/.
 - /tmp is a ~1GiB RAM disk; put anything large under /var/tmp. The container may run under gVisor (no strace/gdb attach, no docker-in-docker, slow file-metadata operations).
 - A background OOM daemon sheds memory-heavy processes. If a command dies with exit 137 that you did not kill, check /home/user/workspace/data/.state/oom_priority/events/shed.jsonl before re-running it, and prefer a lower-memory approach.
