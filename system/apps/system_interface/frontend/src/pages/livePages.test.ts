@@ -1627,6 +1627,9 @@ describe("raising the window the document's focus lands in", () => {
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
     expect(topWindowId()).toBe("win-1");
+    store.endWindowMove({ x: 100, y: 60 });
+    tick();
+    expect(topWindowId()).toBe("win-2");
   });
 
   it("posts no focus grant that falls due between a press into another window's page and the tick that reads it", () => {
