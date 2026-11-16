@@ -39,6 +39,14 @@ function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
     onPersonHoverStart: vi.fn(),
     onAgentHoverStart: vi.fn(),
     onHoverEnd: vi.fn(),
+    resourceGauge: {
+      view: null,
+      isStale: false,
+      onOpen: vi.fn(),
+      onContextMenu: vi.fn(),
+      onHoverStart: vi.fn(),
+      onHoverEnd: vi.fn(),
+    },
     ...overrides,
   };
 }

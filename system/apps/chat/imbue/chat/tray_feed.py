@@ -1,6 +1,7 @@
-"""What this app tells the shell for the taskbar's tray (the multiplayer spec, sections 6.4 and 6.5): a speech
-bubble for every message a person or a visiting agent sends and for every turn the workspace agent closes with
-text, and what every chat is doing whenever the chat list changes.
+"""What this app tells the shell for the taskbar's tray (the multiplayer spec, sections 6.4 and 6.5): every message
+a person or a visiting agent sends and every post the workspace agent makes into a room (which hop the speaker's
+entry, and raise a speech bubble on the clients of the people a message mentions), every notification a chat sends
+the user (a bubble over the agent's entry), and what every chat is doing whenever the chat list changes.
 
 Both are best-effort loopback posts made off the caller's thread, one at a time: a send and a chat-list push never
 wait on the shell. The chats' activity is coalesced, since the list changes far more often than a tray redraws:
@@ -23,6 +24,7 @@ from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatActivity
 from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ChatActivityKind
 from workspace_layout.primitives import ChatActivityStatus
 from workspace_layout.primitives import ParticipantKey
@@ -44,15 +46,6 @@ CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS: Final[float] = 60.0
 def bubble_text(text: str) -> str:
     """What a bubble shows of a message: its first ``BUBBLE_TEXT_LIMIT`` characters, the ends trimmed."""
     return text.strip()[:BUBBLE_TEXT_LIMIT]
-
-
-@pure
-def first_paragraph(text: str) -> str:
-    """The first paragraph of an agent's turn (split on blank lines), which is what its bubble shows."""
-    for paragraph in text.strip().split("\n\n"):
-        if paragraph.strip():
-            return paragraph.strip()
-    return ""
 
 
 def _settled_future() -> Future[None]:
@@ -150,8 +143,10 @@ class TrayFeed(MutableModel):
         text: str,
         message_id: str,
         mentions: Sequence[ParticipantKey],
+        kind: BubbleKind,
     ) -> Future[None]:
-        """Queue the bubble a message raises; the future settles once it has been posted, or dropped."""
+        """Queue the post a message or a notification makes; the future settles once it has been posted, or
+        dropped."""
         bubble = BubblePost(
             speaker=speaker,
             chat_id=str(chat_id),
@@ -159,6 +154,7 @@ class TrayFeed(MutableModel):
             text=bubble_text(text),
             message_id=message_id,
             mentions=tuple(mentions),
+            kind=kind,
         )
         return self._submit("a bubble", self.shell.post_bubble, bubble)
 
