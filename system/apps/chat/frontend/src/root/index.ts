@@ -68,6 +68,7 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
+import { dropCachedTranscript } from "../models/transcriptCache";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -360,7 +361,10 @@ function onChatsUpdated(): void {
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
     for (const heldId of pool.heldChatIds()) {
-      if (!isKept(heldId)) pool.destroy(heldId);
+      if (!isKept(heldId)) {
+        pool.destroy(heldId);
+        dropCachedTranscript(heldId);
+      }
     }
   }
   if (selectedChatId !== null && !isKept(selectedChatId)) {
