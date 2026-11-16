@@ -11,6 +11,7 @@ from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import _MAX_ECHOED_REQUEST_PROBES
+from imbue.chat.testing import thinking_block_signature
 
 
 def _make_user_line(uuid: str, timestamp: str, content: str) -> str:
@@ -107,6 +108,56 @@ def test_parse_assistant_with_tool_calls() -> None:
     assert len(events[0]["tool_calls"]) == 1
     assert events[0]["tool_calls"][0]["tool_name"] == "Read"
     assert events[0]["tool_calls"][0]["tool_call_id"] == "toolu_1"
+
+
+def _make_content_block_line(uuid: str, timestamp: str, block: dict[str, Any]) -> str:
+    """An assistant record holding one content block, the way Claude Code writes each block it receives."""
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": timestamp,
+            "message": {"role": "assistant", "model": "claude-opus-5-5", "content": [block], "stop_reason": None},
+        }
+    )
+
+
+def _thinking_block(text: str, block_kind: str) -> dict[str, Any]:
+    return {"type": "thinking", "thinking": text, "signature": thinking_block_signature(block_kind)}
+
+
+def test_a_progress_update_reads_as_assistant_prose_and_reasoning_stays_hidden() -> None:
+    lines = [
+        _make_content_block_line(
+            "uuid-reason", "2026-01-01T00:00:01Z", _thinking_block("I'm weighing which source to read first.", "thinking")
+        ),
+        _make_content_block_line(
+            "uuid-update",
+            "2026-01-01T00:00:02Z",
+            _thinking_block("The app is up. Try a search and tell me what to change.\n\n", "narration"),
+        ),
+        _make_content_block_line(
+            "uuid-tool",
+            "2026-01-01T00:00:03Z",
+            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}},
+        ),
+    ]
+    events = parse_lines(lines)
+    assert [(event["event_id"], event["text"], len(event["tool_calls"])) for event in events] == [
+        ("uuid-reason-assistant", "", 0),
+        ("uuid-update-assistant", "The app is up. Try a search and tell me what to change.", 0),
+        ("uuid-tool-assistant", "", 1),
+    ]
+
+
+def test_an_empty_progress_update_adds_no_text() -> None:
+    events = parse_lines([_make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", _thinking_block("", "narration"))])
+    assert events[0]["text"] == ""
+
+
+def test_a_progress_update_line_carries_no_deferred_payload() -> None:
+    line = _make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", _thinking_block("Reading the data next.", "narration"))
+    assert parse_line_detail(line) == {}
 
 
 def test_parse_tool_result() -> None:
