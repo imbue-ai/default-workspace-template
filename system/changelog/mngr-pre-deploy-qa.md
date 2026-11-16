@@ -1,0 +1,1 @@
+The Screen spec's visibility section (8.2) now names the fourth input the viewer reads, the stage's size as the 1.5 s belt sees it, and says the stream owns the connect-info fetch, ignoring a superseded one and retrying a failed one; its keyboard section says keys are read from a hidden editable input inside the stage so command-binding browser extensions stand down.

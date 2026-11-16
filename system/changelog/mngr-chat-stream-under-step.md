@@ -1,0 +1,1 @@
+mngr is pinned to the paired mngr change, whose Claude terminal reader no longer streams Claude's own status lines (a finished tool group's "Ran 3 shell commands" summary, a running tool's blinking marker, the "main" row of the background-agents list) as part of a reply.

@@ -16,6 +16,8 @@ import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from pydantic import ValidationError
+from workspace_layout.identity import ANONYMOUS_OWNER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
@@ -37,15 +39,18 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
+from imbue.system_interface.shell.desktops import VISITOR_DESKTOPS_ADOPTED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
+from imbue.system_interface.shell.liveness import SupervisorProgramState
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -59,9 +64,10 @@ from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
 from imbue.system_interface.shell.testing import client_report
+from imbue.system_interface.shell.testing import default_target_pairs
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import offered_targets_recorded
 from imbue.system_interface.shell.testing import placement_record
-from imbue.system_interface.shell.testing import read_default_shortcuts_offered
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shortcut_apps_on
@@ -162,7 +168,7 @@ def _shell_recording_hints(
 
 def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
     request = WindowOpenRequest(app=AppName(app), path=WindowPath(path), client_id=ClientId("laptop"))
-    return shell.open_window(desktop_id, request).window.id
+    return shell.open_window(desktop_id, request, None).window.id
 
 
 def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
@@ -304,7 +310,7 @@ def _launch_waking_manager(
         is_enabled=is_enabled,
         count_windows_by_app=lambda: {},
         granted_app_names=lambda: set(),
-        program_states=lambda: {"docs": "STOPPED"},
+        program_states=lambda: {"docs": SupervisorProgramState(statename="STOPPED", pid=0)},
         start_program=start_program,
         stop_program=lambda program: None,
         clock=clock,
@@ -350,7 +356,7 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     hints: list[WindowClosedHintPost] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     shell.list_desktops()
-    work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), (), None, ())
     first = _open(shell, work.id, "terminal", "/?session=terminal-1")
     second = _open(shell, work.id, "terminal", "/?session=terminal-2")
     _open(shell, work.id, "files", "/")
@@ -358,6 +364,74 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     shell.delete_desktop(work.id)
 
     assert [(post.hint.window_id, post.hint.desktop_id) for post in hints] == [(first, "work"), (second, "work")]
+
+
+def _shell_with_a_visitors_desktop_from_before_owners(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> tuple[ShellState, Desktop]:
+    """A shell whose ``kanjun`` desktop was seeded for a visitor by a shell older than desktop owners: no owner, and
+    named by her ``users.json`` record; the workspace also has a desktop of the owner's own."""
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    shell.list_desktops()
+    visitors_desktop = shell.desktops.create_desktop("kanjun", "#123456", 1, (), (), None, ())
+    shell.desktops.create_desktop("Work", "#654321", 2, (), (), None, ())
+    shell.users.record_user(
+        UserRecord(
+            user_id=UserId("user-kanjun"),
+            desktop_id=visitors_desktop.id,
+            desktop_name=visitors_desktop.name,
+            email="kanjun@example.com",
+            display_name=None,
+            last_seen=TEST_NOW,
+        )
+    )
+    return shell, visitors_desktop
+
+
+def test_start_gives_a_visitors_desktop_from_before_desktop_owners_back_to_its_visitor_once(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A shell older than desktop owners seeded a visitor's desktop with none, which reads as the workspace owner's;
+    the first start gives it the visitor's key, and only it. Later starts leave ownerless desktops alone: her record
+    still names the id after the owner deletes that desktop, and the owner may make one of their own under it."""
+    shell, visitors_desktop = _shell_with_a_visitors_desktop_from_before_owners(tmp_path, broadcaster)
+    kanjun = RequestIdentity(owner=False, user_id="user-kanjun", email="kanjun@example.com")
+
+    shell.start()
+    try:
+        owners = {desktop.id: desktop.owner for desktop in shell.list_desktops()}
+        outcome = shell.arrive_client(ClientId("kanjuns-laptop"), kanjun)
+    finally:
+        shell.stop()
+
+    assert owners == {"home": None, "kanjun": "user:user-kanjun", "work": None}
+    assert outcome is not None and outcome.desktop_id == "kanjun" and outcome.created_desktop is None
+    assert is_desktop_owned_by(shell.get_desktop("kanjun"), kanjun)
+
+    shell.delete_desktop(visitors_desktop.id)
+    shell.desktops.create_desktop("kanjun", "#123456", 1, (), (), None, ())
+    shell.adopt_visitor_desktops()
+    assert shell.get_desktop("kanjun").owner is None
+
+
+def test_a_fill_in_that_cannot_record_it_ran_is_logged_and_runs_again_at_the_next_start(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, loguru_records: list[str]
+) -> None:
+    shell, _ = _shell_with_a_visitors_desktop_from_before_owners(tmp_path, broadcaster)
+    # A directory where the record goes makes every write of it fail.
+    marker_path = tmp_path / "state" / VISITOR_DESKTOPS_ADOPTED_FILENAME
+    marker_path.mkdir()
+
+    shell.adopt_visitor_desktops()
+
+    assert any(record.startswith("ERROR Failed to give the visitors' old desktops") for record in loguru_records)
+    marker_path.rmdir()
+    shell.adopt_visitor_desktops()
+    assert marker_path.is_file()
+    assert shell.get_desktop("kanjun").owner == "user:user-kanjun"
 
 
 def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(
@@ -490,6 +564,11 @@ def _seed_of_the_registry(shell: ShellState) -> tuple[DesktopShortcut, ...]:
     return seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
 
 
+def _default_targets_of_the_registry(shell: ShellState) -> list[tuple[str, str]]:
+    """The default shortcut targets of the rows the shell's inventory holds, as the offered record keeps them."""
+    return default_target_pairs([entry.row for entry in shell.inventory.entries()])
+
+
 def _register_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
 
@@ -555,7 +634,7 @@ def test_a_registry_change_before_the_first_read_of_the_desktops_seeds_nothing(
     assert _desktops_updates(client_queue) == []
     (home,) = shell.list_desktops()
     assert home.shortcuts == _seed_of_the_registry(shell)
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registry_change_alone(
@@ -600,13 +679,13 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
     desktops: creating a desktop, which records the chat as offered, first adds it to the desktops already there."""
     reading = _shell_restarted_after_the_chat_registered(tmp_path, broadcaster)
 
-    work = reading.create_desktop("Work", "#123456", 1)
+    work = reading.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
 
     stored_home, stored_work = reading.desktops.list_desktops()
     assert shortcut_apps_on(stored_home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
     assert _pinned_apps_on(stored_home) == ["chat"]
     assert stored_work == work and shortcut_apps_on(work) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert "chat" in read_default_shortcuts_offered(tmp_path / "state")["apps"]
+    assert ("chat", "root") in offered_targets_recorded(tmp_path / "state")
 
 
 def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_shortcut_too(
@@ -620,7 +699,8 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
         ClientId("visitor-tab"), RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
     )
     assert arrival is not None and arrival.created_desktop is not None
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
+    assert "chat" not in {app for app, _ in offered_targets_recorded(tmp_path / "state")}
 
     _register_chat_and_read(shell)
 
@@ -628,7 +708,7 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
     home, visitors = shell.desktops.list_desktops()
     assert visitors.id == arrival.created_desktop.id
     assert home.shortcuts == seeded_with_chat and visitors.shortcuts == seeded_with_chat
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new_shell(
@@ -666,10 +746,7 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
     (home,) = shell.list_desktops()
 
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert read_default_shortcuts_offered(state_directory) == {
-        "version": 1,
-        "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT),
-    }
+    assert offered_targets_recorded(state_directory) == _default_targets_of_the_registry(shell)
     assert read_desktops_file_in_its_released_shape(state_directory) == (home,)
     # Removed once added, it stays removed: the record now names it.
     shell.desktops.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
@@ -697,7 +774,7 @@ def test_a_registry_change_whose_reconcile_cannot_write_is_logged_and_the_next_r
     offered_path.rmdir()
     (home,) = shell.list_desktops()
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(tmp_path / "state") == _default_targets_of_the_registry(shell)
 
 
 def test_a_late_registration_reaches_the_desktops_through_the_registry_watch(

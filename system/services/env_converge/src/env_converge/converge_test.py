@@ -16,6 +16,8 @@ from env_converge.converge import (
     capture_unless_fresh_rootfs,
     read_overlay_paths,
     read_pinned_snapshot_timestamp,
+    uv_tools_to_replay,
+    workspace_app_package_names,
 )
 from env_converge.data_types import (
     AptState,
@@ -43,7 +45,6 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
 # Record round-trips
 
 
@@ -109,7 +110,6 @@ def test_rootfs_stamp_round_trip(tmp_path: Path) -> None:
     assert stamp.read_text() == first_id
 
 
-# ---------------------------------------------------------------------------
 # Overlay
 
 
@@ -167,7 +167,6 @@ def test_apply_overlay_entry_is_idempotent(tmp_path: Path) -> None:
     assert (rootfs_dir / "state.txt").read_text() == "written through the symlink"
 
 
-# ---------------------------------------------------------------------------
 # Pinned timestamp + upgrade deltas
 
 
@@ -184,7 +183,6 @@ def test_compute_version_deltas() -> None:
     assert deltas == {"curl": "7.88.1 -> 8.0.0", "git": "(absent) -> 2.45.0"}
 
 
-# ---------------------------------------------------------------------------
 # Fresh-rootfs capture guard (the record must survive to be replayed)
 
 
@@ -243,7 +241,6 @@ def test_read_record_snapshot_reads_present_sources_and_leaves_absent_none(
     assert snapshot.cargo_state is None
 
 
-# ---------------------------------------------------------------------------
 # Preserving recorded entries the replay could not install
 
 
@@ -345,7 +342,6 @@ def test_merge_missing_recorded_cargo_captured_default_toolchain_wins() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Per-entry fallback when a batched install fails
 
 
@@ -445,3 +441,47 @@ def test_install_missing_with_nothing_missing_runs_nothing(
     assert installed == []
     assert unavailable == []
     assert not log_path.exists()
+
+
+def _write_app_package(workspace_dir: Path, package: str, pyproject_text: str) -> None:
+    app_dir = workspace_dir / "system" / "apps" / package
+    app_dir.mkdir(parents=True)
+    (app_dir / "pyproject.toml").write_text(pyproject_text)
+
+
+def test_a_recorded_tool_named_like_a_workspace_app_is_never_replayed(
+    tmp_path: Path,
+) -> None:
+    # A record captured before apps stopped being uv tools still lists them. The package
+    # index's project of the same name is unrelated (system-monitor 0.1.0 exists there), so
+    # replaying one onto a fresh rootfs would install a stranger's package as root.
+    workspace_dir = tmp_path / "workspace"
+    _write_app_package(
+        workspace_dir, "system_monitor", '[project]\nname = "system-monitor"\n'
+    )
+    _write_app_package(workspace_dir, "files", '[project]\nname = "Files_App"\n')
+    _write_app_package(workspace_dir, "broken", "[project\n")
+    recorded = {
+        "system-monitor": "0.1.0",
+        "files-app": "0.1.0",
+        "yt-dlp": "2026.7.1",
+        "ruff": "0.6.0",
+    }
+
+    to_replay = uv_tools_to_replay(
+        recorded, {"ruff"}, workspace_app_package_names(workspace_dir)
+    )
+
+    assert to_replay == ["yt-dlp"]
+
+
+def test_workspace_app_package_names_reads_each_apps_project_name(
+    tmp_path: Path,
+) -> None:
+    workspace_dir = tmp_path / "workspace"
+    _write_app_package(workspace_dir, "chat", '[project]\nname = "chat"\n')
+    _write_app_package(workspace_dir, "routines", '[project]\nname = "routines.app"\n')
+    _write_app_package(workspace_dir, "nameless", "[project]\n")
+
+    assert workspace_app_package_names(workspace_dir) == {"chat", "routines-app"}
+    assert workspace_app_package_names(tmp_path / "no-workspace") == frozenset()

@@ -20,7 +20,9 @@ export const MAX_HELD_FRAMES = 4;
 // nested frame can hold no more than its parent, so this asks for the same.
 const FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
-const FRAME_ALLOW = "clipboard-read; clipboard-write";
+// The microphone too: the chat's manifest declares it, so the shell delegates it to the root's frame, and the
+// page that dictates is the one nested here.
+const FRAME_ALLOW = "clipboard-read; clipboard-write; microphone";
 
 interface HeldFrame {
   frame: HTMLIFrameElement;
@@ -133,6 +135,15 @@ export class InnerFramePool {
     const api = this.api(chatId);
     if (api === null) return false;
     api.prependDraft(text);
+    return true;
+  }
+
+  /** Hand ``hint`` to the live composer of ``chatId``'s page as its placeholder, focused; false when the page is not
+   *  loaded yet (the caller then stores the hint where the page's composer reads it on mount). */
+  hintComposer(chatId: string, hint: string): boolean {
+    const api = this.api(chatId);
+    if (api === null) return false;
+    api.hintComposer(hint);
     return true;
   }
 

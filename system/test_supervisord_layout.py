@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import configparser
 import glob
-import importlib.util
 import re
 from pathlib import Path
-from types import ModuleType
 
 from app_manifest import scope
+from build_app_skill import scaffold_flask_lib
+from migrate_workspace_skill import migrate_workspace
+from oom_priority.supervisord_testing import supervisord_commands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
@@ -73,33 +74,6 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
     }
 
 
-# The in-repo readers that have to be loaded by path: they sit in four separate uv workspace
-# members, and two of them are standalone scripts. (``app_manifest.scope`` is a library and is
-# imported normally below.) migrate-workspace's REMOTE reader lists the directory over SSH, in
-# shell, so its own suite runs that shell against a local workspace instead.
-_READER_PATHS: dict[str, Path] = {
-    "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
-    "migrate_workspace": _REPO_ROOT
-    / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
-    "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
-    "oom_bands": _REPO_ROOT
-    / "system/services/oom_priority/bin/oom_tag_service_test.py",
-}
-
-
-def _load(name: str) -> ModuleType:
-    """Import a reader by path, under its own module name so pytest's own copy is untouched."""
-    spec = importlib.util.spec_from_file_location(
-        "_supervisord_reader_" + name, _READER_PATHS[name]
-    )
-    assert spec is not None and spec.loader is not None, (
-        f"cannot load {_READER_PATHS[name]}"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _declared_in(paths: list[Path]) -> set[str]:
     return {
         program for path in paths for program in _SECTION_RE.findall(path.read_text())
@@ -129,11 +103,13 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
     )
 
     assert (
-        _declared_in(_load("scaffolder")._supervisord_conf_files(_SUPERVISORD_CONF))
+        _declared_in(scaffold_flask_lib._supervisord_conf_files(_SUPERVISORD_CONF))
         == canonical
     )
+    # migrate-workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite
+    # runs that shell against a local workspace instead.
     assert (
-        _declared_in(_load("migrate_workspace")._local_supervisord_configs(_REPO_ROOT))
+        _declared_in(migrate_workspace._local_supervisord_configs(_REPO_ROOT))
         == canonical
     )
     # An empty read is this reader's ordinary answer ("the app is not registered yet"), so a
@@ -142,12 +118,16 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
         _REPO_ROOT / path for path in scope._supervisord_conf_paths(_REPO_ROOT)
     ]
     assert _declared_in(scope_files) == canonical
-    # These two return command-by-name rather than a file list; the names are the shared claim.
-    # The band reader covers event listeners as well, the manifest reader programs only.
-    assert set(_load("oom_bands")._command_by_supervisord_program()) == canonical
-    assert set(_load("app_manifests")._command_by_program()) == _program_names_in(
-        canonical_files
+    # The band and manifest tests' reader returns command-by-name rather than a file list; the
+    # names are the shared claim. The band tests read event listeners as well, the manifest tests
+    # programs only.
+    assert (
+        set(supervisord_commands(_SUPERVISORD_CONF, ("program", "eventlistener")))
+        == canonical
     )
+    assert set(
+        supervisord_commands(_SUPERVISORD_CONF, ("program",))
+    ) == _program_names_in(canonical_files)
 
 
 def test_include_glob_matches_every_dropin_file() -> None:
@@ -221,4 +201,18 @@ def test_dropin_filename_matches_the_program_it_declares() -> None:
             mismatched.append(f"{path.name} declares {programs}")
     assert not mismatched, (
         f"drop-ins whose filename does not match their single program: {mismatched}"
+    )
+
+
+def test_every_program_tolerates_settings_newer_than_its_mngr() -> None:
+    """supervisord hands every program ``MNGR_ALLOW_UNKNOWN_CONFIG``.
+
+    An update makes the new tree's ``.mngr/settings.toml`` live before it reinstalls mngr, and
+    the old mngr rejects keys only the new one knows. The daemon's own ``environment`` is the one
+    place every program inherits from, so the tolerance has to sit there.
+    """
+    environment = _parse_main_config().get("supervisord", "environment", fallback="")
+    entries = [entry.strip() for entry in environment.split(",")]
+    assert 'MNGR_ALLOW_UNKNOWN_CONFIG="1"' in entries, (
+        f"[supervisord] environment does not set MNGR_ALLOW_UNKNOWN_CONFIG: {environment!r}"
     )

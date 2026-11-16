@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  layoutRecord,
+  placementRecord,
+  screenAppRecord,
+  windowRecord,
+} from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
-import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveLaunchRun } from "./shortcuts";
+import { cellForAddedShortcut, nextDesktopName, resolveLaunchRun } from "./shortcuts";
 
 const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
@@ -30,6 +38,36 @@ describe("resolveLaunchRun", () => {
       layout: layoutRecord([placementRecord("win-2"), placementRecord("win-1", { is_minimized: true })]),
     });
     expect(resolveLaunchRun(state, "docs", "new", "focus")).toEqual({ kind: "raise", windowId: "win-1" });
+  });
+
+  it("a focus shortcut of a one-window app's POST launch path runs it even with a window to focus", () => {
+    const screen = screenAppRecord();
+    // A many-window app (its default shortcut opens new windows): a focus shortcut of its POST path still raises.
+    const terminal = appRecord("terminal", {
+      launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })],
+      default_shortcuts: [{ launch: "new", mode: "new" }],
+    });
+    const viewing = desktopRecord("home", {
+      windows: [windowRecord("win-9", "screen", "/"), windowRecord("win-8", "terminal", "/t/1")],
+    });
+    const state = [
+      { type: "apps_updated", apps: [screen, terminal] } as DesktopEvent,
+      { type: "desktops_updated", desktops: [viewing] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+      {
+        type: "layout_loaded",
+        desktopId: "home",
+        layout: layoutRecord([placementRecord("win-9"), placementRecord("win-8")]),
+      } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+
+    expect(resolveLaunchRun(state, "screen", "screen", "focus")).toEqual({ kind: "raise", windowId: "win-9" });
+    expect(resolveLaunchRun(state, "screen", "browser", "focus")).toEqual({
+      kind: "open",
+      app: "screen",
+      launch: "browser",
+    });
+    expect(resolveLaunchRun(state, "terminal", "new", "focus")).toEqual({ kind: "raise", windowId: "win-8" });
   });
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {
@@ -65,7 +103,7 @@ describe("resolveLaunchRun", () => {
 });
 
 describe("new desktops and added shortcuts", () => {
-  it("mints the first free Desktop N and the first unused glyph", () => {
+  it("mints the first free Desktop N", () => {
     expect(nextDesktopName([{ id: "home", name: "Home" }])).toBe("Desktop 1");
     expect(
       nextDesktopName([
@@ -73,9 +111,6 @@ describe("new desktops and added shortcuts", () => {
         { id: "x", name: "desktop 2" },
       ]),
     ).toBe("Desktop 3");
-    expect(nextGlyphIndex([0, 1, 3], 10)).toBe(2);
-    expect(nextGlyphIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 10)).toBe(0);
-    expect(nextGlyphIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0], 10)).toBe(1);
   });
 
   it("puts an added shortcut at the first free cell in reading order over the current grid", () => {

@@ -18,7 +18,9 @@ function row(chatId: string, title: string): ChatRow {
     labels: {},
     agentIds: [chatId],
     lastActiveMs: null,
-    isProvisional: false,
+    kind: "agent",
+    hasMention: false,
+    participants: [],
     isMain: false,
   };
 }

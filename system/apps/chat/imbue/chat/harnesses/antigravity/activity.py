@@ -68,7 +68,7 @@ class AntigravityActivityTracker(HarnessActivityTracker):
         # inputs are passed even though the shared base has already applied that gate, so the
         # two harnesses' derivations stay literally comparable.
         return derive(
-            # NOT resolve_is_agent_running: that folds the marker into liveness, and agy's
+            # NOT resolve_is_turn_in_flight: that folds the marker into liveness, and agy's
             # marker is absent for the whole of every tool call (its statusLine reports only
             # idle/thinking), so it would force IDLE mid-chain. agy's dot is decided by the
             # transcript alone; ``is_active_marker_present`` is deliberately unused here --

@@ -36,7 +36,9 @@ class CaptureCommandError(EnvConvergeError, RuntimeError):
         super().__init__(f"Capture probe failed ({command}): {detail}")
 
 
-def _run_capture_command(command: list[str]) -> str:
+def _run_capture_command(command: list[str], is_checked: bool = True) -> str:
+    """The probe's stdout; a probe that cannot run or times out, or (when ``is_checked``) exits
+    nonzero, raises CaptureCommandError."""
     try:
         result = subprocess.run(
             command,
@@ -47,7 +49,7 @@ def _run_capture_command(command: list[str]) -> str:
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         raise CaptureCommandError(" ".join(command), str(e)) from e
-    if result.returncode != 0:
+    if is_checked and result.returncode != 0:
         raise CaptureCommandError(" ".join(command), result.stderr.strip()[:500])
     return result.stdout
 
@@ -116,14 +118,9 @@ def capture_npm_state() -> NpmGlobalState:
         output = _run_capture_command(["npm", "ls", "-g", "--json", "--depth=0"])
     except CaptureCommandError:
         logger.debug("npm ls exited nonzero; retrying without check")
-        result = subprocess.run(
-            ["npm", "ls", "-g", "--json", "--depth=0"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+        output = _run_capture_command(
+            ["npm", "ls", "-g", "--json", "--depth=0"], is_checked=False
         )
-        output = result.stdout
     return NpmGlobalState(
         version_by_package=parse_npm_global_versions(output or "{}"),
         recorded_at=datetime.now(timezone.utc),

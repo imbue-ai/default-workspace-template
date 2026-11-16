@@ -7,6 +7,11 @@ authority on the agentskills.io spec: directory layout, frontmatter, the
 validation, and the scenario template. This reference adds only what that spec
 cheat-sheet and the universal `harden-creation.md` contract don't already cover.
 
+A new skill starts from the scaffold (`spec-summary.md`, "Directory layout"),
+which writes the layout, installs the package and validates it:
+`uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name>
+--description "..." --python --crystallized`.
+
 **Design judgement.** Reliability is the floor; simplicity is the target. Default
 to a subcommand per cleanly-separable step plus a `run all` that chains them; add
 surface beyond that only when a specific invariant demands it. Split into a
@@ -20,19 +25,21 @@ when batches keep arriving and overlap -- build its pipeline by following the
 `data-pipeline-builder` skill (`.agents/skills/data-pipeline-builder/`). The
 pipeline is part of this skill, not a separate creation:
 
-- All of its modules (`sources.py`, `store.py`, ...) go in
-  `.agents/skills/<name>/scripts/` beside `run.py`, running from the root venv.
-  Do NOT add a nested `pyproject.toml` or per-skill dependencies.
-- The root pytest config recurses into `.agents/`, so name test files for the
-  skill -- where data-pipeline-builder says `tests/test_parse.py`, write
-  `.agents/skills/<name>/scripts/<name>_parse_test.py` instead. A generic name
-  like `test_parse.py` collides across skills.
+- All of its modules (`sources.py`, `store.py`, ...) go in the skill's package,
+  `.agents/skills/<name>/python/<name_with_underscores>_skill/`, with its
+  dependencies in `python/pyproject.toml` and `run.py` in the package as its
+  entry point (layout and rules: `spec-summary.md`, "Packaging").
+- Its tests go in the package too: where data-pipeline-builder says
+  `tests/test_parse.py`, write `.agents/skills/<name>/python/<name_with_underscores>_skill/test_parse.py`.
+  pytest imports it as `<name_with_underscores>_skill.test_parse`, so the name cannot collide
+  with another skill's.
 - Fixtures go in `.agents/skills/<name>/tests/fixtures/` as usual.
 
 ## Where a skill's behavior lives
 
 A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
-`.agents/skills/<name>/scripts/`) and its SKILL.md prose, so a change -- or a
+its `python/` package) and its
+SKILL.md prose, so a change -- or a
 fix -- may touch either or both. When a wrong behavior traces to an ambiguous
 or incorrect prose instruction, the edit is a SKILL.md edit even if the skill
 has scripts; a pure-prose skill (no scripts) has all of its behavior in
@@ -57,7 +64,7 @@ lookup and add it to the app's `app.toml` as part of this change when it is
 missing:
 
 ```bash
-uv run app-manifest references --for-path .agents/skills/<name>
+uv run --no-sync app-manifest references --for-path .agents/skills/<name>
 ```
 
 One JSON line per app that claims the skill; no output means none does.
@@ -72,28 +79,28 @@ belongs to the app itself is that app's own pass.
 ## Testing a skill
 
 - While you iterate, run the skill's own tests by path. The root pytest config
-  recurses into `.agents/`, so a bare root `uv run pytest` would collect the
+  recurses into `.agents/`, so a bare root `uv run --no-sync pytest` would collect the
   entire monorepo to reach them:
 
   ```bash
-  uv run pytest .agents/skills/<name>
+  uv run --no-sync pytest .agents/skills/<name>
   ```
 
   The gate is `harden-creation.md`'s "The test gate": when the reverse lookup
   above found an app that claims this skill, `select-tests` runs that app's
   suite too, since it exercises the surface the skill calls.
-- Validate with `uv run .agents/shared/scripts/validate_skill.py
+- Validate with `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py
   .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
   checks).
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
   **ephemeral** -- run them in your transcript, never saved as files. For a
-  `[script]` / `[ai-script]` step, invoke `.agents/skills/<name>/scripts/run.py`
+  `[script]` / `[ai-script]` step, invoke `.agents/skills/<name>/python/<name_with_underscores>_skill/run.py`
   on real input and inspect the output (an `[ai-script]` step makes a real
   Claude call -- run it on a small input to note cost). For a `[prose]` step,
   walk the SKILL.md instructions as the executing agent.
 - The universal fixture-test rule (`harden-creation.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
-  `.agents/skills/<name>/scripts/<name>_test.py` that feeds each through the
+  `.agents/skills/<name>/python/<name_with_underscores>_skill/<name_with_underscores>_test.py` that feeds each through the
   parser and asserts the exact output shape.
 
 ## Data capture
