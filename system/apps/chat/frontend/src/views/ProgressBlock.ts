@@ -1,28 +1,34 @@
 /**
- * Progress block: timeline rendering of one section (one user turn).
+ * Progress block: timeline rendering of one section (one user turn), as a part of
+ * a stretch of the agent's output.
  *
  * The section is a flat, ordered list of timeline items produced by the
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
- * (rendered inline, thread-breaking -- including a step's ejected closing
- * prose), and chips. Step nodes carry their own grouped events; expanding a step
- * reveals that grouped work. The wrap-up reply renders below the timeline.
+ * (including a step's ejected closing prose), and chips. Step nodes carry their
+ * own grouped events; expanding a step reveals that grouped work. The wrap-up
+ * reply renders below the timeline. Every piece stands on the stretch's line
+ * (see agent-rail), which runs through the step bullets as it does through the
+ * chip icons between them.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
  */
 
 import m from "mithril";
-import { MarkdownContent, renderMarkdown } from "../markdown";
+import { renderMarkdown } from "../markdown";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
-import { renderAssistantRun, renderPermissionItem, renderUserMessage } from "./message-renderers";
+import { renderAssistantRun, renderPermissionItem, renderUserMessage, stretchRun } from "./message-renderers";
+import { STRETCH_PIECES_CLASS } from "./machine-bubbles";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
 import {
   TIMELINE_BODY_CLASS,
-  TIMELINE_BULLET_CLASS,
   TIMELINE_CHEVRON_CLASS,
   TIMELINE_NODE_CLASS,
+  TIMELINE_STEPS_CLASS,
+  renderTimelineBullet,
+  renderTimelineTitleText,
   timelineChevronStateClass,
   timelineSpinnerBullet,
   timelineTitleClass,
@@ -40,9 +46,15 @@ interface ProgressBlockAttrs {
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
-  /** Optional DOM id for the root, so a virtualized list can measure this
-   *  block's height by querying ``.message-list > [id]``. */
+  /** Optional DOM id for the root, also the prefix that keeps the expansion
+   *  state of the steps and handoff nodes inside this block apart from another block's. */
   id?: string;
+  /** The block is its stretch's first part: a bubble that opens it squares its corner toward the face. */
+  isStretchHead?: boolean;
+  /** The step the agent's next words join (SectionView.live_step_id), and the reply it is still
+   *  writing, read at draw time: the draft shows in that step as its latest words would. */
+  liveStepId?: string | null;
+  replyDraft?: () => AssistantMessageEvent | null;
 }
 
 /* Styling.
@@ -78,9 +90,10 @@ function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
 
 /** Sub-caption under the step title:
  *   - done + summary -> the close summary
- *   - active + narration (and not expanded) -> latest in-step narration
+ *   - active + narration (and not expanded) -> latest in-step narration, or the reply the agent
+ *     is still writing in the live step
  *   - otherwise nothing. */
-function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null {
+function renderStepCaption(step: StepNode, isExpanded: boolean, draft: AssistantMessageEvent | null): m.Vnode | null {
   if (step.status === "done") {
     return step.summary
       ? m(
@@ -92,22 +105,28 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
       : null;
   }
   if (isExpanded) return null;
-  if (!step.narration) return null;
+  const narration = draft?.text || step.narration;
+  if (!narration) return null;
   // The narration look (muted italic; the frontier one's shimmer) stays in
   // style.css -- it styles markdown-rendered children and the shimmer is a
   // keyframe machine.
   const captionClass = step.is_frontier ? "pv-tl-narration" : "pv-tl-narration--static";
-  return m(`div.${captionClass}.markdown-content`, m.trust(renderMarkdown(step.narration)));
+  return m(`div.${captionClass}.markdown-content`, m.trust(renderMarkdown(narration)));
 }
 
-function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
+function renderExpandedStepBody(
+  step: StepNode,
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+  draft: AssistantMessageEvent | null,
+): m.Vnode {
   // One run over all the step's events, so a sequence of tool calls reads as a
   // single row of chips rather than one row per event.
-  const children = renderAssistantRun(step.events, toolResults, chatId);
+  const children = renderAssistantRun(draft === null ? step.events : [...step.events, draft], toolResults, chatId);
   // The revealed work sits flush under its title -- no indent and no left rule.
-  // The timeline's own thread already runs down the left of every node, so a
-  // second vertical line inside an opened step would read as a nested timeline
-  // that is not one. Its p and tool-block child rules stay in style.css.
+  // The stretch's line already runs down the left of every node, so a second
+  // vertical line inside an opened step would read as a nested timeline that is
+  // not one. Its p and tool-block child rules stay in style.css.
   return m("div", { class: "pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" }, children);
 }
 
@@ -128,12 +147,13 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     is_last: boolean,
     toolResults: Map<string, ToolResultEvent>,
     chatId: string,
+    draft: AssistantMessageEvent | null,
   ): m.Vnode {
     const canExpand = step.events.length > 0;
     const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
     // The status/step modifiers are bare markers (the status look is resolved
-    // in code -- see timelineTitleClass and statusIcon); the padding caps the
-    // thread on the last node.
+    // in code -- see timelineTitleClass and statusIcon); the padding spaces the
+    // run of steps, so the last one has none.
     const nodeClasses = [
       "pv-tl-node",
       `pv-tl-node--${step.status}`,
@@ -143,7 +163,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     ].join(" ");
 
     return m("div", { class: nodeClasses, key: `step-${step.ticket_id}` }, [
-      m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon(step.status, step.is_frontier)),
+      renderTimelineBullet(statusIcon(step.status, step.is_frontier)),
       m("div", { class: TIMELINE_BODY_CLASS }, [
         m(
           "button",
@@ -154,7 +174,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
           },
           [
-            step.title,
+            renderTimelineTitleText(step.title),
             canExpand
               ? m(
                   "span",
@@ -164,9 +184,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               : null,
           ],
         ),
-        renderStepCaption(step, isExpanded),
+        renderStepCaption(step, isExpanded, draft),
         isExpanded
-          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId))
+          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId, draft))
           : null,
       ]),
     ]);
@@ -174,105 +194,104 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
+      const { items, trailing_reply, toolResults, chatId, id, liveStepId, replyDraft } = vnode.attrs;
       blockKeyPrefix = id ?? "";
+      const isHead = (index: number): boolean => vnode.attrs.isStretchHead === true && index === 0;
+      const draft = liveStepId != null && replyDraft !== undefined ? replyDraft() : null;
 
-      // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
-      let lastStepIdx = -1;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].kind === "step" || items[i].kind === "handoff") lastStepIdx = i;
-      }
-
-      const timelineNodes: m.Children[] = items.map((item, idx) => {
-        if (item.kind === "step") {
-          return renderStepNode(item.step, idx === lastStepIdx, toolResults, chatId);
+      // Consecutive nodes on the timeline (steps and handoffs) stand together as one run of steps.
+      const runs: { key: string; nodes: TimelineItem[] }[] = [];
+      const pieces: (m.Vnode | { run: number })[] = [];
+      items.forEach((item, index) => {
+        if (item.kind === "step" || item.kind === "handoff") {
+          const previous = pieces[pieces.length - 1];
+          if (previous !== undefined && "run" in previous) {
+            runs[previous.run].nodes.push(item);
+          } else {
+            runs.push({ key: `steps-${item.kind === "step" ? item.step.ticket_id : item.node.key}`, nodes: [item] });
+            pieces.push({ run: runs.length - 1 });
+          }
+          return;
         }
         if (item.kind === "ungrouped") {
           // Real work / prose that happened with no step open -- including a
-          // step's ejected closing prose: rendered inline as a thread-breaking
-          // block, exactly like a no-steps turn. Top space as padding, not
-          // margin, so the opaque chat background extends up and masks a bit
-          // of the timeline thread above the run. z-[2]:
-          // design-system-exception -- lifts it above the thread; the z scale
-          // has no "content + 1" layer.
-          return m(
-            "div",
-            { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
-            // The whole ungrouped run at once, so its tool calls merge into one
-            // chip row the way a step's revealed work does.
-            renderAssistantRun(item.events, toolResults, chatId),
-          );
-        }
-        if (item.kind === "permission") {
-          // A permission request lifted out of its step: rendered inline as a
-          // thread-breaking block so it is always visible, as the
-          // permission-request card the renderer produces (with its review button
-          // or, once the user decides, a granted/denied verdict). The card
-          // carries its own opaque surface, so no background here (it would
-          // paint the shell's off-white over the pure-white transcript).
-          // z-[2]: design-system-exception, as above.
-          return m(
-            "div",
-            { class: "pv-permission relative z-[2] mt-1.5 mb-3.5", key: `perm-${item.event.event_id}` },
-            renderPermissionItem(
-              item.event,
-              toolResults,
-              chatId,
-              item.resolutionsByRequestId,
-              item.event.event_id,
-              item.secretNotesByRequestId,
+          // step's ejected closing prose -- laid out exactly like a no-steps turn.
+          pieces.push(
+            m(
+              "div",
+              { class: `pv-ungrouped ${STRETCH_PIECES_CLASS}`, key: item.key },
+              // The whole ungrouped run at once, so its tool calls merge into one
+              // chip row the way a step's revealed work does.
+              renderAssistantRun(item.events, toolResults, chatId, new Map(), new Map(), stretchRun(isHead(index))),
             ),
           );
+          return;
         }
-        if (item.kind === "handoff") {
-          // The chat's handoff to another agent, a node on the thread like a step.
-          return renderHandoffNode(item.node, chatId, toolResults, {
-            isLast: idx === lastStepIdx,
-            expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
-          });
+        if (item.kind === "permission") {
+          // A permission request lifted out of its step, so the user can act on it
+          // without opening the step: the permission-request card the renderer
+          // produces (with its review button or, once the user decides, a
+          // granted/denied verdict).
+          pieces.push(
+            m(
+              "div",
+              { class: "pv-permission", key: `perm-${item.event.event_id}` },
+              renderPermissionItem(
+                item.event,
+                toolResults,
+                chatId,
+                item.resolutionsByRequestId,
+                item.secretNotesByRequestId,
+                isHead(index),
+              ),
+            ),
+          );
+          return;
         }
-        // A chip that landed inside an open handoff; the opaque pure-white chat background
-        // masks the thread behind it.
-        // z-[2]: design-system-exception, as above.
-        return m(
-          "div",
-          {
-            class: "pv-stophook relative z-[2] mt-1.5 mb-3.5 bg-chat",
-            key: `${item.kind}-${item.event.event_id}`,
-          },
-          renderUserMessage(item.event),
+        // A chip that landed inside an open handoff.
+        pieces.push(
+          m(
+            "div",
+            { class: "pv-stophook", key: `${item.kind}-${item.event.event_id}` },
+            renderUserMessage(item.event),
+          ),
         );
       });
+
+      const renderRun = (run: { key: string; nodes: TimelineItem[] }): m.Vnode =>
+        m(
+          "div",
+          { class: `pv pv--timeline ${TIMELINE_STEPS_CLASS}`, key: run.key },
+          run.nodes.map((item, index) => {
+            const isLast = index === run.nodes.length - 1;
+            if (item.kind === "step") {
+              const stepDraft = item.step.ticket_id === liveStepId ? draft : null;
+              return renderStepNode(item.step, isLast, toolResults, chatId, stepDraft);
+            }
+            if (item.kind !== "handoff") return null;
+            // The chat's handoff to another agent, a node on the timeline like a step.
+            return renderHandoffNode(item.node, chatId, toolResults, {
+              isLast,
+              expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
+            });
+          }),
+        );
 
       return m(
         "div",
         {
-          class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal text-primary",
+          class: `progress-block ${STRETCH_PIECES_CLASS} text-(length:--font-size-body) leading-normal text-primary`,
           id,
         },
         [
-          m("div.pv.pv--timeline.relative", [
-            // The vertical thread the bullets sit on; nodes mask it with their
-            // own opaque backgrounds.
-            m("div", {
-              class: "pv-timeline-thread absolute top-2 bottom-0 left-[7.5px] w-px bg-default",
-              "aria-hidden": "true",
-            }),
-            m("div.pv-timeline-nodes", timelineNodes),
-          ]),
-          trailing_reply.length > 0
-            ? trailing_reply.map((ev) =>
-                m(
-                  "div",
-                  { class: "pv-final mt-4 text-(length:--font-size-body) leading-normal text-primary" },
-                  m(MarkdownContent, {
-                    content: ev.text ?? "",
-                    requestedAt: ev.timestamp,
-                    expansionKeyPrefix: ev.event_id,
-                  }),
-                ),
-              )
-            : null,
+          ...pieces.map((piece) => ("run" in piece ? renderRun(runs[piece.run]) : piece)),
+          ...trailing_reply.map((ev) =>
+            m(
+              "div",
+              { class: `pv-final ${STRETCH_PIECES_CLASS}`, key: `final-${ev.event_id}` },
+              renderAssistantRun([ev], toolResults, chatId, new Map(), new Map(), stretchRun()),
+            ),
+          ),
         ],
       );
     },

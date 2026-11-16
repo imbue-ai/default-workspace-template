@@ -1,0 +1,25 @@
+{
+  "name": "@imbue/workspace-voice",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dictation for the workspace's pages: on-device speech recognition behind one engine interface, with the speech detector, the streaming turn, the scheduler, and the engine worker (source only; each app's build compiles it).",
+  "scripts": {
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.{ts,json}' '*.ts'",
+    "format:check": "prettier --check 'src/**/*.{ts,json}' '*.ts'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "@ricky0123/vad-web": "0.0.31"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.7.0",
+    "vite": "^6.2.0",
+    "vitest": "^4.1.0"
+  }
+}

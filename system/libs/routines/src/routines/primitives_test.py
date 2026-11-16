@@ -27,7 +27,7 @@ def test_a_string_that_is_not_lowercase_letters_digits_and_hyphens_is_not_a_rout
 
 
 def test_a_duration_knows_its_count_unit_and_length() -> None:
-    assert Duration(" 3h ").count == 3
+    assert Duration(" 3h ").amount == 3
     assert Duration("3h").unit is DurationUnit.HOURS
     assert Duration("3h").timedelta == timedelta(hours=3)
     assert Duration("2w").approximate_seconds == 14 * SECONDS_PER_DAY

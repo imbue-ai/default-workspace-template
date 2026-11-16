@@ -48,11 +48,15 @@ def _read_app_rows(path: Path) -> list[dict]:
     try:
         doc = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
-        _logger.warning("Skipped the app registry at %s: it cannot be read (%s)", path, error)
+        _logger.warning(
+            "Skipped the app registry at %s: it cannot be read (%s)", path, error
+        )
         return []
     apps = doc.get("apps", [])
     if not isinstance(apps, list):
-        _logger.warning("Skipped the app registry at %s: it has no [[apps]] array", path)
+        _logger.warning(
+            "Skipped the app registry at %s: it has no [[apps]] array", path
+        )
         return []
     return [app for app in apps if isinstance(app, dict)]
 
@@ -79,5 +83,7 @@ def read_priority_by_program(path: Path) -> dict[str, str]:
         if not isinstance(program, str) or not program:
             continue
         priority = app.get("priority", DEFAULT_PRIORITY)
-        priority_by_program[program] = priority if isinstance(priority, str) else DEFAULT_PRIORITY
+        priority_by_program[program] = (
+            priority if isinstance(priority, str) else DEFAULT_PRIORITY
+        )
     return priority_by_program

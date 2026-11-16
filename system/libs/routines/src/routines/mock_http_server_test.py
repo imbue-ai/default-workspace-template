@@ -1,5 +1,12 @@
 """A local HTTP server the chat app and notifier adapters are pointed at in tests."""
 
+import json
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
+
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -35,3 +42,43 @@ class FakeHttpServer(MutableModel):
         if not scripted:
             return 404, {"detail": f"no answer scripted for {method} {path}"}
         return scripted.pop(0) if len(scripted) > 1 else scripted[0]
+
+
+@contextmanager
+def serving_fake_http_server() -> Generator[FakeHttpServer, None, None]:
+    """Serve a FakeHttpServer on a loopback port for the length of the block."""
+    holder: list[FakeHttpServer] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def _serve(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b""
+            body = json.loads(raw) if raw else None
+            status, answer = holder[0].take(
+                self.command, self.path, {key.lower(): value for key, value in self.headers.items()}, body
+            )
+            payload = json.dumps(answer).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self) -> None:
+            self._serve()
+
+        def do_POST(self) -> None:
+            self._serve()
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    holder.append(FakeHttpServer(url=f"http://127.0.0.1:{server.server_port}"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield holder[0]
+    finally:
+        server.shutdown()
+        server.server_close()

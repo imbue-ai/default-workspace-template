@@ -111,7 +111,7 @@ or a provisional milestone merge:
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
    SCOPE=$(mktemp)
-   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --out "$SCOPE" || exit 1
+   uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --out "$SCOPE" || exit 1
    PATHS=$(jq -r '[.creations[] | .primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
    [ -n "$PATHS" ] || exit 1
    git diff --name-only "$BASE" HEAD -- $PATHS
@@ -207,7 +207,7 @@ Ask it with a reply naming your current `HEAD` and what moved, then re-arm the
 poll exactly as for a gate (`lead-proxy.md`):
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in harden-creation.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
 ```
 
@@ -340,7 +340,7 @@ answering. That work is never dropped. The new pass carries it:
 2. **Destroy it, keeping its commits.**
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
    ```
 
    Before destroying anything, the launcher checks every branch it would

@@ -96,10 +96,10 @@ def test_an_agent_stays_addressable_by_id_across_a_rename(tmp_path: Path) -> Non
         renamed = _mngr(project, host_dir, "rename", "lead-before", "lead-after")
         assert renamed.returncode == 0, renamed.stderr
 
-        # The worker's transcript read resolves the agent by id (a command agent has no
-        # transcript to show, which is the error mngr answers once it has found the agent).
+        # The worker's transcript read resolves the agent by id (a command agent wrote no
+        # transcript, which is the error mngr answers once it has found the agent).
         transcript = _mngr(project, host_dir, "transcript", agent_id)
-        assert "does not produce a common transcript" in transcript.stderr
+        assert "No common transcript found" in transcript.stderr
         assert "Could not find agent" not in transcript.stderr
 
         # The old name is what a name-stamped worker would read: it is gone.

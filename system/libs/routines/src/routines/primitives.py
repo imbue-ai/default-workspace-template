@@ -95,7 +95,8 @@ class Duration(NonEmptyStr):
         return super().__new__(cls, stripped)
 
     @property
-    def count(self) -> int:
+    def amount(self) -> int:
+        """The whole number the duration is written with: the ``3`` of ``3h``."""
         match = _DURATION_PATTERN.fullmatch(self)
         assert match is not None
         return int(match.group(1))
@@ -114,15 +115,15 @@ class Duration(NonEmptyStr):
     def approximate_seconds(self) -> int:
         """The duration in seconds, a month counted as thirty days."""
         if self.unit is DurationUnit.MONTHS:
-            return self.count * APPROXIMATE_SECONDS_PER_MONTH
-        return self.count * _SECONDS_BY_UNIT[self.unit]
+            return self.amount * APPROXIMATE_SECONDS_PER_MONTH
+        return self.amount * _SECONDS_BY_UNIT[self.unit]
 
     @property
     def timedelta(self) -> timedelta:
         """The exact duration; raises for a calendar cadence, which has no fixed length."""
         if self.unit is DurationUnit.MONTHS:
             raise InvalidDurationError("a cadence in months has no fixed length")
-        return timedelta(seconds=self.count * _SECONDS_BY_UNIT[self.unit])
+        return timedelta(seconds=self.amount * _SECONDS_BY_UNIT[self.unit])
 
 
 class TimeOfDay(NonEmptyStr):

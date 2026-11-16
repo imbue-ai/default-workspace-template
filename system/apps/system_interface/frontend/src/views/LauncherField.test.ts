@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { setResolvedShellKeybindingsForTest } from "../model/keybindings";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,11 +36,26 @@ function press(input: HTMLTextAreaElement, init: KeyboardEventInit): KeyboardEve
 }
 
 describe("isSecondaryChord", () => {
-  it("is Enter with Ctrl or with Cmd, and nothing else", () => {
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false })).toBe(true);
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true })).toBe(true);
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false })).toBe(false);
-    expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false })).toBe(false);
+  it("is Enter with Ctrl or with Cmd by default, and nothing else", () => {
+    const plain = { altKey: false, shiftKey: false };
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(true);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(true);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false, ...plain })).toBe(false);
+    expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
+  });
+
+  it("follows a re-bound launcher-secondary-send chord", () => {
+    setResolvedShellKeybindingsForTest({
+      app: "system_interface",
+      chords_by_action: { "launcher-secondary-send": ["alt+enter"] },
+    });
+    try {
+      const plain = { ctrlKey: false, metaKey: false, shiftKey: false };
+      expect(isSecondaryChord({ key: "Enter", altKey: true, ...plain })).toBe(true);
+      expect(isSecondaryChord({ key: "Enter", altKey: false, ...plain })).toBe(false);
+    } finally {
+      setResolvedShellKeybindingsForTest(null);
+    }
   });
 });
 

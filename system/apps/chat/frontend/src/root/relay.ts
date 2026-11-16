@@ -6,7 +6,8 @@
  * Some of those messages are the shell's business and go up unchanged, as the shell's own relay
  * forwards the frames it created (desktop-interface contracts.md section 7): the ``minds:``
  * messages for the minds chrome, ``shell:focused`` (which the root re-posts as its own, since the
- * shell raises the root's window for it), ``shell:open`` of a sub-agent view, ``shell:draft-text``
+ * shell raises the root's window for it), ``shell:input`` (typing in a nested page is this client's
+ * activity, which the shell's heartbeat reports), ``shell:open`` of a sub-agent view, ``shell:draft-text``
  * from a sub-agent view (which has no composer of its own to draft into), ``shell:message`` (for
  * whichever app registered its type), and ``shell:open-link`` (a clicked link or script popup the
  * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
@@ -25,8 +26,9 @@
  * not the page that asked: those answers (``minds:provider-sign-in-ack``, and
  * ``minds:permission-resolutions``, the verdict on a permission request a page asked the chrome
  * to open, which the page's card flips on and whose activity strip covers the wait for the agent
- * to be told) are passed down to the root's inner frames. Everything else the chrome sends is
- * the root's own to handle.
+ * to be told) are passed down to the root's inner frames, as is the shell's
+ * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords). Everything else
+ * the chrome sends is the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
  * and is forwarded only to ``window.parent``; a message going down counts only when its source is
@@ -37,6 +39,8 @@ import {
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
+  SHELL_INPUT,
+  SHELL_KEYBINDINGS_CHANGED,
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
@@ -48,12 +52,17 @@ import { selectionFromSearch } from "./selection";
 const MINDS_PREFIX = "minds:";
 const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_FOCUSED,
+  SHELL_INPUT,
   SHELL_OPEN,
   SHELL_DRAFT_TEXT,
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
 ]);
-const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([PROVIDER_SIGN_IN_ACK, PERMISSION_RESOLUTIONS]);
+const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
+  PROVIDER_SIGN_IN_ACK,
+  PERMISSION_RESOLUTIONS,
+  SHELL_KEYBINDINGS_CHANGED,
+]);
 
 /** Whether a posted message is one the root passes up to the shell. */
 export function isForwardedToShell(data: unknown): boolean {

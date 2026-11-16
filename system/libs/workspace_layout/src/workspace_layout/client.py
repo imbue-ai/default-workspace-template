@@ -15,6 +15,7 @@ from workspace_layout.agent_identity import AGENT_REQUESTER_APP_NAME
 from workspace_layout.agent_identity import chat_id_from_environment
 from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
+from workspace_layout.answers import InventoryClient
 from workspace_layout.answers import InventoryDocument
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
@@ -24,6 +25,8 @@ from workspace_layout.answers import parse_listing
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.errors import WindowPoppedOutError
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
@@ -45,12 +48,16 @@ from workspace_layout.ops import WindowOpBody
 from workspace_layout.ops import op_request_body
 from workspace_layout.primitives import LayoutOp
 from workspace_layout.records import DesktopView
+from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import BUBBLES_ROUTE
+from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
+from workspace_layout.shell_url import ROSTER_ROUTE
 from workspace_layout.transport import HTTP_SUCCESS_RANGE
 from workspace_layout.transport import exchange_with_shell
 from workspace_layout.transport import refusal_detail
@@ -164,24 +171,40 @@ class ShellLayoutClient(ShellLayoutInterface):
 
     def connected_clients(self) -> list[ClientView]:
         body = self._request("GET", CLIENTS_ROUTE, None, "client list").body
-        return [client for client in parse_listing(ClientView, body, "clients", "client list") if client.is_connected]
+        return [
+            client for client in parse_listing(InventoryClient, body, "clients", "client list") if client.is_connected
+        ]
 
     def desktops(self) -> list[DesktopView]:
         body = self._request("GET", DESKTOPS_ROUTE, None, "desktops").body
         return parse_listing(DesktopView, body, "desktops", "desktops")
 
+    def roster(self) -> RosterDocument:
+        body = self._request("GET", ROSTER_ROUTE, None, "roster").body
+        return parse_answer(RosterDocument, body, "roster")
+
     def record_client_activity(self, report: ClientActivityReport) -> None:
-        # The shell may be down or restarting, and the caller keeps working without it, so an unreachable or failing
-        # shell is a debug log; one that refuses the body is a warning, since the two apps disagree about its shape.
+        self._post_quietly(CLIENT_ACTIVITY_ROUTE, report, "client activity")
+
+    def post_bubble(self, bubble: BubblePost) -> None:
+        self._post_quietly(BUBBLES_ROUTE, bubble, "a bubble")
+
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
+        self._post_quietly(CHATS_ACTIVITY_ROUTE, report, "the chats' activity")
+
+    def _post_quietly(self, route: str, body: FrozenModel, described: str) -> None:
+        """A best-effort post. The shell may be down or restarting, and the caller keeps working without it, so an
+        unreachable or failing shell is a debug log; one that refuses the body is a warning, since the two apps
+        disagree about its shape."""
         try:
-            self._request("POST", CLIENT_ACTIVITY_ROUTE, report.model_dump(mode="json"), "client-activity report")
+            self._request("POST", route, body.model_dump(mode="json"), f"{described} report")
         except ShellUnreachableError as e:
-            logger.debug("Skipped reporting client activity: {}", e)
+            logger.debug("Skipped reporting {}: {}", described, e)
         except ShellRefusedOpError as e:
             if e.status_code < 500:
-                logger.warning("Reported client activity and the shell refused it: {}", e)
+                logger.warning("Reported {} and the shell refused it: {}", described, e)
             else:
-                logger.debug("Reported client activity and the shell failed: {}", e)
+                logger.debug("Reported {} and the shell failed: {}", described, e)
 
 
 @pure
@@ -222,4 +245,13 @@ class DisconnectedShell(ShellLayoutInterface):
         return []
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
+        return None
+
+    def roster(self) -> RosterDocument:
+        raise _no_shell_error("list the roster")
+
+    def post_bubble(self, bubble: BubblePost) -> None:
+        return None
+
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
         return None

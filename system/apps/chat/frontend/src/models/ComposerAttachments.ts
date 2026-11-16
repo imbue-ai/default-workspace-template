@@ -15,7 +15,9 @@
 
 import m from "mithril";
 import { deleteAttachment } from "./attachments";
+import { forgetLocalImage } from "./attachments";
 import { isImagePath } from "./attachments";
+import { rememberLocalImage } from "./attachments";
 import { uploadAttachment } from "./attachments";
 import type { UploadedAttachment } from "./attachments";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
@@ -37,8 +39,8 @@ export interface ComposerAttachment {
   /** The picked file's size, shown on the chip while it uploads. */
   localSize?: number;
   /** An image's own pixels, read locally so its thumbnail shows while it uploads. Lives only in this
-   *  document (a blob URL), so it is never persisted, and is revoked once the upload settles or the chip is
-   *  removed. */
+   *  document (a blob URL), so it is never persisted. Once the upload succeeds it is handed to
+   *  ``rememberLocalImage``, so the sent message draws from it; a failed upload or a removed chip revokes it. */
   previewUrl?: string;
   /** Present once the upload succeeds. */
   uploaded?: UploadedAttachment;
@@ -207,16 +209,23 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
     previewUrl: _localPreviewUrl(file, isImage),
   };
   _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
-  // The preview only stands in until the upload settles: a ready chip shows the uploaded copy and a
-  // failed one shows no thumbnail, and a sent or cleared chip would otherwise hold the blob for the
-  // life of the document.
+  // The chip's preview only stands in until the upload settles: a ready chip shows the uploaded copy and a
+  // failed one shows no thumbnail. A ready image's blob lives on for the message that names it.
   const releasePreview = (): void => {
     if (item.previewUrl !== undefined) URL.revokeObjectURL(item.previewUrl);
   };
   item.uploadSettled = uploadAttachment(file)
     .then((uploaded) => {
+      // A chip that left the composer mid-upload (removed, or dropped by a clear or a rollback) names no
+      // message, so its preview is let go.
+      const isStillStaged = getComposerAttachments(chatId).some((attachment) => attachment.localId === localId);
       _patchAttachment(chatId, localId, { status: "ready", uploaded, previewUrl: undefined });
-      releasePreview();
+      if (item.previewUrl === undefined) return;
+      if (isStillStaged) {
+        rememberLocalImage(uploaded.path, item.previewUrl, file.size);
+      } else {
+        releasePreview();
+      }
     })
     .catch((error: unknown) => {
       // Logged as well as marked: a document that stages for another (the root, for a page not
@@ -271,6 +280,7 @@ export function removeComposerAttachment(chatId: string, localId: string): void 
     URL.revokeObjectURL(item.previewUrl);
   }
   if (item?.uploaded) {
+    forgetLocalImage(item.uploaded.path);
     void deleteAttachment(item.uploaded.path);
   }
 }

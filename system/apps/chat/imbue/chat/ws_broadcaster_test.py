@@ -7,6 +7,7 @@ from imbue.chat.agent_manager import _ResolvedChat
 from imbue.chat.agent_manager import chat_snapshot_for_active_agent
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -72,6 +73,7 @@ def test_broadcast_chats_updated() -> None:
         is_permission_pending=False,
         shoulder_tap_available=False,
         is_connecting=False,
+        is_resending_after_sign_in=False,
         last_messaged_at=None,
         background_tasks=(),
         compaction_cause=None,
@@ -91,7 +93,10 @@ def test_broadcast_provisional_chat_created() -> None:
     q = broadcaster.register()
 
     broadcaster.broadcast_provisional_chat_created(
-        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.CREATING)
+        ProvisionalChatAsShown(
+            chat=ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.CREATING),
+            held_sends=(),
+        )
     )
 
     msg = json.loads(_get_message(q))
