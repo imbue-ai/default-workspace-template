@@ -26,6 +26,9 @@ observe`, its own supervised service) writes, and serves:
   (opened bare, or after the chat on screen is deleted) it shows the main chat
   (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  A chat leaves the list the moment its delete is confirmed and comes back if
+  the delete is refused, and with no chats left the one awaiting its first send
+  is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled, and opens the
