@@ -139,7 +139,7 @@ def _normalize_slash_command(text: str) -> str:
 
 # A message pasted into Claude Code's input box is recorded inside a wrapper, e.g.
 #     \n\n<pasted_content id="dd53">\n<the pasted text>\n</pasted_content id="dd53">\n
-# and every message of LONG_MESSAGE_THRESHOLD characters or more reaches the agent as a paste.
+# and mngr sends every message of 1024 characters or more (its ``LONG_MESSAGE_THRESHOLD``) as a paste.
 # Unwrapped, it renders as the text the user sent and matches it wherever a turn is compared
 # with what was sent.
 _PASTED_CONTENT_PATTERN = re.compile(r'<pasted_content id="([^"]*)">\n?(.*?)\n?</pasted_content id="\1">', re.DOTALL)
