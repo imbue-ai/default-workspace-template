@@ -138,6 +138,13 @@ from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.resource_gauge import AGENT_NOTICE_FILENAME
+from imbue.system_interface.shell.resource_gauge import DeliveryStore
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeMonitor
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettingsStore
+from imbue.system_interface.shell.resource_gauge import ResourceNotifierInterface
+from imbue.system_interface.shell.resource_gauge import read_resource_readings
+from imbue.system_interface.shell.resource_gauge import read_shed_ledger_stops
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
@@ -202,6 +209,9 @@ class ShellState(MutableModel):
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
     tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
+    resource_gauge: ResourceGaugeMonitor = Field(
+        frozen=True, description="The tray's resource gauge: its readings, its settings, and the warnings it raises"
+    )
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
@@ -256,6 +266,7 @@ class ShellState(MutableModel):
         self.inventory.start()
         self.lifecycle.start()
         self.update_notice.start()
+        self.resource_gauge.start()
         self.avatar_status.start()
         theme_watch = ThemeCatalogWatch(
             repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
@@ -276,6 +287,7 @@ class ShellState(MutableModel):
 
     def stop(self) -> None:
         self.update_notice.stop()
+        self.resource_gauge.stop()
         self._prune_stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
@@ -1118,6 +1130,7 @@ def build_shell_state(
     launch_poster: LaunchPoster | None = None,
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
     is_lifecycle_enabled: bool = False,
+    resource_notifier: ResourceNotifierInterface | None = None,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> ShellState:
@@ -1134,8 +1147,12 @@ def build_shell_state(
     is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the lifecycle
     manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
     yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
-    timings are the manager's grace period and idle sweep interval, which a test shortens."""
+    timings are the manager's grace period and idle sweep interval, which a test shortens;
+    ``resource_notifier`` is where the resource gauge tells the user of a warning or a stopped program (the
+    production shell's Imbue Studio feed; None in a preview or a test, which tell nobody and leave no notice for
+    the agents either)."""
     app_theming = AppThemingStore(state_directory=state_directory)
+    stop_ledger = read_shed_ledger_stops()
     resolved_inventory = (
         inventory
         if inventory is not None
@@ -1187,6 +1204,15 @@ def build_shell_state(
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         tour=TourStore(state_directory=state_directory),
+        resource_gauge=ResourceGaugeMonitor(
+            settings_store=ResourceGaugeSettingsStore(state_directory=state_directory),
+            delivery_store=DeliveryStore(state_directory=state_directory),
+            read_readings=lambda: read_resource_readings(repo_root.resolve()),
+            read_stops=stop_ledger.read,
+            notifier=resource_notifier,
+            push=lambda view: broadcaster.broadcast_resource_gauge_changed(view.model_dump(mode="json")),
+            agent_notice_path=state_directory / AGENT_NOTICE_FILENAME if resource_notifier is not None else None,
+        ),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             background_tasks_root=background_tasks_root

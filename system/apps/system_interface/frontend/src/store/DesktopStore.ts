@@ -91,6 +91,7 @@ import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
+import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
   backdropFrameOf,
@@ -132,6 +133,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
   draftTargetOf,
@@ -1190,6 +1192,10 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onResourceGaugeChanged: (view) => {
+        applyResourceGauge(resourceGaugeFromWire(view), this.deps.redraw);
+        this.deps.redraw();
+      },
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
@@ -1680,10 +1686,16 @@ export class DesktopStore {
     return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
   }
 
-  /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
-   *  action with nothing to send (the chat app's "Send to main chat" with no text opens the main chat). */
-  async openMainChat(): Promise<boolean> {
-    return this.startWithText("");
+  /** A click on the agent's tray entry (the multiplayer spec, section 6.2): the avatar's pinned window on the
+   *  active desktop is put on screen on whatever chat it holds, never put away; with no such window the main chat
+   *  opens, through the primary text action with nothing to send. Refused while viewing somebody else's desktop,
+   *  whose pinned window is theirs. False when refused or when nothing opened. */
+  async openAgentChat(): Promise<boolean> {
+    if (this.refuseWhileViewing("show the agent's chat")) return false;
+    const pinned = avatarPinnedEntryOf(this.state);
+    if (pinned === null) return this.startWithText("");
+    this.showWindow(pinned.window.id);
+    return true;
   }
 
   /** A window's "Chat about this app" (the multiplayer spec, section 9.2): the window's app is named to the first
@@ -2024,12 +2036,18 @@ export class DesktopStore {
       await this.focusOrOpenWindowAt(app.name, path);
       return;
     }
+    await this.showAppPage(app.name, path, [pinPage]);
+  }
+
+  /** Put a page of ``app`` on this client's screen through the shell's ``show``: a window already there is raised,
+   *  else the app's window on one of the ``repoint`` pages (or its pinned window) is pointed at it, else one opens. */
+  async showAppPage(app: string, path: string, repoint: readonly string[]): Promise<void> {
     await this.flushPendingSave();
     let outcome: PageShowOutcome;
     try {
-      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
@@ -2935,9 +2953,15 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: for a pulled-out window, show its ghost again when the ghost is hidden, else its
-   *  own desktop window; otherwise restore and raise when minimized, minimize when focused, raise otherwise. */
+  /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
+    if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
+    else this.showWindow(windowId);
+  }
+
+  /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
+   *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
+  private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       if (placement.is_minimized) this.showWindowGhost(windowId);
@@ -2945,7 +2969,6 @@ export class DesktopStore {
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);
-    else if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.raiseWindow(windowId);
   }
 

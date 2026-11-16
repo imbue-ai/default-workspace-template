@@ -3459,3 +3459,30 @@ def test_the_tour_record_round_trips(client: FlaskClient) -> None:
     assert client.post("/api/tour", json={"is_seen": "not a flag"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": "three"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": -1}).status_code == 400
+
+
+def test_the_resource_gauge_settings_round_trip_and_are_the_owners_alone(client: FlaskClient) -> None:
+    view = client.get("/api/resource-gauge").get_json()
+    assert view["settings"] == {
+        "visibility": "when_warning",
+        "disk_warning_free_gb": 5.0,
+        "memory_warning_percent": None,
+        "cpu_warning_percent": None,
+    }
+    assert set(view["readings"]) == {"cpu", "memory", "disk"}
+    assert view["alerts"] == []
+    assert view["recent_stops"] == []
+    chosen = {
+        "visibility": "always",
+        "disk_warning_free_gb": 2.0,
+        "memory_warning_percent": 95,
+        "cpu_warning_percent": None,
+    }
+    assert client.post("/api/resource-gauge/settings", json=chosen).get_json()["settings"] == chosen
+    assert client.get("/api/resource-gauge").get_json()["settings"] == chosen
+    assert client.post("/api/resource-gauge/settings", json={"disk_warning_free_gb": 0}).status_code == 400
+    assert client.post("/api/resource-gauge/settings", json={"visibility": "sometimes"}).status_code == 400
+    visitor = identity_headers(_BOB_IDENTITY)
+    refused = client.post("/api/resource-gauge/settings", json={"visibility": "when_warning"}, headers=visitor)
+    assert refused.status_code == 403
+    assert client.get("/api/resource-gauge", headers=visitor).get_json()["settings"] == chosen

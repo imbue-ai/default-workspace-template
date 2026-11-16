@@ -364,10 +364,13 @@ model_reasoning_effort = "medium"
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
-# Some catalog entries (gpt-6-sol) default to the `priority` (fast) tier, and codex's TUI applies
-# a model's default tier to every turn typed in the agent terminal when no tier is configured. So
-# pin standard speed; the `fast` create template's config_overrides__extend replaces it.
-config_overrides.service_tier = "default"
+# Do not pin `service_tier` here. The visible `--remote` TUI sends the configured tier with its
+# `thread/resume`, and the app-server rebuilds an idle thread whose tier differs from it, so the
+# pin would undo every fast-mode switch the chat made before the TUI attached (on create the TUI
+# attaches only after mngr clears its hook-trust screen, often after the first switch). With no
+# tier configured, turns sent over the app-server run at the standard tier until a switch sets
+# one. A turn typed in the agent terminal on a model whose catalog default is the `priority` tier
+# (gpt-6-sol) runs fast and leaves the thread fast; the model bar shows it.
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. The source is the
@@ -1756,23 +1759,21 @@ transfer = "none"
 output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
 
-# Fast: launches the fast-capable harnesses in fast mode so a new conversation
-# feels responsive. The chat app stacks it on a chat whose fast mode is on, or
-# auto with its fast turns still to run (a new chat's mode is the workspace's
-# default, `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# Fast: launches claude in fast mode so a new conversation feels responsive.
+# The chat app stacks it on a chat whose fast mode is on, or auto with its fast
+# turns still to run (a new chat's mode is the workspace's default,
+# `fast_mode_default` in the chat app's `data/.apps/chat/settings.json`).
+# claude's `settings_overrides` is a SettingsPatchField (deep-merge marker on
+# the field), so a bare dotted path merges into the [agent_types.claude] block.
 #
-# The two fast settings are deliberately asymmetric: claude's
-# `settings_overrides` is a SettingsPatchField (deep-merge marker on the
-# field), so a bare dotted path merges into the [agent_types.claude] block.
-# codex's `config_overrides` is a PLAIN dict -- a bare dotted assignment trips
-# the settings-narrowing guard (it would drop the features/tools blocks), so
-# the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
-# inconsistency in either direction. Settings for whichever harness is not
-# resolved are inert, so this template is safe to stack with any --type.
+# Codex is deliberately absent: the chat app turns its fast mode on with a model
+# switch once the agent is up (`is_launch_fast_switched` in the chat app's
+# harness registry). A tier in codex's config is re-sent by the agent terminal
+# whenever it attaches, so it would undo auto mode's later switch to standard
+# speed after any restart.
 [create_templates.fast]
 setting__extend = [
     "agent_types.claude.settings_overrides.fastMode=true",
-    'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
 # Automation: the agent a skill routine runs in (system/libs/routines). The
