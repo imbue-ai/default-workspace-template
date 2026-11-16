@@ -77,6 +77,13 @@
  * The `/compact` the idle sweep sends a Claude agent breaks nothing either: it
  * shows on its compaction's start chip, not as a bubble.
  *
+ * Nor does the Stop hook that sends a Claude agent back to the workspace folder
+ * when it ends its turn elsewhere. The agent's work is done when it fires, so a
+ * step it left open stays open in this turn rather than carrying over beneath it
+ * (and the step it was on stops spinning), and the lone `cd` it answers with is
+ * no work of the turn's: the hook and the `cd` are one chip, placed as a
+ * compaction is (see return-to-root-chip).
+ *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
  * read transcript order alone.
@@ -92,8 +99,9 @@ import type {
   CompactionCause,
 } from "../models/Response";
 import type { HandoffState } from "../models/Chats";
-import { landedCompaction, runningCompaction, type CompactionPart } from "./compaction-chips";
-import type { RunPart } from "./message-renderers";
+import { landedCompaction, runningCompaction } from "./compaction-chips";
+import type { RunPart, StatusPart } from "./message-renderers";
+import { cdAnswerOf, returnToRootPart, type ReturnToRootPart } from "./return-to-root-chip";
 import { COMPACTING_STATE } from "../models/activityState";
 import { SEED_HARNESS } from "../models/Response";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
@@ -105,6 +113,7 @@ import {
   isNonBoundaryUserMessage,
   isNoticeUserMessage,
   isPromptWithContext,
+  isReturnToRootUserMessage,
   isStatusUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
@@ -209,8 +218,9 @@ export interface SectionView {
   /** The final run of ungrouped prose: the user-facing reply, rendered below
    *  the timeline. */
   trailing_reply: AssistantMessageEvent[];
-  /** Compactions that landed after the trailing reply, rendered below the timeline and reply. */
-  trailing_status: CompactionPart[];
+  /** Status parts (compactions, the return to the workspace folder) that landed after the
+   *  trailing reply, rendered below the timeline and reply. */
+  trailing_status: StatusPart[];
   /** The step the agent's next words join, where a reply it is still writing shows: the live
    *  frontier step, while no handoff node is taking its words. Null on every other section. */
   live_step_id: string | null;
@@ -464,8 +474,8 @@ type SectionEntry =
   | { kind: "permission"; event: AssistantMessageEvent }
   /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
-  /** A compaction, landed or running. */
-  | { kind: "status"; part: CompactionPart }
+  /** A compaction, landed or running, or the return to the workspace folder. */
+  | { kind: "status"; part: StatusPart }
   /** The handoff node, at the summary request that opened it or at a switch with no request. */
   | { kind: "handoff"; node: HandoffNode }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
@@ -655,6 +665,8 @@ export function buildSections(
     builders.push(section);
     return section;
   };
+  // The return to the workspace folder still waiting for the agent's answer: its lone `cd` folds in.
+  let awaitingCd: ReturnToRootPart | null = null;
   // Close the current section, carrying its open steps over, and open the next. A turn the user
   // started is a new request, so the carried-over steps wait until the agent takes them up again;
   // any other break continues the request the closed section was answering.
@@ -665,6 +677,7 @@ export function buildSections(
     isAfterSwitch = false,
   ): void => {
     const previous = current;
+    awaitingCd = null;
     carryover = previous === null ? [] : openStepsAtEnd(previous);
     current = ensureSection(user_event, key, isAfterSwitch);
     if (isNewRequest) setCarryoverDormant(current);
@@ -676,6 +689,12 @@ export function buildSections(
   // setup sends before the prompt (a model pick's slash commands) leave it armed.
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
+    if (e.type === "assistant_message" && awaitingCd !== null && e.tool_calls.length > 0) {
+      const call = cdAnswerOf(e);
+      if (call !== null) awaitingCd.cd = { event: e, call };
+      awaitingCd = null;
+      if (call !== null) continue;
+    }
     if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
       // The chat's first agent taking over from the seed segment, which no agent wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
@@ -771,6 +790,12 @@ export function buildSections(
         // The handoff node takes the retiring agent's whole summary turn, so a chip landing
         // inside it stays in that turn, at its spot after the node.
         current.entries.push({ kind: "chip", event: e });
+        continue;
+      }
+      if (isReturnToRootUserMessage(e)) {
+        if (current === null) current = ensureSection(null, "section-pre");
+        awaitingCd = returnToRootPart(e);
+        current.entries.push({ kind: "status", part: awaitingCd });
         continue;
       }
       if (isStatusUserMessage(e)) {
@@ -976,6 +1001,18 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
   return section.step_order.filter((id) => section.steps.get(id)!.status === "active");
 }
 
+/** Whether the agent's work in the section ended at the Stop hook sending it back to the workspace
+ *  folder: nothing it did after the hook moved a step or did work, so no step is live. */
+function hasEndedOnReturnToRoot(section: SectionBuilder): boolean {
+  for (let i = section.entries.length - 1; i >= 0; i--) {
+    const entry = section.entries[i];
+    if (entry.kind === "status" && entry.part.type === "return-to-root") return true;
+    if (entry.kind === "step" || entry.kind === "permission" || entry.kind === "handoff") return false;
+    if (entry.kind === "event" && isWork(entry.event)) return false;
+  }
+  return false;
+}
+
 /** Collect each step's closing remarks: the prose it spoke after its last work
  *  in this section. The live frontier step is exempt: nothing has ended it, so
  *  its trailing prose is in-flight narration shown as a caption (see step 3). */
@@ -1009,7 +1046,7 @@ function finalizeSection(
   // one that may show a spinner. Computed up front because the live step is
   // treated specially below: prose it just spoke is in-flight narration, not a
   // closing remark, since the step has not closed.
-  const frontierId = is_tail && !isTailSettled ? section.current_step_id : null;
+  const frontierId = is_tail && !isTailSettled && !hasEndedOnReturnToRoot(section) ? section.current_step_id : null;
 
   // A fresh start asked for no summary and delivered no prompt: there was no handoff to show, so
   // its node comes off the timeline rather than standing as an empty line.
@@ -1089,9 +1126,10 @@ function finalizeSection(
     lastTrailingReplyEntryIdx = i;
   }
 
-  // A compaction after the reply follows it below the timeline. With no reply to follow, it
-  // stays in the inline stream, where its chips join the turn's last chip row.
-  const trailing_status: CompactionPart[] = [];
+  // A status part (a compaction, the return to the workspace folder) after the reply follows it
+  // below the timeline. With no reply to follow, it stays in the inline stream, where its chips
+  // join the turn's last chip row.
+  const trailing_status: StatusPart[] = [];
   const trailingStatusIndices = new Set<number>();
   for (let i = lastTrailingReplyEntryIdx + 1; i < section.entries.length && trailing_reply.length > 0; i++) {
     const en = section.entries[i];

@@ -27,6 +27,9 @@ export interface ToolCall {
   // A tk lifecycle command, stamped whole so the step progress view reads titles and
   // close summaries without fetching the input. Absent for every other call.
   tk_command?: string;
+  // True for a shell call that only changes directory (`cd <dir>`, maybe with a `pwd`): the agent's
+  // answer to the repo-root Stop hook, which the transcript walk folds into that hook's chip.
+  is_directory_change?: boolean;
   // Human labels, computed by the harness's own parser: the tool's identity for
   // the transcript block header, and verb + target for the live activity strip.
   // They differ for claude ("Tool: Read" / "Reading foo.py") and are usually equal
@@ -104,6 +107,8 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
     | "permission_resolution"
     | "secret_resolution"
     | "status"
+    // The Stop hook sending the agent back to the repo root, folded with its `cd` into one chip.
+    | "return_to_root"
     | "notice"
     | "prompt_with_context";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.

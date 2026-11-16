@@ -68,6 +68,8 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
         label: event.display_label ?? (event.display_body !== undefined ? content : null),
         body: event.display_body ?? content,
       };
+    case "return_to_root":
+      return { kind: UserMessageKind.ReturnToRoot, label: null, body: content };
     case "notice":
       return {
         kind: UserMessageKind.Notice,
@@ -138,6 +140,11 @@ export function isPromptWithContext(event: ClassifiableUserMessage): boolean {
 /** True when the message is a compaction's status event ("Context was compacted"). */
 export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
+}
+
+/** True when the message is the Stop hook sending the agent back to the workspace folder. */
+export function isReturnToRootUserMessage(event: ClassifiableUserMessage): boolean {
+  return classifyUserMessage(event).kind === UserMessageKind.ReturnToRoot;
 }
 
 /** True when the content is a skill expansion (its body is folded into the
