@@ -6,7 +6,7 @@ Row 2 is a hosted MCP server the service itself publishes (its docs link to
 it, or it lives in the service's own GitHub organization) whose authorization
 server registers clients itself: its metadata has a `registration_endpoint`.
 That is what makes the row frictionless, and why it comes before a key: the
-user signs in once, in a window Imbue Studio opens, and copies nothing. A
+user signs in, in a window Imbue Studio opens, and copies nothing. A
 server without that endpoint wants a client someone registers by hand, which
 no flow here can do, so it is not this row however official it is; neither is
 a server that takes a key in a header (see "A server with a key"). A listing
@@ -22,13 +22,13 @@ calls the service's API with a key, and nothing it adds is worth running a
 stranger's code with this workspace's access: use that API through row 3 or
 row 5 instead, and read the package's source for the endpoints it calls.
 
-MCP is allowed for a service latchkey does not support yet. The workspace disables
-claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
+MCP is allowed for a service latchkey does not already know. The workspace
+disables claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
 `.mngr/settings.toml`) because that is an OAuth side channel around the latchkey
-gateway for services latchkey *does* support; a server for a service it does not
-support bypasses nothing. Many of latchkey's builtins are themselves remote MCP
-servers (`notion-mcp`, `atlassian-mcp`, `airtable-mcp`, ...): those are row 1,
-called as "Calling the server" below says.
+gateway for services latchkey *does* know; a server for a service it does not
+know bypasses nothing. Many of the services latchkey already knows are
+themselves remote MCP servers (`notion-mcp`, `atlassian-mcp`, `airtable-mcp`,
+...): those are row 1, called as "Calling the server" below says.
 
 ## The connection is a latchkey custom service
 
@@ -84,12 +84,11 @@ services") whose `domain` is the MCP endpoint's host and whose `login` is the
 flow. `login.url` is the OAuth authorization endpoint; `login.flow_params`
 carries the MCP endpoint, the token and registration endpoints, the `scopes`,
 and `issuesRefreshTokens: false` only when the server's docs say it issues
-access tokens alone. The mcpEndpoint must be on scheme://domain itself: same
-scheme, exactly that host, no port. The three OAuth endpoints (login.url,
-tokenEndpoint, registrationEndpoint) may be on any domain, but copy them
-exactly as the authorization server metadata gives them, all three from the
-same server. Only a server that publishes no metadata has them held to domain, a
-subdomain or a parent domain of it.
+access tokens alone. The `mcpEndpoint` must be on `scheme://domain` itself:
+same scheme, exactly that host, no port. The three OAuth endpoints
+(`login.url`, `tokenEndpoint`, `registrationEndpoint`) may be on any domain,
+but copy them exactly as the authorization server metadata gives them, all
+three from the same server.
 
 Err on the side of too many scopes. A connection's scopes are fixed when
 the user signs in, and there is no request that adds one: a scope that turns
@@ -115,7 +114,7 @@ expires for good, and the user signs in again then.
 After approval the service is one `latchkey services list` names, and a later
 `No credentials found` or `Request not permitted by the user` is handled as for
 any service latchkey already knows (`references/latchkey.md`, "Interpreting
-latchkey permission"). A `401` from the server after that means the sign-in is
+latchkey permission errors"). A `401` from the server after that means the sign-in is
 gone; re-send the request. A `403` or an `insufficient_scope` error means the
 connection's scopes do not cover the call: tell the user plainly that the
 connection has to be set up again with wider access, ask them to disconnect the
