@@ -1521,7 +1521,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (currentChatId !== forChatId) {
           // The user moved to another chat while the text was read back: it joins that chat's saved draft.
           const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
-          localStorage.setItem(messageTextKey(forChatId), savedDraft + text);
+          const merged = savedDraft.trim().length === 0 ? text : `${savedDraft}\n\n${text}`;
+          localStorage.setItem(messageTextKey(forChatId), merged);
           return;
         }
         const textarea = messageTextareaElement;
