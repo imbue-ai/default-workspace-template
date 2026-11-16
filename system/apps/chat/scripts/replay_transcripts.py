@@ -144,7 +144,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="+", type=Path, help="Claude session files, or directories holding them")
     parser.add_argument("--port", type=int, default=0, help="The chat app's port (default: a free one)")
-    parser.add_argument("--open", action="store_true", help="Open the chat list in the default browser")
+    parser.add_argument("--open", action="store_true", help="Open the first chat in the default browser")
     args = parser.parse_args()
 
     logger.remove()
