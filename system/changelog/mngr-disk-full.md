@@ -1,0 +1,1 @@
+The shell's supervisord program runs its entry point directly; the shell now registers its own registry row (and keeps starting when the disk is too full to write it). `uv.lock` picks up the new `disk-headroom` dependency of `app-manifest` and the chat app.
