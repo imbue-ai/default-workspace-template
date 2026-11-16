@@ -129,6 +129,8 @@ Ask for the smallest set of verbs the task needs, with a rationale that names th
 
 ## 6. Acting on other workspaces from inside one
 
+(Note: This only applies to workspaces belonging to the same user; when you need to access a workspace shared by another user, treat it as any other third-party service. See the `connect-external-service` skill.)
+
 A workspace is addressed by the id of its primary agent (the one carrying the `is_primary` label).
 Your `$MNGR_AGENT_ID` is your own agent, one of the workspace's several, so from inside resolve your workspace's id with `mngr ls --include 'has(labels.is_primary)' --ids` (only this workspace's agents are visible from inside, so exactly one carries the label) and fall back to `$MNGR_AGENT_ID` when that is empty.
 
