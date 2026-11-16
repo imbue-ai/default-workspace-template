@@ -238,6 +238,12 @@ performance.getEntriesByType('resource').map(e => e.name)"`).
 - **Neither** when every request also needs a value the page computes, such as
   a CSRF header that must echo a cookie: row 4 is out, go on to row 5.
 
+Only use the `cookie-capture` and `token-capture` flows when
+you're fairly certain that they're going to work in the given
+case. When the cookie or token do not actually appear during the
+login flow, the user may get stuck with an open browser, not
+knowing what to do next.
+
 `latchkey curl` requests are sent by the gateway, which runs on the user's
 computer for a workspace there and on the workspace's server for a cloud one.
 A plain `curl` from this workspace therefore tests neither the credential nor
