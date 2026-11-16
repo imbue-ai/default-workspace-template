@@ -1,0 +1,1 @@
+- The build-app skill's verify step says where the chat's test gate goes: to the background after the app is on screen, with the reply not waiting for it. It used to say the gate was not part of the chat turn at all, which disagreed with `AGENTS.md`.
