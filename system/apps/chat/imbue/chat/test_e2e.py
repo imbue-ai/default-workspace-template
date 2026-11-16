@@ -2949,15 +2949,10 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
 ) -> None:
     """The last chat leaves the list and the selection the moment its delete is confirmed, and no new chat is asked
     for while the delete is on its way, since the chat could yet come back. A refusal puts it back on screen and says
-    why."""
-    dialogs: list[str] = []
+    so in a notice, with the chat app's reason behind See details."""
     awaiting_requests: list[str] = []
-
-    def record_and_accept(dialog: Dialog) -> None:
-        dialogs.append(dialog.message)
-        dialog.accept()
-
-    page.on("dialog", record_and_accept)
+    # The delete's confirmation is the browser's own dialog.
+    page.on("dialog", lambda dialog: dialog.accept())
     page.on(
         "request",
         lambda request: awaiting_requests.append(request.url) if request.url.endswith("/api/chats/awaiting") else None,
@@ -2979,7 +2974,9 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
     expect(rows).to_have_count(1)
     expect(page.locator(".chat-root-empty")).to_have_count(0)
     assert _selection_of(page.url) == FIXTURE_AGENT_ID
-    assert "mngr failed" in dialogs[-1]
+    notice = page.locator(".modal-card")
+    expect(notice).to_contain_text("Couldn't delete the chat")
+    expect(notice.locator(".see-details-text")).to_contain_text("mngr failed")
     assert awaiting_requests == []
 
 
