@@ -160,10 +160,9 @@ uses a relative path run in the wrong place. The same file's `env` sets
 `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`, which puts the session back in the project
 directory after every call, so the Stop hooks run at the repo root and this hook should never
 fire; it stays as a safety net. (It cannot be made quiet instead: answering it costs the agent a
-second reply, and claude re-prompts a reply with no visible text.) agy and codex cannot end a
-turn in a wandered cwd: agy's `Cwd` and codex's `workdir` are required per-call parameters.
-Measured across 41 live agy calls, `Cwd` was present every time, only ever the agent's own
-workspace root, with zero `cd` invocations.
+second reply, and claude re-prompts a reply with no visible text.) agy and codex cannot hit that: agy's `Cwd`
+and codex's `workdir` are required per-call parameters. Measured across 41 live agy calls, `Cwd`
+was present every time, only ever the agent's own workspace root, with zero `cd` invocations.
 The hook has nothing to protect there, and it appears exactly once in this repo -- it was never
 given to codex or pi either. This paragraph records why, so it is not "fixed" later.
 
