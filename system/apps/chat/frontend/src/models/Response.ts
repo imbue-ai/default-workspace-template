@@ -629,12 +629,12 @@ function storeFor(chatId: string): TranscriptStore {
   return store;
 }
 
-// How long the transcript cache write waits for the window to settle, so a streaming turn writes
-// once per pause rather than once per event.
+// How long the transcript cache write waits after a change, so a streaming turn writes at most once
+// per delay rather than once per event.
 const CACHE_WRITE_DELAY_MS = 500;
 const cacheWriteTimersByChat = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** Cache the chat's window once it settles, when it is a real snapshot that reaches the live end. */
+/** Cache the chat's window shortly after it changes, when it is a real snapshot that reaches the live end. */
 function scheduleTranscriptCacheWrite(chatId: string): void {
   if (cacheWriteTimersByChat.has(chatId)) return;
   cacheWriteTimersByChat.set(
