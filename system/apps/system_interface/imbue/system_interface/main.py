@@ -39,7 +39,6 @@ from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
-
 # The shell's manifest, relative to the repo root every supervised program runs from.
 # ``test_app_manifests.py`` reads this constant from the source to check the program registers
 # with this manifest.

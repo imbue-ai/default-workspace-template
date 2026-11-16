@@ -303,7 +303,9 @@ class _FlakyRegistration:
 def test_a_registration_the_full_disk_refuses_lands_once_there_is_room() -> None:
     registration = _FlakyRegistration([_disk_full_refusal(), _disk_full_refusal(), _disk_full_refusal()])
 
-    retry = register_or_retry_while_disk_full(registration, "app.toml", first_delay_seconds=0.01, max_delay_seconds=0.02)
+    retry = register_or_retry_while_disk_full(
+        registration, "app.toml", first_delay_seconds=0.01, max_delay_seconds=0.02
+    )
 
     assert retry is not None
     retry.join(timeout=5)
