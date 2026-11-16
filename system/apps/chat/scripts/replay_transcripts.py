@@ -74,8 +74,11 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
             files = _session_files_in(path)
             if not files:
                 raise ReplayInputError(f"{path} holds no Claude session file (<session id>.jsonl)")
+            directory_name = path.resolve().name
             names = (
-                [path.name] if len(files) == 1 else [f"{path.name} ({index})" for index in range(1, len(files) + 1)]
+                [directory_name]
+                if len(files) == 1
+                else [f"{directory_name} ({index})" for index in range(1, len(files) + 1)]
             )
         else:
             if not _SESSION_FILE_PATTERN.match(path.name):
