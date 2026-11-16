@@ -711,7 +711,7 @@ export function isTranscriptLoaded(chatId: string): boolean {
 }
 
 /** Whether the chat shows a window placed from the transcript cache that its snapshot has not replaced yet. */
-export function isShowingCachedTranscript(chatId: string): boolean {
+function isShowingCachedTranscript(chatId: string): boolean {
   return !loadedChatIds.has(chatId) && getEventCount(chatId) > 0;
 }
 
