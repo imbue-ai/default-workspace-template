@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import re
+import signal
 import sys
 import tempfile
 import threading
@@ -111,6 +112,9 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
 
 def serve(sessions: list[SeededSession], chat_port: int, is_opening_browser: bool) -> None:
     """Serve ``sessions`` as chats until interrupted."""
+    # A kill or a closed terminal stops like Ctrl-C, so the temp dir of transcript copies is deleted too.
+    for stop_signal in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(stop_signal, signal.default_int_handler)
     first, *rest = sessions
     with tempfile.TemporaryDirectory(prefix="replay-transcripts-") as tmp:
         with running_workspace(
