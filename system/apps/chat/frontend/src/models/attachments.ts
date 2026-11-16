@@ -7,7 +7,8 @@
  * inline image (``![path](path)``) for images, a file link (``[path](path)``, which
  * opens the file in Files) otherwise, each referencing the file by its absolute path on the agent VM
  * (e.g. "/code/uploads/<id>/<name>", or "/code/uploads/<id>-<width>x<height>/<name>" for an
- * image whose size was read). The bubble drops the label and renders the
+ * image whose size was read); a long paste's link is labelled with its file name instead
+ * (``[pasted-text-1.txt](path)``). The bubble drops the label and renders the
  * values through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
  * reader and the agent (which records the same text in its transcript, and can
