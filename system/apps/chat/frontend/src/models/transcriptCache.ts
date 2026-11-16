@@ -84,7 +84,7 @@ export function readCachedTranscript(chatId: string): CachedTranscript | null {
   return { events: entry.events, offset: entry.offset, total: entry.total };
 }
 
-/** The serialized entry for the last ``count`` of ``events``, or null when even one event is too large. */
+/** The serialized entry for as many of the last ``events`` as fit, or null when even one event is too large. */
 function encodeTail(events: TranscriptEvent[], firstOffset: number, total: number): string | null {
   let count = Math.min(events.length, CACHED_EVENT_LIMIT);
   while (count > 0) {
