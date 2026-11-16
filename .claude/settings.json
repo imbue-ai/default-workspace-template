@@ -125,5 +125,6 @@
       }
     }
   },
-  "autoMemoryDirectory": "~/workspace/data/memories"
+  "autoMemoryDirectory": "~/workspace/data/memories",
+  "showThinkingSummaries": true
 }
