@@ -137,6 +137,20 @@ def _normalize_slash_command(text: str) -> str:
     return f"{command} {args}".strip()
 
 
+# A message pasted into Claude Code's input box is recorded inside a wrapper, e.g.
+#     \n\n<pasted_content id="dd53">\n<the pasted text>\n</pasted_content id="dd53">\n
+# and every message of LONG_MESSAGE_THRESHOLD characters or more reaches the agent as a paste.
+# Unwrapped, it renders as the text the user sent and matches it wherever a turn is compared
+# with what was sent.
+_PASTED_CONTENT_PATTERN = re.compile(r'<pasted_content id="([^"]*)">\n?(.*?)\n?</pasted_content id="\1">', re.DOTALL)
+
+
+def _unwrap_pasted_content(text: str) -> str:
+    """Replace each of Claude Code's paste wrappers with the text it holds; ``text`` unchanged when it has none."""
+    unwrapped, count = _PASTED_CONTENT_PATTERN.subn(r"\2", text)
+    return unwrapped.strip() if count else text
+
+
 _COMPACTION_COMMAND_RE = re.compile(r"^\s*<command-name>\s*/compact\s*</command-name>", re.DOTALL)
 
 
@@ -451,7 +465,7 @@ def _parse_user_message(
     # Emit user text message if there is actual user text
     if not _has_tool_results_only(content):
         raw_text = extract_text_content(content)
-        text = _normalize_slash_command(raw_text)
+        text = _normalize_slash_command(_unwrap_pasted_content(raw_text))
 
         if raw.get("isCompactSummary"):
             event_id = _make_event_id(uuid, "context_compacted")
@@ -611,7 +625,7 @@ def _parse_queued_command_attachment(
     # A queued message can itself be a slash command; normalize it the same way
     # a non-queued one is handled in ``_parse_user_message`` so it renders as the
     # typed text and reconciles against its optimistic bubble.
-    prompt = _normalize_slash_command(prompt)
+    prompt = _normalize_slash_command(_unwrap_pasted_content(prompt))
 
     event_id = _make_event_id(uuid, "queued")
     if event_id in existing_event_ids:

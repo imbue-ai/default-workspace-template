@@ -266,6 +266,37 @@ def test_queued_slash_command_expansion_normalized() -> None:
     assert events[0]["content"] == "/rebase-merge origin/main"
 
 
+_PASTED_BODY = "First paragraph of a long message.\n\nSecond paragraph.\n\nThe last sentence."
+
+
+def test_pasted_message_is_unwrapped_to_the_text_sent() -> None:
+    """A long message reaches Claude Code as a paste, which its transcript records inside a
+    ``<pasted_content>`` wrapper (seen on Claude Code 2.1.317); the bubble shows the text sent, not the wrapper."""
+    recorded = f'\n\n<pasted_content id="dd53">\n{_PASTED_BODY}\n</pasted_content id="dd53">\n'
+    events = parse_lines([_make_user_line("uuid-1", "2026-01-01T00:00:00Z", recorded)])
+    assert len(events) == 1
+    assert events[0]["content"] == _PASTED_BODY
+
+
+def test_queued_pasted_message_is_unwrapped_to_the_text_sent() -> None:
+    recorded = f'<pasted_content id="dd53">\n{_PASTED_BODY}\n</pasted_content id="dd53">'
+    events = parse_lines([_make_queued_command_line("uuid-q", "2026-01-01T00:00:00Z", recorded)])
+    assert len(events) == 1
+    assert events[0]["content"] == _PASTED_BODY
+
+
+def test_text_typed_around_a_paste_is_kept() -> None:
+    recorded = 'see this:\n<pasted_content id="a1">\nline one\nline two\n</pasted_content id="a1">\nthoughts?'
+    events = parse_lines([_make_user_line("uuid-1", "2026-01-01T00:00:00Z", recorded)])
+    assert events[0]["content"] == "see this:\nline one\nline two\nthoughts?"
+
+
+def test_unmatched_paste_tags_are_left_as_written() -> None:
+    text = '<pasted_content id="a1">\nnever closed'
+    events = parse_lines([_make_user_line("uuid-1", "2026-01-01T00:00:00Z", text)])
+    assert events[0]["content"] == text
+
+
 def test_non_command_text_with_angle_brackets_untouched() -> None:
     """Ordinary user text that happens to contain angle brackets but no
     <command-name> tag passes through unchanged."""
