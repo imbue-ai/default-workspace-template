@@ -31,7 +31,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `icon` | string | unless `internal` | | `.svg` beside the manifest. |
 | `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
 | `stop_when_no_windows` | bool | no | `false` | Whether the shell may stop the app's program once no window on any desktop shows it, a minute after the last one closes (`docs/system/specs/stop-when-no-windows.md`); `critical = true` forces it `false`, and a manifest declaring both fails to load. |
-| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone (the chat's composer dictates). The shell adds `microphone` to the `allow` attribute of the frames of an app that declares it, and of no other; the Imbue Studio chrome already delegates the microphone to the workspace's frame, and a browser asks the person once per origin. |
+| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone (the chat's composer dictates). The shell adds `microphone` and `screen-wake-lock` (dictation keeps a phone's screen awake while it listens) to the `allow` attribute of the frames of an app that declares it, and of no other; the Imbue Studio chrome already delegates the microphone to the workspace's frame, and a browser asks the person once per origin. |
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |

@@ -988,7 +988,12 @@ every chat page of the workspace shares for as long as any of them is open; the
 workspace stores and runs nothing for voice. A phone or tablet also runs the
 model on WebAssembly's quantized weights even where it has WebGPU: the
 full-precision ones take three times the memory, more than a phone's browser
-gives a page.
+gives a page. While a dictation runs, the page holds a screen wake lock
+(`frontend/src/models/screenWakeLock.ts`), so a phone's screen does not dim and
+lock mid-sentence while the person speaks without touching it; the lock is best
+effort, asked for again when the page comes back into view, and nothing is said
+when a browser refuses it. The root's inner frames, like the shell's, allow it
+beside the microphone.
 Silero VAD splits speech into utterances, and a bounded streaming window keeps
 every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten

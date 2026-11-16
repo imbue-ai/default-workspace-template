@@ -74,6 +74,8 @@ import {
   whenChatRegistered,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
+import { browserWakeLockHost, createScreenWakeLock } from "../models/screenWakeLock";
+import type { ScreenWakeLock } from "../models/screenWakeLock";
 import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
 import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
@@ -626,6 +628,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let dictationProblem: DictationProblem | null = null;
   // The stretch of the box the dictation owns, from the caret it started at; null while none runs.
   let dictationSpan: LiveSpan | null = null;
+  // Keeps a phone's screen awake while a dictation runs: a locked screen hides the page and stops the words.
+  let screenWakeLock: ScreenWakeLock | null = null;
   // Fills the mic's capsule, handed over by the button while its glyph is in the document.
   let setMeterLevel: ((level: number) => void) | null = null;
   // Send or Enter came while dictating: the words are finished first, then the box is sent (spec D8).
@@ -661,8 +665,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (dictation !== null) return dictation;
     // The page's own URL roots the runtime's files; a document-less test has none.
     const pageUrl = typeof location === "undefined" ? "" : location.href;
+    const wakeLock = createScreenWakeLock(browserWakeLockHost());
+    screenWakeLock = wakeLock;
     dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass()), {
       onStateChange: (state) => {
+        // Held through loading, starting and listening, and let go once idle.
+        wakeLock.setWanted(state !== "idle");
         dictationState = state;
         if (state !== "loading") {
           dictationProgress = null;
@@ -730,6 +738,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   function disposeDictation(): void {
     dictation?.dispose();
     dictation = null;
+    // Disposal reaches idle without a state change of its own.
+    screenWakeLock?.setWanted(false);
+    screenWakeLock = null;
     dictationState = "idle";
     dictationProgress = null;
     dictationProblem = null;
