@@ -23,7 +23,7 @@ const CACHE_VERSION = 2;
 
 // The characters all of a window's snapshots may take together. Chromium keeps sessionStorage twice
 // (the browser process and the page's renderer, two bytes a character each), so this is about 1 MB
-// of memory per window: room for the bottoms of roughly a dozen to twenty chats.
+// of memory per window.
 export const TOTAL_BUDGET_CHARS = 250_000;
 // The most one chat's snapshot may take, whatever its screen holds.
 export const MAX_ENTRY_CHARS = 32_000;
