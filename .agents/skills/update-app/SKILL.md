@@ -156,9 +156,9 @@ To hand work off:
    build yourself go live without waiting for it.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the changes handed to the worker, in the user's
-   words, the ones you are building yourself so the worker leaves them alone,
-   the files and
-   decisions you already know about, and what done looks like. It names the
+   words, the changes you are building yourself so the worker does not build
+   them too (it may still edit the same files), the files and decisions you
+   already know about, and what done looks like. It names the
    build-worker guide (`.agents/shared/build-worker/SKILL.md`), which carries
    the standing rules for how the worker builds, checks and reports; do not
    restate them in the brief. Hardening still happens at turn-end, as
@@ -176,9 +176,8 @@ To hand work off:
 4. While the worker runs, keep handling new messages. Build a change
    yourself, through the live loop below, unless it needs more than a few
    minutes of building; send that one to the worker with
-   `create_worker.py reply`. Also forward a change that alters or adds to
-   the worker's part, and leave those files to it, so two agents never edit
-   the same code.
+   `create_worker.py reply`. You and the worker may edit the same files;
+   any conflicts are resolved when you merge its work.
 5. When a milestone or the final report arrives, merge it as
    `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
    through steps 2 and 3 of the live loop, and tell the user what is now there.
@@ -196,6 +195,11 @@ agents editing the same service at the same time interleave destructively --
 there is no merge step where that could be reconciled. Concurrent edits must
 be *serialized*, and the serialization token is an advisory lease held as a
 regular `tk` ticket (regular tickets are visible across agents).
+
+The exception is a background worker you launched: it is not a second editor
+here. It works in its own worktree, so you can keep editing the same files
+while it runs; its changes reach the live app only when you merge them, and
+any conflicts are resolved in that merge.
 
 **Pre-flight, before touching the service's code or config:**
 
