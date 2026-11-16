@@ -70,6 +70,8 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
     """The sessions the arguments name, in argument order; a directory's sessions are named after it."""
     sessions: list[SeededSession] = []
     for path in paths:
+        if not path.exists():
+            raise ReplayInputError(f"{path} does not exist")
         if path.is_dir():
             files = _session_files_in(path)
             if not files:
