@@ -882,7 +882,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
         );
-    // A long paste can go back into the box as text, beside the remove button.
     const putBack =
       isUploading || !isPastedText
         ? null

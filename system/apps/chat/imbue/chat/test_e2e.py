@@ -1754,7 +1754,6 @@ def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(
         assert match.group(1).endswith("/pasted-text-1.txt")
         assert Path(match.group(1)).read_text() == _LONG_PASTE
         expect(chat.locator(".composer-attachment")).to_have_count(0)
-        # The bubble names the paste by its file name, not by its path.
         link = chat.locator(".message-user", has_text="Summarize this:").get_by_role("link", name="pasted-text-1.txt")
         expect(link).to_be_visible(timeout=15000)
 
