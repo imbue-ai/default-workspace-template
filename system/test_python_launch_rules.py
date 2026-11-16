@@ -36,6 +36,7 @@ from collections.abc import Collection, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
+import pytest
 from agents_shared.validate_skill import is_entry_module, third_party_skills
 from entry_points_testing import (
     BARE_SEARCH_PATHS,
@@ -451,6 +452,7 @@ def test_a_planted_uv_run_window_is_caught_at_any_depth(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.timeout(60)
 def test_no_plain_uv_run_in_agent_facing_files() -> None:
     offenders = [
         f"{relative}: {line.strip()}"
@@ -464,6 +466,7 @@ def test_no_plain_uv_run_in_agent_facing_files() -> None:
     )
 
 
+@pytest.mark.timeout(60)
 def test_every_deliberate_sync_exception_still_matches_a_line() -> None:
     violations = _plain_uv_run_violations()
     stale = [
@@ -1230,6 +1233,7 @@ def _sys_path_edits_outside_the_bare_search_paths(
     return offenders
 
 
+@pytest.mark.timeout(60)
 def test_sys_path_edits_only_add_a_bare_search_path() -> None:
     offenders = _sys_path_edits_outside_the_bare_search_paths(
         REPO_ROOT, BARE_SEARCH_PATHS
@@ -1678,6 +1682,7 @@ add in your report. Never edit this test to let a site through.
 """
 
 
+@pytest.mark.timeout(60)
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
     assert not sites, (
@@ -1725,6 +1730,7 @@ def _marker_problems(repo_root: Path) -> list[str]:
     return problems
 
 
+@pytest.mark.timeout(60)
 def test_every_marker_keeps_a_site_for_a_named_reason() -> None:
     assert _marker_problems(REPO_ROOT) == []
 

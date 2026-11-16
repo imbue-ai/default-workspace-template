@@ -1,5 +1,9 @@
 """Open the workspace's welcome chat on the conversation the Imbue Studio app had before the workspace existed.
 
+Imbue Studio runs this script: its path, arguments, output and exit codes are the app's workspace
+command contract. ``system/test_studio_command_contract.py`` checks the path and arguments but little
+of the output or exit codes; change any of them upstream only.
+
 Usage, from the repo root (the cwd ``mngr exec`` gives every command there)::
 
     python3 system/scripts/seed_welcome_chat.py --transcript-base64 <base64 of the JSON body>
