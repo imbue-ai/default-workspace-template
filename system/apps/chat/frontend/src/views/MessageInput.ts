@@ -150,6 +150,13 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "compact_unavailable",
 ]);
 
+// A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
+// refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting
+// binary content), so dropping them sends exactly what the user saw.
+function withoutNulCharacters(draft: string): string {
+  return draft.split("\0").join("");
+}
+
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
 }
@@ -1056,14 +1063,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Only slash-shaped messages consult it, and only those block on the
         // catalog when it has not loaded yet -- otherwise an early /login could
         // slip through the fetch window.
-        if (messageText.trim().startsWith("/")) {
+        const guardedText = withoutNulCharacters(messageText);
+        if (guardedText.trim().startsWith("/")) {
           const harness = getChatById(chatId)?.active_agent.harness;
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
           }
           // ``/fast on`` and ``/fast off`` choose the chat's fast mode (on a harness that has
           // one) rather than reaching the harness or its notice: the mode is the chat's setting.
-          const fastMode = parseFastModeCommand(messageText);
+          const fastMode = parseFastModeCommand(guardedText);
           if (fastMode !== null && hasFastModeLimit(harness)) {
             chooseFastMode(chatId, fastMode, getEventsForChat(chatId));
             messageText = "";
@@ -1071,7 +1079,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             m.redraw();
             return null;
           }
-          const match = findComposerPopup(harness, messageText);
+          const match = findComposerPopup(harness, guardedText);
           if (match !== null) {
             if (match.popup.action === "open_auth") {
               interceptedAuthCommand = match.command;
@@ -1090,7 +1098,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         await waitForComposerUploads(chatId);
 
         const attachmentPaths = getReadyAttachmentPaths(chatId);
-        const text = messageText;
+        const text = withoutNulCharacters(messageText);
 
         // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
         // below, so without this the file would leave the message silently and the only clue

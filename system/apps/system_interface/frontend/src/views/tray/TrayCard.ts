@@ -24,8 +24,9 @@ export const TRAY_CARD_ROW_CLASS =
   "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left " +
   `hover:bg-fill-hover ${MENU_ROW_FOCUS}`;
 
-/** Which card is open: a person's (by roster key) or the agent's. */
-export type OpenCard = { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" };
+/** Which card is open: a person's (by roster key), the agent's, or the resource gauge's. */
+export type OpenCard =
+  { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" } | { readonly kind: "resources" };
 
 export interface TrayCardHover {
   /** The card open now, or null. */

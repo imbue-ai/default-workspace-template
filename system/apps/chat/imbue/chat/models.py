@@ -261,6 +261,19 @@ class AttachmentUploadResponse(FrozenModel):
     size: int = Field(description="Size of the stored upload in bytes")
 
 
+class InterruptAgentRequest(FrozenModel):
+    """Optional request body for the /api/chats/{id}/interrupt endpoint."""
+
+    only_if_idle: bool = Field(
+        default=False,
+        description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
+    )
+    keep_queue: bool = Field(
+        default=False,
+        description="Resend the messages queued for the agent as one turn after the restart, instead of dropping them",
+    )
+
+
 class InterruptAgentResponse(FrozenModel):
     """Response from the /api/chats/{id}/interrupt endpoint."""
 
@@ -278,6 +291,13 @@ class ChatWatchersResponse(FrozenModel):
     """Response from GET /api/chats/{id}/watchers."""
 
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
+class ChatNotificationRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/notification: the notification the chat just sent the user."""
+
+    message: str = Field(min_length=1, description="What the notification says")
+    title: str | None = Field(default=None, description="Its optional title, shown as a prefix on the message")
 
 
 class DrainToComposerResponse(FrozenModel):
@@ -633,6 +653,12 @@ class ConvergingResponse(ErrorResponse):
     """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
 
     phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class InterruptBusyResponse(ErrorResponse):
+    """The 409 an ``only_if_idle`` interrupt answers for a chat that has not ended its turn."""
+
+    busy_with: str = Field(description="What the chat is in the middle of, in plain words")
 
 
 class HandoffCancelResponse(FrozenModel):

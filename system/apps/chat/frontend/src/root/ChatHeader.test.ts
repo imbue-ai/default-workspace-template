@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The phone layout's header: its kebab offers the chat on screen what a right-click on its row in the list does,
- * and, as that row, nothing once the chat is being deleted; with the drawer open over it, a rename is the row's alone.
- * Under a mouse the bar is denser than a touchscreen's.
+ * The phone layout's header: its kebab offers the chat on screen what a right-click on its row in the list does;
+ * with the drawer open over it, a rename is the row's alone. Under a mouse the bar is denser than a touchscreen's.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -26,9 +25,6 @@ import type { ChatRow } from "./rows";
 // The workspace's only chat, so its main chat too.
 const ONLY_CHAT: ChatRow = chatRowFixture("agent-1", { title: "Plan the launch", isMain: true });
 
-// The rename case's chat: the delete case leaves its chat marked as being deleted for the rest of the file.
-const RENAMED_CHAT: ChatRow = { ...ONLY_CHAT, chatId: "agent-2", agentIds: ["agent-2"] };
-
 let root: HTMLElement | null = null;
 
 afterEach(() => {
@@ -41,11 +37,12 @@ afterEach(() => {
 });
 
 describe("the chat header", () => {
-  it("offers no verbs for the chat on screen once its delete is under way", () => {
+  it("offers the row's verbs, and moves off the only chat as its delete starts", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     root = document.createElement("div");
     document.body.appendChild(root);
-    const context = chatRailAttrsFixture({ rows: [ONLY_CHAT], selectedChatId: ONLY_CHAT.chatId });
+    const onPick = vi.fn<(chatId: string | null) => void>();
+    const context = chatRailAttrsFixture({ rows: [ONLY_CHAT], selectedChatId: ONLY_CHAT.chatId, onPick });
     m.mount(root, {
       view: () =>
         m(ChatHeader, { row: ONLY_CHAT, context, isListOpen: false, onOpenList: () => undefined, isTouch: true }),
@@ -66,8 +63,7 @@ describe("the chat header", () => {
     m.redraw.sync();
 
     expect(verbs.destroyChat).toHaveBeenCalledTimes(1);
-    // The only chat stays selected (there is no next one to move to), and a second Delete is not on offer.
-    expect(root.querySelector("[data-chat-header-menu]")).toBeNull();
+    expect(onPick).toHaveBeenCalledWith(null);
   });
 
   it("offers a chat that is still starting its rename and delete, and nothing to stop", () => {
@@ -97,15 +93,15 @@ describe("the chat header", () => {
     root = document.createElement("div");
     document.body.appendChild(root);
     const rail = chatRailAttrsFixture({
-      rows: [RENAMED_CHAT],
-      selectedChatId: RENAMED_CHAT.chatId,
+      rows: [ONLY_CHAT],
+      selectedChatId: ONLY_CHAT.chatId,
       isInDrawer: true,
       isTouch: true,
     });
     m.mount(root, {
       view: () => [
         m(ChatHeader, {
-          row: RENAMED_CHAT,
+          row: ONLY_CHAT,
           context: rail,
           isListOpen: true,
           onOpenList: () => undefined,
@@ -115,7 +111,7 @@ describe("the chat header", () => {
       ],
     });
 
-    root.querySelector<HTMLElement>(`[data-chat-row-menu="${RENAMED_CHAT.chatId}"]`)?.click();
+    root.querySelector<HTMLElement>(`[data-chat-row-menu="${ONLY_CHAT.chatId}"]`)?.click();
     m.redraw.sync();
     document.querySelector<HTMLElement>('.chat-rail-menu [data-menu-row="rename"]')?.click();
     m.redraw.sync();

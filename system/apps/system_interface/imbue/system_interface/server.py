@@ -861,6 +861,10 @@ def _run_ws_broadcast_loop(
         chats_activity = shell.chats_activity.current()
         if chats_activity is not None:
             websocket.send(json.dumps({"type": "chats_activity", **chats_activity.model_dump(mode="json")}))
+        # The tray's resource gauge as it stands; later changes are broadcast by its monitor.
+        websocket.send(
+            json.dumps({"type": "resource_gauge_changed", "view": shell.resource_gauge.view().model_dump(mode="json")})
+        )
 
         is_client_registered = False
         shutdown = False

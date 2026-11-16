@@ -11,7 +11,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { BAR_ICON_BUTTON, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
+import { BAR_ICON_BUTTON, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -47,9 +47,6 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
     },
     view({ attrs }) {
       const { row } = attrs;
-      // A chat being deleted offers nothing more, as its row in the list does not.
-      const isRowDeleting = row !== null && isDeleting(row.chatId);
-      const hasVerbs = row !== null && !isRowDeleting;
       const triggerAttrs = menu.triggerAttrs();
       const barButton = attrs.isTouch ? BAR_ICON_BUTTON : DENSE_BAR_ICON_BUTTON;
       return m(
@@ -78,13 +75,12 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 "span",
                 {
                   class:
-                    "chat-header-title ml-1 min-w-0 flex-1 truncate font-semibold " +
-                    (attrs.isTouch ? "text-(length:--font-size-body) " : "text-(length:--font-size-body-dense) ") +
-                    (isRowDeleting ? "text-danger-surface line-through opacity-50" : "text-body-content"),
+                    "chat-header-title ml-1 min-w-0 flex-1 truncate font-semibold text-body-content " +
+                    (attrs.isTouch ? "text-(length:--font-size-body)" : "text-(length:--font-size-body-dense)"),
                 },
                 row?.title ?? "Chats",
               ),
-          hasVerbs
+          row !== null
             ? m(
                 Button,
                 {
@@ -111,7 +107,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 kebabGlyph(attrs.isTouch ? 18 : 16),
               )
             : null,
-          hasVerbs ? menu.view(rowMenuRows(attrs.context, row, referenceRows)) : null,
+          row !== null ? menu.view(rowMenuRows(attrs.context, row, referenceRows)) : null,
         ],
       );
     },
