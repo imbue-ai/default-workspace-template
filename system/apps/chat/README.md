@@ -1022,6 +1022,23 @@ side-by-side evaluation, a browser's `localStorage` may name another registered
 engine under `workspace-voice:engine` and insist on a device (`webgpu` or
 `wasm`) under `workspace-voice:device`.
 
+Speech recognition mishears, so a message sent from a draft that dictation wrote
+into tells the model so: it ends with a dictation note, a short paragraph in a
+`<dictation-note>` tag pair set off from the words by a blank line (and ahead of
+the attachment block, which has to end the message). The composer keeps one mark
+per chat's draft, in `localStorage` under `message-dictated:<chat id>` beside
+the draft itself: set when final words land, kept through edits and partial
+deletes, and dropped once the box is emptied or the message is sent. A message
+put back in the composer (a failed send, a draft the switch dialog handed back)
+is marked again, and queued text returned to it comes back without its notes and
+marks the draft instead. A slash command or bash-mode input is sent without the
+note, since a harness reads one only as the whole message. The note is for the
+model alone: the agent receives it and the transcript keeps it, while every
+bubble that shows a person's message, the tray's notification bubbles, and the
+chat-naming prompt take it out by its tags.
+`frontend/src/models/dictationNote.ts` holds the note and the marks, and
+`imbue/chat/dictation_note.py` the backend's half.
+
 ## Development
 
 ```bash

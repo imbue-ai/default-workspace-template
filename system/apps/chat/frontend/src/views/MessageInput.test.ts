@@ -306,6 +306,7 @@ import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { DICTATION_NOTE, hasDictatedSpeech, withDictationNote } from "../models/dictationNote";
 import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import {
@@ -2057,6 +2058,7 @@ describe("MessageInput switching harness", () => {
       // The mocked builder appends the ready paths it was given.
       finalText: "moving house + /uploads/plan.pdf",
       attachments: [{ localId: "a1", fileName: "plan.pdf", status: "ready", uploaded: { path: "/uploads/plan.pdf" } }],
+      mayContainDictatedSpeech: false,
     });
     // The chips go with the text, rather than being left behind in a composer it emptied.
     expect(mocks.clearComposerAttachments).toHaveBeenCalledWith("agent-1");
@@ -2588,7 +2590,7 @@ describe("MessageInput dictation", () => {
     render();
     await flushAsync();
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.sendMessage).toHaveBeenCalledWith(CHAT, "Ship it.", expect.any(String));
+    expect(mocks.sendMessage).toHaveBeenCalledWith(CHAT, withDictationNote("Ship it."), expect.any(String));
   });
 
   it("drops the unfinished words on Escape and keeps the final ones", () => {
@@ -2809,5 +2811,426 @@ describe("MessageInput dictation", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  describe("the note a dictated message carries for the model", () => {
+    const TARGET = { id: "acct-openai", harness: "codex", label: "OpenAI (Codex)" };
+    const AWAITING_FIRST_SEND = {
+      chat_id: CHAT,
+      name: "Getting started",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+      held_sends: [],
+    };
+
+    beforeEach(() => {
+      mocks.switchChat.mockClear();
+      mocks.launchChat.mockClear();
+      mocks.chooseFastMode.mockClear();
+      mocks.openProviderChooser.mockReset();
+      mocks.hasUserTurnLandedSince.mockClear();
+      mocks.drainToComposer.mockReset();
+      mocks.drainToComposer.mockResolvedValue({ block: "" });
+      mocks.agent.harness = "claude";
+      mocks.agent.activity_state = undefined;
+    });
+
+    afterEach(() => {
+      mocks.agent.activity_state = undefined;
+      mocks.switching.target = null;
+      mocks.isChatRegistered = true;
+      mocks.provisional = undefined;
+      mocks.selectedAccount = null;
+      mocks.accountsLoaded = true;
+      mocks.getComposerAttachments.mockReturnValue([]);
+    });
+
+    /** Dictate `words` into the box: the mic's press, the words landing as final, and the engine going idle. */
+    function dictate(render: () => unknown, words: string): void {
+      startDictating(render);
+      mocks.dictationEvents!.onFinalWords(words);
+      setDictationState("idle");
+    }
+
+    /** Change the box's text, as typing or deleting in it does. */
+    function editBox(render: () => unknown, text: string): void {
+      const oninput = findByTag(render(), "textarea")!.attrs!.oninput as (event: unknown) => void;
+      oninput({ target: { value: text, style: {}, scrollHeight: 10 } });
+    }
+
+    /** Press the send button, which reads "Switch and send" while a switch is armed, and wait for the send. */
+    async function pressSend(render: () => unknown, label = "Send message"): Promise<void> {
+      const send = findByAttr(render(), "aria-label", label);
+      expect(send, `"${label}" should be offered`).toBeTruthy();
+      await (send!.attrs!.onclick as () => Promise<void>)();
+    }
+
+    /** The text the last send put on the wire. */
+    function lastSentText(): string {
+      const calls = mocks.sendMessage.mock.calls as unknown as [string, string][];
+      return calls[calls.length - 1][1];
+    }
+
+    it("marks a draft dictation wrote into, and sends it once with the note after the words", async () => {
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+
+      await pressSend(render);
+
+      expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+      expect(lastSentText()).toBe(`Rename the parser module.\n\n${DICTATION_NOTE}`);
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+
+      // The next message is typed: the sent one took its note with it.
+      editBox(render, "typed by hand");
+      await pressSend(render);
+      expect(lastSentText()).toBe("typed by hand");
+    });
+
+    it("sends a typed message as it is, with no note", async () => {
+      await typeAndSend(composer().component, CHAT, "typed by hand");
+
+      expect(lastSentText()).toBe("typed by hand");
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it("does not mark a draft for words that never became final", async () => {
+      const { render } = composer();
+      startDictating(render);
+      mocks.dictationEvents!.onTentativeWords("rename the");
+      expect(textareaValue(render)).toBe("rename the");
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+      // What the engine does when the dictation is called off.
+      mocks.dictationEvents!.onTentativeWords("");
+      mocks.dictationEvents!.onUtteranceEnd();
+      setDictationState("idle");
+
+      editBox(render, "typed by hand");
+      await pressSend(render);
+
+      expect(lastSentText()).toBe("typed by hand");
+    });
+
+    it("keeps the note on a dictated draft that was edited and partly deleted", async () => {
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+      editBox(render, "Rename the");
+      render();
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+
+      await pressSend(render);
+
+      expect(lastSentText()).toBe(withDictationNote("Rename the"));
+    });
+
+    it("drops the note once the box has been emptied, whatever is typed into it next", async () => {
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+      editBox(render, "");
+      render();
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+
+      editBox(render, "typed by hand");
+      await pressSend(render);
+
+      expect(lastSentText()).toBe("typed by hand");
+    });
+
+    it("drops the note when a command the composer acts on empties the box", async () => {
+      const { render } = composer();
+      dictate(render, "Fast on.");
+      editBox(render, "/fast on");
+
+      await pressSend(render);
+      expect(mocks.chooseFastMode).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessage).not.toHaveBeenCalled();
+      expect(textareaValue(render)).toBe("");
+
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it.each(["/compact", "!ls -la"])(
+      "sends a dictated draft that reads as a command (%s) without the note",
+      async (command) => {
+        const { render } = composer();
+        dictate(render, "Compact.");
+        editBox(render, command);
+
+        await pressSend(render);
+
+        expect(lastSentText()).toBe(command);
+      },
+    );
+
+    it("puts the note before the attachment references, which end the message", async () => {
+      mocks.getComposerAttachments.mockReturnValue([{ status: "ready", uploaded: { path: "/code/uploads/a/p.png" } }]);
+      const { render } = composer();
+      dictate(render, "Look at this.");
+
+      await pressSend(render);
+
+      // The mocked builder appends the ready paths to the text it was given.
+      expect(lastSentText()).toBe(`${withDictationNote("Look at this.")} + /code/uploads/a/p.png`);
+    });
+
+    it("keeps each chat's draft to itself", async () => {
+      const { component, render } = composer();
+      dictate(render, "Rename the parser module.");
+
+      await typeAndSend(component, "agent-typed-in", "typed by hand");
+
+      expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-typed-in", "typed by hand", expect.any(String));
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
+
+    it("keeps the mark while another page showing the chat redraws its own empty box", async () => {
+      const dictating = composer();
+      const other = composer();
+      other.render();
+      dictate(dictating.render, "Rename the parser module.");
+
+      // Every page showing a chat redraws when anything about the chat changes; this one's box was never typed in.
+      expect(textareaValue(other.render)).toBe("");
+
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+      await pressSend(dictating.render);
+      expect(lastSentText()).toBe(withDictationNote("Rename the parser module."));
+    });
+
+    it("still notes a dictated draft sent from a composer mounted after the words landed", async () => {
+      dictate(composer().render, "Rename the parser module.");
+      const mountedLater = composer();
+      expect(textareaValue(mountedLater.render)).toBe("Rename the parser module.");
+
+      await pressSend(mountedLater.render);
+
+      expect(lastSentText()).toBe(withDictationNote("Rename the parser module."));
+    });
+
+    it("marks the draft again when a dictated message comes back from a failed send", async () => {
+      mocks.sendMessage.mockRejectedValueOnce("nope");
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+
+      await pressSend(render);
+      expect(textareaValue(render)).toBe("Rename the parser module.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+
+      await pressSend(render);
+      expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+      expect(lastSentText()).toBe(withDictationNote("Rename the parser module."));
+    });
+
+    it("repeats a failed dictated message with its note on Retry, and forgets the draft once it has landed", async () => {
+      mocks.sendMessage.mockRejectedValueOnce("nope");
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+      await pressSend(render);
+
+      (findButton(render(), "Retry")!.attrs!.onclick as () => void)();
+      await flushAsync();
+
+      expect(mocks.sendMessage).toHaveBeenLastCalledWith(
+        CHAT,
+        withDictationNote("Rename the parser module."),
+        expect.any(String),
+        true,
+      );
+      expect(textareaValue(render)).toBe("");
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it("forgets a dictated draft in the pass that takes its delivered copy out of the box", async () => {
+      mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+      const { render } = composer();
+      dictate(render, "Rename the parser module.");
+      await pressSend(render);
+      expect(textareaValue(render)).toBe("Rename the parser module.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+
+      mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+      const landed = render();
+
+      // The turn is looked for by everything that was sent, the note included.
+      expect(mocks.hasUserTurnLandedSince).toHaveBeenLastCalledWith(
+        CHAT,
+        withDictationNote("Rename the parser module."),
+        new Set(["turn-before-the-send"]),
+      );
+      expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it("takes the notes out of a queue Stop hands back, and sends the draft it joins with one note", async () => {
+      mocks.agent.activity_state = "THINKING";
+      mocks.drainToComposer.mockResolvedValueOnce({
+        block: [withDictationNote("queued one"), "queued two"].join("\n"),
+      });
+      const { render } = composer();
+      editBox(render, "my draft");
+
+      await (findByAttr(render(), "aria-label", "Interrupt agent")!.attrs!.onclick as () => Promise<void>)();
+
+      expect(textareaValue(render)).toBe("queued one\nqueued two\n\nmy draft");
+      expect(localStorage.getItem(`message-text:${CHAT}`)).toBe("queued one\nqueued two\n\nmy draft");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+      await pressSend(render);
+      expect(lastSentText()).toBe(withDictationNote("queued one\nqueued two\n\nmy draft"));
+    });
+
+    it("leaves a draft unmarked when the queue Stop hands back holds no note", async () => {
+      mocks.agent.activity_state = "THINKING";
+      mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
+      const { render } = composer();
+
+      await (findByAttr(render(), "aria-label", "Interrupt agent")!.attrs!.onclick as () => Promise<void>)();
+
+      expect(textareaValue(render)).toBe("queued one");
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it("takes the note out of a block handed back from outside the composer, once, and marks the draft", () => {
+      const { render } = composer();
+      prependToComposer(CHAT, withDictationNote("queued one"));
+
+      expect(localStorage.getItem(`message-text:${CHAT}`)).toBe("queued one");
+      expect(textareaValue(render)).toBe("queued one");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+
+      // Handed back again while it still leads the draft: recognised without its note, and not stacked.
+      prependToComposer(CHAT, withDictationNote("queued one"));
+      expect(textareaValue(render)).toBe("queued one");
+
+      prependToComposer("agent-typed-in", "queued two");
+      expect(hasDictatedSpeech("agent-typed-in")).toBe(false);
+    });
+
+    it("moves a dictated draft to a sibling with its note, and marks a draft that is handed back", async () => {
+      const attachment = {
+        localId: "a1",
+        fileName: "plan.pdf",
+        status: "ready",
+        uploaded: { path: "/uploads/plan.pdf" },
+      };
+      mocks.getComposerAttachments.mockReturnValue([attachment]);
+      const { render } = composer();
+      dictate(render, "Start over in a new chat.");
+
+      const taken = await takeComposerDraft(CHAT);
+      mocks.getComposerAttachments.mockReturnValue([]);
+
+      expect(taken).toEqual({
+        text: "Start over in a new chat.",
+        // The mocked builder appends the ready paths to the text it was given.
+        finalText: `${withDictationNote("Start over in a new chat.")} + /uploads/plan.pdf`,
+        attachments: [attachment],
+        mayContainDictatedSpeech: true,
+      });
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+      expect(textareaValue(render)).toBe("");
+
+      restoreComposerDraft(CHAT, taken!);
+
+      expect(textareaValue(render)).toBe("Start over in a new chat.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
+
+    it("carries the note on the message that switches the chat", async () => {
+      mocks.switching.target = TARGET;
+      const { render } = composer();
+      dictate(render, "Carry on in Codex.");
+
+      await pressSend(render, "Switch and send");
+
+      expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+      const [chatId, , message] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+      expect([chatId, message]).toEqual([CHAT, withDictationNote("Carry on in Codex.")]);
+      expect(hasDictatedSpeech(CHAT)).toBe(false);
+    });
+
+    it("takes the note out of the queue a switch returns to the composer, and marks the draft", async () => {
+      mocks.switching.target = TARGET;
+      mocks.switchChat.mockResolvedValueOnce({
+        kind: "handoff",
+        phase: "summarizing",
+        returned_block: withDictationNote("queued one"),
+      });
+      const { render } = composer();
+      editBox(render, "Carry on in Codex");
+
+      await pressSend(render, "Switch and send");
+
+      expect(textareaValue(render)).toBe("queued one");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
+
+    it("marks the draft again when the switch a dictated message asked for is refused", async () => {
+      mocks.switching.target = TARGET;
+      mocks.switchChat.mockRejectedValueOnce(new Error("Chat already runs on account acct-openai"));
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { render } = composer();
+      dictate(render, "Carry on in Codex.");
+
+      await pressSend(render, "Switch and send");
+      error.mockRestore();
+
+      expect(textareaValue(render)).toBe("Carry on in Codex.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
+
+    it("marks the draft again when the switch is called off while a dictated message is being prepared", async () => {
+      mocks.switching.target = TARGET;
+      const release = holdComposerUploads();
+      const { render } = composer();
+      dictate(render, "Never mind.");
+
+      const sending = pressSend(render, "Switch and send");
+      await flushAsync();
+      mocks.switching.target = null;
+      release();
+      await sending;
+
+      expect(mocks.switchChat).not.toHaveBeenCalled();
+      expect(textareaValue(render)).toBe("Never mind.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
+
+    it("launches a seeded chat with the note on a dictated first message", async () => {
+      mocks.isChatRegistered = false;
+      mocks.provisional = AWAITING_FIRST_SEND;
+      mocks.selectedAccount = { id: "acct-1" };
+      const { render } = composer();
+      dictate(render, "Let's build something.");
+
+      await pressSend(render);
+
+      expect(mocks.launchChat).toHaveBeenCalledWith(
+        CHAT,
+        "acct-1",
+        withDictationNote("Let's build something."),
+        "agent",
+      );
+    });
+
+    it("marks the draft again when no provider is chosen for a dictated first message", async () => {
+      mocks.isChatRegistered = false;
+      mocks.provisional = AWAITING_FIRST_SEND;
+      mocks.accountsLoaded = false;
+      const { render } = composer();
+      dictate(render, "Let's build something.");
+
+      const sending = pressSend(render);
+      await flushAsync();
+      const intent = mocks.openProviderChooser.mock.calls[0][0] as { onDismissed: () => void };
+      intent.onDismissed();
+      await sending;
+
+      expect(mocks.launchChat).not.toHaveBeenCalled();
+      expect(textareaValue(render)).toBe("Let's build something.");
+      expect(hasDictatedSpeech(CHAT)).toBe(true);
+    });
   });
 });

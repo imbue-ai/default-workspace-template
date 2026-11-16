@@ -14,6 +14,13 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
+import {
+  forgetDictatedSpeech,
+  hasDictatedSpeech,
+  markDictatedSpeech,
+  withDictationNote,
+  withoutDictationNotes,
+} from "../models/dictationNote";
 import { stageElementReferences } from "../models/elementReferences";
 import {
   drainToComposer,
@@ -251,9 +258,12 @@ const pendingComposerClears = new Set<string>();
 export interface TakenComposerDraft {
   /** What the user typed, for putting back if it could not be sent. */
   text: string;
-  /** What goes on the wire: the text with the attachment references appended. */
+  /** What goes on the wire: the text, the dictation note when the draft may hold dictated words, and the
+   *  attachment references appended. */
   finalText: string;
   attachments: readonly ComposerAttachment[];
+  /** Whether dictation wrote into the draft, so one put back counts as holding dictated words again. */
+  mayContainDictatedSpeech: boolean;
 }
 
 /**
@@ -277,17 +287,23 @@ export async function takeComposerDraft(chatId: string): Promise<TakenComposerDr
   }
   const text = localStorage.getItem(messageTextKey(chatId)) ?? "";
   const attachments = getComposerAttachments(chatId);
-  const finalText = buildMessageWithAttachments(text, getReadyAttachmentPaths(chatId));
+  const mayContainDictatedSpeech = hasDictatedSpeech(chatId);
+  const finalText = buildMessageWithAttachments(
+    mayContainDictatedSpeech ? withDictationNote(text) : text,
+    getReadyAttachmentPaths(chatId),
+  );
   localStorage.removeItem(messageTextKey(chatId));
+  forgetDictatedSpeech(chatId);
   clearComposerAttachments(chatId);
   pendingComposerClears.add(chatId);
   m.redraw();
-  return { text, finalText, attachments };
+  return { text, finalText, attachments, mayContainDictatedSpeech };
 }
 
 /** Hand a taken draft back to ``chatId``'s composer when what it was taken for did not happen. */
 export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft): void {
   restoreToComposer(chatId, taken.text, taken.attachments);
+  if (taken.mayContainDictatedSpeech) markDictatedSpeech(chatId);
 }
 
 /**
@@ -325,9 +341,6 @@ function clearComposerHint(chatId: string): void {
   localStorage.removeItem(composerHintKey(chatId));
 }
 
-/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
- *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
- *  text (``stageElementReferences``). */
 // The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
 let mountedComposerTextarea: HTMLTextAreaElement | null = null;
 
@@ -340,22 +353,28 @@ export function focusComposer(): boolean {
   return true;
 }
 
+/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
+ *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
+ *  text (``stageElementReferences``). Delivered text comes back without the dictation notes its messages carried:
+ *  the draft it joins counts as holding dictated words instead, so the next send carries one note. */
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
+  const returned = withoutDictationNotes(block);
   const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
   // The block already leads the draft (the app-chat button pressed again while its lead-in sits unsent):
   // prepending it once more would stack identical copies. Checked before staging, which attaches files.
-  if (existingDraft.startsWith(block)) {
+  if (existingDraft.startsWith(returned.text)) {
     return;
   }
-  const text = stageElementReferences(chatId, block);
+  const text = stageElementReferences(chatId, returned.text);
   if (!text) {
     return;
   }
   const merged = existingDraft.trim().length === 0 ? text : `${text}\n\n${existingDraft}`;
   localStorage.setItem(messageTextKey(chatId), merged);
+  if (returned.hadNote) markDictatedSpeech(chatId);
   pendingComposerPrepends.set(chatId, merged);
   m.redraw();
 }
@@ -726,7 +745,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (dictationSpan === null) return;
         dictationSpan = appendFinal(dictationSpan, words);
         applyDictationSpan();
-        if (currentChatId !== null) warmUpStoppedChat(currentChatId);
+        if (currentChatId !== null) {
+          markDictatedSpeech(currentChatId);
+          warmUpStoppedChat(currentChatId);
+        }
       },
       onTentativeWords: (words) => {
         if (dictationSpan === null) return;
@@ -1119,13 +1141,24 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
       }
 
+      // The box's text is settled for this pass, and an emptied box holds no dictated words, whatever emptied
+      // it: the user's own deleting, a command the composer acted on, a delivered copy taken out just above.
+      // The saved draft is asked as well, since another page showing this chat has a box of its own, and
+      // its empty one says nothing about a draft dictation wrote into here.
+      if (messageText === "" && !localStorage.getItem(messageTextKey(chatId))) {
+        forgetDictatedSpeech(chatId);
+      }
+
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
       interface PreparedSend {
         /** What the user typed, for the bubble and for restoring the composer. */
         text: string;
-        /** What goes to the agent: the text with the attachment references appended. */
+        /** What goes to the agent: the text, the dictation note when the draft may hold dictated words, and
+         *  the attachment references appended. */
         finalText: string;
         attachments: readonly ComposerAttachment[];
+        /** Whether dictation wrote into the draft, so a message put back counts as holding dictated words again. */
+        mayContainDictatedSpeech: boolean;
       }
 
       /**
@@ -1208,14 +1241,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return null;
         }
 
-        const finalText = buildMessageWithAttachments(text, attachmentPaths);
+        // The note goes before the attachment block, which is only recognised at the very end of a message.
+        const mayContainDictatedSpeech = hasDictatedSpeech(chatId);
+        const finalText = buildMessageWithAttachments(
+          mayContainDictatedSpeech ? withDictationNote(text) : text,
+          attachmentPaths,
+        );
         // Snapshot for rollback if the send fails.
         const attachments = getComposerAttachments(chatId);
 
         messageText = "";
         clearComposerAttachments(chatId);
         localStorage.removeItem(messageTextKey(chatId));
-        return { text, finalText, attachments };
+        forgetDictatedSpeech(chatId);
+        return { text, finalText, attachments, mayContainDictatedSpeech };
       }
 
       async function handleSend(): Promise<void> {
@@ -1228,7 +1267,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The hint asked a question; the send answered it.
         clearComposerHint(chatId);
-        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        const { text: sentText, finalText, attachments: sentAttachments, mayContainDictatedSpeech } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
         // optimism the frontend is allowed (contract A2). It is a client-only overlay
@@ -1261,7 +1300,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
               dropOutgoing(chatId, outgoingId);
-              restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+              restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
               m.redraw();
               return;
             }
@@ -1319,7 +1358,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments, messageId };
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
@@ -1385,12 +1424,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m.redraw();
           return;
         }
-        const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        const { text: sentText, finalText, attachments: sentAttachments, mayContainDictatedSpeech } = prepared;
         // Read once the message is ready, not at the press: until then the choice could still be
         // changed or taken back, and the account and its pick must go out as one.
         const target = nextSendSwitchTarget(chatId);
         if (target === null) {
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           m.redraw();
           return;
         }
@@ -1407,7 +1446,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const detail = describeRequestError(err);
           console.error(`Failed to switch chat ${chatId} to ${target.id}: ${detail}`);
           dropOutgoing(chatId, outgoingId);
-          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments, mayContainDictatedSpeech);
           if (currentChatId === chatId) {
             clearActionFailureNotice();
             actionFailureTitle = `Couldn't switch to ${harnessLabel(target.harness)}`;
@@ -1482,10 +1521,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             // (block, blank line, draft) rather than dropping it when the composer is
             // non-empty. Under pi's native retract the messages survive nowhere else, so
             // dropping them here would lose them outright.
+            // The dictation notes the queued messages carried are for the model, not the box: the
+            // draft counts as holding dictated words instead, so its next send carries one note.
+            const returned = withoutDictationNotes(block);
             const draft = messageText;
-            const merged = draft.trim().length === 0 ? block : `${block}\n\n${draft}`;
+            const merged = draft.trim().length === 0 ? returned.text : `${returned.text}\n\n${draft}`;
             messageText = merged;
             localStorage.setItem(messageTextKey(chatId), merged);
+            if (returned.hadNote) markDictatedSpeech(chatId);
           }
         } catch (err) {
           const detail = describeRequestError(err);
@@ -1571,15 +1614,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
 
-      /** Put a failed message back in the composer, in FRONT of whatever is already there. */
+      /** Put a failed message back in the composer, in FRONT of whatever is already there; one that may
+       *  hold dictated words makes the draft it joins one that may. */
       function restoreFailedMessageToComposer(
         forChatId: string,
         text: string,
         attachments: readonly ComposerAttachment[],
+        mayContainDictatedSpeech: boolean,
       ): void {
         // Reuses the module-level hand-back that Stop's drain, QueuedMessageView and the switch
         // dialog already go through, rather than inventing a second set of rules for the same job.
         restoreToComposer(forChatId, text, attachments);
+        if (mayContainDictatedSpeech) markDictatedSpeech(forChatId);
         if (currentChatId === forChatId) {
           messageText = localStorage.getItem(messageTextKey(forChatId)) ?? text;
         }
