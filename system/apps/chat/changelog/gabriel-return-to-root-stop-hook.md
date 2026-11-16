@@ -1,1 +1,1 @@
-The harness contract notes now explain that Claude's Stop hooks always run at the repo root, because the session goes back to the project folder after every command. The repo-root Stop hook is kept only as a safety net.
+The harness contract notes now explain that Claude agents keep their shell in the workspace folder after every command, so the repo-root Stop hook is only a safety net.
