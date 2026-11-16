@@ -76,7 +76,7 @@ const mocks = vi.hoisted(() => {
     uploadDescribedFileToComposer: vi.fn(),
     uploadFilesToComposer: vi.fn(),
     stagePastedText: vi.fn(),
-    unstagePastedText: vi.fn(async (_chatId: string, _localId: string): Promise<string> => ""),
+    unstagePastedText: vi.fn(async (_chatId: string, _localId: string): Promise<string | null> => ""),
     // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),

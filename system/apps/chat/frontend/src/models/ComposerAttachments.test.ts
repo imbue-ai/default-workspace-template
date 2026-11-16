@@ -309,6 +309,28 @@ describe("pasted text", () => {
     expect(getComposerAttachments(otherChatId)).toEqual([]);
   });
 
+  it("answers nothing when the attachment leaves the composer while its text is read back", async () => {
+    const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(
+      `${STORAGE_KEY_PREFIX}${otherChatId}`,
+      JSON.stringify([
+        {
+          localId: "composer-att-79",
+          fileName: "pasted-text-1.txt",
+          isImage: false,
+          summary: "Pasted text, 301 lines",
+          uploaded: { path: "/w/data/uploads/r/pasted-text-1.txt", name: "r", size: 3, isImage: false, url: "/r" },
+        },
+      ]),
+    );
+    let answerRead: (response: Response) => void = () => undefined;
+    uploadAnswers.push(() => new Promise<Response>((resolve) => (answerRead = resolve)));
+    const putBack = unstagePastedText(otherChatId, "composer-att-79");
+    clearComposerAttachments(otherChatId);
+    answerRead(new Response(PASTE, { status: 200 }));
+    expect(await putBack).toBeNull();
+  });
+
   it("leaves the attachment in place when its text cannot be read back", async () => {
     const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(

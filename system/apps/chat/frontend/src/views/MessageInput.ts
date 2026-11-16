@@ -1504,7 +1504,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       async function putPastedTextBack(forChatId: string, localId: string): Promise<void> {
         if (pastedTextPutBacksInFlight.has(localId)) return;
         pastedTextPutBacksInFlight.add(localId);
-        let text: string;
+        let text: string | null;
         try {
           text = await unstagePastedText(forChatId, localId);
         } catch (error) {
@@ -1518,6 +1518,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         } finally {
           pastedTextPutBacksInFlight.delete(localId);
         }
+        if (text === null) return;
         if (currentChatId !== forChatId) {
           // The user moved to another chat while the text was read back: it joins that chat's saved draft.
           const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
