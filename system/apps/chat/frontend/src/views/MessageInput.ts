@@ -627,6 +627,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let isSendPendingAfterDictation = false;
   // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
   let isComposerDisabledNow = false;
+  // The pasted-text chips whose text is being read back, so a second click does not put it back twice.
+  const pastedTextPutBacksInFlight = new Set<string>();
 
   /** Write the dictation's words into the box: the live span, with the caret at its end so the words stay in
    *  view, and only the final words to the saved draft. */
@@ -1498,6 +1500,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /** Put a long paste's text back into the box where the caret is, in place of its attachment. */
       async function putPastedTextBack(forChatId: string, localId: string): Promise<void> {
+        if (pastedTextPutBacksInFlight.has(localId)) return;
+        pastedTextPutBacksInFlight.add(localId);
         let text: string;
         try {
           text = await unstagePastedText(forChatId, localId);
@@ -1509,6 +1513,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           actionFailureDetail = "The attachment is still there, and will be sent as it is. Try again, or remove it.";
           m.redraw();
           return;
+        } finally {
+          pastedTextPutBacksInFlight.delete(localId);
         }
         if (currentChatId !== forChatId) {
           // The user moved to another chat while the text was read back: it joins that chat's saved draft.

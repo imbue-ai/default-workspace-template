@@ -769,6 +769,30 @@ describe("MessageInput long paste", () => {
     expect(findByTag(render(), "textarea")?.attrs?.value).toBe(`Summarize this: ${LONG_PASTE}`);
   });
 
+  it("puts the text back once when the button is clicked again while it is read back", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      {
+        localId: "p1",
+        fileName: "pasted-text-1.txt",
+        isImage: false,
+        status: "ready",
+        summary: "Pasted text, 401 lines",
+        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
+      },
+    ]);
+    mocks.unstagePastedText.mockClear();
+    mocks.unstagePastedText.mockResolvedValue(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const putBack = findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void;
+    putBack();
+    putBack();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledTimes(1);
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(LONG_PASTE);
+    mocks.unstagePastedText.mockReset();
+  });
+
   it("says so, and keeps the attachment, when the text cannot be put back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     mocks.getComposerAttachments.mockReturnValue([
