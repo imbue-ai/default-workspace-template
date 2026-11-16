@@ -149,11 +149,11 @@ tell them to do that when more than one account is configured).
 
 ## Custom services (rows 2 to 4)
 
-A **custom service** is a connection to one domain latchkey does not already
-know. The user approves it in the Imbue Studio app, pastes the credential into
-the approval window (or signs in through a browser latchkey drives), and the
-gateway injects it into every `latchkey curl` to that domain. The value never
-enters this workspace.
+A **custom service** is a connection to one domain latchkey does not support
+out of the box. The user approves it in the Imbue Studio app, pastes the
+credential into the approval window (or signs in through a browser latchkey
+drives), and the gateway injects it into every `latchkey curl` to that domain.
+The value never enters this workspace.
 
 Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
