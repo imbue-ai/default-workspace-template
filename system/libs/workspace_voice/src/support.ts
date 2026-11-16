@@ -3,8 +3,8 @@
  * hides the mic), and the shortcut as the platform spells it.
  */
 
-import { DEFAULT_ENGINE_ID, ENGINES } from "./engines";
-import type { Device, EngineId } from "./engines";
+import { ENGINES, defaultEngineId } from "./engines";
+import type { Device, DeviceClass, EngineId } from "./engines";
 
 /** Where an app's build serves the voice runtime's files, under its assets (see ``runtimeAssets.ts``). */
 export const VOICE_ASSETS_PATH = "assets/voice/";
@@ -49,15 +49,19 @@ export interface PageDictationOptions {
   assetBase: string;
 }
 
-/** The dictation a page runs: the registry's default engine unless the browser's override names a registered one,
- *  the device the override insists on, and the runtime's files under the page's base path. */
+/** The dictation a page runs: the registry's default engine for the page's kind of device unless the browser's
+ *  override names a registered one, the device the override insists on, and the runtime's files under the page's
+ *  base path. */
 export function pageDictationOptions(
   storage: Pick<Storage, "getItem">,
   basePath: string,
   pageUrl: string,
+  deviceClass: DeviceClass,
 ): PageDictationOptions {
   const engineOverride = storage.getItem(ENGINE_STORAGE_KEY);
-  const engineId = ENGINES.some((engine) => engine.id === engineOverride) ? engineOverride! : DEFAULT_ENGINE_ID;
+  const engineId = ENGINES.some((engine) => engine.id === engineOverride)
+    ? engineOverride!
+    : defaultEngineId(deviceClass);
   const deviceOverride = storage.getItem(DEVICE_STORAGE_KEY);
   const preferredDevice = deviceOverride === "webgpu" || deviceOverride === "wasm" ? deviceOverride : null;
   return { engineId, preferredDevice, assetBase: new URL(`${basePath}/${VOICE_ASSETS_PATH}`, pageUrl).href };
