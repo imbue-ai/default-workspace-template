@@ -232,7 +232,7 @@ describe("the transcript cache", () => {
     expect(readCachedTranscript("chat-new")).not.toBeNull();
   });
 
-  it("sizes a write by the screen the page measured, and by the last one while it is hidden", () => {
+  it("reads the screen the page measures, and the last one measured while it is hidden", () => {
     const measured: ScreenMeasure = { heightPx: 300, charsPerPx: 2 };
     let isHidden = false;
     setScreenMeasurer(() => (isHidden ? null : measured));
@@ -240,8 +240,6 @@ describe("the transcript cache", () => {
     expect(currentScreen()).toEqual(measured);
     isHidden = true;
     expect(currentScreen()).toEqual(measured);
-
-    setScreenMeasurer(() => null);
   });
 
   it("uses a default screen before the page has measured one", () => {
