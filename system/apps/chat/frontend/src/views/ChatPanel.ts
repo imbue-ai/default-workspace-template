@@ -36,13 +36,16 @@ import {
   getRenderVersion,
   getTotalEventCount,
   hasMoreAfter,
+  hasMoreBefore,
   isConversationNotFound,
   noteLoadedArrivals,
   removeMessageSentListener,
   type ToolResultEvent,
   isTranscriptLoaded,
+  isShowingCachedTranscript,
   placeCachedTranscript,
 } from "../models/Response";
+import { setScreenMeasurer, type ScreenMeasure } from "../models/transcriptCache";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
@@ -210,6 +213,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
+  // The transcript's scroll container, once mounted.
+  let transcriptElement: HTMLElement | null = null;
   // Memoized turn-grouping output. buildSections walks the whole held
   // transcript, so it is recomputed only when the data actually changes (keyed
   // on the render version + idle flag), not on every scroll-driven redraw.
@@ -636,6 +641,21 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
+  /** How much rendered text the transcript's screen holds, from the rows on screen now; null while hidden. */
+  function measureScreen(): ScreenMeasure | null {
+    if (!panelVisible || transcriptElement === null || transcriptElement.clientHeight === 0) return null;
+    const heightPx = transcriptElement.clientHeight;
+    let chars = 0;
+    let rowsPx = 0;
+    // Each mounted row carries its key as its id; the spacers carry none.
+    for (const row of transcriptElement.querySelectorAll<HTMLElement>(".message-list > [id]")) {
+      chars += row.textContent?.length ?? 0;
+      rowsPx += row.getBoundingClientRect().height;
+    }
+    // Under half a screen of rows says too little about the chat's text to go by.
+    return { heightPx, charsPerPx: rowsPx >= heightPx / 2 ? chars / rowsPx : null };
+  }
+
   /** Load the chat once. */
   function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
@@ -878,6 +898,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
+        // A window from the transcript cache holds only the chat's bottom; the rest arrives with the snapshot.
+        isShowingCachedTranscript(chatId) && hasMoreBefore(chatId) && load.phase === "loading"
+          ? m(
+              "p",
+              {
+                key: "earlier-loading",
+                class: "message-list-earlier-loading py-3 text-center text-sm text-secondary",
+              },
+              "Loading earlier messages...",
+            )
+          : m.fragment({ key: "earlier-loading" }, []),
         ...renderTranscriptSegments(rows, [
           { kind: "spacer", height: plan.topPadPx },
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
@@ -910,6 +941,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
 
   return {
     oninit() {
+      setScreenMeasurer(measureScreen);
       addChatsUpdatedListener(handleChatsUpdated);
       addMessageSentListener(handleMessageSent);
     },
@@ -1005,6 +1037,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
                     oncreate: (mainVnode: m.VnodeDOM) => {
+                      transcriptElement = mainVnode.dom as HTMLElement;
                       engine.afterRender(mainVnode.dom as HTMLElement);
                       reportChatOnScreenOnce(chatId, isTranscriptLoaded(chatId));
                     },

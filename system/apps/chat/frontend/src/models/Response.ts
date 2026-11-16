@@ -9,7 +9,13 @@ import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { ensureParticipantsKnowAuthors } from "./Participants";
-import { dropCachedTranscript, readCachedTranscript, writeCachedTranscript } from "./transcriptCache";
+import {
+  currentScreen,
+  dropCachedTranscript,
+  readCachedTranscript,
+  touchCachedTranscript,
+  writeCachedTranscript,
+} from "./transcriptCache";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -645,7 +651,7 @@ function scheduleTranscriptCacheWrite(chatId: string): void {
       // Only what the server has answered is written back (a window placed from the cache is not),
       // and only a window at the live end: a tail is what the page shows first.
       if (store === undefined || !loadedChatIds.has(chatId) || store.hasMoreAfter || store.eventCount === 0) return;
-      writeCachedTranscript(chatId, store.events, store.firstOffset, store.total);
+      writeCachedTranscript(chatId, store.events, store.firstOffset, store.total, currentScreen());
     }, CACHE_WRITE_DELAY_MS),
   );
 }
@@ -659,6 +665,7 @@ export function placeCachedTranscript(chatId: string): boolean {
   if (loadedChatIds.has(chatId) || getEventCount(chatId) > 0) return false;
   const cached = readCachedTranscript(chatId);
   if (cached === null) return false;
+  touchCachedTranscript(chatId);
   storeFor(chatId).reset(cached.events, cached.offset, cached.total);
   return true;
 }
@@ -693,6 +700,11 @@ export function isConversationNotFound(chatId: string): boolean {
  *  transcript rather than one that has not loaded. */
 export function isTranscriptLoaded(chatId: string): boolean {
   return loadedChatIds.has(chatId);
+}
+
+/** Whether the chat shows a window placed from the transcript cache that its snapshot has not replaced yet. */
+export function isShowingCachedTranscript(chatId: string): boolean {
+  return !loadedChatIds.has(chatId) && getEventCount(chatId) > 0;
 }
 
 /** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */

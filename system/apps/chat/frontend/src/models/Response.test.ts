@@ -49,7 +49,7 @@ import {
   type TranscriptEvent,
 } from "./Response";
 import { addOutgoing, getOutgoingMessages } from "./OutgoingMessages";
-import { readCachedTranscript, writeCachedTranscript } from "./transcriptCache";
+import { readCachedTranscript, setScreenMeasurer, writeCachedTranscript } from "./transcriptCache";
 import { memoryStorage } from "./storageFixture";
 
 function makeEvent(id: string): TranscriptEvent {
@@ -1117,6 +1117,33 @@ describe("the transcript cache", () => {
     vi.advanceTimersByTime(1000);
 
     expect(readCachedTranscript(agent)).toBeNull();
+  });
+
+  it("counts a chat whose cached tail it places as the one viewed last", () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("mine")], 0, 1);
+    writeCachedTranscript("other-chat", [makeEvent("theirs")], 0, 1);
+
+    placeCachedTranscript(agent);
+
+    const index = JSON.parse(sessionStorage.getItem("transcript-cache-index") ?? "[]") as { id: string }[];
+    expect(index.map((entry) => entry.id)).toEqual([agent, "other-chat"]);
+  });
+
+  it("sizes what it writes by the screen the page measured", async () => {
+    const agent = freshChat();
+    const events = Array.from({ length: 200 }, (_, index) => makeEvent(`e${index}`));
+    mockRequest.mockResolvedValueOnce({ events, offset: 0, total: 200 });
+    await fetchEvents(agent);
+    setScreenMeasurer(() => ({ heightPx: 100, charsPerPx: 1 }));
+
+    vi.advanceTimersByTime(1000);
+    setScreenMeasurer(() => null);
+
+    const cached = readCachedTranscript(agent);
+    expect(cached?.events.length).toBeGreaterThan(0);
+    expect(cached?.events.length).toBeLessThan(10);
+    expect(cached?.events[cached.events.length - 1].event_id).toBe("e199");
   });
 
   it("forgets the cached tail of a chat whose transcript is not found", async () => {

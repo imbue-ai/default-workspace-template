@@ -34,6 +34,7 @@ from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import Route
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 from workspace_layout.primitives import ParticipantKey
@@ -885,6 +886,64 @@ def test_a_chat_seen_this_session_shows_its_conversation_without_waiting_on_its_
         chat = _shown_chat_of_root(page)
         expect(chat.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list-error")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reopened_long_chat_shows_its_bottom_at_once_and_says_so_while_earlier_messages_load(
+    tmp_path: Path, page: Page
+) -> None:
+    """A long chat's cached snapshot holds about a screen of its bottom, not its history. Opened again while its
+    transcript request is still out, the page draws that bottom at once, says earlier messages are loading above it,
+    and fills them in when the transcript lands."""
+    events = _make_long_conversation_events(150)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        chat_frame = _chat_frame(page)
+        entry_key = f"transcript-cache:{FIXTURE_AGENT_ID}"
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('{entry_key}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+        entry = json.loads(chat_frame.evaluate(f"sessionStorage.getItem('{entry_key}')"))
+        cached_messages = [event["content"] for event in entry["events"] if event["type"] == "user_message"]
+        assert "msg-149" in cached_messages
+        assert len(entry["events"]) < 100, f"the snapshot holds {len(entry['events'])} of 300 events, not a screen"
+        first_cached = _min_message_index(cached_messages)
+
+        held: list[Route] = []
+        is_released = False
+
+        def hold_until_released(route: Route) -> None:
+            if is_released:
+                route.continue_()
+            else:
+                held.append(route)
+
+        page.route(lambda url: "/events" in url, hold_until_released)
+        page.reload()
+
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        wait_for(lambda: len(held) > 0, timeout=10.0, poll_interval=0.1)
+        chat_frame = _chat_frame(page)
+        chat_frame.evaluate("() => { document.querySelector('.app-content').scrollTop = 0; }")
+        earlier = chat.locator(".message-list-earlier-loading")
+        expect(earlier).to_be_visible(timeout=5000)
+        expect(earlier).to_have_text("Loading earlier messages...")
+
+        is_released = True
+        for route in held:
+            route.continue_()
+        expect(earlier).to_have_count(0, timeout=15000)
+
+        def shows_earlier_messages() -> bool:
+            chat_frame.evaluate("() => { document.querySelector('.app-content').scrollTop = 0; }")
+            return 0 <= _min_message_index(_visible_user_messages(page)) < first_cached
+
+        wait_for(shows_earlier_messages, timeout=20.0, poll_interval=0.3)
 
 
 # layout ops

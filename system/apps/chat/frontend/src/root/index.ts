@@ -68,7 +68,7 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
-import { dropCachedTranscript } from "../models/transcriptCache";
+import { pruneCachedTranscripts, touchCachedTranscript } from "../models/transcriptCache";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -171,6 +171,7 @@ function select(chatId: string | null): void {
   isDrawerOpen = shown === null;
   history.replaceState(null, "", `${getBasePath()}${rootPathFor(shown)}`);
   pool?.show(shown);
+  if (shown !== null) touchCachedTranscript(shown);
   if (shown !== null && isRootShown) markRead(shown);
   reportLocation();
   m.redraw();
@@ -361,12 +362,10 @@ function onChatsUpdated(): void {
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
     for (const heldId of pool.heldChatIds()) {
-      if (!isKept(heldId)) {
-        pool.destroy(heldId);
-        dropCachedTranscript(heldId);
-      }
+      if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
+  pruneCachedTranscripts(isKept);
   if (selectedChatId !== null && !isKept(selectedChatId)) {
     select(null);
     return;
