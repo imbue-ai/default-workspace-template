@@ -95,7 +95,7 @@ export function keydownMatchesAction(
   return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? []);
 }
 
-/** Whether the keydown belongs to an input-method composition rather than to the field it landed in. */
-export function isImeKeydown(event: { isComposing?: boolean }): boolean {
+/** Whether an input method is handling this keydown (a composition is open), so the field must not act on it. */
+export function isHandledByInputMethod(event: { isComposing?: boolean }): boolean {
   return event.isComposing === true;
 }

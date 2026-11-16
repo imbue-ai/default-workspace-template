@@ -26,7 +26,7 @@ import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/men
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { isImeKeydown } from "@imbue/workspace-ui/src/keybindings";
+import { isHandledByInputMethod } from "@imbue/workspace-ui/src/keybindings";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
@@ -631,7 +631,7 @@ export function renameField(row: ChatRow): m.Vnode {
     },
     onkeydown: (event: KeyboardEvent) => {
       event.stopPropagation();
-      if (isImeKeydown(event)) return;
+      if (isHandledByInputMethod(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename(row);
