@@ -1,7 +1,7 @@
 [project]
 name = "notify-user-skill"
 version = "0.1.0"
-description = "Posts a notification from this chat to the Imbue Studio app"
+description = "Posts a notification from this chat to the Imbue Studio app and the owner's devices"
 requires-python = ">=3.12"
 dependencies = [
     "workspace-scripts",

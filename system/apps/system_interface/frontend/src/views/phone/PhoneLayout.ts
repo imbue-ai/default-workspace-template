@@ -36,6 +36,7 @@ import { PhoneBar } from "./PhoneBar";
 import { isSoftKeyboardUp, readViewport } from "./softKeyboard";
 import { StartSheet } from "./StartSheet";
 import { WindowsSheet } from "./WindowsSheet";
+import { isNotificationsPageOffered, openNotificationsPage } from "../../model/notificationsPage";
 
 type PhoneMenu =
   { readonly kind: "window"; readonly windowId: string } | { readonly kind: "app"; readonly app: string };
@@ -124,7 +125,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
   }
 
   function startRows(store: DesktopStore): readonly LauncherRow[] {
-    return startSheetRows(store.getState(), startQuery).rows;
+    return startSheetRows(store.getState(), startQuery, isNotificationsPageOffered()).rows;
   }
 
   function startHighlightIndex(rows: readonly LauncherRow[]): number {
@@ -147,6 +148,9 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
         return;
       case "text":
         void store.runFreeText(row.app.name, row.launchPath.id, row.text);
+        return;
+      case "notifications":
+        openNotificationsPage();
         return;
     }
   }
@@ -175,7 +179,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
           onDismiss: () => store.openPhoneSheet(null),
         });
       case "start": {
-        const menuRows = startSheetRows(state, startQuery);
+        const menuRows = startSheetRows(state, startQuery, isNotificationsPageOffered());
         return m(StartSheet, {
           menu: menuRows,
           highlightIndex: startHighlightIndex(menuRows.rows),

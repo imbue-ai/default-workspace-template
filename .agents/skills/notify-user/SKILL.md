@@ -11,7 +11,10 @@ metadata:
 This skill posts a message from this chat to the Imbue Studio app's
 notification menu, and shows it as a bubble over the agent on the workspace's
 desktop for everyone not looking at this chat; clicking either brings them
-here. It is one-way: any answer comes back in this chat.
+here. Unless the user is already looking at this chat, the same message also
+goes to every device the owner turned notifications on for (a phone with the
+workspace on its home screen, a browser), where tapping it opens this chat. It
+is one-way: any answer comes back in this chat.
 
 ## When to use it
 
@@ -55,10 +58,17 @@ An optional `--title` becomes a prefix on the message (`Title: message`):
 python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py --title "Test run" "All 412 tests passed."
 ```
 
-The script exits 0 when the app accepted the notification and non-zero when
-it did not (the app was unreachable, or the gateway refused). **Read the exit
+The script exits 0 when the app, or at least one of the user's devices,
+accepted the notification and non-zero when neither did (the app was
+unreachable, or the gateway refused, and no device took it). **Read the exit
 code.** When it fails, say so in your reply -- "I tried to notify you but the
 notification did not go out" -- so the user knows why they heard nothing;
 never retry in a loop. A `could not check who is watching this chat` or
 `could not show the notification on the workspace's desktop` warning is not a
 failure: the notification still went out, and the exit code says so.
+
+The devices are optional: with none turned on the push is skipped silently,
+and a device that did not take it is a warning on stderr, not a failure. To
+turn notifications on for a phone, the user opens the launcher in the workspace
+on that phone (from its home screen on an iPhone or iPad) and chooses
+"Notifications on this device".

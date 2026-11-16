@@ -1,7 +1,7 @@
 /**
  * The small glyphs the desktop's chrome draws that the shared icon set does not carry: the
  * window controls (minimize, maximize, restore, fullscreen and its exit), the kebab, the size menu's zone pictograms,
- * the launcher's plus and app fallback, and the phone bar's home. Same Feather-style 24x24 frame as ``icons.ts``,
+ * the launcher's plus, app fallback, and bell, and the phone bar's home. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
  *
  * Some of these are Lucide's own shapes as well as its frame -- the plus, the minus the minimize
@@ -38,6 +38,8 @@ const GLYPH_PATHS = {
   // Lucide's message-circle: the speech balloon of the title bar's "Chat about this app".
   balloon: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
+  // Lucide's bell: the launcher's row to the notifications page.
+  bell: '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
 } as const;
 
 export type GlyphName = keyof typeof GLYPH_PATHS;

@@ -159,6 +159,10 @@ from imbue.system_interface.shell.tray_feed import ChatsActivityStore
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
+from imbue.system_interface.shell.web_push import PushTransportInterface
+from imbue.system_interface.shell.web_push import PywebpushTransport
+from imbue.system_interface.shell.web_push import WEB_PUSH_DIRECTORY_NAME
+from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.window_paths import WindowPathStore
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -209,6 +213,9 @@ class ShellState(MutableModel):
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
     tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
+    web_push: WebPushNotifier = Field(
+        frozen=True, description="web_push/: the Web Push signing key and the devices that turned notifications on"
+    )
     resource_gauge: ResourceGaugeMonitor = Field(
         frozen=True, description="The tray's resource gauge: its readings, its settings, and the warnings it raises"
     )
@@ -1133,6 +1140,7 @@ def build_shell_state(
     resource_notifier: ResourceNotifierInterface | None = None,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
+    push_transport: PushTransportInterface | None = None,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
@@ -1150,7 +1158,8 @@ def build_shell_state(
     timings are the manager's grace period and idle sweep interval, which a test shortens;
     ``resource_notifier`` is where the resource gauge tells the user of a warning or a stopped program (the
     production shell's Imbue Studio feed; None in a preview or a test, which tell nobody and leave no notice for
-    the agents either)."""
+    the agents either); ``push_transport`` (how a notification reaches a device's push service) is the real one
+    unless a test passes a recording one."""
     app_theming = AppThemingStore(state_directory=state_directory)
     stop_ledger = read_shed_ledger_stops()
     resolved_inventory = (
@@ -1204,6 +1213,10 @@ def build_shell_state(
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         tour=TourStore(state_directory=state_directory),
+        web_push=WebPushNotifier(
+            directory=state_directory / WEB_PUSH_DIRECTORY_NAME,
+            transport=push_transport if push_transport is not None else PywebpushTransport(),
+        ),
         resource_gauge=ResourceGaugeMonitor(
             settings_store=ResourceGaugeSettingsStore(state_directory=state_directory),
             delivery_store=DeliveryStore(state_directory=state_directory),

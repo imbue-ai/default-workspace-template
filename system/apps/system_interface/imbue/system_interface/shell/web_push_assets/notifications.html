@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fafaf8">
+<title>Notifications on this device</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #fafaf8; color: #1d1d1b; font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: max(1.5rem, env(safe-area-inset-top)) 1.25rem 3rem; }
+  h1 { font-size: 1.35rem; margin: 0.5rem 0 0.75rem; }
+  h2 { font-size: 1rem; margin: 2rem 0 0.5rem; }
+  p { margin: 0 0 1rem; color: #4a4a46; }
+  a { color: #2f5bd3; }
+  .status { padding: 0.75rem 1rem; border-radius: 10px; background: #efeee9; margin: 0 0 1rem; }
+  .status[data-tone="good"] { background: #e3f1e5; }
+  .status[data-tone="bad"] { background: #f8e3e1; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 1rem; }
+  button { font: inherit; min-height: 44px; padding: 0.5rem 1rem; border-radius: 10px; border: 1px solid #c9c8c1;
+           background: #fff; color: inherit; cursor: pointer; }
+  button.primary { background: #2f5bd3; border-color: #2f5bd3; color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button[hidden] { display: none; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.6rem 0;
+       border-bottom: 1px solid #e4e3dd; }
+  li small { display: block; color: #6b6b66; }
+  details { margin-top: 1.5rem; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #efeee9; padding: 0.75rem; border-radius: 8px;
+        font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<main>
+  <p><a href="./" id="back">Back to the workspace</a></p>
+  <h1>Notifications on this device</h1>
+  <p>Get a notification here when an agent in this workspace finishes something for you or needs your answer.
+     Tapping it brings you back to the workspace.</p>
+  <div class="status" id="status" role="status">Checking this device...</div>
+  <div class="actions">
+    <button type="button" class="primary" id="turn-on" hidden>Turn on notifications</button>
+    <button type="button" id="send-test" hidden>Send a test notification</button>
+    <button type="button" id="turn-off" hidden>Turn off on this device</button>
+  </div>
+  <h2>Devices with notifications on</h2>
+  <ul id="devices"></ul>
+  <p id="no-devices" hidden>None yet.</p>
+  <details id="last-answer" hidden>
+    <summary>What the last request answered</summary>
+    <pre id="last-answer-body"></pre>
+  </details>
+</main>
+<script type="module" src="notifications.js"></script>
+</body>
+</html>
