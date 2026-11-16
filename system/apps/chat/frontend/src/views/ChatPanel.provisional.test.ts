@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => {
     outgoingAfterOwnTurn: [] as (boolean | undefined)[],
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
+    isTranscriptLoaded: false,
+    reportChatOnScreenOnce: vi.fn(),
     isChatListReceived: true,
     // The ids the account list holds, and the one a new chat would start on.
     accountIds: ["acct-1"] as string[],
@@ -68,7 +70,12 @@ vi.mock("../models/Response", () => ({
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
   isConversationNotFound: () => mocks.isConversationNotFound,
+  isTranscriptLoaded: () => mocks.isTranscriptLoaded,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
+}));
+vi.mock("../shell", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shell")>()),
+  reportChatOnScreenOnce: mocks.reportChatOnScreenOnce,
 }));
 vi.mock("../models/StreamingMessage", () => ({
   connectToStream: mocks.connectToStream,
@@ -509,6 +516,23 @@ describe("ChatPanel over a seeded chat", () => {
     expect(mocks.loadSnapshotWithStream.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.noteLoadedArrivals.mock.invocationCallOrder[0],
     );
+  });
+
+  it("reports the chat on screen from each draw of its transcript, with whether the transcript has loaded", () => {
+    seeded("awaiting_first_send");
+    mocks.reportChatOnScreenOnce.mockClear();
+    const transcript = findByClass(mountPanel()(), "transcript-scroll");
+    const draw = { dom: document.createElement("main") };
+
+    mocks.isTranscriptLoaded = false;
+    (transcript!.attrs!.oncreate as (vnode: unknown) => void)(draw);
+    mocks.isTranscriptLoaded = true;
+    (transcript!.attrs!.onupdate as (vnode: unknown) => void)(draw);
+
+    expect(mocks.reportChatOnScreenOnce.mock.calls).toEqual([
+      [AGENT_ID, false],
+      [AGENT_ID, true],
+    ]);
   });
 
   it("shows a failed create's reason over a seeded chat like any other", () => {

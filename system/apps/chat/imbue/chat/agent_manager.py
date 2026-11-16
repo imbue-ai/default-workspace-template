@@ -43,6 +43,7 @@ from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
@@ -338,7 +339,8 @@ LAST_COMPACTION_RECORD_MAX_AGE_SECONDS: Final[float] = 300.0
 
 
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
-# fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
+# fast mode (``chat_fast_mode.py``) calls for it: it launches claude in fast mode. A harness whose spec
+# sets ``is_launch_fast_switched`` (codex) is switched fast once it is up instead (``apply_launch_fast_mode``).
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
 
@@ -346,6 +348,33 @@ FAST_ROLE_TEMPLATE: Final[str] = "fast"
 def launch_role_templates(is_fast: bool) -> tuple[str, ...]:
     """The templates a chat create stacks beyond the caller's: fast mode when the chat's mode calls for it."""
     return (FAST_ROLE_TEMPLATE,) if is_fast else ()
+
+
+@pure
+def launch_fast_identity(fast_mode: ChatFastModeState, live: ModelIdentity | None) -> ModelIdentity | None:
+    """The selection a just-launched agent is switched to so it runs fast, or None when its chat does not launch fast.
+
+    Only the fast axis is switched, so the model and effort are the agent's own, as far as it has recorded them.
+    """
+    if not fast_mode.launches_fast:
+        return None
+    if live is None:
+        return ModelIdentity(model_id="", effort=None, fast=True)
+    return live.model_copy_update(to_update(live.field_ref().fast, True))
+
+
+@pure
+def is_first_message_after_create(harness: HarnessType, is_picked: bool, launches_fast: bool) -> bool:
+    """Whether a new chat's first message follows its create rather than riding it as ``--message``.
+
+    ``mngr create --message`` starts the first turn itself, so whatever has to be set before that
+    turn makes the message follow the create: a model pick, or fast mode on a harness that takes it
+    as a switch once the agent is up. A room's message follows it too: typed into the reader's pane
+    it would be the workspace agent's words, not the sender's.
+    """
+    if is_picked or harness is HarnessType.ROOM:
+        return True
+    return launches_fast and get_harness_spec(harness).is_launch_fast_switched
 
 
 @pure
@@ -466,8 +495,8 @@ def _build_chat_create_command(
     # The project the chat starts out filed in: the one it was created inside
     # when there is one, else whatever the primary agent carries. The chat agent
     # belongs to its workspace by sharing the host; it carries no workspace
-    # label. (Fast-mode launch settings ride the ``fast`` create template, so the
-    # builder takes no fast-mode flag.)
+    # label. (Fast mode rides the ``fast`` create template or a switch after the
+    # create, so the builder takes no fast-mode flag.)
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
@@ -742,6 +771,47 @@ def chat_status_for_agent(
     return ChatStatus.IDLE
 
 
+UNREADABLE_CHAT_BUSY_REASON: Final[str] = "in a state the chat app cannot read"
+
+
+@pure
+def restart_busy_reason(
+    lifecycle_state: str,
+    activity_state: ActivityState | None,
+    is_active_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued_messages: bool,
+    has_harness_background_task: bool,
+) -> str | None:
+    """What a chat is in the middle of that a restart would cut short, in plain words; None when it is idle.
+
+    Idle needs the harness to have ended its turn (WAITING, with no ``active`` turn marker), not just a
+    transcript that reads idle: between an assistant message and the tool call after it the transcript
+    shows no turn in flight. The marker covers a turn the observe-reported lifecycle has not caught up with.
+
+    A turn that ended on the harness's own background work (RUNNING_BACKGROUND, or a harness task marker
+    from a chat on an older turn-end hook, which reports WAITING) is not idle either: that work dies with
+    the process and nothing reports it. A ``run_in_background.py`` command does not count: its runner
+    outlives the restart and sends the chat the command's report.
+    """
+    if is_permission_pending:
+        return "waiting on a dialog"
+    if is_connecting:
+        return "receiving a message"
+    if has_queued_messages:
+        return "holding queued messages"
+    if (
+        lifecycle_state not in (WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE)
+        or is_active_marker_present
+        or (activity_state is not None and is_working_activity_state(activity_state))
+    ):
+        return "working"
+    if lifecycle_state == BACKGROUND_LIFECYCLE_STATE or has_harness_background_task:
+        return "waiting on background work"
+    return None
+
+
 @pure
 def background_task_snapshot(task: BackgroundTask) -> BackgroundTaskSnapshot:
     return BackgroundTaskSnapshot(
@@ -1005,11 +1075,19 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # The confirming message leads the list for as long as the switch lasts: a handoff folds it
     # into the successor's prompt, a rebind delivers it first, and either way the page keeps
     # showing it until its turn appears in the transcript. A switch made with nothing to say
-    # (a fresh start picked from the provider menu) has no confirming message to show.
-    others = transition.held_sends_after_trigger()
+    # (a fresh start picked from the provider menu) has no confirming message to show. The
+    # other held sends stay listed the same way once the switch has delivered them; any of
+    # them, the confirming message included, that did not land has no turn to wait for.
+    others = transition.shown_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
-        if transition.trigger_text
+        (
+            _held_send_snapshot(
+                transition.trigger_message_id,
+                transition.trigger_text,
+                is_delivered=transition.is_delivered(transition.trigger_message_id),
+            ),
+        )
+        if transition.is_trigger_listed()
         else ()
     )
     return HandoffState(
@@ -1020,7 +1098,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
+        held_sends=(
+            *trigger,
+            *(
+                _held_send_snapshot(held.message_id, held.text, is_delivered=transition.is_delivered(held.message_id))
+                for held in others
+            ),
+        ),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
@@ -1029,11 +1113,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _held_send_snapshot(message_id: str, delivered_text: str) -> HeldSendSnapshot:
+def _held_send_snapshot(message_id: str, delivered_text: str, is_delivered: bool) -> HeldSendSnapshot:
     """One held send on the wire: the words behind the author prefix a non-owner's send carries (the record keeps the
     delivered text for the agent), with the render decision they would get in the transcript."""
     words = split_author_prefix(delivered_text)[1]
-    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=words), classify_user_message(words))
+    return _with_display_decision(
+        HeldSendSnapshot(message_id=message_id, text=words, is_delivered=is_delivered), classify_user_message(words)
+    )
 
 
 @pure
@@ -1953,7 +2039,9 @@ class AgentManager:
     def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChatAsShown:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
-        held_sends = tuple(_held_send_snapshot(held.message_id, held.text) for held in provisional.held_sends)
+        held_sends = tuple(
+            _held_send_snapshot(held.message_id, held.text, is_delivered=False) for held in provisional.held_sends
+        )
         return ProvisionalChatAsShown(
             chat=provisional
             if title is None
@@ -2826,6 +2914,38 @@ class AgentManager:
         self._oom_prioritizer.record_message(chat_id)
         self._message_stamps.record(chat_id)
 
+    def restart_busy_reason_for_chat(self, chat_id: ChatId) -> str | None:
+        """What the chat's active agent is in the middle of (``restart_busy_reason``); None when it is idle.
+
+        A chat or agent this manager cannot resolve counts as busy: an unattended restart must
+        know the agent has ended its turn, not merely fail to see that it has not.
+        """
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent_id = chat.active_agent_id if chat is not None else None
+            tracker = self._activity_tracker_by_agent.get(agent_id) if agent_id else None
+        if chat is None or not agent_id:
+            return UNREADABLE_CHAT_BUSY_REASON
+        # The observe-reported lifecycle trails a turn's start; the marker flips at once.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
+        # A task the turn-end hook just recorded may not have reached the poller's cache yet.
+        self._recompute_background_tasks(chat.chat_id)
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                return UNREADABLE_CHAT_BUSY_REASON
+            return restart_busy_reason(
+                agent.state,
+                agent.activity_state,
+                is_active_marker_present,
+                bool(self._pending_permission_ids_by_agent.get(agent.id)),
+                bool(self._connecting_message_ids_by_agent.get(agent.id)),
+                bool(agent.queued_messages),
+                any(
+                    task.source is TaskSource.HARNESS for task in self._background_tasks_by_chat.get(chat.chat_id, ())
+                ),
+            )
+
     def has_pending_permission(self, chat_id: ChatId) -> bool:
         """Whether a permission request the chat's active agent filed is still awaiting the user's verdict."""
         with self._lock:
@@ -3368,6 +3488,34 @@ class AgentManager:
             raise ModelApplyError(result.detail or f"Failed to set the model for agent '{agent_info.name}'")
         self.refresh_model_choice(agent_info.id)
 
+    def apply_launch_fast_mode(self, chat_id: ChatId, agent_info: AgentInfo) -> None:
+        """Turn fast mode on for an agent that has just come up, when the chat launches fast and its harness
+        takes fast mode as a switch rather than from the ``fast`` create template.
+
+        Only the fast axis is switched, so the agent keeps the model and effort it launched on. A
+        refused switch is logged and the agent runs at standard speed; the model bar shows that.
+        """
+        spec = get_harness_spec(agent_info.harness)
+        if not spec.is_launch_fast_switched:
+            return
+        identity = launch_fast_identity(
+            self.get_fast_mode_state(chat_id),
+            read_model_identity(get_model_state_path(agent_info.harness, agent_info.agent_state_dir)),
+        )
+        if identity is None:
+            return
+        result = build_resolver(agent_info).switch(
+            identity,
+            frozenset({ModelAxis.FAST}),
+            lambda line: isinstance(self.send_message_to_agent(AgentId(agent_info.id), line), SendDelivery),
+        )
+        if not result.ok:
+            _loguru_logger.warning(
+                "Chat {}: could not turn fast mode on for agent {}: {}", chat_id, agent_info.id, result.detail
+            )
+            return
+        self.refresh_model_choice(agent_info.id)
+
     def hold_send(self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin) -> HandoffPhase | None:
         """Hold a send while the chat converges; None when the chat is not converging.
 
@@ -3452,6 +3600,7 @@ class AgentManager:
             resolve_account=resolve_account,
             deliver=capabilities.deliver,
             apply_model=self.apply_model_pick,
+            apply_launch_fast_mode=self.apply_launch_fast_mode,
             drain_to_composer=capabilities.drain_to_composer,
             ensure_watcher=capabilities.ensure_watcher,
             get_background_tasks=self._background_tasks_of_chat,
@@ -3694,7 +3843,9 @@ class AgentManager:
             raise RebindCancelledError(str(e)) from e
 
     def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
-        """Pop the oldest held send, or finish the switch (clear its entry) and return None once none remain.
+        """Move the oldest held send onto the delivered list, or finish the switch (clear its entry) and return None
+        once none remain. Either way the chat's snapshot is pushed: the page reads which listed sends are delivered off
+        it, to stand each down once its turn lands.
 
         A finished rebind on a chat of one agent takes its record with it: a record exists only
         for a chat that has had a handoff, and the agent's ``account`` label is the truth again.
@@ -3703,19 +3854,15 @@ class AgentManager:
             record = self._require_transition_locked(self._chat_record_by_id.get(chat_id), chat_id, transition_id)
             transition = record.converging
             assert transition is not None, "_require_transition_locked returned a record with a switch"
-            if transition.held_sends:
-                held = transition.held_sends[0]
-                remaining = transition.model_copy_update(
-                    to_update(transition.field_ref().held_sends, transition.held_sends[1:])
-                )
-                self._write_record_locked(record.with_converging(remaining))
-                return held
-            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
+            taken = transition.held_sends[0] if transition.held_sends else None
+            if taken is not None:
+                self._write_record_locked(record.with_converging(transition.with_oldest_held_send_delivered()))
+            elif isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
                 self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
         self._broadcast_chats_updated()
-        return None
+        return taken
 
     def _note_agent_relabeled(self, agent_id: str, labels: Mapping[str, str]) -> None:
         """Reflect labels a switch wrote before the observe stream relists the agent."""
@@ -4924,12 +5071,10 @@ class AgentManager:
             else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
-        # With a pick the message follows the create rather than riding it: the model has to be
-        # set before the first turn, and ``mngr create --message`` starts that turn itself. A room's follows it
-        # too: typed into the reader's pane it would be the workspace agent's words, not the sender's.
         first_message = (
             FirstMessage(text=launch_message, message_id=message_id or uuid4().hex, on_delivered=on_message_delivered)
-            if launch_message and (model_pick is not None or harness is HarnessType.ROOM)
+            if launch_message
+            and is_first_message_after_create(harness, model_pick is not None, fast_mode.launches_fast)
             else None
         )
         create_labels = [
@@ -5371,23 +5516,28 @@ class AgentManager:
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
-        what the user chose the switch by. The messages go through the send path a held send
-        takes; a refusal is logged the same way, and only a first message that landed is told of.
+        what the user chose the switch by. With no pick, or a refused one, a chat that launches
+        fast on a harness switched fast once it is up gets that switch here. The messages go
+        through the send path a held send takes; a refusal is logged the same way, and only a
+        first message that landed is told of.
         """
-        if model_pick is None and first_message is None and not held_sends:
-            return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
         if agent_info is None or capabilities is None:
-            _loguru_logger.warning(
-                "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
-            )
+            if model_pick is not None or first_message is not None or held_sends:
+                _loguru_logger.warning(
+                    "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
+                )
             return
+        is_picked = False
         if model_pick is not None:
             try:
                 self.apply_model_pick(agent_info, model_pick)
+                is_picked = True
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
+        if not is_picked:
+            self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
                 capabilities.deliver,
@@ -5791,6 +5941,19 @@ class AgentManager:
             self._evict_watcher(member_id)
         if chat is not None and is_active_agent and self._chat_stream_ender is not None:
             self._chat_stream_ender(str(chat.chat_id))
+
+    def _is_active_marker_present(self, agent_id: str, tracker: HarnessActivityTracker | None) -> bool:
+        """Whether the agent's turn-in-flight marker is on disk; a filesystem stat, so call it outside the lock.
+
+        The tracker declares which file that is; a harness that keeps no marker (codex -- its daemon
+        is the turn authority), or an agent with no tracker, reads False and the lifecycle state
+        stands alone.
+        """
+        active_marker_filename = tracker.active_marker_filename if tracker is not None else None
+        return (
+            active_marker_filename is not None
+            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
+        )
 
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
@@ -6664,14 +6827,8 @@ class AgentManager:
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
         # The turn-in-flight marker flips promptly at turn start/end, whereas the observe-reported
-        # lifecycle state can miss a short turn -- so read it for a timely signal (stat outside the
-        # lock). The tracker declares which file that is; ``None`` = the harness keeps no marker
-        # (codex -- its daemon is the turn authority) and the lifecycle state stands alone.
-        active_marker_filename = tracker.active_marker_filename
-        is_active_marker_present = (
-            active_marker_filename is not None
-            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
-        )
+        # lifecycle state can miss a short turn -- so read it for a timely signal.
+        is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
         live_compaction = self._resolve_live_compaction(
             agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
         )

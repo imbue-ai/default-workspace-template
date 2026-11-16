@@ -40,6 +40,7 @@ import {
   noteLoadedArrivals,
   removeMessageSentListener,
   type ToolResultEvent,
+  isTranscriptLoaded,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
@@ -70,7 +71,7 @@ import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
 import { buildAgentTerminalUrl } from "../models/Chats";
-import { getShellHandshake } from "../shell";
+import { getShellHandshake, reportChatOnScreenOnce } from "../shell";
 import {
   buildConversationView,
   MESSAGE_LIST_CLASS,
@@ -890,7 +891,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m(TurnDoneMark, { key: "turn-done", chatId, events }),
         m(LastMessageMark, { key: "last-message", chatId, events }),
         ...renderPendingSends(chatId, pendingRunAfterRows(chatId, rows, liveEnd)),
-        // The status row under the user's own send while it waits on the agent.
+        // The status row under the user's own send while it waits on the agent or opens the turn the row reports.
         ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),
     ]);
@@ -1005,9 +1006,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                     tabindex: 0,
                     oncreate: (mainVnode: m.VnodeDOM) => {
                       engine.afterRender(mainVnode.dom as HTMLElement);
+                      reportChatOnScreenOnce(chatId, isTranscriptLoaded(chatId));
                     },
                     onupdate: (mainVnode: m.VnodeDOM) => {
                       engine.afterRender(mainVnode.dom as HTMLElement);
+                      reportChatOnScreenOnce(chatId, isTranscriptLoaded(chatId));
                     },
                   },
                   content,

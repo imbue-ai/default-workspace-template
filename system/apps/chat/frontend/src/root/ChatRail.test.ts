@@ -2,7 +2,8 @@
 /**
  * The rail's status marks: a chat waiting on a background task wears the dashed ring, a working one the breathing
  * dot (pending tasks or not, since the backend reports it working), and an idle one the hollow ring. And the
- * main chat: it leads in its own group, set off from the rest, and its row is marked.
+ * main chat: it leads in its own group, set off from the rest, and its row is marked. And the delete: a confirmed
+ * chat leaves the list before the chat app answers, and comes back with the reason on a refusal.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,13 +19,17 @@ vi.mock("./verbs", () => verbs);
 import m from "mithril";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ChatRail, rowMenuRows } from "./ChatRail";
+import type { RowMenuContext } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
+import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import type { ChatRow } from "./rows";
 
 let root: HTMLElement | null = null;
 
 afterEach(() => {
+  settlePendingDeletes(new Set());
+  vi.restoreAllMocks();
   if (root === null) return;
   m.mount(root, null);
   root.remove();
@@ -225,6 +230,67 @@ describe("ChatRail main chat", () => {
     ).toEqual(["rename", "make-main", "delete"]);
     expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
     expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).not.toBeNull();
+  });
+});
+
+describe("ChatRail delete", () => {
+  const first = chatRowFixture("agent-first");
+  const second = chatRowFixture("agent-second");
+
+  function deleteFromMenu(context: RowMenuContext, row: ChatRow): void {
+    const deleteRow = rowMenuRows(context, row).find(
+      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
+    );
+    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
+    deleteRow.onSelect();
+  }
+
+  it("takes a confirmed chat off the list before the chat app answers, and moves off it when it is on screen", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    verbs.destroyChat.mockReturnValueOnce(new Promise<undefined>(() => undefined));
+    const onPick = vi.fn<(chatId: string | null) => void>();
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second], selectedChatId: first.chatId, onPick }), first);
+
+    expect(withoutPendingDeletes([first, second])).toEqual([second]);
+    expect(onPick).toHaveBeenCalledWith(second.chatId);
+    expect(verbs.destroyChat).toHaveBeenCalledWith(first.chatId);
+  });
+
+  it("stays on the chat on screen when another one is deleted", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    verbs.destroyChat.mockReturnValueOnce(new Promise<undefined>(() => undefined));
+    const onPick = vi.fn<(chatId: string | null) => void>();
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second], selectedChatId: first.chatId, onPick }), second);
+
+    expect(withoutPendingDeletes([first, second])).toEqual([first]);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the question is declined", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    verbs.destroyChat.mockClear();
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first], selectedChatId: first.chatId }), first);
+
+    expect(hasPendingDelete()).toBe(false);
+    expect(verbs.destroyChat).not.toHaveBeenCalled();
+  });
+
+  it("brings the chat back and says why when the chat app refuses", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    verbs.destroyChat.mockRejectedValueOnce(new Error("mngr failed"));
+    const onDeleteRefused = vi.fn<() => void>();
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second], onDeleteRefused }), first);
+    expect(hasPendingDelete()).toBe(true);
+
+    await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(withoutPendingDeletes([first, second])).toEqual([first, second]);
+    expect(onDeleteRefused).toHaveBeenCalledTimes(1);
+    expect(alertSpy.mock.calls[0][0]).toContain("mngr failed");
   });
 });
 

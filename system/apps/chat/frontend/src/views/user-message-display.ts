@@ -222,15 +222,18 @@ export function renderNoticeRow(key: string, rowClass: string, cls: UserMessageC
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent; previousTurn?: UserMessageEvent | null }> {
   let renderedEventId: string | null = null;
   // The page learns who it is beside the transcript (ensureParticipants), so a turn drawn before
-  // then resolves no author; it is redrawn once the resolution changes -- and so is whether it
-  // carries on the run of the turn above it.
+  // then resolves no author; it is redrawn once the resolution changes -- who wrote it, or what the
+  // roster calls them -- and so is whether it carries on the run of the turn above it.
   let renderedAuthorKey: string | null = null;
+  let renderedAuthorName: string | null = null;
   let renderedIsContinued = false;
   return {
     onbeforeupdate(vnode) {
+      const author = authorOfTurn(vnode.attrs.event);
       return (
         vnode.attrs.event.event_id !== renderedEventId ||
-        (authorOfTurn(vnode.attrs.event)?.key ?? null) !== renderedAuthorKey ||
+        (author?.key ?? null) !== renderedAuthorKey ||
+        (author?.name ?? null) !== renderedAuthorName ||
         continuesSpeakerRun(vnode.attrs.event, vnode.attrs.previousTurn ?? null) !== renderedIsContinued
       );
     },
@@ -239,6 +242,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
       renderedEventId = event.event_id;
       const author = authorOfTurn(event);
       renderedAuthorKey = author?.key ?? null;
+      renderedAuthorName = author?.name ?? null;
       const isContinued = continuesSpeakerRun(event, vnode.attrs.previousTurn ?? null);
       renderedIsContinued = isContinued;
       const cls = classifyUserMessage(event);

@@ -793,6 +793,50 @@ def test_the_tray_stacks_four_people_and_opens_a_persons_card_on_hover(e2e_serve
     expect(card).to_have_count(0, timeout=5000)
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_the_trays_agent_shows_the_pinned_window_on_the_page_it_holds(tmp_path: Path, page: Page) -> None:
+    """A click on the agent's tray entry puts the avatar's pinned window on screen, minimized or closed for this
+    client, on the page it was showing and launching nothing into it; already on top, the window stays (the
+    multiplayer spec, section 6.2)."""
+    with _running_e2e_server(tmp_path, pin=("avatar", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        agent = page.locator("[data-tray-agent]")
+
+        agent.click()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        _wait_for_stored_placement(
+            server, client_id, pinned["id"], lambda placement: not placement["is_minimized"], "the click's restore"
+        )
+        frame = _page_frame(page, pinned["id"])
+        expect(frame.locator("#where")).to_have_text(_PINNED_HOME_PATH)
+        frame.evaluate("() => window.__navigateTo('/?doc=1')")
+        wait_for(
+            lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the page's own path never reached the window path file",
+        )
+
+        _window(page, pinned["id"]).locator('[data-window-control="close"]').click()
+        _wait_for_stored_placement(
+            server, client_id, pinned["id"], lambda placement: placement["is_minimized"], "the close"
+        )
+        agent.click()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        _wait_for_stored_placement(
+            server, client_id, pinned["id"], lambda placement: not placement["is_minimized"], "the second restore"
+        )
+
+        agent.click()
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        expect(_window(page, pinned["id"])).to_be_visible()
+        assert _placements(server.base_url, client_id)[pinned["id"]]["is_minimized"] is False
+        expect(_page_frame(page, pinned["id"]).locator("#where")).to_have_text("/?doc=1")
+        assert _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_shortcut_opens_a_window_whose_page_speaks_the_contract(e2e_server: E2EServer, page: Page) -> None:
     """A double click on the shortcut opens a window at the launch path: the shell records the window and this

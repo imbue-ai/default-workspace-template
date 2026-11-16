@@ -25,8 +25,10 @@ so all of these take the ``--ssh-*`` options):
 
 ``list-agents``
     Enumerate the source's agents from ``<host_dir>/agents/*/data.json`` and
-    ``<host_dir>/preserved/``, and map each to its session JSONLs via
-    ``claude_session_id_history``.
+    ``<host_dir>/preserved/`` with each one's harness, account and work dir,
+    and map each to the sessions it resumes: a claude agent's JSONLs via
+    ``claude_session_id_history``, a codex agent's rollout via
+    ``codex_root_session``.
 
 ``classify-branches``
     Split the source's ``mngr/*`` branches into merged (tip already reachable
@@ -52,10 +54,17 @@ Local (no SSH):
     Rewrite legacy path references inside already-migrated files, reporting every
     substitution it made.
 
+``data-excludes``
+    Print the rsync ``--exclude`` flags that keep the source's per-workspace
+    secrets (its backup, tunnel and published-share identity) out of the data
+    copy.
+
 ``recreate-agents``
-    Recreate each enumerated agent here via ``mngr create --template chat
-    --adopt <session.jsonl>`` and stop it, so its full history renders in a tab
-    and a message revives it. Idempotent: already-recreated agents are skipped.
+    Recreate each enumerated agent here via ``mngr create --type <harness>
+    --template chat --adopt <session.jsonl>``, bound to the account it ran on
+    and in the folder it worked in, and stop it, so its full history renders in
+    a tab and a message revives it. Idempotent: already-recreated agents are
+    skipped.
 
 Deliberately NOT scripted: deciding an ambiguous path mapping, judging whether a
 rewritten skill still means what it meant, semantic porting of template-file
@@ -71,6 +80,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -91,7 +101,7 @@ EXIT_SSH_UNREACHABLE = 3
 EXIT_NO_TEMPLATE_BASE = 4
 
 
-# --- Source layout detection -----------------------------------------------
+# Source layout detection
 
 LAYOUT_PRE_DECLUTTER = "pre-declutter"
 LAYOUT_CURRENT = "current"
@@ -172,7 +182,7 @@ LAYOUT_PROBE_PATHS: tuple[str, ...] = (
 )
 
 
-# --- Legacy path mapping ---------------------------------------------------
+# Legacy path mapping
 
 
 class PathMapping(NamedTuple):
@@ -382,7 +392,7 @@ def rewrite_legacy_references(text: str) -> tuple[str, list[Substitution]]:
     return "".join(rewritten_lines), substitutions
 
 
-# --- Template base resolution ----------------------------------------------
+# Template base resolution
 
 # The template-base rule is shared with publish-template and
 # update-published-template, so it lives in ``agents_shared.resolve_template_base``;
@@ -432,7 +442,7 @@ def parse_baseline_diff(
     return entries
 
 
-# --- Branch classification -------------------------------------------------
+# Branch classification
 
 
 class BranchClassification(NamedTuple):
@@ -477,7 +487,47 @@ def classify_branches(
     return classification
 
 
-# --- Agent enumeration and session resolution ------------------------------
+# The data tree's per-workspace secrets
+
+# The files under the data tree's secrets directory that are identity minted
+# for one workspace rather than user content, so the copy must leave them
+# behind: a backup repository keyed by the old workspace's own random password,
+# a tunnel minted per agent id, and the published share's whole identity (its
+# relay materials, auth label, gateway signing key, grants document, grantee
+# identities, TLS material, and the visiting-agent registry). Copying any of
+# the share files would make this workspace present the old one's hostname
+# and certificate and have two machines claim one share.
+DATA_SECRETS_EXCLUDED_FROM_COPY = (
+    "restic.env",
+    "cloudflare_tunnel.env",
+    "share.env",
+    "share_auth_label",
+    "share_gateway_signing_key",
+    "share_grants.toml",
+    "share_grants.toml.lock",
+    "share_identities.json",
+    "share_tls/",
+    "agent_access/",
+)
+
+# The secrets directory under each layout's data root (``data/`` here,
+# ``runtime/`` on a pre-declutter source).
+_SECRETS_DIR_BY_LAYOUT = {LAYOUT_CURRENT: ".secrets", LAYOUT_PRE_DECLUTTER: "secrets"}
+
+
+def data_rsync_exclude_args(layout: str) -> list[str]:
+    """The ``--exclude`` flags an rsync of the source's data root takes, one per excluded secret.
+
+    Anchored at the data root (the leading ``/``), so a user file that happens
+    to share a name elsewhere in the tree still comes over.
+    """
+    secrets_dir = _SECRETS_DIR_BY_LAYOUT[layout]
+    return [
+        f"--exclude=/{secrets_dir}/{name}" for name in DATA_SECRETS_EXCLUDED_FROM_COPY
+    ]
+
+
+# Agent enumeration and session resolution
 
 # The one agent never brought over: it is the source workspace's primary agent
 # (``is_primary=true``), and a second primary makes this workspace ambiguous to
@@ -491,6 +541,19 @@ _USER_CREATED_LABEL = "user_created"
 _AGENT_CREATED_LABEL = "agent_created"
 _CARRIED_LABELS = (_USER_CREATED_LABEL, _AGENT_CREATED_LABEL, "project")
 
+# The label the chat app stamps with the account a chat runs on; the recreated
+# agent is bound to the same account here.
+ACCOUNT_LABEL = "account"
+
+# The harnesses whose sessions this flow can enumerate and adopt.
+HARNESS_CLAUDE = "claude"
+HARNESS_CODEX = "codex"
+
+# Where the chat app keeps one folder per signed-in provider account; a chat's
+# transcripts sit under its account's folder, and a recreated chat is bound to
+# the same folder here.
+DEFAULT_ACCOUNTS_DIR = "/home/user/.minds/accounts"
+
 
 class SourceAgent(NamedTuple):
     """One agent found on the source host, with the sessions it should resume."""
@@ -499,6 +562,9 @@ class SourceAgent(NamedTuple):
     agent_id: str
     labels: dict[str, str]
     is_preserved: bool
+    harness: str
+    account_id: str
+    work_dir: str
     session_files: tuple[str, ...]
     unresolved_session_ids: tuple[str, ...]
     excluded_because: str
@@ -555,6 +621,32 @@ def resolve_agent_sessions(
     return tuple(session_files), tuple(unresolved)
 
 
+def resolve_codex_session(
+    root_session_id: str, rollout_paths: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve a codex agent's session to the one rollout file to adopt.
+
+    Codex keeps its transcripts as date-nested ``rollout-<timestamp>-<id>.jsonl``
+    files under the agent's own codex home, and mngr records the id it resumes
+    in the agent's ``codex_root_session``. That rollout is the one to adopt;
+    an agent with no recorded root falls back to its newest rollout (the
+    timestamp in the name sorts), and one with no rollout at all has nothing
+    to adopt. A recorded id with no file on disk is reported, not dropped.
+
+    ``rollout_paths`` are the rollouts under this one agent's state directory.
+    Returns ``(session_files, unresolved_ids)`` in the shape of
+    :func:`resolve_agent_sessions`.
+    """
+    if root_session_id:
+        for path in rollout_paths:
+            if Path(path).stem.endswith(f"-{root_session_id}"):
+                return (path,), ()
+        return (), (root_session_id,)
+    if rollout_paths:
+        return (max(rollout_paths, key=lambda path: Path(path).name),), ()
+    return (), ()
+
+
 def plan_agent_names(
     existing: Sequence[str], desired: Sequence[tuple[str, str]]
 ) -> dict[str, str]:
@@ -603,39 +695,101 @@ def derive_recreate_labels(source_labels: Mapping[str, str]) -> list[str]:
     return labels
 
 
+def account_binding_args(harness: str, account_dir: str) -> list[str]:
+    """The ``mngr create`` arguments that bind a new agent of ``harness`` to the account folder.
+
+    The same binding the chat app gives a chat it creates
+    (``system/apps/chat/imbue/chat/harnesses/account_binding.py``), which has
+    to ride the create: mngr starts the agent and waits for readiness before
+    returning, so a binding applied afterwards would land after the first turn
+    ran on the wrong credential. Claude binds through its config dir, which
+    mngr sources from the agent's env file; codex binds by repointing the
+    ``auth.json`` link that provisioning writes under the agent's own codex
+    home at the account's, through a provision command that runs after
+    provisioning and before the start (the state dir is only known then, so
+    the shell expands it). Another harness gets no binding here and so runs
+    on the workspace's default account.
+    """
+    if harness == HARNESS_CLAUDE:
+        return ["--env", f"CLAUDE_CONFIG_DIR={account_dir}"]
+    if harness == HARNESS_CODEX:
+        codex_home = '"$MNGR_AGENT_STATE_DIR"/plugin/codex/home'
+        source = _shell_quote(f"{account_dir}/auth.json")
+        return [
+            "--extra-provision-command",
+            f"mkdir -p {codex_home} && ln -sfn {source} {codex_home}/auth.json",
+        ]
+    return []
+
+
+def account_process_env(harness: str, account_dir: str) -> dict[str, str]:
+    """The environment the ``mngr create`` process itself runs under to bind a new agent to the account folder.
+
+    The create's own environment, on top of :func:`account_binding_args`: the
+    workspace runs claude without a per-agent config dir
+    (``isolate_local_config_dir = false``), and in that mode mngr files an
+    adopted session under the ``CLAUDE_CONFIG_DIR`` of the process running the
+    create -- never under the ``--env`` value, which only reaches the agent's
+    env file. A migrating chat runs with its own account folder in that
+    variable, so without this every adopted claude session would land in the
+    migrating chat's account while the recreated chat read from its own, and
+    come back empty. The same scoping the chat app gives its own CLI calls
+    (``AccountBinding.account_env``). Codex copies a rollout into the agent's
+    own codex home, which the process env plays no part in, so it and any other
+    harness get nothing here.
+    """
+    if harness == HARNESS_CLAUDE and account_dir:
+        return {"CLAUDE_CONFIG_DIR": account_dir}
+    return {}
+
+
 def build_recreate_argv(
     name: str,
+    harness: str,
     session_files: Sequence[str],
     source_labels: Mapping[str, str],
+    account_dir: str = "",
+    work_dir: str = "",
     mngr_binary: str = "mngr",
 ) -> list[str]:
     """Build the ``mngr create`` argv that recreates one agent here, dormant.
 
-    ``--template chat`` matches how the system interface creates a chat agent, so
-    the recreated agent gets a tab; ``--transfer none`` runs it in place in this
-    workspace's checkout rather than cutting a worktree; each ``--adopt`` copies
-    one session in, and the last one listed is the session it resumes.
-    ``--no-connect`` keeps the create from attaching a terminal. A new agent id is
-    minted deliberately: the old one may still be live on the old host.
+    ``--type`` selects the harness the way the chat app does (there is no
+    per-harness create template); ``--template chat`` matches how the chat app
+    creates a chat agent, so the recreated agent gets a tab, and that template
+    runs it in place (``transfer = none``) rather than cutting a worktree. An
+    agent that worked outside the checkout -- a project-folder agent -- is
+    recreated in that folder, by ``--from :<dir>``, which the data step brought
+    over at the same path. Each ``--adopt`` copies one session in, and the last
+    one listed is the session it resumes. ``account_dir`` binds the agent to
+    the account it ran on (see :func:`account_binding_args`) and stamps the
+    chat app's account label, so the app shows which account the chat is on.
+    ``--no-connect`` keeps the create from attaching a terminal. A new agent id
+    is minted deliberately: the old one may still be live on the old host.
     """
     argv = [
         mngr_binary,
         "create",
         name,
-        "--template",
-        "claude",
+        "--type",
+        harness,
         "--template",
         "chat",
         "--no-connect",
     ]
+    if work_dir:
+        argv.extend(["--from", f":{work_dir}"])
     for session_file in session_files:
         argv.extend(["--adopt", session_file])
     for label in derive_recreate_labels(source_labels):
         argv.extend(["--label", label])
+    if account_dir:
+        argv.extend(account_binding_args(harness, account_dir))
+        argv.extend(["--label", f"{ACCOUNT_LABEL}={Path(account_dir).name}"])
     return argv
 
 
-# --- App ports -------------------------------------------------------------
+# App ports
 
 
 class AppPort(NamedTuple):
@@ -783,7 +937,7 @@ def reconcile_ports(
     return result
 
 
-# --- Scheduled jobs --------------------------------------------------------
+# Scheduled jobs
 
 
 class CronEntry(NamedTuple):
@@ -825,7 +979,7 @@ def parse_cron_entries(job_name: str, text: str) -> list[CronEntry]:
     return entries
 
 
-# --- Audit scanning --------------------------------------------------------
+# Audit scanning
 
 # What each audit kind looks for, and why the skill cares:
 #
@@ -921,7 +1075,7 @@ def scan_audit(
     return findings
 
 
-# --- SSH plumbing ----------------------------------------------------------
+# SSH plumbing
 
 
 def build_ssh_argv(
@@ -1101,7 +1255,7 @@ def _remote_git(target: SshTarget, repo_root: str, git_args: str) -> str:
     return run_remote(target, f"git -C {_shell_quote(repo_root)} {git_args}")
 
 
-# --- Checkpointing ---------------------------------------------------------
+# Checkpointing
 
 # Where a pass keeps its cached scans and its agent-recreation ledger. Under
 # ``data/.tasks/`` with the other flow-internal scratch.
@@ -1148,7 +1302,7 @@ def _cached(args: argparse.Namespace, checkpoint_name: str) -> bool:
     return True
 
 
-# --- Subcommands -----------------------------------------------------------
+# Subcommands
 
 
 def _cmd_detect_layout(args: argparse.Namespace) -> int:
@@ -1244,48 +1398,73 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
         return 0
     target = _ssh_target(args)
     host_dir = args.host_dir
+    accounts_dir = args.accounts_dir
+    # Claude files a chat's sessions under the config dir it runs with: the
+    # account's folder on a current source, the primary agent's state dir on an
+    # older one, so both trees are walked. Codex keeps each agent's rollouts
+    # under that agent's own codex home.
     listing = run_remote(
         target,
         f"ls -1 {_shell_quote(host_dir + '/agents')} 2>/dev/null; "
         f"echo '---'; ls -1 {_shell_quote(host_dir + '/preserved')} 2>/dev/null; "
-        f"echo '---'; find {_shell_quote(host_dir)} -path '*/projects/*' -name '*.jsonl' 2>/dev/null",
+        f"echo '---'; find {_shell_quote(host_dir)} {_shell_quote(accounts_dir)} "
+        "-path '*/projects/*' -name '*.jsonl' 2>/dev/null; "
+        f"echo '---'; find {_shell_quote(host_dir)} -path '*/plugin/codex/home/sessions/*' "
+        "-name 'rollout-*.jsonl' 2>/dev/null",
     )
-    live_names, preserved_names, session_paths = _split_sections(listing, 3)
+    live_names, preserved_names, session_paths, rollout_paths = _split_sections(
+        listing, 4
+    )
     read_targets: list[str] = []
-    for entry in live_names:
-        read_targets.append(f"{host_dir}/agents/{entry}/data.json")
-        read_targets.append(f"{host_dir}/agents/{entry}/claude_session_id_history")
-    for entry in preserved_names:
-        read_targets.append(f"{host_dir}/preserved/{entry}/data.json")
-        read_targets.append(f"{host_dir}/preserved/{entry}/claude_session_id_history")
+    for parent, entries in (("agents", live_names), ("preserved", preserved_names)):
+        for entry in entries:
+            read_targets.append(f"{host_dir}/{parent}/{entry}/data.json")
+            read_targets.append(
+                f"{host_dir}/{parent}/{entry}/claude_session_id_history"
+            )
+            read_targets.append(f"{host_dir}/{parent}/{entry}/codex_root_session")
     files = _read_remote_files(target, read_targets)
 
     agents: list[SourceAgent] = []
     unreadable: list[str] = []
     for parent, entries in (("agents", live_names), ("preserved", preserved_names)):
         for entry in entries:
-            data_path = f"{host_dir}/{parent}/{entry}/data.json"
-            raw = files.get(data_path)
+            agent_dir = f"{host_dir}/{parent}/{entry}"
+            raw = files.get(f"{agent_dir}/data.json")
             if raw is None:
-                unreadable.append(data_path)
+                unreadable.append(f"{agent_dir}/data.json")
                 continue
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                unreadable.append(data_path)
+                unreadable.append(f"{agent_dir}/data.json")
                 continue
             labels = {str(k): str(v) for k, v in (data.get("labels") or {}).items()}
             name = str(data.get("name") or entry)
-            history = files.get(
-                f"{host_dir}/{parent}/{entry}/claude_session_id_history", ""
-            )
-            session_files, unresolved = resolve_agent_sessions(history, session_paths)
+            harness = str(data.get("type") or HARNESS_CLAUDE)
+            if harness == HARNESS_CODEX:
+                session_files, unresolved = resolve_codex_session(
+                    files.get(f"{agent_dir}/codex_root_session", "").strip(),
+                    [
+                        path
+                        for path in rollout_paths
+                        if path.startswith(agent_dir + "/")
+                    ],
+                )
+            else:
+                session_files, unresolved = resolve_agent_sessions(
+                    files.get(f"{agent_dir}/claude_session_id_history", ""),
+                    session_paths,
+                )
             agents.append(
                 SourceAgent(
                     name=name,
                     agent_id=str(data.get("id") or entry),
                     labels=labels,
                     is_preserved=parent == "preserved",
+                    harness=harness,
+                    account_id=labels.get(ACCOUNT_LABEL, ""),
+                    work_dir=str(data.get("work_dir") or ""),
                     session_files=session_files,
                     unresolved_session_ids=unresolved,
                     excluded_because=is_excluded_agent(name, labels),
@@ -1296,13 +1475,17 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
         "agents.json",
         {
             "host_dir": host_dir,
+            "accounts_dir": accounts_dir,
             "agents": [
                 agent._asdict() for agent in sorted(agents, key=lambda a: a.name)
             ],
             "unreadable": unreadable,
             "caveat": (
                 "An agent with no session file has no transcript to adopt -- it can be "
-                "recreated empty or skipped, which is a question for the user."
+                "recreated empty or skipped, which is a question for the user. Sessions are "
+                "enumerated for claude and codex agents only; another harness's agent is "
+                "listed with none. An agent with no account label is recreated on this "
+                "workspace's default account."
             ),
         },
     )
@@ -1567,6 +1750,21 @@ def _cmd_rewrite_refs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_data_excludes(args: argparse.Namespace) -> int:
+    print(" ".join(data_rsync_exclude_args(args.layout)))
+    return 0
+
+
+def _skipped_result(agent: Mapping[str, object], reason: str) -> dict[str, object]:
+    """The recreate-agents result for an agent left alone this run, with why."""
+    return {
+        "source_agent_id": agent["agent_id"],
+        "name": agent["name"],
+        "status": "skipped",
+        "reason": reason,
+    }
+
+
 def _cmd_recreate_agents(args: argparse.Namespace) -> int:
     inventory = json.loads(Path(args.agents_json).read_text(encoding="utf-8"))
     ledger_path = _checkpoint_path(args, "recreated-agents.jsonl")
@@ -1587,28 +1785,66 @@ def _cmd_recreate_agents(args: argparse.Namespace) -> int:
         [(agent["agent_id"], agent["name"]) for agent in pending],
     )
 
+    # Staged sessions are looked up by file name anywhere under the staging
+    # dir: session ids are UUIDs, so names cannot collide, and keeping the
+    # source's tree is what lets codex's adopt find the ``sessions/`` root
+    # above a rollout.
+    staged_by_name = {
+        path.name: path for path in Path(args.sessions_dir).rglob("*.jsonl")
+    }
     results: list[dict[str, object]] = []
     for agent in pending:
         created_name = name_plan[agent["agent_id"]]
-        session_files = [
-            str(Path(args.sessions_dir) / Path(remote).name)
-            for remote in agent["session_files"]
-        ]
-        missing = [path for path in session_files if not Path(path).is_file()]
+        session_names = [Path(remote).name for remote in agent["session_files"]]
+        missing = [name for name in session_names if name not in staged_by_name]
         if missing:
             results.append(
-                {
-                    "source_agent_id": agent["agent_id"],
-                    "name": agent["name"],
-                    "status": "skipped",
-                    "reason": f"session files not staged locally: {missing}",
-                }
+                _skipped_result(agent, f"session files not staged locally: {missing}")
             )
             continue
-        argv = build_recreate_argv(
-            created_name, session_files, agent["labels"], mngr_binary=args.mngr_binary
+        work_dir = (
+            ""
+            if agent["work_dir"] in ("", args.source_repo_root)
+            else agent["work_dir"]
         )
-        create = subprocess.run(argv, capture_output=True, text=True, check=False)
+        if work_dir and not Path(work_dir).is_dir():
+            results.append(
+                _skipped_result(
+                    agent,
+                    f"its work dir {work_dir} is not present here; bring it over first",
+                )
+            )
+            continue
+        account_dir = (
+            str(Path(args.accounts_dir) / agent["account_id"])
+            if agent["account_id"]
+            else ""
+        )
+        if account_dir and not Path(account_dir).is_dir():
+            results.append(
+                _skipped_result(
+                    agent,
+                    f"its account folder {account_dir} is not present here; bring the accounts over first",
+                )
+            )
+            continue
+        session_files = [str(staged_by_name[name]) for name in session_names]
+        argv = build_recreate_argv(
+            created_name,
+            agent["harness"],
+            session_files,
+            agent["labels"],
+            account_dir=account_dir,
+            work_dir=work_dir,
+            mngr_binary=args.mngr_binary,
+        )
+        create = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, **account_process_env(agent["harness"], account_dir)},
+        )
         if create.returncode != 0:
             results.append(
                 {
@@ -1675,7 +1911,7 @@ def _local_agent_names(mngr_binary: str) -> list[str]:
     ]
 
 
-# --- CLI -------------------------------------------------------------------
+# CLI
 
 
 def _add_ssh_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -1759,7 +1995,25 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="The source's mngr host dir (from detect-layout).",
     )
+    agents_parser.add_argument(
+        "--accounts-dir",
+        default=DEFAULT_ACCOUNTS_DIR,
+        help="The source's chat accounts dir, where a claude chat's sessions are filed.",
+    )
     agents_parser.set_defaults(func=_cmd_list_agents)
+
+    excludes_parser = sub.add_parser(
+        "data-excludes",
+        help="Print the rsync --exclude flags that keep the source's per-workspace secrets out of the data copy.",
+        parents=[common],
+    )
+    excludes_parser.add_argument(
+        "--layout",
+        required=True,
+        choices=sorted(_SECRETS_DIR_BY_LAYOUT),
+        help="The source layout (from detect-layout).",
+    )
+    excludes_parser.set_defaults(func=_cmd_data_excludes)
 
     branches_parser = sub.add_parser(
         "classify-branches",
@@ -1851,7 +2105,17 @@ def build_parser() -> argparse.ArgumentParser:
     recreate_parser.add_argument(
         "--sessions-dir",
         required=True,
-        help="Local directory holding the session JSONLs copied off the source.",
+        help="Local directory holding the session JSONLs copied off the source, searched recursively.",
+    )
+    recreate_parser.add_argument(
+        "--source-repo-root",
+        required=True,
+        help="The source's repo root (from detect-layout); an agent that worked elsewhere is recreated in that folder.",
+    )
+    recreate_parser.add_argument(
+        "--accounts-dir",
+        default=DEFAULT_ACCOUNTS_DIR,
+        help="This workspace's chat accounts dir, holding the account folders the chats are bound to.",
     )
     recreate_parser.add_argument(
         "--mngr-binary", default="mngr", help="The mngr binary to call."
