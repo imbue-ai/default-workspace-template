@@ -804,6 +804,26 @@ describe("MessageInput long paste", () => {
     expect(findByTag(render("agent-2"), "textarea")?.attrs?.value).toBe("");
   });
 
+  it("keeps the text when a hand-back is waiting for the chat the user moved away from", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    prependToComposer("agent-1", "Handed back");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(findByTag(render("agent-1"), "textarea")?.attrs?.value).toBe(`Handed back\n\n${LONG_PASTE}`);
+  });
+
   it("says so, and keeps the attachment, when the text cannot be put back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);

@@ -1524,6 +1524,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
           const merged = savedDraft.trim().length === 0 ? text : `${savedDraft}\n\n${text}`;
           localStorage.setItem(messageTextKey(forChatId), merged);
+          // A hand-back waiting for that chat is taken in verbatim when it is shown, so it carries the text too.
+          if (pendingComposerPrepends.has(forChatId)) {
+            pendingComposerPrepends.set(forChatId, merged);
+          }
           return;
         }
         const textarea = messageTextareaElement;
