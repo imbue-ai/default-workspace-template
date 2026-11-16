@@ -94,7 +94,7 @@ subdomain or a parent domain of it.
 Err on the side of too many scopes. A connection's scopes are fixed when
 the user signs in, and there is no request that adds one: a scope that turns
 out to be missing later means asking the user to disconnect the service in
-Imbue Studio (the Permissions tab of this machine's options) and then setting
+Imbue Studio (the Permissions tab of this workspace's options) and then setting
 it up again from scratch, sign-in included.
 
 ```bash
