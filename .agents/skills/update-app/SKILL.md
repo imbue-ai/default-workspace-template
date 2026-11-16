@@ -66,7 +66,7 @@ question draws one line through it:
 | | Builds in a few minutes or less | Takes longer |
 |---|---|---|
 | **Shape clear enough to build** | Build it yourself through the live change loop below | Hand it to the background worker |
-| **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
+| **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Make a quick mock yourself and hand the change off right away; pass the user's feedback to the worker |
 
 - **Small / contained changes** usually have a clear shape: a bug fix, a copy
   tweak, a new field, a backend logic fix, a config or `command` change, a
@@ -90,8 +90,7 @@ create the service: **read `.agents/shared/references/interactive-delivery.md`**
 put a cheap, throwaway version of the *proposed* change in front of the user,
 loop until they **explicitly confirm** the shape, and only then build the real
 thing to a usable state. Never build heavy against an unconfirmed shape
-yourself; a background worker may start while its first milestone serves as
-the mock.
+yourself.
 
 This is the demonstrative-prototype choice from
 [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
@@ -149,12 +148,7 @@ bring the worker's result in when it lands.
 
 To hand work off:
 
-1. If a change you hand off needs its shape confirmed (a larger-scope change
-   above), hand it off right away and ask the worker for an early milestone
-   that shows that change's shape. Treat that milestone as the mock: show it
-   to the user and pass their changes to the worker. The short changes you
-   build yourself go live without waiting for it.
-2. Commit your pending edits and launch the worker as `launch-task` describes.
+1. Commit your pending edits and launch the worker as `launch-task` describes.
    The brief names the app, the changes handed to the worker, in the user's
    words, the changes you are building yourself so the worker does not build
    them too (it may still edit the same files), the files and decisions you
@@ -171,14 +165,14 @@ To hand work off:
    writing out a detailed plan tends to add work nobody asked for. Checks
    that the user's existing data survives the change still happen before it
    goes live.
-3. Tell the user in one line that the change is being built and that they can
+2. Tell the user in one line that the change is being built and that they can
    keep sending requests.
-4. While the worker runs, keep handling new messages. Build a change
+3. While the worker runs, keep handling new messages. Build a change
    yourself, through the live loop below, unless it needs more than a few
    minutes of building; send that one to the worker with
    `create_worker.py reply`. You and the worker may edit the same files;
    any conflicts are resolved when you merge its work.
-5. When a milestone or the final report arrives, merge it as
+4. When a milestone or the final report arrives, merge it as
    `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
    through steps 2 and 3 of the live loop, and tell the user what is now there.
 
