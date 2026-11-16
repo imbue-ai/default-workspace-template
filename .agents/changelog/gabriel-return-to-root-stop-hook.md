@@ -1,1 +1,0 @@
-The launch-task guide for salvaging a dead worker's worktree by hand now names the worktree in every git command (`git -C <work_dir> ...`). A Claude agent's shell now goes back to its own checkout after each command, so a `cd` into the worktree no longer carries over to the later restore, stage and commit steps.
