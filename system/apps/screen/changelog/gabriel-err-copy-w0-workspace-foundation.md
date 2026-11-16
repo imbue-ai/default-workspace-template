@@ -1,0 +1,1 @@
+The integration test for the browser launch path starts from a browser of its own: it forgets any browser an earlier test in the module left behind, so a tab that test remembered no longer lands in its checkpoint when CI runs the tests in a different order.
