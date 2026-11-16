@@ -43,6 +43,7 @@ from workspace_bare_scripts import room_agent
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import parse_identity_header
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -67,17 +68,21 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FirstMessage
+from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
+from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
@@ -96,6 +101,7 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -2141,7 +2147,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
     # rather than by position, so reordering the picker does not break this.
     reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
-    assert reported["fable[1m]"] == "claude-fable-5-1"
+    assert reported["fable[1m]"] == "claude-fable-5-2"
     assert reported["opus[1m]"] == "claude-opus-5-5"
     assert reported["sonnet[1m]"] == "claude-sonnet-5-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
@@ -2466,6 +2472,95 @@ def test_fast_mode_changes_on_a_codex_chat_whose_effort_was_never_picked(tmp_pat
 
     assert response.status_code == 200
     assert codex_client.calls == [{"service_tier": None}]
+
+
+@pytest.mark.parametrize(
+    ("harness", "mode", "expected_calls"),
+    [
+        (HarnessType.CODEX, FastModeMode.ON, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.AUTO, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.OFF, []),
+        # claude launches fast through the ``fast`` create template, so nothing is switched.
+        (HarnessType.CLAUDE, FastModeMode.ON, []),
+    ],
+)
+def test_launch_fast_mode_switches_only_the_fast_axis_of_a_codex_agent_whose_chat_launches_fast(
+    harness: HarnessType, mode: FastModeMode, expected_calls: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    agent_id = "agent-00000000000000000000000000000017"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=harness)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.set_fast_mode_state(ChatId(agent_id), ChatFastModeState(mode=mode))
+    switch_client = _RecordingSwitchClient()
+    try:
+        with patch("imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=switch_client):
+            manager.apply_launch_fast_mode(ChatId(agent_id), agent_info)
+    finally:
+        manager.stop()
+
+    assert switch_client.calls == expected_calls
+    assert messenger.sent == []
+
+
+class _StepRecordingSwitchClient(_RecordingSwitchClient):
+    """A switch client that also notes each switch in a log shared with the deliveries, to order them."""
+
+    def __init__(self, steps: list[str]) -> None:
+        super().__init__()
+        self._steps = steps
+
+    def settings_update(self, **kwargs: Any) -> None:
+        super().settings_update(**kwargs)
+        self._steps.append(f"switch:{kwargs}")
+
+
+@pytest.mark.parametrize(
+    "model_pick",
+    [
+        None,
+        # A pick the agent refuses leaves the chat on its default model, still at its launch speed.
+        ModelPick(model_id="no-such-model", effort=None, fast=False),
+    ],
+)
+def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_message(
+    model_pick: ModelPick | None, agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    chat_id = ChatId("codex-chat")
+    with agent_manager._lock:
+        # The create settles on the pick and account its provisional chat carries.
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="", phase=ProvisionalChatPhase.CREATING, model_pick=model_pick
+        )
+    agent_manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+    steps: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        steps.append(f"deliver:{text}")
+        return SendOutcome.OK
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    with patch(
+        "imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=_StepRecordingSwitchClient(steps)
+    ):
+        agent_manager._run_creation(
+            chat_id,
+            str(chat_id),
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {"display_name": "Chat 1"},
+            HarnessType.CODEX,
+            first_message=FirstMessage(text="hello", message_id="m-0"),
+        )
+
+    assert steps == ["switch:{'service_tier': 'priority'}", "deliver:hello"]
 
 
 class _FakeCodexConnection:
@@ -6560,6 +6655,7 @@ def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_me
         ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
         ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
 
 
 def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_nothing(tmp_path: Path) -> None:
@@ -6603,32 +6699,89 @@ def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_no
     assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
 
 
-def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
-    """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
-    agent's entry; a retired agent's words raise none."""
+def test_only_the_agents_room_posts_reach_the_tray_naming_the_people_they_mention(tmp_path: Path) -> None:
+    """The agent's post into a room is posted to the tray with the people it mentions, whose clients raise it as a
+    bubble (the multiplayer spec, section 6.5); its turns in an agent chat and a retired agent's words post none."""
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     state = state_of(app)
     shell = _fake_shell_of(app)
-    turn = {
-        "type": "assistant_message",
-        "event_id": "e-1",
-        "agent_id": _MAIN_ID,
-        "text": "Done: the report is ready.\n\nIt covers three cases.",
-    }
+    turn = {"type": "assistant_message", "event_id": "e-1", "agent_id": _MAIN_ID, "text": "Looking into it."}
     room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+    mentioning = {**room_post, "event_id": "e-3", "content": "@Josh @Bob done, and @agent is me."}
 
-    state.bubble_agent_turns(ChatId(_MAIN_ID), _MAIN_ID, [turn, {**turn, "event_id": "e-3", "text": "  "}])
-    state.bubble_agent_turns(ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post])
-    state.bubble_agent_turns(ChatId(_MAIN_ID), "agent-00000000000000000000000000000099", [turn])
+    state.post_agents_room_posts(ChatId(_MAIN_ID), _MAIN_ID, [turn])
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), "agent-00000000000000000000000000000099", [room_post])
+    state.post_agents_room_posts(
+        ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post, {**room_post, "event_id": "e-4", "content": " "}]
+    )
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), _LOUNGE_ID, [mentioning])
 
-    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's bubbles to reach the shell")
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's room posts to reach the shell")
     assert [
-        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id)
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
         for bubble in shell.bubbles
     ] == [
-        ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
-        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2", ()),
+        (
+            "workspace-agent",
+            _LOUNGE_ID,
+            "Lounge",
+            "@Josh @Bob done, and @agent is me.",
+            "e-3",
+            (ParticipantKey("user:user-josh-0001"), ParticipantKey("user:user-bob-4471")),
+        ),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
+
+
+def test_a_chats_notification_raises_a_notification_bubble_over_the_agents_entry(tmp_path: Path) -> None:
+    """The notify script tells the chat app about each notification it sends (the multiplayer spec, section 6.5):
+    the chat app raises it over the agent's entry, under the chat's title, the optional title as its prefix."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    plain = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "The report is ready."})
+    titled = client.post(
+        f"/api/chats/{_LOUNGE_ID}/notification", json={"message": "All 412 passed.", "title": "Test run"}
+    )
+
+    assert (plain.status_code, titled.status_code) == (200, 200)
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both notifications to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.mentions, bubble.kind)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "The report is ready.", (), BubbleKind.NOTIFICATION),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "Test run: All 412 passed.", (), BubbleKind.NOTIFICATION),
+    ]
+    assert shell.bubbles[0].message_id != shell.bubbles[1].message_id
+
+
+def test_a_notification_is_taken_only_from_loopback_for_a_chat_there_is_with_something_to_say(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    unknown_chat = "agent-00000000000000000000000000000099"
+
+    remote = client.post(
+        f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"}, environ_base={"REMOTE_ADDR": "10.0.0.7"}
+    )
+    unknown = client.post(f"/api/chats/{unknown_chat}/notification", json={"message": "hi"})
+    not_an_id = client.post("/api/chats/not-an-agent/notification", json={"message": "hi"})
+    empty = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": ""})
+
+    assert [response.status_code for response in (remote, unknown, not_an_id, empty)] == [403, 404, 404, 400]
+    assert shell.bubbles == []
+
+
+def test_a_secondary_chat_app_takes_a_notification_and_raises_no_bubble(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+
+    response = app.test_client().post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert _fake_shell_of(app).bubbles == []
 
 
 def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:

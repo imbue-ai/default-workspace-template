@@ -63,7 +63,9 @@ from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.agent_manager import is_first_message_after_create
 from imbue.chat.agent_manager import is_rebind_target
+from imbue.chat.agent_manager import launch_fast_identity
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.agent_manager import resolve_is_busy
 from imbue.chat.agent_manager import restart_busy_reason
@@ -114,6 +116,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -619,6 +622,48 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         assert "fast" in manager._build_successor_create_command(spec)
     finally:
         manager.stop()
+
+
+def test_a_chat_that_launches_fast_switches_only_the_fast_axis_on() -> None:
+    """A codex agent's launch speed is set by a switch once it is up: fast on, its own model and effort kept."""
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    # Before the agent has recorded a selection, the fast axis alone is still enough to switch.
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), None) == ModelIdentity(
+        model_id="", effort=None, fast=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("harness", "is_picked", "launches_fast", "expected"),
+    [
+        (HarnessType.CLAUDE, False, False, False),
+        # claude launches fast through the template, so its message can still ride the create.
+        (HarnessType.CLAUDE, False, True, False),
+        (HarnessType.CLAUDE, True, False, True),
+        (HarnessType.CODEX, False, False, False),
+        # codex is switched fast once it is up, which has to land before its first turn.
+        (HarnessType.CODEX, False, True, True),
+        (HarnessType.ROOM, False, False, True),
+    ],
+)
+def test_a_new_chats_first_message_follows_the_create_when_something_must_be_set_before_its_first_turn(
+    harness: HarnessType, is_picked: bool, launches_fast: bool, expected: bool
+) -> None:
+    assert is_first_message_after_create(harness, is_picked, launches_fast) is expected
+
+
+def test_a_chat_that_does_not_launch_fast_is_not_switched() -> None:
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.OFF), live) is None
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO, is_switched=True), live) is None
 
 
 def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compaction_setting(
@@ -2818,8 +2863,9 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
-    mode rides only the `fast` create template (see .mngr/settings.toml), never
-    the argv, so a chat launched without it starts at standard speed."""
+    mode rides the `fast` create template (see .mngr/settings.toml) or a switch
+    once the agent is up, never the argv, so a chat launched without either
+    starts at standard speed."""
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
