@@ -81,6 +81,8 @@ const mocks = vi.hoisted(() => {
     // Whether the agent's turn for a message has reached the transcript; none has, at rest.
     hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
+    // The chat root framing the page, null for a page no root frames (the shell's own frame, a direct visit).
+    framingRoot: null as { chooseProviderForFirstSend: ReturnType<typeof vi.fn> } | null,
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
@@ -268,6 +270,7 @@ vi.mock("../models/Providers", () => ({
   loadAccounts: () => mocks.loadAccounts(),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
+vi.mock("../embedApi", () => ({ framingChatRoot: () => mocks.framingRoot }));
 vi.mock("@imbue/workspace-voice/src/dictation", () => ({
   createDictation: (_options: unknown, events: NonNullable<typeof mocks.dictationEvents>) => {
     mocks.dictation = mocks.makeFakeDictation();
@@ -2303,6 +2306,35 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+
+  describe("in a chat root's frame", () => {
+    beforeEach(() => {
+      mocks.framingRoot = { chooseProviderForFirstSend: vi.fn() };
+    });
+
+    afterEach(() => {
+      mocks.framingRoot = null;
+    });
+
+    it("leaves opening the chooser to the root as the notice appears", () => {
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      const notice = findByClass(tree, "message-input-no-provider");
+      expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
+      expect(notice!.attrs!.oncreate).toBeUndefined();
+      expect(mocks.framingRoot!.chooseProviderForFirstSend).not.toHaveBeenCalled();
+      expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+    });
+
+    it("asks the root for its chooser from the notice's button, opening none of its own", () => {
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+
+      expect(mocks.framingRoot!.chooseProviderForFirstSend).toHaveBeenCalledTimes(1);
+      expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+    });
   });
 });
 

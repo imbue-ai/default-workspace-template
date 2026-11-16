@@ -24,16 +24,34 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected
   (opened bare, or after the chat on screen is deleted) it shows the main chat
-  (below), else the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  (below), else the most recent chat, and with no chats and an account signed in
+  one awaiting its first send (`POST /api/chats/awaiting`, held in memory until
+  that send launches it). With nothing signed in it starts no chat for an empty
+  list: the empty list says "Connect an AI provider to start chatting." with a
+  "Choose a provider" button, so a new workspace's welcome chat lands alone.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
-  composer, which stays in view (holding any draft) but disabled, and opens the
-  provider chooser as that notice appears; this is the one place the chooser
-  opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). The sign-in
-  that chooser produces launches the awaiting chat at once, with no message, so
-  its agent is up before the user has typed. Whether
+  composer, which stays in view (holding any draft) but disabled. The root opens
+  the provider chooser over everything it frames as soon as the chat it shows is
+  in that state, once per chat, and also once with no chat to show while nothing
+  is signed in (a new workspace before its welcome chat is seeded or its agents
+  are first listed); the first chat it shows after that counts as opened for, so
+  a chooser the user closed stays closed when the welcome chat arrives. The
+  notice's button, and the empty list's, open the root's chooser again
+  (`frontend/src/models/firstSendChooser.ts`; a chat page no root frames
+  opens its own as the notice appears). This is the one place the chooser opens
+  for a missing provider (the New chat button opens the awaiting chat, and an
+  intake's first message goes into its composer, with no dialog). Being the
+  root's, the chooser stays up, with any sign-in under way, when the selection
+  moves (the seeded welcome chat arriving). The sign-in it produces launches the
+  chat awaiting its first send on screen when it finishes, with no message, so
+  its agent is up before the user has typed; one that finishes with no such chat
+  on screen launches the first the root shows after it, and the root starts no
+  chat for an empty list meanwhile. Once per page load, when a chooser of the
+  root's is drawn with its providers listed while the shell shows the root and
+  its frame is laid out, the root posts `minds:provider-chooser-on-screen {}` to
+  the Imbue Studio chrome (forwarded up by the shell), which lifts its cover over
+  a new workspace on it. Whether
   anything is signed in is decided from a fresh read of the account list; the
   New chat button then names no account, so the chat app picks it as the create
   runs and an account signed out since the page read the list is never the one
@@ -108,7 +126,10 @@ observe`, its own supervised service) writes, and serves:
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
-  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  and a chat root window (`/`) on screen allowed to be moved to it. With no `chatId` (the Imbue Studio app
+  entering a new workspace) it shows the chat root as it stands: a chat root window at `/` or on any chat
+  the app lists or holds provisionally counts as already showing it, no window is moved, and with none the
+  pinned window comes up at `/`. The shell picks the window. It
   answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe

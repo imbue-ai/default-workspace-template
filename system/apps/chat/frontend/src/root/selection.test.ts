@@ -47,6 +47,7 @@ describe("slotFill", () => {
     isChoosing: false,
     isCompact: false,
     isShown: true,
+    canStartNew: true,
   };
 
   it("shows the head of the list (the main chat, else the most recent) when nothing is selected", () => {
@@ -59,6 +60,15 @@ describe("slotFill", () => {
   it("opens a new chat when there are none, but only while the list is on screen", () => {
     expect(slotFill(empty)).toEqual({ kind: "open_new" });
     expect(slotFill({ ...empty, isShown: false })).toEqual({ kind: "keep" });
+  });
+
+  it("opens no new chat while nothing is signed in, or a sign-in waits to start the chat still to come", () => {
+    expect(slotFill({ ...empty, canStartNew: false })).toEqual({ kind: "keep" });
+    // Listed chats are still shown: only the empty-list chat waits for an account.
+    expect(slotFill({ ...empty, canStartNew: false, chatIds: ["agent-welcome"] })).toEqual({
+      kind: "select",
+      chatId: "agent-welcome",
+    });
   });
 
   it("keeps what is shown: a selection, a list not read yet, a choice in progress, and the phone list", () => {
