@@ -39,6 +39,7 @@ from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
+from disk_headroom.full import is_disk_full_error
 from flask import Flask
 from flask import Response
 from flask import current_app
@@ -233,6 +234,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import answer_chat_app_error
+from imbue.chat.request_helpers import answer_disk_full
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
@@ -1516,6 +1518,8 @@ def _upload_attachment() -> Response:
     try:
         stored_path = store_uploaded_file(uploads_directory, file_storage.filename, file_storage)
     except AttachmentError as e:
+        if is_disk_full_error(e):
+            return answer_disk_full(e)
         return error_response(str(e), 500)
 
     size_bytes = stored_path.stat().st_size

@@ -1,11 +1,14 @@
 """Unit tests for the chat-attachment storage helpers."""
 
+import errno
 import io
+import os
 import re
 import struct
 from pathlib import Path
 
 import pytest
+from disk_headroom.full import is_disk_full_error
 from werkzeug.datastructures import FileStorage
 
 from imbue.chat.attachments import _DEFAULT_UPLOAD_FILENAME
@@ -15,6 +18,7 @@ from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import sanitize_upload_filename
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.models import AttachmentError
 
 
 def _file_storage(content: bytes, filename: str) -> FileStorage:
@@ -52,6 +56,23 @@ def test_store_uploaded_file_writes_content_under_unique_subdir(tmp_path: Path) 
     assert stored_path.read_bytes() == b"image-bytes"
     assert stored_path.name == "photo.png"
     assert stored_path.parent.parent == uploads_directory
+
+
+class _DiskFullStream(io.BytesIO):
+    """A stream whose copy fails part way, as a write to a full disk does."""
+
+    def read(self, size: int | None = -1) -> bytes:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+
+def test_store_uploaded_file_leaves_nothing_behind_on_a_full_disk(tmp_path: Path) -> None:
+    uploads_directory = tmp_path / "uploads"
+
+    with pytest.raises(AttachmentError) as raised:
+        store_uploaded_file(uploads_directory, "big.bin", FileStorage(stream=_DiskFullStream(), filename="big.bin"))
+
+    assert is_disk_full_error(raised.value)
+    assert list(uploads_directory.iterdir()) == []
 
 
 _PNG_1600X900 = (

@@ -8,6 +8,7 @@ from typing import assert_never
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
 from app_schema.routes import model_response
+from disk_headroom.full import is_disk_full_error
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import request
@@ -81,6 +82,7 @@ from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
+from imbue.system_interface.request_helpers import answer_disk_full
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -102,6 +104,8 @@ from imbue.system_interface.shell.tray_feed import speakers_client_ids
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
+    if is_disk_full_error(error):
+        return answer_disk_full(error)
     match error:
         case (
             UnknownAppError()

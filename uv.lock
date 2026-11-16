@@ -260,6 +260,7 @@ source = { editable = "system/libs/app_manifest" }
 dependencies = [
     { name = "app-registration" },
     { name = "click" },
+    { name = "disk-headroom" },
     { name = "flask" },
     { name = "imbue-common" },
     { name = "loguru" },
@@ -277,6 +278,7 @@ dev = [
 requires-dist = [
     { name = "app-registration", editable = "system/libs/app_registration" },
     { name = "click", specifier = ">=8.1" },
+    { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "flask", specifier = ">=3.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=473227c9cb365c093c56b676170da5a3e2502ed2" },
     { name = "loguru", specifier = ">=0.7" },
@@ -749,6 +751,7 @@ dependencies = [
     { name = "app-schema" },
     { name = "chat-background-tasks" },
     { name = "concurrency-group" },
+    { name = "disk-headroom" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
@@ -801,6 +804,7 @@ requires-dist = [
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=473227c9cb365c093c56b676170da5a3e2502ed2" },
+    { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
