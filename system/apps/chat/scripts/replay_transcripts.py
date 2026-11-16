@@ -62,6 +62,12 @@ def _read_session_events(path: Path) -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
+def _session_id_of(session_file: Path) -> str:
+    match = _SESSION_FILE_PATTERN.match(session_file.name)
+    assert match is not None
+    return match.group(1)
+
+
 def _session_files_in(directory: Path) -> list[Path]:
     return sorted(path for path in directory.iterdir() if _SESSION_FILE_PATTERN.match(path.name))
 
@@ -80,7 +86,7 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
             names = (
                 [directory_name]
                 if len(files) == 1
-                else [f"{directory_name} ({index})" for index in range(1, len(files) + 1)]
+                else [f"{directory_name} ({_session_id_of(file)[:8]})" for file in files]
             )
         else:
             if not _SESSION_FILE_PATTERN.match(path.name):
@@ -88,9 +94,7 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
             files = [path]
             names = [path.stem]
         for file, name in zip(files, names, strict=True):
-            match = _SESSION_FILE_PATTERN.match(file.name)
-            assert match is not None
-            session_id = match.group(1)
+            session_id = _session_id_of(file)
             sessions.append(
                 SeededSession(
                     agent_id=_agent_id_for_session(session_id),
