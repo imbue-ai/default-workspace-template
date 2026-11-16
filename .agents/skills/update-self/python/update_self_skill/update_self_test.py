@@ -2645,7 +2645,7 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 
     assert code == 0
     # Pre-flight boots the venv's entry point on a throwaway port before the restart.
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
@@ -2656,6 +2656,27 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 def _venv_entry_point(repo_root: Path, script: str) -> str:
     """Where a pre-flight finds an app's console script: the workspace venv's bin directory."""
     return str(repo_root / ".venv" / "bin" / script)
+
+
+class _AbsoluteFolder:
+    """Equal to any absolute path: the scratch folder a pre-flight boot picks for itself."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and Path(other).is_absolute()
+
+
+_SCRATCH_FOLDER = _AbsoluteFolder()
+
+
+def _shell_preflight_argv(repo_root: Path) -> list[object]:
+    """The shell's pre-flight boot: its console script, with its state and presence in a scratch folder."""
+    return [
+        _venv_entry_point(repo_root, "system-interface"),
+        "--state-dir",
+        _SCRATCH_FOLDER,
+        "--presence-dir",
+        _SCRATCH_FOLDER,
+    ]
 
 
 _OOM_TAGGER = "system/services/oom_priority/bin/oom_tag_service.py"
@@ -2679,12 +2700,16 @@ def _supervisord_exec_target(program_conf: Path) -> list[str]:
 @pytest.mark.parametrize(
     ("program_conf", "preflight", "extra_args"),
     [
-        ("system_interface.conf", update_probes.preflight, []),
+        (
+            "system_interface.conf",
+            update_probes.preflight,
+            ["--state-dir", _SCRATCH_FOLDER, "--presence-dir", _SCRATCH_FOLDER],
+        ),
         ("chat.conf", update_probes.preflight_chat, ["--preflight"]),
     ],
 )
 def test_the_preflight_boots_the_install_supervisord_runs(
-    program_conf: str, preflight, extra_args: list[str]
+    program_conf: str, preflight, extra_args: list[object]
 ) -> None:
     # The pre-flight exists to boot what the restart will boot. Read off the real tree's
     # program lines, so a program that moves to another install moves the pre-flight too.
@@ -2705,6 +2730,26 @@ def test_the_preflight_boots_the_install_supervisord_runs(
     assert spawner.spawns == [
         [str(_WORKSPACE_ROOT / executable), *program_args, *extra_args]
     ]
+
+
+def test_the_shell_preflight_keeps_its_state_out_of_the_tree() -> None:
+    # The shell resolves its default state and presence folders against its working
+    # directory, the app's folder in a pre-flight, and writes into them as it starts; a
+    # boot left to its defaults leaves files in the tree that the next apply refuses as
+    # uncommitted changes.
+    spawner = _FakeSpawner()
+
+    update_probes.preflight(
+        _WORKSPACE_ROOT, _FakeHttp(_all_healthy), spawner, _no_sleep, expend=list
+    )
+
+    (argv,) = spawner.spawns
+    for flag in ("--state-dir", "--presence-dir"):
+        assert flag in argv, f"the pre-flight boot leaves {flag} to its in-tree default"
+        folder = Path(argv[argv.index(flag) + 1])
+        assert folder.is_absolute()
+        assert not folder.is_relative_to(_WORKSPACE_ROOT)
+        assert not folder.parent.exists(), "the boot's scratch folder outlived it"
 
 
 def _write_chat_program(repo_root: Path) -> None:
@@ -2729,7 +2774,7 @@ def test_apply_preflights_the_chat_app_beside_the_shell_when_the_tree_runs_one(
 
     assert code == 0
     assert spawner.spawns == [
-        [_venv_entry_point(apply_repo, "system-interface")],
+        _shell_preflight_argv(apply_repo),
         [_venv_entry_point(apply_repo, "chat-app"), "--preflight"],
     ]
     chat_env = spawner.envs[1]
@@ -2774,7 +2819,7 @@ def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
     code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
 
     assert code == 0
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
 
 
 def test_apply_apt_snapshot_change_provisions_before_any_restart(
@@ -2930,7 +2975,7 @@ def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) 
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
     assert not runner.ran("npm")
     assert not runner.ran(*_PROVISION)
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
@@ -8321,7 +8366,7 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
 
     assert code == 2
-    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
+    assert spawner.spawns == [_shell_preflight_argv(apply_repo)]
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran(*_RESTART)
     assert _bundle_exists(apply_repo)
@@ -9331,6 +9376,132 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+# agent_restart_verdict
+
+_SETUP_BEFORE = ': "${TTYD_VERSION:=1.7.7}"\n: "${CLAUDE_CODE_VERSION:=2.1.269}"\n: "${PI_VERSION:=0.87.1}"\n'
+_SETTINGS_BEFORE = '[agent_types.claude]\nparent_type = "claude"\nversion = "2.1.269"\n\n[agent_types.chat]\nparent_type = "claude"\n'
+_AGY_INSTALLER_BEFORE = '#!/usr/bin/env bash\nAGY_VERSION="1.4.3"\n'
+_PINS_BEFORE = update_classification.HarnessPinFiles(
+    setup_system=_SETUP_BEFORE,
+    mngr_settings=_SETTINGS_BEFORE,
+    agy_installer=_AGY_INSTALLER_BEFORE,
+)
+
+
+@pytest.mark.parametrize(
+    "changed_paths, pins_after, expected_triggers",
+    [
+        (
+            ["system/scripts/setup_system.sh", ".mngr/settings.toml"],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+                mngr_settings=_SETTINGS_BEFORE.replace("2.1.269", "2.1.280"),
+            ),
+            (
+                "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+                "agent_types.claude.version: 2.1.269 -> 2.1.280",
+            ),
+        ),
+        (
+            ["system/scripts/agy_install.sh"],
+            _PINS_BEFORE._replace(
+                agy_installer=_AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7")
+            ),
+            ("AGY_VERSION: 1.4.3 -> 1.4.7",),
+        ),
+        (
+            [".pi/extensions/policy_guards.ts", ".pi/extensions/pi_extensions_test.py"],
+            _PINS_BEFORE,
+            ("harness extension: .pi/extensions/policy_guards.ts",),
+        ),
+        # A pin that is not a harness's, hook scripts run fresh on every call, and an installer
+        # edit that keeps its pin installs the same binary.
+        (
+            [
+                "system/scripts/setup_system.sh",
+                "system/scripts/agent_block_pipe_tail_head.sh",
+                "system/scripts/agy_install.sh",
+            ],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("1.7.7", "1.7.8"),
+                agy_installer=_AGY_INSTALLER_BEFORE + "# a comment\n",
+            ),
+            (),
+        ),
+    ],
+    ids=["claude-bump", "agy-bump", "pi-extension", "unrelated"],
+)
+def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
+    changed_paths: list[str],
+    pins_after: update_classification.HarnessPinFiles,
+    expected_triggers: tuple[str, ...],
+) -> None:
+    verdict = update_classification.agent_restart_verdict(
+        changed_paths, _PINS_BEFORE, pins_after
+    )
+
+    assert verdict.triggers == expected_triggers
+    assert verdict.is_needed is bool(expected_triggers)
+
+
+def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
+    # The settings file is absent from the tree the agents started from, so its pin reads as
+    # unset; that tree still names its Antigravity installer by version, as before its rename.
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git_in(tmp_path, "init", "-q")
+    _git_in(tmp_path, "config", "user.email", "test@example.com")
+    _git_in(tmp_path, "config", "user.name", "test")
+    _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
+    _write("system/scripts/agy_install-1.4.3.sh", _AGY_INSTALLER_BEFORE)
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "before")
+    _git_in(
+        tmp_path,
+        "mv",
+        "system/scripts/agy_install-1.4.3.sh",
+        "system/scripts/agy_install.sh",
+    )
+    _write(
+        "system/scripts/agy_install.sh",
+        _AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7"),
+    )
+    _write(
+        update_layout.PROVISIONER_SCRIPT,
+        _SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+    )
+    _write(update_classification.MNGR_SETTINGS_PATH, _SETTINGS_BEFORE)
+    _write(".pi/extensions/policy_guards.ts", "export default () => {};\n")
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "after")
+
+    code = update_self.main(
+        [
+            "agent-restart-verdict",
+            "--before",
+            "HEAD^1",
+            "--after",
+            "HEAD",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "needed": True,
+        "triggers": [
+            "AGY_VERSION: 1.4.3 -> 1.4.7",
+            "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+            "agent_types.claude.version: unset -> 2.1.269",
+            "harness extension: .pi/extensions/policy_guards.ts",
+        ],
+    }
 
 
 # The root venv's fresh-target swap

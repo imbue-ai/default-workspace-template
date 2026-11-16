@@ -47,7 +47,15 @@ import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Prese
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
 import { applyChatsActivity } from "../model/ChatsActivity";
-import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
+import {
+  isMentionOf,
+  nextExpiryOf,
+  raisesBubble,
+  withBubble,
+  withoutChat,
+  withoutExpired,
+  withoutSpeaker,
+} from "../model/Bubbles";
 import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, pinPageOfLink, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
@@ -83,6 +91,7 @@ import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
+import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
   backdropFrameOf,
@@ -124,6 +133,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
   draftTargetOf,
@@ -266,6 +276,11 @@ export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat abou
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 /** What a change refused while this window views somebody else's desktop gets (the multiplayer spec, section 8.3). */
 export const STOP_VIEWING_FIRST_NOTICE = "Stop viewing first";
+/** What "Stop viewing" says when it could not ask the shell where to go; pressing it again asks again. */
+export const STOP_VIEWING_UNANSWERED_NOTICE = "Couldn't leave this desktop: the workspace did not answer";
+/** What "Stop viewing" says when the viewer has no desktop of their own to go to (the workspace owner after
+ *  deleting all of theirs; a visitor is always seeded one). */
+export const STOP_VIEWING_NOWHERE_NOTICE = "Couldn't leave this desktop: you have no desktop of your own to go to";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
 export const TRAY_HOP_MS = 450;
@@ -1177,6 +1192,10 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onResourceGaugeChanged: (view) => {
+        applyResourceGauge(resourceGaugeFromWire(view), this.deps.redraw);
+        this.deps.redraw();
+      },
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
@@ -1358,8 +1377,8 @@ export class DesktopStore {
     return this.bubbles;
   }
 
-  /** The tray entries hopping now: they just became connected, or a bubble of theirs just appeared (the
-   *  multiplayer spec, sections 6.2 and 6.5). */
+  /** The tray entries hopping now: they just became connected, or just said something (the multiplayer spec,
+   *  sections 6.2 and 6.5). */
   getHopping(): ReadonlySet<string> {
     return this.hopping;
   }
@@ -1387,15 +1406,20 @@ export class DesktopStore {
     }, TRAY_HOP_MS);
   }
 
-  /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
-   *  timeout is armed. A bubble for the chat the user is looking at says nothing they cannot already see, so it
-   *  is not raised -- unless it mentions the viewer, whose mark must not be missable. */
+  /** Somebody just said something, or a chat notified the user: their entry hops, and when it is a notification
+   *  or mentions the viewer their bubble is raised or refreshed (S11) and the next timeout is armed. A bubble for
+   *  the chat the user is looking at says nothing they cannot already see, so it is not raised -- unless it
+   *  mentions the viewer, whose mark must not be missable. */
   private takeBubble(bubble: BubbleWire): void {
     this.hop([bubble.speaker]);
     const viewer = getOwnParticipant();
-    const isMentionOfViewer = viewer !== null && bubble.mentions.includes(viewer);
-    if (!isMentionOfViewer && isChatOnScreen(this.state, bubble.chat_id)) return;
-    this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    const isRaised =
+      raisesBubble(bubble, viewer) && (isMentionOf(bubble, viewer) || !isChatOnScreen(this.state, bubble.chat_id));
+    if (isRaised) {
+      this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    } else {
+      this.deps.redraw();
+    }
   }
 
   /** Put a speaker's bubble away: it was dismissed, or clicked. */
@@ -1529,10 +1553,18 @@ export class DesktopStore {
   }
 
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
-   *  shell seeds for a visitor who has none left. */
+   *  shell seeds for a visitor who has none left. When none of those is somewhere else to go, the window stays and
+   *  a toast says why. */
   async stopViewing(): Promise<void> {
+    const viewedId = this.state.activeDesktopId;
     const target = await this.wayBackOrOwnDesktop();
-    if (target !== null) await this.switchDesktop(target);
+    if (target === null || target === viewedId) {
+      // A window that moved off while the shell was asked has left already: there is nothing to tell.
+      if (this.state.activeDesktopId !== viewedId) return;
+      this.toast(target === null ? STOP_VIEWING_UNANSWERED_NOTICE : STOP_VIEWING_NOWHERE_NOTICE);
+      return;
+    }
+    await this.switchDesktop(target);
   }
 
   isOverviewOpen(): boolean {
@@ -1654,10 +1686,16 @@ export class DesktopStore {
     return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
   }
 
-  /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
-   *  action with nothing to send (the chat app's "Send to main chat" with no text opens the main chat). */
-  async openMainChat(): Promise<boolean> {
-    return this.startWithText("");
+  /** A click on the agent's tray entry (the multiplayer spec, section 6.2): the avatar's pinned window on the
+   *  active desktop is put on screen on whatever chat it holds, never put away; with no such window the main chat
+   *  opens, through the primary text action with nothing to send. Refused while viewing somebody else's desktop,
+   *  whose pinned window is theirs. False when refused or when nothing opened. */
+  async openAgentChat(): Promise<boolean> {
+    if (this.refuseWhileViewing("show the agent's chat")) return false;
+    const pinned = avatarPinnedEntryOf(this.state);
+    if (pinned === null) return this.startWithText("");
+    this.showWindow(pinned.window.id);
+    return true;
   }
 
   /** A window's "Chat about this app" (the multiplayer spec, section 9.2): the window's app is named to the first
@@ -1998,12 +2036,18 @@ export class DesktopStore {
       await this.focusOrOpenWindowAt(app.name, path);
       return;
     }
+    await this.showAppPage(app.name, path, [pinPage]);
+  }
+
+  /** Put a page of ``app`` on this client's screen through the shell's ``show``: a window already there is raised,
+   *  else the app's window on one of the ``repoint`` pages (or its pinned window) is pointed at it, else one opens. */
+  async showAppPage(app: string, path: string, repoint: readonly string[]): Promise<void> {
     await this.flushPendingSave();
     let outcome: PageShowOutcome;
     try {
-      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
@@ -2909,9 +2953,15 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: for a pulled-out window, show its ghost again when the ghost is hidden, else its
-   *  own desktop window; otherwise restore and raise when minimized, minimize when focused, raise otherwise. */
+  /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
+    if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
+    else this.showWindow(windowId);
+  }
+
+  /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
+   *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
+  private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
       if (placement.is_minimized) this.showWindowGhost(windowId);
@@ -2919,7 +2969,6 @@ export class DesktopStore {
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);
-    else if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.raiseWindow(windowId);
   }
 

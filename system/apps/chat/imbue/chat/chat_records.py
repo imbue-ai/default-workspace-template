@@ -124,6 +124,14 @@ class ChatTransitionRecord(FrozenModel):
     held_sends: tuple[HeldSend, ...] = Field(
         default=(), description="The sends received while converging, in order; delivered once the switch is done"
     )
+    delivered_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description=(
+            "The held sends the switch has taken off the held list to deliver, in order, kept until the switch is "
+            "done so the page can keep showing them until their turns appear in the transcript; one that did not "
+            "land leaves it again"
+        ),
+    )
     returned_block: str = Field(
         default="", description="The queued text draining took off the agent, for the composer"
     )
@@ -145,12 +153,47 @@ class ChatTransitionRecord(FrozenModel):
         """The id minted for this switch; a runner that finds another id stops (the switch was called off)."""
         raise NotImplementedError
 
+    def shown_sends(self) -> tuple[HeldSend, ...]:
+        """The sends the switch has delivered and those it still holds, in order."""
+        return (*self.delivered_sends, *self.held_sends)
+
+    def is_delivered(self, message_id: str) -> bool:
+        """Whether the switch has delivered the send under ``message_id``."""
+        return any(held.message_id == message_id for held in self.delivered_sends)
+
     def held_send_for(self, message_id: str) -> HeldSend | None:
-        return next((held for held in self.held_sends if held.message_id == message_id), None)
+        """The send under ``message_id`` the switch holds or has delivered, or None."""
+        return next((held for held in self.shown_sends() if held.message_id == message_id), None)
+
+    def is_trigger_listed(self) -> bool:
+        """Whether the page lists the confirming message: the switch was made with one, and still holds it or has
+        delivered it, so its turn is still to come."""
+        return bool(self.trigger_text) and self.held_send_for(self.trigger_message_id) is not None
 
     def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
         """The held sends other than the confirming message, in order."""
         return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
+
+    def shown_sends_after_trigger(self) -> tuple[HeldSend, ...]:
+        """The sends the switch holds or has delivered, other than the confirming message, in order."""
+        return tuple(held for held in self.shown_sends() if held.message_id != self.trigger_message_id)
+
+    def with_oldest_held_send_delivered(self) -> Self:
+        """This switch with its oldest held send moved onto the delivered list, as it is taken to be delivered."""
+        assert self.held_sends, "a switch with no held sends has none to deliver"
+        return self.model_copy_update(
+            to_update(self.field_ref().held_sends, self.held_sends[1:]),
+            to_update(self.field_ref().delivered_sends, (*self.delivered_sends, self.held_sends[0])),
+        )
+
+    def without_delivered_send(self, message_id: str) -> Self:
+        """This switch with the delivered send ``message_id`` taken off its delivered list: it did not land."""
+        return self.model_copy_update(
+            to_update(
+                self.field_ref().delivered_sends,
+                tuple(held for held in self.delivered_sends if held.message_id != message_id),
+            )
+        )
 
 
 class ChatHandoffRecord(ChatTransitionRecord):
@@ -195,6 +238,10 @@ class ChatHandoffRecord(ChatTransitionRecord):
     @property
     def transition_id(self) -> str:
         return self.handoff_id
+
+    def is_trigger_listed(self) -> bool:
+        """Also once the prompt carries the confirming message, which takes it off the held list undelivered."""
+        return super().is_trigger_listed() or (bool(self.trigger_text) and self.prompt is not None)
 
 
 class ChatRebindRecord(ChatTransitionRecord):

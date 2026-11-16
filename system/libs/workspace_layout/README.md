@@ -104,7 +104,8 @@ answer shapes live in one place the shell and its callers share.
   last three best-effort: an unreachable or failing shell is a debug log, one
   that refuses the report a warning, and they never raise).
 - `workspace_layout.feed`: `BubblePost` (`POST /api/bubbles`: who said what,
-  in which chat, mentioning whom, for the speech bubble over their tray entry)
+  in which chat, mentioning whom, and whether it is a message or a chat's
+  notification, for their tray entry and its speech bubble)
   and `ChatsActivityReport` (`POST /api/chats-activity`: every chat's
   `ChatActivity`, with its `ChatActivityStatus` and `ChatActivityKind`), the
   multiplayer spec's sections 6.5 and 6.4.
