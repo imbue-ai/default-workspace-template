@@ -50,6 +50,7 @@ import {
 } from "./Response";
 import { addOutgoing, getOutgoingMessages } from "./OutgoingMessages";
 import { readCachedTranscript, writeCachedTranscript } from "./transcriptCache";
+import { memoryStorage } from "./storageFixture";
 
 function makeEvent(id: string): TranscriptEvent {
   return {
@@ -1039,20 +1040,6 @@ describe("event detail cache", () => {
 });
 
 describe("the transcript cache", () => {
-  function memoryStorage(): Storage {
-    const items = new Map<string, string>();
-    return {
-      get length() {
-        return items.size;
-      },
-      clear: () => items.clear(),
-      getItem: (key) => items.get(key) ?? null,
-      key: (index) => [...items.keys()][index] ?? null,
-      removeItem: (key) => void items.delete(key),
-      setItem: (key, value) => void items.set(key, value),
-    };
-  }
-
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("sessionStorage", memoryStorage());

@@ -9,28 +9,7 @@ import {
   readCachedTranscript,
   writeCachedTranscript,
 } from "./transcriptCache";
-
-/** An in-memory Storage that can be told to refuse writes past a character budget, like a full quota. */
-function makeStorage(charBudget = Infinity): Storage {
-  const items = new Map<string, string>();
-  const used = (): number => [...items.values()].reduce((sum, value) => sum + value.length, 0);
-  return {
-    get length() {
-      return items.size;
-    },
-    clear: () => items.clear(),
-    getItem: (key) => items.get(key) ?? null,
-    key: (index) => [...items.keys()][index] ?? null,
-    removeItem: (key) => void items.delete(key),
-    setItem: (key, value) => {
-      const previous = items.get(key)?.length ?? 0;
-      if (used() - previous + value.length > charBudget) {
-        throw new DOMException("quota", "QuotaExceededError");
-      }
-      items.set(key, value);
-    },
-  };
-}
+import { memoryStorage } from "./storageFixture";
 
 function makeEvent(id: string, content: string = id): TranscriptEvent {
   return {
@@ -50,7 +29,7 @@ function makeEvents(count: number, prefix = "e"): TranscriptEvent[] {
 
 describe("transcript cache", () => {
   beforeEach(() => {
-    vi.stubGlobal("sessionStorage", makeStorage());
+    vi.stubGlobal("sessionStorage", memoryStorage());
   });
 
   afterEach(() => {
@@ -111,7 +90,7 @@ describe("transcript cache", () => {
 
   it("makes room over quota by dropping the oldest other chats", () => {
     const content = "y".repeat(1000);
-    vi.stubGlobal("sessionStorage", makeStorage(2600));
+    vi.stubGlobal("sessionStorage", memoryStorage(2600));
     writeCachedTranscript("chat-old", [makeEvent("a", content)], 0, 1);
     writeCachedTranscript("chat-mid", [makeEvent("b", content)], 0, 1);
     writeCachedTranscript("chat-new", [makeEvent("c", content)], 0, 1);
