@@ -26,6 +26,9 @@ observe`, its own supervised service) writes, and serves:
   (opened bare, or after the chat on screen is deleted) it shows the main chat
   (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  A chat leaves the list the moment its delete is confirmed and comes back if
+  the delete is refused, and with no chats left the one awaiting its first send
+  is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled, and opens the
@@ -589,10 +592,15 @@ call to the new model instead of breaking it:
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
-names the subject in two to five words, short enough for the chat list to show
-whole. A leading label ("Title: ") is dropped from the answer, and an answer
-with a colon is refused: a "Short name: description" title's two halves restate
-each other ("Map app: build a simple map application").
+names the message's one main subject as tersely as it can while still saying
+what the chat is about, in fewer than 40 characters and preferably far fewer,
+and leaves out the details a long message lists (the tools, sources, places or
+steps it names). A leading label ("Title: ") is
+dropped from the answer, and an answer with a colon is refused: a "Short name:
+description" title's two halves restate each other ("Map app: build a simple map
+application"). A title longer than 40 characters is cut at a word and ends in
+"..." ("Information flow diagram for Obsidian..."), and the cut is logged as a
+warning.
 
 Names are ASCII. A chat's true name is the ASCII part of its name, so a name in
 another script would leave it a fragment ("React 待办应用" -> "React") or nothing,
