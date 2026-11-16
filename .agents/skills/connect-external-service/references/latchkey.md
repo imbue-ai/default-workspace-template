@@ -283,8 +283,10 @@ desktop whenever possible.
 
 - All curl arguments are passed through unchanged; return code, stdout and
   stderr come back from curl.
-- Unless the user explicitly asks, do not discuss latchkey or the technical
-  details; it is easy for the user to get confused. Do not ask the user to run
+- Unless the user explicitly asks about Latchkey, do not mention Latchkey or
+  any of the underlying technical details; the fact that we're using the
+  Latchkey library is meant to stay an implementation detail. Until proven
+  otherwise, assume the user is non-technical. Do not ask the user to run
   latchkey commands.
 - Do not call `latchkey auth` commands yourself. The Imbue Studio app runs them on the
   user's computer as part of approving a permission request; for services with no
