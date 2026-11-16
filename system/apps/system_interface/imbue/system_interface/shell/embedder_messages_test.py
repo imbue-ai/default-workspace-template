@@ -213,7 +213,7 @@ def _refreshes(page_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any]]:
 
 
 @pytest.mark.parametrize("is_reloaded_when_raised", [True, False])
-def test_a_show_handler_that_reloads_when_raised_refreshes_the_window_it_raises_and_never_one_it_opens(
+def test_a_show_handler_refreshes_the_window_it_raises_only_when_it_reloads_when_raised_and_never_one_it_opens(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, is_reloaded_when_raised: bool
 ) -> None:
     client = _arrived_client(tmp_path, broadcaster, _viewer_row(is_reloaded_when_raised=is_reloaded_when_raised))
@@ -235,9 +235,8 @@ def test_a_show_handler_that_reloads_when_raised_refreshes_the_window_it_raises_
 def test_a_files_link_reloads_the_file_window_it_raises_and_only_raises_a_folder_window(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """Files' own ``open:file`` handler: a window at a file's view page (the handler's ``show`` page) is reloaded
-    when a link raises it, so a file rewritten under the same name shows its new content; a folder window, at one of
-    the ``showing`` pages, is only raised, so what it holds in the page (an upload, a selection) survives."""
+    """Files' own ``open:file`` handler: a link reloads the window it raises at a file's view page (the handler's
+    ``show`` page) and only raises a folder window (at one of its ``showing`` pages)."""
     registry = write_registry(tmp_path / "apps.toml", files_registry_row(TEST_FILES_URL))
     client = shell_application(tmp_path, build_inventory(registry, broadcaster), broadcaster).test_client()
     assert client.post(f"/api/clients/{_CLIENT_ID}/arrive").status_code == 200
@@ -249,16 +248,14 @@ def test_a_files_link_reloads_the_file_window_it_raises_and_only_raises_a_folder
     )
     assert opened_folder.status_code == 201
 
-    shown = [
-        _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": path}}).get_json()[
-            "deliveries"
-        ][0]["shown"]
+    relayed = [
+        _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": path}})
         for path in ("/data/x-ad/ad.png", "/data/x-ad/ad.png", "/data/x-ad")
     ]
 
     (desktop,) = client.get("/api/desktops").get_json()["desktops"]
     window_ids = {window["path"]: window["id"] for window in desktop["windows"] if window["app"] == "files"}
-    assert shown == ["opened", "raised", "raised"]
+    assert [answer.get_json()["deliveries"][0]["shown"] for answer in relayed] == ["opened", "raised", "raised"]
     assert set(window_ids) == {"/data/x-ad/", "/data/x-ad/ad.png?view"}
     assert _refreshes(page_queue) == [({"window": window_ids["/data/x-ad/ad.png?view"]}, _CLIENT_ID)]
 

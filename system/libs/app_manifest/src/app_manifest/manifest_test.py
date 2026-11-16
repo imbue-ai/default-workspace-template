@@ -9,6 +9,7 @@ from app_manifest.manifest import AppManifest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import PinStyle
 from app_manifest.manifest import PreviewSpec
 from app_manifest.manifest import RESERVED_LAUNCH_PARAM_NAMES
@@ -245,6 +246,19 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
 
 
 @pytest.mark.parametrize(
+    "handler",
+    [
+        {"type": "minds:focus-chat", "path": "/api/focus-chat"},
+        {"type": "open:file", "show": "{path}?view", "showing": ["{path}/"], "reload_when_raised": True},
+    ],
+)
+def test_a_message_handler_reads_back_from_its_own_dump(handler: dict[str, object]) -> None:
+    """The shell answers its inventory with these handlers dumped whole, and callers read the answer with this model."""
+    loaded = MessageHandler.model_validate(handler)
+    assert MessageHandler.model_validate(loaded.model_dump(mode="json")) == loaded
+
+
+@pytest.mark.parametrize(
     ("handler", "match"),
     [
         pytest.param(
@@ -306,11 +320,6 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             {"type": "open:file", "path": "/api/open", "reload_when_raised": True},
             "'reload_when_raised' only beside 'show'",
             id="reload-when-raised-beside-a-path",
-        ),
-        pytest.param(
-            {"type": "open:file", "path": "/api/open", "reload_when_raised": False},
-            "'reload_when_raised' only beside 'show'",
-            id="reload-when-raised-false-beside-a-path",
         ),
         pytest.param(
             {"type": "open:file", "show": "{path?view"},

@@ -44,8 +44,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `PageTemplate` of the app's page the shell shows for it, with `showing`, the
   templates of the app's other pages that count as already showing it, and
   `reload_when_raised`, whether a window the message raises at the `show` page
-  itself has its page reloaded, both only beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
-  within the manifest; `label`, a `KeybindingActionLabel`; and
+  itself has its page reloaded, both only beside `show`), `KeybindingAction`
+  (`id`, a `KeybindingActionId` unique within the manifest; `label`, a
+  `KeybindingActionLabel`; and
   `default_chords`, the chords that trigger it out of the box, whose grammar
   the `workspace_profile` library checks),
   `DefaultShortcut`

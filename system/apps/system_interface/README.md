@@ -242,10 +242,10 @@ through `relay.ts`). A solo page hands on its apps' messages but never the
 chrome's, which the main window's page already relays. A `path` handler has the
 message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
-route's `show` below, in-process, then refresh the window when the show only
-raised it, at the handler's `show` page itself, and the handler gives
-`reload_when_raised`. A message some app did not take becomes a
-notice carrying that app's reason, and a page shown while the client has only
+route's `show` below, in-process; when the handler sets `reload_when_raised`
+and the show raised a window already at that page, the shell then refreshes
+that window. A message some app did not take becomes a notice carrying that
+app's reason, and a page shown while the client has only
 pop-outs open becomes a notice to reopen the main window. The shell's page
 announces `reportsChatOnScreen` to the chrome, promising the
 `minds:chat-on-screen` a chat's own page sends once its transcript is drawn in

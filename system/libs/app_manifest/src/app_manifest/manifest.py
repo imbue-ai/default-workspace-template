@@ -269,7 +269,7 @@ class MessageHandler(FrozenModel):
             )
         if self.showing and self.show is None:
             raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
-        if "reload_when_raised" in self.model_fields_set and self.show is None:
+        if self.reload_when_raised and self.show is None:
             raise InvalidManifestValueError(
                 f"message handler {str(self.type)!r} gives 'reload_when_raised' only beside 'show'"
             )

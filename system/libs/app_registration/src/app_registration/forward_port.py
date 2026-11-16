@@ -26,10 +26,10 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
 ``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show with showing and reload_when_raised),
-``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]`` table's mode,
-when the manifest has one); the icon is read from the file the manifest names, relative to the manifest. Every manifest
-field is authoritative on every call, so a re-registration with a changed manifest updates the row.
+default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show with showing and
+reload_when_raised), ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]``
+table's mode, when the manifest has one); the icon is read from the file the manifest names, relative to the manifest.
+Every manifest field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -849,7 +849,10 @@ def _copied_message_handler(
     showing = handler.get("showing")
     reload_when_raised = handler.get("reload_when_raised")
     if is_path_given:
-        for name, value in (("showing", showing), ("reload_when_raised", reload_when_raised)):
+        for name, value in (
+            ("showing", showing),
+            ("reload_when_raised", reload_when_raised),
+        ):
             if value is not None:
                 return (
                     None,
