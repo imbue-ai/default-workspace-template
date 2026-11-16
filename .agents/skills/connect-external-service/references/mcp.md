@@ -104,7 +104,7 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "mcp.example.com", "scheme": "https", "login": {"url": "https://mcp.example.com/authorize", "flow": "mcp", "flow_params": {"mcpEndpoint": "https://mcp.example.com/mcp", "tokenEndpoint": "https://mcp.example.com/token", "registrationEndpoint": "https://mcp.example.com/register", "scopes": ["read", "write"]}}}, "rationale": "Example has its own connector; I'"'"'d like to use it to read the projects you asked about."}'
 ```
 
-Approving opens latchkey's own browser on the user's computer at the server's
+Approving opens a browser on the user's computer at the server's
 consent page, where the app asking may be named after latchkey or Imbue Studio
 rather than after you; say so if the user asks. The sign-in and the OAuth
 client it registered stay in Imbue Studio's credential store, and the gateway
