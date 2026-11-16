@@ -6,20 +6,26 @@
  * note asking the model to read the words leniently. The note is for the model alone: it rides in the text
  * the agent receives and the transcript records, inside a tag pair, and every bubble that shows a person's
  * message, and the composer when a message comes back to it, takes it out by that pair, whatever the note
- * says. The backend does the same for its notification bubbles and its chat-naming prompt
+ * says. The backend does the same for the notifications it raises and for its chat-naming prompt
  * (``imbue/chat/dictation_note.py``).
  *
  * Whether a draft may hold dictated words is kept per chat in localStorage, beside the draft itself and
  * nowhere else, so the composer and the views that reach a draft from outside it read one answer.
  */
 
-/** What a message that may hold dictated words ends with. */
+/** What a message that may hold dictated words ends with. Each part earns its place: naming the kinds of error
+ *  speech recognition makes tells the model what to doubt; resolving a misfit word by its sound, toward a name
+ *  it already knows and without comment, is what a listener does; leaving text that reads fine alone guards
+ *  against "corrections" of what was typed or pasted; and the question is kept for the one case where a
+ *  mishearing would change what gets done. */
 export const DICTATION_NOTE =
   "<dictation-note>\n" +
-  "Part of this message was dictated aloud and transcribed by speech recognition, so it may contain misheard " +
-  "words, homophones, and missing or misplaced punctuation; names, file paths, and code identifiers are the " +
-  "likeliest to be wrong. Read it for what the speaker most plausibly meant in context rather than literally, " +
-  "and ask before acting if a possible mishearing would change what you do.\n" +
+  "Parts of the message above were dictated and transcribed by speech-to-text, so it may contain misheard " +
+  "words, homophones, missing punctuation, and misspelled or miscapitalised names and code identifiers. Where " +
+  "a word does not fit its context, read it as the word or identifier it sounds like, preferring names that " +
+  "exist in this project or conversation, and do not remark on the correction; leave text that already makes " +
+  "sense as written. If two plausible readings would lead to materially different actions, ask which was " +
+  "meant before acting.\n" +
   "</dictation-note>";
 
 // A note with the blank line that sets it off (the backend's ``_DICTATION_NOTE_RE`` in

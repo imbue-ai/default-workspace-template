@@ -6618,6 +6618,31 @@ def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the
     }
 
 
+def test_the_owners_mention_notification_leaves_out_a_dictated_messages_note(tmp_path: Path) -> None:
+    gateway = RecordingGateway(status=200)
+    dictated = (
+        "@Josh look at this\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, RecordingMngrMessenger(), imbue_studio_gateway=access)
+        client = app.test_client()
+        try:
+            client.post(
+                f"/api/chats/{_LOUNGE_ID}/message",
+                json={"message": dictated, "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_until_true(lambda: len(gateway.received) == 1, 10.0, "the owner's notification to be posted")
+        finally:
+            state_of(app).shutdown()
+    (received,) = gateway.received
+    assert received.body["message"] == "@Josh look at this"
+
+
 def test_a_mention_in_an_agent_chat_is_a_word_the_agent_reads_and_nothing_more(tmp_path: Path) -> None:
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)

@@ -205,8 +205,10 @@ export function renderUserBubbleContent(content: string, requestedAt?: string): 
   // The note comes off before the attachments are split off: sent again from a block handed back to the
   // composer, a message's note follows the attachment block its own text ends with, and that block is
   // only read at the very end.
-  const { visibleText, attachmentBlock } = parseMessageAttachments(withoutDictationNotes(content).text);
-  const words = visibleText.trimEnd();
+  const withoutNotes = withoutDictationNotes(content);
+  const { visibleText, attachmentBlock } = parseMessageAttachments(withoutNotes.text);
+  // A send is trimmed whole, so words that ended in a line break keep it ahead of their note.
+  const words = withoutNotes.hadNote ? visibleText.trimEnd() : visibleText;
   const children: m.Children[] = [];
   if (words.length > 0) {
     children.push(m("div", { class: "message-content whitespace-pre-wrap" }, words));

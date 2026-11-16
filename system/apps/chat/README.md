@@ -1034,8 +1034,9 @@ is marked again, and queued text returned to it comes back without its notes and
 marks the draft instead. A slash command or bash-mode input is sent without the
 note, since a harness reads one only as the whole message. The note is for the
 model alone: the agent receives it and the transcript keeps it, while every
-bubble that shows a person's message, the tray's notification bubbles, and the
-chat-naming prompt take it out by its tags.
+bubble that shows a person's message, the tray's notification bubbles, the
+notification the owner gets for a mention, and the chat-naming prompt take it
+out by its tags.
 `frontend/src/models/dictationNote.ts` holds the note and the marks, and
 `imbue/chat/dictation_note.py` the backend's half.
 

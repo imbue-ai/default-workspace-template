@@ -3,8 +3,9 @@ back out of a person's words.
 
 Speech recognition mishears, so a message sent from a draft that dictation wrote into ends with a short note, in
 a tag pair, asking the model to read the words leniently. The note is for the model alone: the agent is handed it
-and the transcript keeps it, while the tray's notification bubbles, which show the words to people, and the chat
-namer, which feeds them to another prompt, read them through ``without_dictation_notes``.
+and the transcript keeps it, while the tray's notification bubbles and the owner's mention notification, which
+show the words to people, and the chat namer, which feeds them to another prompt, read them through
+``without_dictation_notes``.
 """
 
 import re
