@@ -1710,6 +1710,82 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
         expect(reloaded.locator(".message-resent-note")).to_have_count(1)
 
 
+_PASTE_JS = """(textbox, text) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    textbox.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+}"""
+
+# Long enough to become an attachment, its last line one a truncated copy would lose.
+_LONG_PASTE = "".join(f"line {index} of the pasted report\n" for index in range(1, 500)) + "LAST-LINE-OF-THE-PASTE"
+
+
+def _paste(textbox: Locator, text: str) -> None:
+    textbox.evaluate(_PASTE_JS, text)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long paste becomes a chip saying how many lines it holds, the typed words stay in the box, and the agent is
+    sent those words with a line naming the uploaded file, which holds the whole paste."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger([], sent)
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Summarize this:")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        expect(chip).to_contain_text("Pasted text, 500 lines")
+        expect(textbox).to_have_value("Summarize this:")
+
+        textbox.press("Enter")
+        wait_for(lambda: len(sent) == 1, timeout=15.0, error_message="the message with the paste was never sent")
+        match = re.fullmatch(r"Summarize this:\n\nSee attachment here: \[pasted-text-1\.txt\]\((\S+)\)", sent[0])
+        assert match is not None, sent[0]
+        assert match.group(1).endswith("/pasted-text-1.txt")
+        assert Path(match.group(1)).read_text() == _LONG_PASTE
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        # The bubble names the paste by its file name, not by its path.
+        link = chat.locator(".message-user", has_text="Summarize this:").get_by_role("link", name="pasted-text-1.txt")
+        expect(link).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_goes_back_into_the_box_as_text(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chip's "Paste as text" puts the whole paste back where the caret is and takes the chip away."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    with running_workspace(tmp_path, find_free_port(), find_free_port()) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Before: ")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        chip.hover()
+        chip.get_by_role("button", name="Paste as text").click()
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        expect(textbox).to_have_value(f"Before: {_LONG_PASTE}")
+        wait_for(
+            lambda: not list((tmp_path / "work" / "data" / "uploads").rglob("pasted-text-1.txt")),
+            timeout=15.0,
+            error_message="the pasted text's uploaded copy was left behind",
+        )
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_sending_it_once_more(
     tmp_path: Path, page: Page

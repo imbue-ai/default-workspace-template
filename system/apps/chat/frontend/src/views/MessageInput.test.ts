@@ -74,6 +74,9 @@ const mocks = vi.hoisted(() => {
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
     uploadDescribedFileToComposer: vi.fn(),
+    uploadFilesToComposer: vi.fn(),
+    stagePastedText: vi.fn(),
+    unstagePastedText: vi.fn(async (_chatId: string, _localId: string): Promise<string> => ""),
     // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
@@ -175,8 +178,10 @@ vi.mock("../models/ComposerAttachments", () => ({
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
   restoreComposerAttachments: vi.fn(),
+  stagePastedText: mocks.stagePastedText,
+  unstagePastedText: mocks.unstagePastedText,
   uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
-  uploadFilesToComposer: vi.fn(),
+  uploadFilesToComposer: mocks.uploadFilesToComposer,
   waitForComposerUploads: (chatId: string) => mocks.waitForComposerUploads(chatId),
 }));
 vi.mock("../models/attachments", () => ({
@@ -679,6 +684,110 @@ describe("MessageInput attachment chips", () => {
     expect(findByTag(failed, "img")).toBeUndefined();
     expect(renderedText(failed)).toContain("Upload failed");
     expect(findByAttr(failed, "aria-label", "Remove attachment")).toBeDefined();
+  });
+});
+
+describe("MessageInput long paste", () => {
+  const LONG_PASTE = "a pasted line\n".repeat(400) + "the last line";
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    mocks.stagePastedText.mockClear();
+    mocks.uploadFilesToComposer.mockClear();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  function paste(component: m.Component<{ chatId: string | null }>, text: string, files: File[] = []) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    const items = files.map((file) => ({ kind: "file", getAsFile: () => file }));
+    (textarea?.attrs?.onpaste as (event: unknown) => void)({
+      preventDefault,
+      clipboardData: { items, getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+    return preventDefault;
+  }
+
+  it("stages a long paste as an attachment instead of putting it in the box", () => {
+    const preventDefault = paste(MessageInput(), LONG_PASTE);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(mocks.stagePastedText).toHaveBeenCalledWith("agent-1", LONG_PASTE);
+  });
+
+  it("leaves a short paste to the box as typed text", () => {
+    const preventDefault = paste(MessageInput(), "a short note");
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("attaches a pasted image as an image, not its text", () => {
+    const image = new File(["px"], "shot.png", { type: "image/png" });
+    paste(MessageInput(), LONG_PASTE, [image]);
+    expect(mocks.uploadFilesToComposer).toHaveBeenCalledWith("agent-1", [image]);
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("offers to put a pasted-text chip back as text, and only on such a chip", () => {
+    const ready = (fileName: string) => ({
+      localId: fileName,
+      fileName,
+      isImage: false,
+      status: "ready",
+      summary: fileName.startsWith("pasted") ? "Pasted text, 401 lines" : undefined,
+      uploaded: { path: `/uploads/${fileName}`, name: fileName, size: 9, isImage: false, url: `/f/${fileName}` },
+    });
+    mocks.getComposerAttachments.mockReturnValue([ready("pasted-text-1.txt"), ready("notes.txt")]);
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(tree)).toContain("Pasted text, 401 lines");
+    const putBackButtons = flatten(tree).filter((vnode) => vnode.attrs?.["aria-label"] === "Paste as text");
+    expect(putBackButtons).toHaveLength(1);
+  });
+
+  it("puts the text back into the box where the caret is", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      {
+        localId: "p1",
+        fileName: "pasted-text-1.txt",
+        isImage: false,
+        status: "ready",
+        summary: "Pasted text, 401 lines",
+        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
+      },
+    ]);
+    mocks.unstagePastedText.mockResolvedValueOnce(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const oninput = findByTag(render(), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "Summarize this: ", style: {}, scrollHeight: 10 } });
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledWith("agent-1", "p1");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(`Summarize this: ${LONG_PASTE}`);
+  });
+
+  it("says so, and keeps the attachment, when the text cannot be put back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.getComposerAttachments.mockReturnValue([
+      {
+        localId: "p1",
+        fileName: "pasted-text-1.txt",
+        isImage: false,
+        status: "ready",
+        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
+      },
+    ]);
+    mocks.unstagePastedText.mockRejectedValueOnce(new Error("HTTP 404"));
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(renderedText(render())).toContain("Couldn't paste the text back");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
+    vi.mocked(console.warn).mockRestore();
   });
 });
 

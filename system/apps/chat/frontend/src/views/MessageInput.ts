@@ -8,9 +8,12 @@ import {
   hasReadyAttachments,
   removeComposerAttachment,
   restoreComposerAttachments,
+  stagePastedText,
+  unstagePastedText,
   uploadFilesToComposer,
   waitForComposerUploads,
 } from "../models/ComposerAttachments";
+import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
@@ -847,7 +850,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    * reference). While uploading, a spinner sits over the thumbnail on a dark wash, or where the icon
    * would be. The remove button rides the top-right corner, shown on hover.
    */
-  function renderComposerAttachment(chatId: string, attachment: ComposerAttachment): m.Vnode {
+  function renderComposerAttachment(
+    chatId: string,
+    attachment: ComposerAttachment,
+    putPastedTextBack: (localId: string) => void,
+  ): m.Vnode {
     const isUploading = attachment.status === "uploading";
     const isError = attachment.status === "error";
     // The local pixels while uploading, then the uploaded copy.
@@ -856,6 +863,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const size = attachment.uploaded?.size ?? attachment.localSize;
     const spinner = m.trust(spinnerIcon(16));
     const isDescribed = attachment.summary !== undefined;
+    const isPastedText = isPastedTextFileName(attachment.fileName);
     const remove = isUploading
       ? null
       : m(
@@ -874,6 +882,24 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
         );
+    // A long paste can go back into the box as text, beside the remove button.
+    const putBack =
+      isUploading || !isPastedText
+        ? null
+        : m(
+            "button",
+            {
+              type: "button",
+              class:
+                "composer-attachment-put-back absolute -top-[9px] right-[17px] z-10 inline-flex h-5 w-5 cursor-pointer " +
+                "items-center justify-center rounded-full bg-inverse text-on-accent opacity-0 shadow-sm " +
+                "transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100",
+              "aria-label": "Paste as text",
+              ...hoverTooltipAttrs("Paste as text", "above"),
+              onclick: () => putPastedTextBack(attachment.localId),
+            },
+            m.trust(icon("edit", { size: 11, strokeWidth: 2.5 })),
+          );
     // The status modifier is an interpolated marker; the one status the look distinguishes (a
     // failed upload's red border) rides beside it.
     const chipMarker = `composer-attachment composer-attachment--${attachment.status}`;
@@ -936,7 +962,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           isUploading
             ? m("span", { class: "composer-attachment-uploading", "aria-label": "Uploading", role: "img" }, spinner)
-            : m.trust(icon(isDescribed ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
+            : m.trust(icon(isDescribed && !isPastedText ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
         ),
         m("span", { class: "composer-attachment-info flex min-w-0 flex-col" }, [
           m(
@@ -948,6 +974,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           ),
           detail,
         ]),
+        putBack,
         remove,
       ],
     );
@@ -1460,7 +1487,48 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (files.length > 0) {
           event.preventDefault();
           uploadFilesToComposer(chatId, files);
+          return;
         }
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (isLongPaste(text)) {
+          event.preventDefault();
+          stagePastedText(chatId, text);
+          warmUpStoppedChat(chatId);
+        }
+      }
+
+      /** Put a long paste's text back into the box where the caret is, in place of its attachment. */
+      async function putPastedTextBack(forChatId: string, localId: string): Promise<void> {
+        let text: string;
+        try {
+          text = await unstagePastedText(forChatId, localId);
+        } catch (error) {
+          console.warn(`The pasted text of chat ${forChatId} could not be put back`, error);
+          if (currentChatId !== forChatId) return;
+          clearActionFailureNotice();
+          actionFailureTitle = "Couldn't paste the text back";
+          actionFailureDetail = "The attachment is still there, and will be sent as it is. Try again, or remove it.";
+          m.redraw();
+          return;
+        }
+        if (currentChatId !== forChatId) {
+          // The user moved to another chat while the text was read back: it joins that chat's saved draft.
+          const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
+          localStorage.setItem(messageTextKey(forChatId), savedDraft + text);
+          return;
+        }
+        const textarea = messageTextareaElement;
+        const start = textarea?.selectionStart ?? messageText.length;
+        const end = textarea?.selectionEnd ?? messageText.length;
+        messageText = messageText.slice(0, start) + text + messageText.slice(end);
+        localStorage.setItem(messageTextKey(forChatId), messageText);
+        if (textarea !== null) {
+          textarea.value = messageText;
+          textarea.setSelectionRange(start + text.length, start + text.length);
+          refitAfterEdit();
+        }
+        focusMessageTextarea();
+        m.redraw();
       }
 
       function openFilePicker(): void {
@@ -2108,7 +2176,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                         "div",
                         { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
                         m(AttachmentStrip, {
-                          children: attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
+                          children: attachments.map((attachment) =>
+                            renderComposerAttachment(chatId, attachment, (localId) => {
+                              void putPastedTextBack(chatId, localId);
+                            }),
+                          ),
                         }),
                       )
                     : null,

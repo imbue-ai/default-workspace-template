@@ -478,6 +478,17 @@ element context menu; a chat page drafts into its own composer, the root into
 the selected chat's (else through the shell), and a sub-agent view through the
 shell, its `shell:draft-text` relayed by the root.
 
+A long paste enters a composer as an attachment too (`models/pastedText.ts`):
+a paste of at least 4,000 characters or 80 lines is uploaded as a
+`pasted-text-<n>.txt` file through `/api/uploads` instead of going into the
+box, so the draft stays short enough to read and edit and the agent opens the
+whole text from the file the sent message names, whatever its harness. Its chip
+says "Pasted text, N lines", and its "Paste as text" button puts the text back
+where the caret is (read from memory, or from the uploaded copy after a
+reload) and deletes the upload. A pasted image is still attached as an image,
+and a shorter paste stays text. The sent bubble names the paste by its file
+name, a link that opens it in Files.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside

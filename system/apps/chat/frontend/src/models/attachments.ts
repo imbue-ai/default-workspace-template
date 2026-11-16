@@ -17,6 +17,7 @@
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { isPastedTextFileName } from "./pastedText";
 
 /** Marker segment present in every stored-attachment path. Used to detect the
  *  appended attachment block in persisted message content and to derive a
@@ -76,7 +77,7 @@ export function attachmentServeUrl(path: string): string {
  * path. An image renders inline (``![path](path)``); any other file becomes a
  * file link (``[path](path)``), which opens it in Files. The absolute path is used as both the label
  * / alt text and the URL, so the chat app serves the file at that path
- * and the path stays visible to the reader.
+ * and the path stays visible to the reader. A long paste's link is labelled with its file name instead.
  *
  * No escaping is needed: the backend stores each upload under a hex uuid dir
  * (``<id>-<width>x<height>`` for an image whose size it read) with a
@@ -85,7 +86,10 @@ export function attachmentServeUrl(path: string): string {
  * break the markdown link or its URL.
  */
 export function attachmentMarkdown(path: string): string {
-  return isImagePath(path) ? `![${path}](${path})` : `[${path}](${path})`;
+  if (isImagePath(path)) return `![${path}](${path})`;
+  // A long paste is the user's own words rather than a file they picked, so its link reads as its name.
+  const basename = attachmentBasename(path);
+  return isPastedTextFileName(basename) ? `[${basename}](${path})` : `[${path}](${path})`;
 }
 
 /**
