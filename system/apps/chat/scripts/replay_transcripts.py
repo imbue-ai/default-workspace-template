@@ -52,7 +52,9 @@ def _agent_id_for_session(session_id: str) -> str:
 
 def _read_session_events(path: Path) -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+    # Split on newlines only, as the app does: splitlines() would also break on the U+2028 and U+0085 a record's
+    # text can hold raw, cutting that record in two.
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         stripped = line.strip()
         if not stripped:
             continue
