@@ -38,6 +38,7 @@ import {
   getChatById,
   getChats,
   getMainChatId,
+  getProvisionalChat,
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
@@ -68,8 +69,9 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
+import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
-import { groupedRows, rowsFromSnapshots } from "./rows";
+import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
@@ -109,8 +111,9 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  const title = getChatById(selectedChatId)?.title;
-  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
+  const provisional = getProvisionalChat(selectedChatId);
+  const title = getChatById(selectedChatId)?.title ?? (provisional === undefined ? "" : provisionalTitle(provisional));
+  return titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
@@ -118,7 +121,7 @@ interface ReportedLocation {
   title: string;
 }
 
-// The last location told to the shell: every chat list push re-derives it, and only a change goes up.
+// The last location told to the shell: every chat list push and redraw re-derives it, and only a change goes up.
 let reportedLocation: ReportedLocation | null = null;
 
 function reportLocation(): void {
@@ -147,7 +150,7 @@ function allRows(): ChatRow[] {
 
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(allRows(), startedHere);
+  return groupedRows(withoutPendingDeletes(allRows()), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -158,6 +161,7 @@ function slotFillFor(chatId: string | null): SlotFill {
     isChoosing: pendingToken !== null || pendingPick !== null,
     isCompact: compactQuery.matches,
     isShown: isRootShown,
+    isDeletePending: hasPendingDelete(),
   });
 }
 
@@ -177,7 +181,7 @@ function select(chatId: string | null): void {
 }
 
 /** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
- *  layout left the phone width). */
+ *  layout left the phone width, a delete was refused). */
 function fillSlot(): void {
   if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
 }
@@ -356,6 +360,8 @@ function onChatsUpdated(): void {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
   const listed = new Set(rows.map((row) => row.chatId));
+  // A chat opened here can be deleted while it still waits for a push to name it, and none will now.
+  for (const chatId of settlePendingDeletes(listed)) awaitingListing.delete(chatId);
   for (const chatId of listed) awaitingListing.delete(chatId);
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
@@ -372,6 +378,10 @@ function onChatsUpdated(): void {
 }
 
 const ChatRoot: m.Component = {
+  onupdate() {
+    // A rename reaches the window's title as it reaches the list, ahead of any chat list carrying it.
+    reportLocation();
+  },
   view() {
     const rows = railRows();
     const isCompact = compactQuery.matches;
@@ -465,7 +475,8 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isInDrawer: isCompact,
     isTouch: isCompact && touchQuery.matches,
-    onPick: (chatId: string) => select(chatId),
+    onPick: select,
+    onDeleteRefused: fillSlot,
     onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
