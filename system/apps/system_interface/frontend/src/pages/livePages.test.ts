@@ -1615,19 +1615,54 @@ describe("raising the window the document's focus lands in", () => {
     expect(topWindowId()).toBe("win-1");
   });
 
-  it("drops the focused window's pending focus grants once the hold sets aside a landing in another window's page", () => {
+  it("posts the focused window's page no focus grant while a press the hold set aside waits in another window's page", () => {
     blurIntoFrameOf("win-1");
     layer.reconcile();
     const grants = spyOnFrame("win-1");
     vi.advanceTimersByTime(0);
     expect(grantsSeen(grants)).toBe(1);
     frameOf("win-2").focus();
-    tick();
-    // The store refuses the raise the hold put off, so win-1 stays the window the grants were for.
+    // The store refuses the raise the hold put off, so win-1 stays the window the grants are for.
     store.beginWindowMove("win-1", { x: 100, y: 60 });
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
     expect(topWindowId()).toBe("win-1");
+  });
+
+  it("posts no focus grant that falls due between a press into another window's page and the tick that reads it", () => {
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const grants = spyOnFrame("win-1");
+    frameOf("win-2").focus();
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(0);
+    expect(document.activeElement).toBe(frameOf("win-2"));
+    tick();
+    expect(topWindowId()).toBe("win-2");
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    expect(grantsSeen(grants)).toBe(0);
+  });
+
+  it("posts the grants all the same while the focus rests in a page the shell raises nothing for", () => {
+    // A page that answers the shell's own message.
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    const grants = spyOnFrame("win-1");
+    load("win-2");
+    frameOf("win-2").focus();
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(1);
+
+    // A page the window in front covers.
+    drawChromeAt("win-1", CASCADE_RECT);
+    drawChromeAt("win-2", CASCADE_RECT);
+    store.raiseWindow("win-2");
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    const laterGrants = spyOnFrame("win-2");
+    frameOf("win-1").focus();
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(laterGrants)).toBe(1);
   });
 
   it("raises a few times, not on every tick, for two pages that each take the focus back when they lose it", () => {

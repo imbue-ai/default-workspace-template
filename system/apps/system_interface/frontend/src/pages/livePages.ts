@@ -645,7 +645,7 @@ export class LivePagesLayer implements PageDriver {
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page === undefined) return;
     this.cancelFrameFocus = requestFrameFocus(page.wrapper, {
-      isStillWanted: () => this.isFocusHolder(page.windowId),
+      isStillWanted: () => this.isFocusHolder(page.windowId) && !this.isPressWaiting(),
       onPosted: () => {
         page.lastFocusPromptTick = this.watchedTicks;
       },
@@ -670,29 +670,42 @@ export class LivePagesLayer implements PageDriver {
     if (page !== undefined && !this.isAnswerToPrompt(page)) this.noteFocusLandingIn(page);
   }
 
+  /** The page of an unfocused window the document's focus has landed in, where the layer acts on a landing. */
+  private landedPage(): LivePage | undefined {
+    const page = this.activePage();
+    if (page === undefined || page.windowId === this.lastFocusedWindowId) return undefined;
+    if (!this.isShown(page) || page.isCovered || this.isGestureActive) return undefined;
+    const state = this.store.getState();
+    if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return undefined;
+    // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
+    if (page.windowId === activeFocusedWindowId(state)) return undefined;
+    return page;
+  }
+
+  /** Whether the landing in ``page`` is its answer to a message the shell posted it, and no press. */
+  private isLandingAnAnswer(page: LivePage): boolean {
+    return page === this.pageToHandBack || this.isAnswerToPrompt(page);
+  }
+
+  /** Whether a press holds the document's focus in an unfocused window's page the layer has yet to raise. */
+  private isPressWaiting(): boolean {
+    const page = this.landedPage();
+    return page !== undefined && !this.isLandingAnAnswer(page);
+  }
+
   /** Raise the unfocused window whose page frame holds the document's focus, unless the shell prompted that focus. */
   private raiseWindowOfActiveFrame(canHandBack: boolean): void {
-    const page = this.activePage();
-    if (page === undefined || page.windowId === this.lastFocusedWindowId) return;
-    if (!this.isShown(page) || page.isCovered || this.isGestureActive) return;
-    const state = this.store.getState();
-    if (this.overview !== null || state.modes.isTouch || this.store.viewedDesktop() !== null) return;
-    // A raise leaves the focus in the old page until the next reconcile, so the layer's last focused window is skipped too.
-    if (page.windowId === activeFocusedWindowId(state)) return;
-    if (page === this.pageToHandBack || this.isAnswerToPrompt(page)) {
+    const page = this.landedPage();
+    if (page === undefined) return;
+    if (this.isLandingAnAnswer(page)) {
       // The focus cannot be handed back from inside the blur event; the next tick does.
       if (canHandBack) this.host.focus({ preventScroll: true });
       else this.pageToHandBack = page;
       return;
     }
-    if (
-      this.lastWatcherRaiseTick !== null &&
-      this.watchedTicks - this.lastWatcherRaiseTick < WATCHER_RAISE_HOLD_TICKS
-    ) {
-      // A press set aside is the user moving on: the focused window's pending grants must not take the focus from it.
-      this.cancelFrameFocus();
-      return;
-    }
+    const isHeld =
+      this.lastWatcherRaiseTick !== null && this.watchedTicks - this.lastWatcherRaiseTick < WATCHER_RAISE_HOLD_TICKS;
+    if (isHeld) return;
     this.store.raiseWindow(page.windowId);
     const isRaised = activeFocusedWindowId(this.store.getState()) === page.windowId;
     // A raise the store refuses starts no hold.
