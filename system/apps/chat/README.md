@@ -1056,7 +1056,7 @@ the way its user saw it. It runs the app over the e2e suite's fakes, so it needs
 a built frontend and sends nothing anywhere:
 
 ```bash
-uv run --no-sync python system/apps/chat/scripts/replay_transcripts.py ~/Downloads/some-pack/*/ --open
+.venv/bin/python system/apps/chat/scripts/replay_transcripts.py ~/Downloads/some-pack/*/ --open
 ```
 
 A directory argument serves the session files in it, named after the

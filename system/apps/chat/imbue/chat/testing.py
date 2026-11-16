@@ -1372,6 +1372,15 @@ def make_agent_fixture(
     return agent_info, session_file
 
 
+class SeededSession(FrozenModel):
+    """A chat ``running_workspace`` lists beside the fixture's: an agent whose claude session holds ``events``."""
+
+    agent_id: str = Field(description="The agent's mngr id, which is also the chat's id")
+    agent_name: str = Field(description="The agent's name, which the chat list shows")
+    session_id: str = Field(description="The claude session id its transcript is filed under")
+    events: tuple[Mapping[str, Any], ...] = Field(description="The session file's records, in order")
+
+
 class RunningWorkspace(FrozenModel):
     """Handle to a shell and a chat app served together, with the fixtures behind the chat."""
 
@@ -1495,7 +1504,7 @@ def running_workspace(
     agent_name: str = FIXTURE_AGENT_NAME,
     session_id: str = FIXTURE_SESSION_ID,
     additional_agents: Sequence[tuple[str, str]] = (),
-    seeded_agents: Sequence[AgentInfo] = (),
+    seeded_sessions: Sequence[SeededSession] = (),
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
@@ -1506,11 +1515,10 @@ def running_workspace(
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
     The chat app lists the fixture agent (plus any ``additional_agents``, bare state dirs with
-    a manager entry, and any ``seeded_agents``, agents ``make_agent_fixture`` made under
-    ``tmp_path`` with transcripts of their own) from a patched discovery and a never-started
-    manager, so no ``mngr observe`` runs; the shell reads a registry holding the chat row at the
-    chat's own URL. ``session_events``, ``agent_id``, ``agent_name`` and ``session_id`` shape the
-    fixture agent. With
+    a manager entry, and any ``seeded_sessions``, agents with transcripts of their own) from a
+    patched discovery and a never-started manager, so no ``mngr observe`` runs; the shell reads a
+    registry holding the chat row at the chat's own URL. ``session_events``, ``agent_id``,
+    ``agent_name`` and ``session_id`` shape the fixture agent. With
     ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
     is bound to, so a create starts at once; without one a create is refused, and the chat
     root offers the provider chooser instead. ``additional_accounts`` sign further
@@ -1527,7 +1535,18 @@ def running_workspace(
     agent_info, session_file = make_agent_fixture(
         tmp_path, agent_id=agent_id, agent_name=agent_name, session_events=session_events, session_id=session_id
     )
-    extra_infos: list[AgentInfo] = list(seeded_agents)
+    session_ids = [session_id, *(seeded.session_id for seeded in seeded_sessions)]
+    assert len(set(session_ids)) == len(session_ids), "every agent's transcript needs its own session id"
+    extra_infos: list[AgentInfo] = [
+        make_agent_fixture(
+            tmp_path,
+            agent_id=seeded.agent_id,
+            agent_name=seeded.agent_name,
+            session_events=seeded.events,
+            session_id=seeded.session_id,
+        )[0]
+        for seeded in seeded_sessions
+    ]
     for extra_id, extra_name in additional_agents:
         extra_state_dir = tmp_path / "agents" / extra_id
         extra_state_dir.mkdir(parents=True, exist_ok=True)
