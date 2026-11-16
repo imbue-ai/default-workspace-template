@@ -68,6 +68,7 @@ const { mockDetailState, mockRequestDetail, transcript } = vi.hoisted(() => ({
   // The chat's held transcript, and the send the recovered sign-in note makes.
   transcript: {
     events: [] as unknown[],
+    isLoaded: true,
     sendMessage: vi.fn(async () => "ok"),
   },
 }));
@@ -77,6 +78,7 @@ vi.mock("../models/Response", async (importOriginal) => ({
   getEventDetailVersion: () => 0,
   requestEventDetail: mockRequestDetail,
   getEventsForChat: () => transcript.events,
+  isTranscriptLoaded: () => transcript.isLoaded,
   sendMessage: transcript.sendMessage,
 }));
 
@@ -753,6 +755,7 @@ describe("the auth-error note's switch link", () => {
     beforeEach(() => {
       resetResendStatesForTesting();
       transcript.sendMessage.mockClear();
+      transcript.isLoaded = true;
       switching.signedInAtById = new Map([[OPENAI_ID, "2026-08-06T00:05:00.000Z"]]);
     });
 
@@ -797,6 +800,15 @@ describe("the auth-error note's switch link", () => {
         "<context>seed</context>\nSummarize the deploy thread",
         expect.any(String),
       );
+    });
+
+    it("offers nothing to send while the chat shows its cached tail, whose messages may be cut short", () => {
+      transcript.isLoaded = false;
+      transcript.events = [PROMPT, authErrorEvent()];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
     });
 
     it("offers the message the failure refused when the failure was written ahead of it", () => {
