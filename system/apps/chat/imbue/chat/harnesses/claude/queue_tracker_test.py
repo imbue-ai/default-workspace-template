@@ -255,6 +255,12 @@ def test_single_session_replay_reproduces_the_true_queue() -> None:
     assert _contents(tracker) == ["still parked", "also parked"]
 
 
+def test_a_parked_paste_shows_the_text_sent() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line('\n\n<pasted_content id="dd53">\nA long message.\n</pasted_content id="dd53">\n'))
+    assert _contents(tracker) == ["A long message."]
+
+
 def test_reset_clears_the_queue() -> None:
     # The watcher resets the tracker when a new latest main session is
     # registered (the process restarted); the tracker itself does no session

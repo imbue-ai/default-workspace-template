@@ -821,7 +821,7 @@ def parse_queue_signals(line: str) -> QueueSignal | None:
             kind=QueueSignalKind.ENQUEUE,
             session_id=_record_session_id(raw),
             timestamp=raw.get("timestamp", ""),
-            content=content if isinstance(content, str) else "",
+            content=_unwrap_pasted_content(content) if isinstance(content, str) else "",
         )
     if operation in _LEAVE_OPERATIONS:
         return QueueSignal(kind=QueueSignalKind.LEAVE, session_id=_record_session_id(raw))
