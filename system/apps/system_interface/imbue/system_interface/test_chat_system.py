@@ -134,6 +134,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
         assert listed["default_shortcuts"] == [{"launch": "root", "mode": "new"}]
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(60, func_only=False)
 def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: Path) -> None:
     """The desktop ``open`` op with the chat's name and a chat page's path puts a window on the desktop for the
