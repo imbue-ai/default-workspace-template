@@ -179,7 +179,9 @@ def is_directory_change_command(command: str) -> bool:
     return (
         "cd" in programs
         and all(program in _DIRECTORY_CHANGE_PROGRAMS for program in programs)
-        and all(not segment.has_redirect and segment.terminator in _DIRECTORY_CHANGE_SEPARATORS for segment in segments)
+        and all(
+            not segment.has_redirect and segment.terminator in _DIRECTORY_CHANGE_SEPARATORS for segment in segments
+        )
     )
 
 
