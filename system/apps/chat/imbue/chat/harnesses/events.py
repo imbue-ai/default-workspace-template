@@ -43,8 +43,7 @@ SPECIAL_EVENT_TYPE: Final[str] = "special"
 # a payload is stamped at parse time instead: the labels (derived from the FULL input),
 # ``input_chars`` / ``output_chars`` (so the frontend knows whether there is anything to
 # fetch), ``error_snippet`` (a failed call stays glanceable without a fetch), ``tk_stamp``
-# and ``tk_command`` (the step progress view's facts), ``is_directory_change`` (a shell call that
-# only ``cd``s, which the page folds into the repo-root Stop hook's chip), ``permission_request`` and
+# and ``tk_command`` (the step progress view's facts), ``permission_request`` and
 # ``secret_request`` (the two cards' structured objects), and ``has_thinking``.
 MAX_ERROR_SNIPPET_LENGTH: Final[int] = 200
 # Ceiling on the resident tk stamp. tk decoration is a handful of short lines per call;
@@ -107,10 +106,6 @@ class DisplayKind(StrEnum):
     # ``user_message`` of this kind, stamped with ``compaction_cause`` (a ``CompactionCause`` value,
     # or null when unknown; absent on an event older than the compaction status timeout).
     STATUS = "status"
-    # user_message only: the Stop hook that sends an agent which ended its turn outside the repo root
-    # back there. The page folds it and the agent's ``cd`` (a call stamped ``is_directory_change``)
-    # into one status chip, with no break in the turn.
-    RETURN_TO_ROOT = "return_to_root"
     # A one-line notice on the ASSISTANT rail: a tick, a bold lead (``display_label``) and
     # the plain summary (``display_body``). For a message the agent is told about rather
     # than one the user sent -- a background task finishing.

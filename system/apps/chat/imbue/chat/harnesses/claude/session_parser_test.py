@@ -1017,24 +1017,6 @@ def test_tk_mentioned_in_quoted_arg_is_not_stamped() -> None:
     assert "tk_command" not in events[0]["tool_calls"][0]
 
 
-def test_a_shell_call_that_only_changes_directory_is_stamped_and_other_calls_are_not() -> None:
-    """The page folds the stamped call into the repo-root Stop hook's chip, so a call doing anything more stays unstamped."""
-    lines = [
-        _make_assistant_line(
-            "uuid-cd",
-            "2026-01-01T00:00:00Z",
-            "",
-            tool_calls=[
-                {"id": "toolu_cd", "name": "Bash", "input": {"command": "cd /home/user/workspace && pwd"}},
-                {"id": "toolu_cd_ls", "name": "Bash", "input": {"command": "cd /home/user/workspace && ls"}},
-            ],
-        ),
-    ]
-    calls = {call["tool_call_id"]: call for call in parse_lines(lines)[0]["tool_calls"]}
-    assert calls["toolu_cd"]["is_directory_change"] is True
-    assert "is_directory_change" not in calls["toolu_cd_ls"]
-
-
 @pytest.mark.parametrize("line_type", ["assistant", "user"])
 def test_null_message_line_is_dropped_not_crashed(line_type: str) -> None:
     """A line with a present-but-null ``message`` must be dropped, not raised on.

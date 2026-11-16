@@ -5,8 +5,6 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
-import json
-import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -40,57 +38,6 @@ def test_ordinary_human_prompt_gets_no_decision() -> None:
 
 def test_stop_hook_feedback_is_a_chip() -> None:
     decision = classify_user_message("Stop hook feedback:\nlint failed, fix it")
-    assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Stop hook feedback"
-
-
-_CLAUDE_SETTINGS = Path(__file__).resolve().parents[6] / ".claude" / "settings.json"
-
-
-def _return_to_root_hook_command() -> str:
-    stop_hooks = json.loads(_CLAUDE_SETTINGS.read_text())["hooks"]["Stop"]
-    commands = [hook["command"] for group in stop_hooks for hook in group["hooks"]]
-    (command,) = [command for command in commands if "[ -e .git ]" in command]
-    return command
-
-
-def test_the_repo_root_stop_hooks_feedback_folds_into_its_own_kind(tmp_path: Path) -> None:
-    """Runs the hook as wired in .claude/settings.json, outside a repo, and classifies the feedback Claude Code
-    reports for it, so a rewording of the hook that the detector would miss fails here."""
-    command = _return_to_root_hook_command()
-    result = subprocess.run(
-        ["sh", "-c", command],
-        cwd=tmp_path,
-        env={"PATH": "/usr/bin:/bin", "MNGR_AGENT_WORK_DIR": "/home/user/workspace"},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 2
-    assert "cd /home/user/workspace" in result.stderr
-    decision = classify_user_message(f"Stop hook feedback:\n[{command}]: {result.stderr}", is_meta=True)
-    assert decision is not None
-    assert decision.display is DisplayKind.RETURN_TO_ROOT
-
-
-def test_the_repo_root_stop_hooks_earlier_wording_folds_too() -> None:
-    feedback = (
-        "Stop hook feedback:\n[[ -e .git ] || exit 2]: Be sure to return to the repo root when you finish! "
-        "Otherwise the other stop hooks cannot run correctly.\n"
-    )
-    decision = classify_user_message(feedback, is_meta=True)
-    assert decision is not None
-    assert decision.display is DisplayKind.RETURN_TO_ROOT
-
-
-def test_repo_root_feedback_beside_another_hooks_is_an_ordinary_stop_hook_chip() -> None:
-    """The agent is asked for more than the cd, so its answer must not be folded away."""
-    feedback = (
-        "Stop hook feedback:\n[[ -e .git ] || exit 2]: Return to the repo root so the other stop hooks can run.\n"
-        "[lint.sh]: lint failed, fix it\n"
-    )
-    decision = classify_user_message(feedback, is_meta=True)
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
     assert decision.display_label == "Stop hook feedback"

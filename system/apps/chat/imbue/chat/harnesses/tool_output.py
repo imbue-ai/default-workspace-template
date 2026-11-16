@@ -163,26 +163,6 @@ def is_secret_request_call(raw_input: str) -> bool:
     return script is not None and _SECRET_REQUEST_FILE_FLAG_RE.search(raw_input, script.end()) is not None
 
 
-_DIRECTORY_CHANGE_PROGRAMS: Final[frozenset[str]] = frozenset({"cd", "pwd"})
-_DIRECTORY_CHANGE_SEPARATORS: Final[frozenset[str | None]] = frozenset({"&&", ";", None})
-
-
-def is_directory_change_command(command: str) -> bool:
-    """True when ``command`` does nothing but move the shell: one or more ``cd``s, optionally with a
-    ``pwd`` to confirm, chained with ``&&`` or ``;`` and with no redirect. The answer an agent gives the
-    repo-root Stop hook, which the page folds into that hook's chip (``tool_call.is_directory_change``)."""
-    parsed = parse_command(command)
-    if parsed is None:
-        return False
-    segments = [segment for segment in parsed.segments if segment.words or segment.terminator is not None]
-    programs = [segment.words[0] if segment.words else None for segment in segments]
-    return (
-        "cd" in programs
-        and all(program in _DIRECTORY_CHANGE_PROGRAMS for program in programs)
-        and all(not segment.has_redirect and segment.terminator in _DIRECTORY_CHANGE_SEPARATORS for segment in segments)
-    )
-
-
 def classify_tool_call_display(*, is_pure_tk: bool, raw_input: str) -> DisplayKind | None:
     """The render decision for one tool call, or ``None`` for an ordinary row: a pure tk
     lifecycle call is a hidden structural marker; a latchkey POST renders as the

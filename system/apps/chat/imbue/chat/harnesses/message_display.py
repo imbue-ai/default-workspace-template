@@ -14,7 +14,7 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, the repo-root stop hook, fleet, task-notification, background-task report,
+1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
    workspace-update note, skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
    a secret-card resolution, reports merged into a turn with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
@@ -69,11 +69,6 @@ SEED_CONTEXT_TAG = "chat-seed-context"
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
-# Claude Code reports a blocking Stop hook as one ``[<hook command>]: <its stderr>`` line under the
-# header. Cross-layer contract: the stderr's opening words are those of the repo-root Stop hook in
-# ``.claude/settings.json`` (``message_display_test.py`` runs that hook and classifies its feedback).
-# The optional ``Be sure to`` is that hook's wording in transcripts from before it named the command.
-_RETURN_TO_ROOT_FEEDBACK_RE = re.compile(r"^\[.*\]: (?:Be sure to )?return to the repo root", re.IGNORECASE)
 _TASK_NOTIFICATION_OPEN = "<task-notification>"
 _TASK_NOTIFICATION_PREAMBLE = "[SYSTEM NOTIFICATION"
 _TASK_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>")
@@ -287,17 +282,6 @@ def _match_skill_expansion(content: str) -> MessageDisplay | None:
     )
 
 
-def _match_return_to_root_hook(content: str) -> MessageDisplay | None:
-    """The repo-root Stop hook's feedback, and only that hook's: feedback carrying another hook's line too
-    stays an ordinary Stop-hook chip, since it asks the agent for more than the ``cd``."""
-    if not content.startswith(_STOP_HOOK_PREFIX):
-        return None
-    lines = [line for line in content[len(_STOP_HOOK_PREFIX) :].splitlines() if line.strip()]
-    if len(lines) != 1 or _RETURN_TO_ROOT_FEEDBACK_RE.match(lines[0]) is None:
-        return None
-    return MessageDisplay(display=DisplayKind.RETURN_TO_ROOT)
-
-
 def _match_stop_hook(content: str) -> MessageDisplay | None:
     """Stop-hook feedback the harness injects when a Stop hook fires."""
     if not content.startswith(_STOP_HOOK_PREFIX):
@@ -488,7 +472,6 @@ _DETECTORS = (
     _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
-    _match_return_to_root_hook,
     _match_stop_hook,
     _match_task_notification,
     _match_background_task_report,
