@@ -2,7 +2,7 @@ Chat failures without a reason of their own use the workspace's shared sentences
 
 - A transcript or side conversation that does not load shows its reason, or "The workspace didn't answer. Try again in a moment.", without an "Error:" prefix; the model list in the switch dialog says "Couldn't load the list of models." (or that the workspace didn't answer) with the reason behind "See details".
 
-- A send that failed for a reason the composer has no sentence of its own for says your message wasn't delivered, with the reason behind "See details", as does every failed send's notice.
+- A send that failed for a reason the composer has no sentence of its own for says your message wasn't delivered. The composer's failure notice keeps the chat app's reason behind "See details" for every kind, including the ones it words itself.
 
 - A declined `/compact`, and a send refused because the chat's account was signed out, carry their reason as a sentence written for people, so the composer shows it as written rather than asking for a bug report.
 
