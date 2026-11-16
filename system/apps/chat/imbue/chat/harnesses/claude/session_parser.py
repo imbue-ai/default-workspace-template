@@ -26,6 +26,7 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
+from imbue.chat.harnesses.tool_output import is_directory_change_command
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
 from imbue.chat.harnesses.tool_output import stamp_echoed_requests
@@ -367,6 +368,10 @@ def _parse_assistant_message(
             # command itself, so that one command is stamped resident.
             if command is not None and is_tk_lifecycle_anywhere(command):
                 tool_call["tk_command"] = command
+            # The repo-root Stop hook is claude's alone (tool-call-policies-state-of-things.md), so only
+            # claude's parser stamps the answer it asks for.
+            if command is not None and is_directory_change_command(command):
+                tool_call["is_directory_change"] = True
             # For Agent tool calls, surface the description and subagent_type from the
             # tool input directly. These let the frontend render the rich subagent card
             # (label + agent-type badge) the instant the call appears, before the subagent

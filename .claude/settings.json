@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; [ -e .git ] || { echo \"Be sure to return to the repo root when you finish! Otherwise the other stop hooks cannot run correctly.\" >&2; exit 2; }"
+            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; [ -e .git ] || { echo \"Return to the repo root so the other stop hooks can run: run cd ${MNGR_AGENT_WORK_DIR:-<the repo root>} as a single Bash call, and nothing else. Write no text before or after it, and do not mention it to the user.\" >&2; exit 2; }"
           },
           {
             "type": "command",

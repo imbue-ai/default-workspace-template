@@ -8,11 +8,14 @@ hook-block exception to it) is tested here too.
 
 import json
 
+import pytest
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
 from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import find_secret_request
+from imbue.chat.harnesses.tool_output import is_directory_change_command
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_secret_request_call
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
@@ -124,3 +127,26 @@ def test_the_two_echoed_shapes_are_told_apart_and_stamped_side_by_side() -> None
     untouched: dict[str, object] = {}
     stamp_echoed_requests(untouched, "plain output with a {brace} and no request")
     assert untouched == {}
+
+
+@pytest.mark.parametrize(
+    ("command", "is_directory_change"),
+    [
+        ("cd /home/user/workspace", True),
+        ("cd /home/user/workspace && pwd", True),
+        ("cd '/home/user/my workspace'; pwd", True),
+        ("cd /home/user/workspace;", True),
+        ("pwd", False),
+        ("cd /home/user/workspace && ls", False),
+        ("cd /home/user/workspace && pwd > /tmp/where", False),
+        ("cd /home/user/workspace | cat", False),
+        ("cd /home/user/workspace || exit 1", False),
+        ("cd /home/user/workspace &", False),
+        ("echo 'cd /home/user/workspace'", False),
+        ("cd 'unterminated", False),
+    ],
+)
+def test_only_a_command_that_just_moves_the_shell_is_a_directory_change(
+    command: str, is_directory_change: bool
+) -> None:
+    assert is_directory_change_command(command) is is_directory_change

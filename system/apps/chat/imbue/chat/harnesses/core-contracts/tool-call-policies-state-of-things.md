@@ -153,7 +153,7 @@ shim sits on the command before any of that; but the `--backgrounded` arm is not
 unreachable, and an agent that wants to background a command can.
 
 **The cwd Stop hook is claude-only, by construction -- do not port it.** claude's
-`.claude/settings.json` carries `[ -e .git ] || "Be sure to return to the repo root..."`. It
+`.claude/settings.json` carries `[ -e .git ] || "Return to the repo root..."`. It
 exists because claude's `Bash` tool keeps one shell cwd ACROSS calls, so an agent that wanders
 breaks every later hook that uses a relative path. agy and codex cannot hit that: agy's `Cwd`
 and codex's `workdir` are required per-call parameters. Measured across 41 live agy calls, `Cwd`
