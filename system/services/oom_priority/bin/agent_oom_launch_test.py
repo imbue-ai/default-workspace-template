@@ -13,7 +13,6 @@ maps back to the agent.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import platform
@@ -21,16 +20,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import agent_oom_launch as wrapper
 import pytest
-
-_SCRIPT = Path(__file__).parent / "agent_oom_launch.py"
-_spec = importlib.util.spec_from_file_location("agent_oom_launch", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-wrapper = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(wrapper)
-
 from oom_priority.ledger import has_pending_shed, read_records
 from oom_priority.registry import lookup_agent
+
+_SCRIPT = Path(__file__).parent / "agent_oom_launch.py"
 
 _SHED_HOOK = Path(__file__).parent / "earlyoom_record_shed.py"
 

@@ -1,0 +1,9 @@
+Copy and paste between your computer and the Screen works again, over a shared link too, and clicking into the Screen no longer pops a "Paste" button (Safari, Firefox) or a clipboard permission prompt (Chrome).
+
+Pasting text copied from a terminal or an editor (which carries an HTML flavor beside the plain text) now lands on the Screen: neko writes one X clipboard target and kept only the HTML when the viewer sent both, so a URL bar or a terminal had nothing to paste. The viewer sends the plain text alone.
+
+A paste no longer comes back as "Copied from the Screen" and overwrites the clipboard on your computer with an HTML rendering of what you pasted. neko reads its own write back with the HTML equal to the text (an `xclip` owner answers every target with its one payload) and announces it like any other change; the viewer now recognises the echo by the plain text, and treats HTML equal to the text as no HTML. Pasting back something copied on the Screen leaves the Screen's clipboard as it was, rich flavors included.
+
+The viewer's calls to neko's routes (the clipboard text and image reads and the text write, the screencast fallback, the logout) carry the session token in the `token` query parameter, as its WebSocket already did, instead of an `Authorization: Bearer` header: the share gateway reads such a header as a visiting agent's admission token and refuses the request, and strips it from what it forwards, so over a share every paste failed with "The text could not be pasted on the Screen" and copying from the Screen failed silently.
+
+The viewer no longer reads the local clipboard when its window gains focus; a paste (Ctrl+V, Cmd+V) is the one way text and images cross to the Screen, and its event carries the data with no permission at all. A paste while this viewer does not hold control says "Take control to paste on the Screen" in the strip instead of vanishing.

@@ -30,6 +30,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
+  addMentionsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
   discardPendingIntake,
@@ -37,6 +38,7 @@ import {
   getChatById,
   getChats,
   getMainChatId,
+  getProvisionalChat,
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
@@ -65,8 +67,11 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
+import { ensureParticipants } from "../models/Participants";
+import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
-import { groupedRows, rowsFromSnapshots } from "./rows";
+import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
@@ -76,7 +81,7 @@ import {
   slotFill,
 } from "./selection";
 import type { SlotFill } from "./selection";
-import { prependToComposer } from "../views/MessageInput";
+import { prependToComposer, setComposerHint } from "../views/MessageInput";
 import { plainFailureLines } from "../views/failure-lines";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { RootNoticeView, describeIntakeApplyFailure, raiseRootNotice } from "./rootNotice";
@@ -109,8 +114,9 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  const title = getChatById(selectedChatId)?.title;
-  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
+  const provisional = getProvisionalChat(selectedChatId);
+  const title = getChatById(selectedChatId)?.title ?? (provisional === undefined ? "" : provisionalTitle(provisional));
+  return titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
@@ -118,7 +124,7 @@ interface ReportedLocation {
   title: string;
 }
 
-// The last location told to the shell: every chat list push re-derives it, and only a change goes up.
+// The last location told to the shell: every chat list push and redraw re-derives it, and only a change goes up.
 let reportedLocation: ReportedLocation | null = null;
 
 function reportLocation(): void {
@@ -137,12 +143,17 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
+/** Every row's source: the chats (rooms among them), the chats not yet agents, the main chat, and the viewer's
+ *  mentions, each row carrying a rename's pending title. */
+function allRows(): ChatRow[] {
+  return withPendingTitles(
+    rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getMentionedChatIds()),
+  );
+}
+
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(
-    withPendingTitles(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId())),
-    startedHere,
-  );
+  return groupedRows(withoutPendingDeletes(allRows()), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -153,6 +164,7 @@ function slotFillFor(chatId: string | null): SlotFill {
     isChoosing: pendingToken !== null || pendingPick !== null,
     isCompact: compactQuery.matches,
     isShown: isRootShown,
+    isDeletePending: hasPendingDelete(),
   });
 }
 
@@ -172,7 +184,7 @@ function select(chatId: string | null): void {
 }
 
 /** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
- *  layout left the phone width). */
+ *  layout left the phone width, a delete was refused). */
 function fillSlot(): void {
   if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
 }
@@ -266,13 +278,22 @@ function isReferenceDraftAvailable(): boolean {
   return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
+/** Put ``hint`` on a chat's composer as its placeholder, focused: the live page's when it is loaded, else where the
+ *  composer reads it on mount. */
+function hintInto(chatId: string, hint: string): void {
+  if (pool?.hintComposer(chatId, hint) === true) return;
+  setComposerHint(chatId, hint);
+}
+
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
- *  goes into its composer, a first message launches it. */
+ *  goes into its composer, a first message launches it, a hint becomes its composer's placeholder (the multiplayer
+ *  spec, section 9.2). */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.hint !== null) hintInto(applied.chatId, applied.hint);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
@@ -359,13 +380,15 @@ function dismissPick(): void {
 
 function onChatsUpdated(): void {
   settleAcceptedRenames();
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
+  const rows = allRows();
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
   const listed = new Set(rows.map((row) => row.chatId));
+  // A chat opened here can be deleted while it still waits for a push to name it, and none will now.
+  for (const chatId of settlePendingDeletes(listed)) awaitingListing.delete(chatId);
   for (const chatId of listed) awaitingListing.delete(chatId);
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
@@ -382,6 +405,10 @@ function onChatsUpdated(): void {
 }
 
 const ChatRoot: m.Component = {
+  onupdate() {
+    // A rename reaches the window's title as it reaches the list, ahead of any chat list carrying it.
+    reportLocation();
+  },
   view() {
     const rows = railRows();
     const isCompact = compactQuery.matches;
@@ -476,7 +503,8 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isInDrawer: isCompact,
     isTouch: isCompact && touchQuery.matches,
-    onPick: (chatId: string) => select(chatId),
+    onPick: select,
+    onDeleteRefused: fillSlot,
     onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
@@ -547,6 +575,13 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
+  // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
+  void watchPendingMentions().then(() => m.redraw());
+  // The rows' participant pictures name and draw their authors off the roster, which this entry loads for itself:
+  // the models are singletons per entry, so the chat page's load does nothing for the root. Read again when
+  // someone's mentions change, which is the one push that follows a sender joining.
+  void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();

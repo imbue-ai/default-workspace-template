@@ -31,20 +31,23 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 import m from "mithril";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
-import { isDeleting, rowMenuRows } from "./ChatRail";
+import { rowMenuRows } from "./ChatRail";
+import { hasPendingDelete } from "./pendingDeletes";
 import type { ChatRow } from "./rows";
 import { RootNoticeView } from "./rootNotice";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 
 const ROW: ChatRow = {
   chatId: "agent-1",
+  kind: "agent",
   title: "Plan the trip",
   status: "idle",
   labels: {},
   agentIds: ["agent-1"],
   lastActiveMs: null,
-  isProvisional: false,
   isMain: false,
+  hasMention: false,
+  participants: [],
 };
 
 function select(key: string): void {
@@ -130,7 +133,7 @@ describe("the chat list's failed verbs", () => {
     expect(button(root, "Try again")).toBeUndefined();
   });
 
-  it("says a delete nothing answered may have run, offers no retry, and keeps the row marked until the list updates", async () => {
+  it("says a delete nothing answered may have run, offers no retry, and keeps the chat off the list until it updates", async () => {
     verbs.destroyChat.mockRejectedValue(httpError(502, null));
     select("delete");
     const root = await rendered();
@@ -139,13 +142,13 @@ describe("the chat list's failed verbs", () => {
       `The workspace didn't answer, so Imbue Studio can't tell whether "Plan the trip" was deleted.`,
     );
     expect(button(root, "Try again")).toBeUndefined();
-    expect(isDeleting("agent-1")).toBe(true);
+    expect(hasPendingDelete()).toBe(true);
 
     for (const listener of [...chatsListeners]) listener();
-    expect(isDeleting("agent-1")).toBe(false);
+    expect(hasPendingDelete()).toBe(false);
   });
 
-  it("shows a half-done delete's own sentence and unmarks a refused one", async () => {
+  it("shows a half-done delete's own sentence and brings a refused one back", async () => {
     verbs.destroyChat.mockRejectedValue(
       httpError(500, {
         detail: "the agent was destroyed but its record could not be removed",
@@ -158,7 +161,7 @@ describe("the chat list's failed verbs", () => {
     const root = await rendered();
 
     expect(root.textContent).toContain("This chat was only partly deleted");
-    expect(isDeleting("agent-1")).toBe(false);
+    expect(hasPendingDelete()).toBe(false);
   });
 });
 

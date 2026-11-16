@@ -19,7 +19,7 @@ scripted; Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
@@ -155,7 +155,7 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 SCOPES=data/.tasks/update-self/scopes
 RANGES=data/.tasks/update-self/footprint-ranges.json
 rm -rf "$SCOPES" && mkdir -p "$SCOPES"
@@ -317,9 +317,32 @@ is a `question` gate (Step 6). Record which branch applied, with its evidence,
 in your report.
 
 - **Environment gate first**, whenever a manifest or lockfile is in the
-  merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
-  is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else.
+  merged set: `uv lock --check` then `uv sync --all-packages` at the root, and
+  for each user package (`python3 system/scripts/workspace_bare_scripts/user_packages.py list`;
+  each is a standalone project with its own lock) `uv lock --check --project <package>`.
+  A failure here is a precise blocker (an unparseable root lock means no service
+  in the workspace can start); fix it before running anything else. A user
+  package whose lock is stale after the merge (a shared library it uses or the
+  mngr pin moved) is relocked with
+  `uv run --no-sync user-package-migration relock <package>`,
+  never by hand-editing its lock. A user package that is not standalone yet (the
+  update that made them standalone; `system/test_user_packages_are_standalone.py`
+  names it) is converted with the same command's `migrate`, after its `--dry-run`,
+  whose output goes in your report, per `references/python-packaging-migration.md`
+  ("A user app, service or lib"). Each converted package then gets this step's
+  suites, and an app or service its isolated boot, from its own venv. A failure here
+  or in the suites below on the workspace's own skills, apps, services or docs
+  that the update's changelog ties to a changed rule (for example a user
+  skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
+  import, a user service whose program line runs under `uv run`, or a type
+  error in a user skill or app) is fixed by following
+  `references/python-packaging-migration.md`.
+  Separately, before any suite or boot below runs, sync the venv
+  (`uv sync --all-packages --frozen`) whenever the merge changed a
+  `pyproject.toml` or `uv.lock` at all, merged or pulled in
+  (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
+  lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
+  which never syncs, so it would otherwise run on the pre-merge environment.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test
@@ -361,7 +384,7 @@ in your report.
   Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
-  every printed line, in order, plus `uv run ruff check` when a Python file is
+  every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation; the tree before
@@ -371,7 +394,7 @@ in your report.
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
   file of it in `local_only`) -- against a scratch data copy via
-  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  `.agents/shared/scripts/agents_shared/serve_isolated_instance.py` (see `update-app`),
   never the live store. A service that arrived exactly as upstream shipped
   it is not booted here: upstream tested it, and for the shell and the chat
   app the apply pre-flights the merged copy itself before anything live
@@ -385,10 +408,10 @@ in your report.
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
-  app's, and the Style Guide's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those six bundles
+  app's, the Screen's, and the Style Guide's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all six locations in your report.
+  installed only as a set) -- name all seven locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -430,6 +453,71 @@ commits are in
 or should run at another scope, in a situation the rule does not cover, that is
 a `question` gate for the lead -- never a silent adaptation.
 
+### 4d. Decide whether running agents need a restart
+
+The apply restarts the services, never the agents: every chat and worker keeps
+the harness process it had, which loaded its binary and some of its config
+once, when it started. After a successful apply the lead restarts them all
+(itself last) when the update changes what those processes loaded. **Whether
+that happens is decided by rule**; record the verdict and its evidence in your
+report. The mechanical half is a command, run from the tree the live workspace
+runs (`footprint-ranges`' `update_base`, the same base Step 4's update range
+reads from) to `HEAD`, wherever 4c's fix commits left it. After a rolled-back
+update that tree is the commit under Step 1's rollback reverts: the reverts,
+and a merge made on top of them, already carry a release the running agents
+never loaded:
+
+```bash
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+RANGES=data/.tasks/update-self/footprint-ranges.json
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
+LIVE=$(jq -r .update_base "$RANGES")
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    agent-restart-verdict --before "$LIVE" --after HEAD
+```
+
+Its `triggers` name every change it knows makes a restart **needed**: a
+harness version pin in `system/scripts/setup_system.sh`, an
+`[agent_types.*]` `version` in `.mngr/settings.toml`, or the `AGY_VERSION`
+the Antigravity installer (`system/scripts/agy_install.sh`) pins (the apply's
+provisioner installs the new binary, but a running agent keeps executing the
+old one), and code a harness loads into its process at start
+(`.pi/extensions/**`). When `needed` is `true`, the verdict is `needed`, and
+its triggers are the evidence. When it is `false`, read the rest of the diff
+(`git diff
+--name-only "$(jq -r .update_base data/.tasks/update-self/footprint-ranges.json)"
+HEAD`) for what the command cannot see, which also makes a restart
+**needed**:
+
+- **A harness extension or plugin tree the update adds**, like
+  `.pi/extensions/`, that a harness loads when it starts. Name it for the
+  command too, as a `submit-upstream-changes` candidate, so the next update
+  sees it.
+- **Other harness config whose live reload you cannot establish** (for example
+  `.codex/hooks.json`): a harness that re-reads it on its own needs no
+  restart, but only its documentation can tell you that, and when it does not
+  say, count it as loaded at start. A restart of an idle agent is cheap; an
+  agent left on half-applied config is not.
+
+A restart is **not needed** for:
+
+- **`.claude/settings.json`**: Claude Code's file watcher picks up edits to
+  it, hooks included, in a running session.
+- **A script a hook or tool runs** (`system/scripts/agent_*.sh`, a guard's
+  checker): each call runs the file as it is on disk.
+- **An agent's launch command, arguments or environment** (`[agent_types.*]`
+  in `.mngr/settings.toml` other than `version`), and files mngr writes into
+  an agent's state directory when it creates the agent (a move of the mngr pin
+  can change these): mngr records both at create, and a restart replays them
+  unchanged. They reach only agents created after the update. When that
+  matters to the user, say so under **Agent restarts** so the results message
+  can offer a fresh chat.
+
+When the rule is unclear for a file (a new harness, a config file whose
+loading you cannot place), that is a `question` gate (Step 6), and the
+fallback is a restart.
+
 ## 5. Gather the "what's new" inputs
 
 ```bash
@@ -463,8 +551,9 @@ Valid `name:` values:
 - `question` (`type: gate`) -- three cases; say which in the first line.
   (a) A genuine, unresolvable merge conflict: the file, what each side did,
   the options. (b) The scope escape hatch of 4a (the impact analysis), 4b (a
-  validation item) or 4c (the review gates): which rule, its conditions as you
-  read them, your situation, what you would do instead. (c) A
+  validation item), 4c (the review gates) or 4d (the agent-restart rule):
+  which rule, its conditions as you read them, your situation, what you would
+  do instead. (c) A
   **customization the update cannot keep** (the 4b verdict): what the user
   built, what the update does to it, the adaptation you attempted and why it
   failed, the before/after evidence (paths in your worktree), and the options.
@@ -485,11 +574,12 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all six (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all seven (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
-    `<your work_dir>/system/apps/routines/src/routines_app/static`, and
+    `<your work_dir>/system/apps/routines/src/routines_app/static`,
+    `<your work_dir>/system/apps/screen/src/screen/static`, and
     `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
@@ -516,6 +606,12 @@ Valid `name:` values:
     bump is "applied live, unverified in the worktree; the lead checks it
     after the apply", with what your research turned up. Only a change whose
     absence would break the running workspace is a `stuck` report.
+  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with
+    `agent-restart-verdict`'s output and any changed file you judged beyond
+    it, and, when needed, one plain line naming what
+    the restart picks up (for example "Claude Code 2.1.300" or "new pi command
+    guards"); the lead passes that line to the restart. Add any change that
+    reaches only newly created agents.
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and

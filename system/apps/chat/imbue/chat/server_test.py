@@ -1,7 +1,6 @@
 """Tests for the Flask server."""
 
 import fcntl
-import importlib.util
 import io
 import json
 import os
@@ -9,6 +8,8 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,17 +21,35 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
+from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
+from update_self_skill import update_agent_restarts
+from update_self_skill import update_runtime
+from update_self_skill.update_layout import APPS_REGISTRY_PATH
+from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
+from workspace_bare_scripts import message_chat
+from workspace_bare_scripts import room_agent
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import parse_identity_header
+from workspace_layout.primitives import BubbleKind
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import shell_base_url
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import roster_participant
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -39,22 +58,31 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FirstMessage
+from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
+from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
@@ -74,19 +102,22 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
+from imbue.chat.harnesses.room.transcript import transcript_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import CreateChatRequest
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
@@ -98,8 +129,12 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _attributed_send
+from imbue.chat.server import _bubble_new_chats_first_message
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _room_first_message_hook
+from imbue.chat.server import _send_room_mention
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -113,6 +148,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import drain_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
@@ -129,11 +165,14 @@ from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -185,8 +224,9 @@ def client(app: Flask) -> FlaskClient:
 def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
     """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
     images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
-    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
-    carries none."""
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), the composer's dictation
+    may compile WebAssembly and download its speech model from Hugging Face and the CDN hosts it redirects to,
+    scripts still come only from the chat's origin, and a non-page answer carries none."""
     page = client.get("/")
 
     assert page.status_code == 200
@@ -195,6 +235,8 @@ def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskCl
     assert "frame-src http: https:" in policy
     assert "img-src * data: blob:" in policy
     assert "media-src * data: blob:" in policy
+    assert "script-src 'self' 'wasm-unsafe-eval'" in policy
+    assert "connect-src 'self' https://huggingface.co https://*.hf.co" in policy
     assert "Content-Security-Policy" not in client.get("/api/health").headers
 
 
@@ -696,6 +738,54 @@ def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: st
     )
 
 
+def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree(
+    tmp_path: Path,
+) -> None:
+    """The chats of one account all watch that account's projects tree; the app watches it once, through one
+    observer, however many of them are open."""
+    state = build_test_state()
+    account_dir = tmp_path / "account"
+    (account_dir / "projects" / "hash123").mkdir(parents=True)
+    observers_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseObserver)}
+    try:
+        for index in range(4):
+            agent_id = f"account-chat-{index}"
+            agent_state_dir = tmp_path / agent_id
+            agent_state_dir.mkdir()
+            (agent_state_dir / "claude_session_id_history").write_text(f"s{index}\n")
+            info = AgentInfo(
+                id=agent_id,
+                name=agent_id,
+                state="RUNNING",
+                agent_state_dir=agent_state_dir,
+                claude_config_dir=account_dir,
+            )
+            state.get_or_create_watcher(info)
+
+        def app_observers() -> list[BaseObserver]:
+            return [
+                thread
+                for thread in threading.enumerate()
+                if isinstance(thread, BaseObserver) and thread not in observers_before
+            ]
+
+        def watch_count(path: Path) -> int:
+            return sum(
+                1 for observer in app_observers() for emitter in observer.emitters if emitter.watch.path == str(path)
+            )
+
+        # Each chat's own state dir is watched once its watcher has subscribed to everything.
+        wait_until_true(
+            lambda: all(watch_count(tmp_path / f"account-chat-{index}") == 1 for index in range(4)),
+            5.0,
+            "every chat's watches in place",
+        )
+        assert watch_count(account_dir / "projects") == 1
+        assert len(app_observers()) == 1
+    finally:
+        state.shutdown()
+
+
 def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
     """Eviction releases the watcher (resident transcript, watch thread); a later read
     rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
@@ -795,6 +885,7 @@ class _ReleasingWhileSeedingAgentManager(AgentManager):
         super().update_session_events(agent_id, events)
 
 
+@pytest.mark.flaky
 def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_path: Path) -> None:
     manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
     state = build_test_state(agent_manager=manager)
@@ -953,11 +1044,88 @@ def _fake_watcher(
         set_finished_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
+        set_flush_hooks=lambda _send, _is_alive, _note_resent: None,
+        set_watch_observer=lambda _watch_observer: None,
         get_all_events=get_all_events,
         start=start,
         stop=stop,
     )
+
+
+class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that also records whether each send may be sent again when unconfirmed."""
+
+    resend_choices: list[bool] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        self.resend_choices.append(is_resent_when_unsure)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def _client_over(messenger: RecordingMngrMessenger) -> tuple[AgentManager, FlaskClient]:
+    """A chat app whose agent list is known and whose sends go to ``messenger``, with a client for its routes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
+def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
+    """The flush retries a block it did not see land only while no turn is open, so mngr's send is not repeated."""
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster(), messenger=messenger))
+    flush_sends: list[Callable[[str], bool]] = []
+    fake_watcher = _fake_watcher(lambda: [], lambda: None)
+    fake_watcher.set_flush_hooks = lambda send, _is_alive, _note_resent: flush_sends.append(send)
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(harness=HarnessType.ANTIGRAVITY))
+        (flush_send,) = flush_sends
+        assert flush_send("held block") is True
+        assert messenger.resend_choices == [False]
+    finally:
+        state.shutdown()
+
+
+def test_the_antigravity_flush_notes_a_block_it_sent_again_on_the_chat() -> None:
+    agent_info = _agent_info(harness=HarnessType.ANTIGRAVITY)
+    state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster()))
+    seed_agent_state(state.agent_manager, agent_info.id, name=agent_info.name)
+    note_hooks: list[Callable[[str, float], None]] = []
+    fake_watcher = _fake_watcher(lambda: [], lambda: None)
+    fake_watcher.set_flush_hooks = lambda _send, _is_alive, note_resent: note_hooks.append(note_resent)
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(agent_info)
+        (note_resent,) = note_hooks
+        note_resent("held block", 0.0)
+        snapshot = state.agent_manager.get_chat_snapshot(agent_info.id)
+        assert snapshot is not None
+        assert [send.text for send in snapshot.resent_sends] == ["held block"]
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("body_fields", "expected_choice"),
+    [({}, True), ({"is_single_send": True}, False)],
+    ids=["a-plain-send", "a-send-from-a-failure-notice"],
+)
+def test_only_a_send_from_a_failure_notice_goes_out_once(body_fields: dict[str, bool], expected_choice: bool) -> None:
+    agent_info = _agent_info()
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    _manager, client = _client_over(messenger)
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello", **body_fields})
+
+    assert response.status_code == 200
+    assert messenger.resend_choices == [expected_choice]
 
 
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
@@ -1083,6 +1251,74 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
+def test_a_send_repeated_under_its_id_is_delivered_once() -> None:
+    """A page that got no answer sends again under the same id; the chat app answers it without delivering twice."""
+    agent_id = "agent-00000000000000000000000000000001"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        first = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+        repeat = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+        other = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-2"})
+
+    assert [first.status_code, repeat.status_code, other.status_code] == [200, 200, 200]
+    assert repeat.get_json() == first.get_json()
+    assert messenger.sent == [(agent_id, "hello"), (agent_id, "hello")]
+
+
+def test_a_repeat_of_a_refused_send_gets_the_refusal_while_a_plain_send_under_its_id_is_sent_afresh() -> None:
+    """The page's repeat (``is_repeat``) of an unconfirmed send must not type it again; the user's Send again does."""
+    agent_info = _agent_info()
+    agent_id = agent_info.id
+    messenger = RecordingMngrMessenger(succeeds=False, failure_kind="submission_unconfirmed")
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    url = f"/api/chats/{agent_id}/message"
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        first = client.post(url, json={"message": "hello", "message_id": "m-1"})
+        repeat = client.post(url, json={"message": "hello", "message_id": "m-1", "is_repeat": True})
+        assert messenger.sent == [(agent_id, "hello")]
+        send_again = client.post(url, json={"message": "hello", "message_id": "m-1"})
+
+    assert [first.status_code, repeat.status_code, send_again.status_code] == [500, 500, 500]
+    assert first.get_json()["kind"] == "submission_unconfirmed"
+    assert repeat.get_json() == first.get_json()
+    assert messenger.sent == [(agent_id, "hello"), (agent_id, "hello")]
+
+
+def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
+    """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
+    agent_info = _agent_info()
+    messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
+    manager, client = _client_over(messenger)
+    seed_agent_state(manager, agent_info.id, name=agent_info.name)
+    url = f"/api/chats/{agent_info.id}/message"
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(url, json={"message": "hello", "message_id": "m-1"})
+        # The page's repeat after a lost answer gets the same answer, so it can say so too.
+        repeat = client.post(url, json={"message": "hello", "message_id": "m-1", "is_repeat": True})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "resent"}
+    assert repeat.get_json() == {"status": "resent"}
+    assert messenger.sent == [(agent_info.id, "hello")]
+    snapshot = manager.get_chat_snapshot(agent_info.id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hello"]
+    # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
+    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
+
+
 def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
     tmp_path: Path, signed_in_account: str
 ) -> None:
@@ -1134,6 +1370,47 @@ def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_on
     assert delivered is not None and delivered.is_seed_pending is False
 
 
+def test_a_rooms_send_never_carries_the_pending_seed(tmp_path: Path, signed_in_account: str) -> None:
+    """A seeded chat that became a room appends the words as typed: a room has no agent to need the seed
+    context, and its page shows the seeded conversation as earlier segments; the seed stays pending."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    seeded = manager.seed_chat("Welcome", (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready."),))
+    chat_id = ChatId(seeded.chat_id)
+    manager.create_chat("", chat_id=seeded.chat_id)
+    wait_until_true(
+        lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+    )
+    record = manager._chat_record_store.read(chat_id)
+    assert record is not None and record.is_seed_pending is True
+    member_id = record.agents[-1].agent_id
+    member = AgentInfo(
+        id=member_id,
+        name="Welcome",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "member",
+        claude_config_dir=tmp_path / ".claude",
+        harness=HarnessType.ROOM,
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=member):
+        answer = client.post(f"/api/chats/{chat_id}/message", json={"message": "just say hi"})
+
+    assert answer.status_code == 200
+    # A room's send is appended to its transcript, as typed: no seed context block ahead of the words.
+    transcript = transcript_path(manager._get_agent_state_dir(member_id)).read_text()
+    assert '"just say hi"' in transcript
+    assert SEED_CONTEXT_TAG not in transcript
+    kept = manager._chat_record_store.read(chat_id)
+    assert kept is not None and kept.is_seed_pending is True
+
+
 def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1168,7 +1445,11 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
 
 
 def _client_with_account_labeled_chat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str, account_id: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    account_id: str,
+    harness: HarnessType = HarnessType.CLAUDE,
 ) -> tuple[FlaskClient, RecordingMngrMessenger]:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     messenger = RecordingMngrMessenger()
@@ -1176,8 +1457,12 @@ def _client_with_account_labeled_chat(
     manager.note_agent_list_known()
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
-            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None
+            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None, harness=harness
         )
+    # A room's send appends to the transcript under its state dir; an agent chat's dir stays absent, since a claude
+    # agent whose dir holds no ready marker reads as starting up and a send to it waits.
+    if harness is HarnessType.ROOM:
+        agent_state_dir(tmp_path, agent_id).mkdir(parents=True, exist_ok=True)
     return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
 
 
@@ -1198,6 +1483,25 @@ def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
     assert messenger.sent == []
 
 
+def test_a_room_stamped_with_a_signed_out_accounts_label_still_takes_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A room runs on no account whatever its labels say (the multiplayer spec, section 7.3): the create defaults
+    stamped the account's label onto a room created before its create cleared them, and the account signing out
+    must not close the room, while an agent chat on the same label is refused."""
+    room_id = "agent-00000000000000000000000000000737"
+    client, messenger = _client_with_account_labeled_chat(
+        tmp_path, monkeypatch, room_id, "signed-out-account-8815", harness=HarnessType.ROOM
+    )
+
+    response = client.post(f"/api/chats/{room_id}/message", json={"message": "anyone here?", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert messenger.sent == []
+    events = client.get(f"/api/chats/{room_id}/events").get_json()["events"]
+    assert [event["content"] for event in events] == ["anyone here?"]
+
+
 def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1210,6 +1514,20 @@ def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_o
         bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
 
     assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
+def test_a_rooms_mention_is_refused_by_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000736"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8814")
+
+    with client.application.app_context():
+        delivered = author_prefix("Bob", "Lounge") + "@agent hi"
+        refusal = _send_room_mention(ChatId(agent_id), delivered, "m-1")
+
+    assert refusal is not None and "signed out" in refusal
+    assert messenger.sent == []
 
 
 def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(
@@ -1280,6 +1598,27 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert messenger.sent == [(agent_id, "wake up")]
     tracked = manager.get_agent_by_id(agent_id)
     assert tracked is not None and tracked.state == "WAITING"
+
+
+def test_a_send_into_a_stopped_room_appends_and_leaves_the_room_stopped(tmp_path: Path) -> None:
+    """A room's send appends to its transcript and starts nothing (the multiplayer spec, section 11): the room
+    keeps reading as stopped, and its reader is revived by ``mngr message``, the start verb, or boot, not by a page."""
+    room_id = "agent-00000000000000000000000000000737"
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    seed_agent_state(manager, room_id, name="Attic", state="STOPPED", harness=HarnessType.ROOM)
+    agent_state_dir(get_host_dir(), room_id).mkdir(parents=True, exist_ok=True)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post(f"/api/chats/{room_id}/message", json={"message": "anyone here?", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert messenger.sent == []
+    events = client.get(f"/api/chats/{room_id}/events").get_json()["events"]
+    assert [event["content"] for event in events] == ["anyone here?"]
+    tracked = manager.get_agent_by_id(room_id)
+    assert tracked is not None and tracked.state == "STOPPED"
 
 
 class _ReleasingAsEachSendEndsAgentManager(AgentManager):
@@ -1426,7 +1765,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
         model_state_path=agent_info.agent_state_dir / "model_state.json",
-        send_to_harness=lambda text: True,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -1500,10 +1839,8 @@ def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: 
     assert response.status_code == 500
     body = response.get_json()
     assert body["kind"] == "agent_unreachable"
-    assert body["user_facing_message"] == (
-        "This chat's agent couldn't be started. Try again. If this persists, report a bug."
-    )
-    assert body["reportable"] is True
+    # The page words the kind itself; mngr's reason goes behind its details.
+    assert "user_facing_message" not in body
     assert "no such agent" in body["detail"]
     assert started == [agent_info.name]
 
@@ -1600,6 +1937,45 @@ def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_m
         )
     assert outcome is SendOutcome.NOT_READY
     assert sleeps == []
+
+
+@pytest.mark.parametrize("is_single_send", [False, True], ids=["a-plain-send", "a-send-from-a-failure-notice"])
+def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
+    tmp_path: Path, agent_manager: AgentManager, is_single_send: bool
+) -> None:
+    agent_info = _model_agent_info("codex-agent-11", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    request_body = SendMessageRequest(message="hi", message_id="m11", is_single_send=is_single_send)
+
+    with (
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(session, "send", return_value=SendOutcome.OK) as mock_send,
+    ):
+        outcome = _revive_and_retry_send(agent_info, agent_manager, session, request_body, "m11", sleep=lambda _: None)
+    assert outcome is SendOutcome.OK
+    mock_send.assert_called_once_with("hi", "m11", not is_single_send)
+
+
+def test_a_send_delivered_by_a_second_send_on_the_revive_path_is_noted_on_its_chat(tmp_path: Path) -> None:
+    agent_id = "codex-agent-12"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, client = _client_over(RecordingMngrMessenger())
+    seed_agent_state(manager, agent_id, name=agent_info.name)
+    session = _codex_session_over(None)
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "is_starting_up", return_value=False),
+        patch.object(session, "send", side_effect=[SendOutcome.NOT_READY, SendOutcome.RESENT]),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m12"})
+
+    assert response.get_json() == {"status": "resent"}
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hi"]
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
@@ -1795,7 +2171,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
     # rather than by position, so reordering the picker does not break this.
     reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
-    assert reported["fable[1m]"] == "claude-fable-5-1"
+    assert reported["fable[1m]"] == "claude-fable-5-2"
     assert reported["opus[1m]"] == "claude-opus-5-5"
     assert reported["sonnet[1m]"] == "claude-sonnet-5-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
@@ -2122,6 +2498,95 @@ def test_fast_mode_changes_on_a_codex_chat_whose_effort_was_never_picked(tmp_pat
     assert codex_client.calls == [{"service_tier": None}]
 
 
+@pytest.mark.parametrize(
+    ("harness", "mode", "expected_calls"),
+    [
+        (HarnessType.CODEX, FastModeMode.ON, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.AUTO, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.OFF, []),
+        # claude launches fast through the ``fast`` create template, so nothing is switched.
+        (HarnessType.CLAUDE, FastModeMode.ON, []),
+    ],
+)
+def test_launch_fast_mode_switches_only_the_fast_axis_of_a_codex_agent_whose_chat_launches_fast(
+    harness: HarnessType, mode: FastModeMode, expected_calls: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    agent_id = "agent-00000000000000000000000000000017"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=harness)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.set_fast_mode_state(ChatId(agent_id), ChatFastModeState(mode=mode))
+    switch_client = _RecordingSwitchClient()
+    try:
+        with patch("imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=switch_client):
+            manager.apply_launch_fast_mode(ChatId(agent_id), agent_info)
+    finally:
+        manager.stop()
+
+    assert switch_client.calls == expected_calls
+    assert messenger.sent == []
+
+
+class _StepRecordingSwitchClient(_RecordingSwitchClient):
+    """A switch client that also notes each switch in a log shared with the deliveries, to order them."""
+
+    def __init__(self, steps: list[str]) -> None:
+        super().__init__()
+        self._steps = steps
+
+    def settings_update(self, **kwargs: Any) -> None:
+        super().settings_update(**kwargs)
+        self._steps.append(f"switch:{kwargs}")
+
+
+@pytest.mark.parametrize(
+    "model_pick",
+    [
+        None,
+        # A pick the agent refuses leaves the chat on its default model, still at its launch speed.
+        ModelPick(model_id="no-such-model", effort=None, fast=False),
+    ],
+)
+def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_message(
+    model_pick: ModelPick | None, agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    chat_id = ChatId("codex-chat")
+    with agent_manager._lock:
+        # The create settles on the pick and account its provisional chat carries.
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="", phase=ProvisionalChatPhase.CREATING, model_pick=model_pick
+        )
+    agent_manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+    steps: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        steps.append(f"deliver:{text}")
+        return SendOutcome.OK
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    with patch(
+        "imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=_StepRecordingSwitchClient(steps)
+    ):
+        agent_manager._run_creation(
+            chat_id,
+            str(chat_id),
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {"display_name": "Chat 1"},
+            HarnessType.CODEX,
+            first_message=FirstMessage(text="hello", message_id="m-0"),
+        )
+
+    assert steps == ["switch:{'service_tier': 'priority'}", "deliver:hello"]
+
+
 class _FakeCodexConnection:
     """A minimal stand-in for a live ``CodexLiveConnection`` for the connect-seed write-through."""
 
@@ -2198,7 +2663,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2372,7 +2837,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [4242] for cid in cids if cid == agent_id},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
@@ -2596,7 +3061,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
     ):
         response = client.post("/api/chats/agent-123/flush-queue")
 
@@ -2607,6 +3072,25 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     assert mock_send.call_count == 1
     assert mock_send.call_args.args[1] == "first message\nsecond message"
     assert fake_watcher.clear_calls == [True]
+
+
+def test_flush_queue_answers_resent_for_a_block_delivered_by_a_second_send() -> None:
+    agent_info = _agent_info()
+    manager, client = _client_over(RecordingMngrMessenger(delivery=SendDelivery.RESENT))
+    seed_agent_state(manager, agent_info.id, name=agent_info.name)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+    ):
+        response = client.post(f"/api/chats/{agent_info.id}/flush-queue")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "resent"
+    snapshot = manager.get_chat_snapshot(agent_info.id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["queued text"]
 
 
 def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
@@ -2660,6 +3144,167 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     assert response.status_code == 500
     # The restart failed, so nothing is resent.
     mock_send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "body", "expected_status", "is_restart_expected"),
+    [
+        ("WAITING", {"only_if_idle": True}, 200, True),
+        ("RUNNING", {"only_if_idle": True}, 409, False),
+        # Without the flag the route is the plain interrupt it always was.
+        ("RUNNING", None, 200, True),
+    ],
+)
+def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
+    client: FlaskClient,
+    app: Flask,
+    lifecycle: str,
+    body: dict[str, bool] | None,
+    expected_status: int,
+    is_restart_expected: bool,
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", lifecycle)
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == expected_status
+    assert mock_run.called is is_restart_expected
+    if expected_status == 409:
+        assert response.get_json()["busy_with"] == "working"
+
+
+@pytest.mark.parametrize(
+    ("data", "content_type", "expected_status"),
+    [
+        # A script or curl posting without a JSON content type still gets the busy chat left alone.
+        ('{"only_if_idle": true}', "text/plain", 409),
+        ('{"only_if_idle": "sometimes"}', "application/json", 400),
+        ('{"only_if_idle": true, "force": true}', "application/json", 400),
+        ("[]", "application/json", 400),
+        ("not json", "application/json", 400),
+    ],
+)
+def test_an_interrupt_body_is_honoured_whatever_its_content_type_and_a_malformed_one_restarts_nothing(
+    client: FlaskClient, app: Flask, data: str, content_type: str, expected_status: int
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", "RUNNING")
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", data=data, content_type=content_type)
+
+    assert response.status_code == expected_status
+    mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("queued_block", ["first message\nsecond message", ""])
+def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: FlaskClient, queued_block: str) -> None:
+    """Unlike the flush, an empty queue still restarts: the caller asked for the restart itself."""
+    fake_watcher = _fake_queue_watcher(queued_block)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
+    ):
+        response = client.post("/api/chats/agent-123/interrupt", json={"keep_queue": True})
+
+    assert response.status_code == 200
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert [call.args[1] for call in mock_send.call_args_list] == ([queued_block] if queued_block else [])
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_message_chats_interrupt_asks_for_what_the_interrupt_route_takes() -> None:
+    """``message_chat.py --interrupt`` is standard-library only and carries its own copy of the route's
+    request; a rename here would leave it dropping the queue of every chat it restarts."""
+    assert InterruptAgentRequest.model_validate(message_chat.INTERRUPT_REQUEST).keep_queue is True
+
+
+class _TestClientHttp(update_runtime.HttpClient):
+    """update-self's HTTP client, answered by this app's test client instead of a socket."""
+
+    def __init__(self, client: FlaskClient) -> None:
+        self._client = client
+
+    def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.get(urlparse(url).path))
+
+    def post_json(self, url: str, body: Mapping[str, object], timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.post(urlparse(url).path, json=dict(body)))
+
+    @staticmethod
+    def _page_of(response: TestResponse) -> update_runtime.FetchedPage:
+        return update_runtime.FetchedPage(
+            status=response.status_code, body=response.get_data(as_text=True), headers={}
+        )
+
+
+def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(tmp_path: Path) -> None:
+    """update-self's restart pass, run against this app: it restarts the idle chat, leaves the busy ones and
+    the switching one running and says why, and skips its own chat, a stopped chat and a room.
+
+    The pass is standard-library only and reads this app's chat list and interrupt answers from its
+    own copies of their wire names, so this is what fails when the two drift apart."""
+    app, _log_path = _recording_app(tmp_path)
+    manager: AgentManager = state_of(app).agent_manager
+    own, idle, working, backgrounded, stopped, room = (f"agent-{uuid4().hex}" for _ in range(6))
+    _register_agent(app, own, "Chat-own", "WAITING")
+    _register_agent(app, idle, "Chat-idle", "WAITING")
+    _register_agent(app, working, "Chat-working", "RUNNING")
+    _register_agent(app, backgrounded, "Chat-backgrounded", BACKGROUND_LIFECYCLE_STATE)
+    _register_agent(app, stopped, "Chat-stopped", "STOPPED")
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
+    switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    workspace = tmp_path / "workspace"
+    registry = workspace / APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://chat.test"\n')
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        report = update_agent_restarts.restart_idle_agents(workspace, own, set(), _TestClientHttp(app.test_client()))
+
+    assert [entry["chat_id"] for entry in report["restarted"]] == [idle]
+    assert sorted((entry["chat_id"], entry["busy_with"]) for entry in report["left_running"]) == sorted(
+        [
+            (working, "working"),
+            (backgrounded, "waiting on background work"),
+            (switching, "switching to another agent"),
+        ]
+    )
+    assert report["failed"] == []
+    assert mock_run.call_count == 1
+
+
+@pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
+def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, client: FlaskClient, route: str) -> None:
+    """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
+    agent_info = _agent_info()
+    manager = state_of(app).agent_manager
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time(), stops_begun_before_send=0)
+    letting_go_during_restart: list[bool] = []
+
+    def restart(**_kwargs: Any) -> FinishedProcess:
+        letting_go_during_restart.append(agent_info.id in manager._letting_go_counts_by_agent)
+        return _restart_ok()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", side_effect=restart),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED),
+    ):
+        response = client.post(f"/api/chats/{agent_info.id}/{route}")
+
+    assert response.status_code == 200
+    assert letting_go_during_restart == [True]
+    kept_texts = [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])]
+    # The flush sends the drained queue to the restarted agent, which is kept like any other send.
+    assert kept_texts == (["queued text"] if route == "flush-queue" else [])
 
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
@@ -3502,22 +4147,20 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
-    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
-    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
-    body = module.create_request_body(
-        module.CreateRequest(name="assist-1a2b3c", message="/assist it broke", labels={"auto_open": "true"})
+    assert message_chat.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = message_chat.create_request_body(
+        message_chat.CreateRequest(
+            name="assist-1a2b3c",
+            message="/assist it broke",
+            labels={"auto_open": "true"},
+        )
     )
 
     parsed = CreateChatRequest.model_validate(body)
     assert parsed.name == "assist-1a2b3c"
     assert parsed.message == "/assist it broke"
     assert parsed.labels == {"auto_open": "true"}
-    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
+    assert body[message_chat.WAIT_FIELD] is True and parsed.should_wait is True
 
 
 def test_create_chat_refuses_an_id_it_never_minted(
@@ -4159,6 +4802,44 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert second["type"] == "chats_updated"
 
 
+@pytest.mark.timeout(15)
+def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
+    config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    """The app serves while it first reads the agent list. A page connected by then is replayed what the app
+    holds but no chat list -- an empty one would read as every chat gone -- and gets the list the read pushes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    app = create_application(build_test_state(config=config, agent_manager=manager))
+    failed = seed_failed_chat(manager, ChatId("failed-1"), "Chat 1")
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            replayed = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            assert ws.receive(timeout=0.5) is None
+            manager._adopt_initial_listing(
+                [
+                    AgentInfo(
+                        id="listed-chat",
+                        name="listed-chat",
+                        state="RUNNING",
+                        agent_state_dir=tmp_path / "listed-chat",
+                        claude_config_dir=tmp_path / "claude_config",
+                        labels={"user_created": "true"},
+                    )
+                ]
+            )
+            pushed = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))]
+            while pushed[-1]["type"] != "chats_updated":
+                pushed.append(json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)))
+        finally:
+            close_ws(ws)
+
+    assert replayed["type"] == "provisional_chat_created"
+    assert replayed["chat_id"] == failed.chat_id
+    assert "listed-chat" in {chat["chat_id"] for chat in pushed[-1]["chats"]}
+
+
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
     projects_dir = claude_config_dir / "projects" / "hash123"
     projects_dir.mkdir(parents=True, exist_ok=True)
@@ -4359,6 +5040,36 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     wait_for(lambda: (first, "and this") in messenger.sent, timeout=5.0)
     assert client.post(f"/api/chats/{first}/handoff/cancel").status_code == 400
     assert not log_path.exists()
+
+
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_as_theirs_without_the_prefix(
+    tmp_path: Path,
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers={IDENTITY_HEADER: _VISITOR.model_dump_json(exclude_none=True)},
+    )
+    assert held.status_code == 202
+
+    # The successor is handed the prefix; the page, which draws the held send under its sender, is handed the words
+    # and who the sender is.
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [
+        {key: held_send[key] for key in ("message_id", "text", "author", "author_name")}
+        for held_send in listed[0]["handoff"]["held_sends"]
+    ] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex", "author": None, "author_name": None},
+        {"message_id": "m-2", "text": "and this", "author": "user:user-bob-4471", "author_name": "bob"},
+    ]
 
 
 def test_a_secret_request_notice_to_a_converging_chat_is_held_as_a_script_send(tmp_path: Path) -> None:
@@ -4574,6 +5285,20 @@ def _token_of(path: str) -> str:
     return parse_qs(urlparse(path).query)["intake"][0]
 
 
+def _chat_id_of(path: str) -> str:
+    return parse_qs(urlparse(path).query)["chat"][0]
+
+
+def _signed_out_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentManager, FlaskClient]:
+    """A chat app with nothing signed in whose agent list is known: an intake cannot launch a chat, so a new one
+    awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
 def test_intake_is_not_ready_until_the_agent_list_is_known() -> None:
     manager = AgentManager.build(WebSocketBroadcaster())
     test_client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -4634,6 +5359,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "message": "Draw me a seal",
         "is_draft": True,
         "needs_pick": False,
+        "hint": None,
         "chat_id": "agent-00000000000000000000000000000123",
     }
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4643,6 +5369,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "chat_id": "agent-00000000000000000000000000000123",
         "composer_text": "Draw me a seal",
         "first_message": None,
+        "hint": None,
     }
     assert client.get(f"/api/chats/intakes/{token}").status_code == 404
     assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
@@ -4724,6 +5451,7 @@ def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picke
         "chat_id": "agent-00000000000000000000000000000002",
         "composer_text": None,
         "first_message": None,
+        "hint": None,
     }
     wait_for(lambda: messenger.sent == [("agent-00000000000000000000000000000002", "Carry on")], timeout=10.0)
 
@@ -4772,7 +5500,7 @@ def test_intake_main_chat_with_no_chats_falls_back_to_a_new_chat(
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    provisional = agent_manager.get_provisional_chat(parse_qs(urlparse(path).query)["chat"][0])
+    provisional = agent_manager.get_provisional_chat(_chat_id_of(path))
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4805,7 +5533,7 @@ def test_intake_new_chat_with_an_account_creates_the_chat_with_the_text_as_its_f
     assert response.status_code == 200
     path = response.get_json()["path"]
     assert path.startswith("/?chat=agent-") and "intake" not in path
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.CREATING
@@ -4823,7 +5551,7 @@ def test_intake_new_chat_draft_mints_a_chat_awaiting_its_first_send_and_holds_th
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
@@ -4840,18 +5568,14 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
 ) -> None:
     """With no account the server cannot launch: the chat waits for its first send, and applying the intake hands
     the root the message to launch it with once an account is chosen."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
-    manager.note_agent_list_known()
-    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
 
     response = test_client.post("/api/chats/intake", json={"message": "Teach me", "target": "new_chat"})
 
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     assert provisional.account_id == ""
@@ -4861,6 +5585,7 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
         "chat_id": chat_id,
         "composer_text": None,
         "first_message": "Teach me",
+        "hint": None,
     }
 
 
@@ -4912,6 +5637,7 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "chat_id": str(awaiting.chat_id),
         "composer_text": None,
         "first_message": "Begin here",
+        "hint": None,
     }
 
 
@@ -4945,7 +5671,7 @@ def _client_with_a_tracked_chat(
     return create_application(build_test_state(agent_manager=manager)).test_client()
 
 
-def test_a_refused_send_with_no_reason_says_the_agent_did_not_take_it_and_keeps_mngrs_words_as_details(
+def test_a_refused_send_with_no_reason_keeps_mngrs_words_as_details_for_the_page_to_word(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -4958,17 +5684,10 @@ def test_a_refused_send_with_no_reason_says_the_agent_did_not_take_it_and_keeps_
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 500
-    assert response.get_json() == {
-        "detail": "The send reached no agent, and mngr gave no reason.",
-        "user_facing_message": (
-            "This chat's agent did not take your message. It is back in the message box -- try again, "
-            "or use Force to restart the agent and resend."
-        ),
-        "kind": "unknown",
-    }
+    assert response.get_json() == {"detail": "The send reached no agent, and mngr gave no reason.", "kind": "unknown"}
 
 
-def test_a_send_to_an_unreachable_agent_points_at_force_rather_than_a_retry(
+def test_a_send_to_an_unreachable_agent_names_the_kind_and_leaves_the_wording_to_the_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -4980,10 +5699,7 @@ def test_a_send_to_an_unreachable_agent_points_at_force_rather_than_a_retry(
 
     body = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"}).get_json()
 
-    assert body["kind"] == "agent_unreachable"
-    assert "use Force to restart the agent" in body["user_facing_message"]
-    assert "try again" not in body["user_facing_message"]
-    assert body["detail"] == "the pane is gone"
+    assert body == {"detail": "the pane is gone", "kind": "agent_unreachable"}
 
 
 def test_a_send_to_a_chat_that_is_gone_says_so_and_names_the_case() -> None:
@@ -5260,6 +5976,27 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     assert response.get_json()["block"] == "queued behind it"
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+@pytest.mark.parametrize("body", [None, {"keep_queue": True}])
+def test_an_interrupt_clears_a_compaction_its_restart_ended(tmp_path: Path, body: dict[str, bool] | None) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    marker = write_compacting_marker(state_dir, "manual")
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == 200
     assert not marker.exists()
     assert agent_id not in manager._compaction_pending_by_agent
 
@@ -5567,3 +6304,1175 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def _identity_header(identity: RequestIdentity) -> dict[str, str]:
+    return {IDENTITY_HEADER: identity.model_dump_json(exclude_none=True)}
+
+
+_VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_VISITOR_KEY = "user:user-bob-4471"
+_VISITING_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
+)
+_BRACKETED_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's [Claude]", granter="user:8c0f"
+)
+_OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+
+
+def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000031"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-31")
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "please rebase", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    # No shell to ask for a name, so the visitor is named after their email.
+    assert messenger.sent == [(agent_id, "[from: bob] please rebase")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (annotation.message_id, str(annotation.author), annotation.display_name) == (
+        "m-1",
+        "user:user-bob-4471",
+        "bob",
+    )
+    assert annotation.text_sha256 == text_sha256("[from: bob] please rebase")
+
+
+def test_a_visitors_intake_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    """The launcher's text enters through the intake route rather than the message route, and is attributed the
+    same way."""
+    agent_id = "agent-00000000000000000000000000000035"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-35")
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/intake",
+        json={"message": "please deploy", "target": "chat", "chat_id": agent_id, "is_delivery_awaited": True},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "[from: bob] please deploy")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+
+
+def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000032"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-32")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "/clear", "message_id": "m-2"},
+        headers=_identity_header(_VISITING_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "/clear")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == (
+        "agent:va-0123456789abcdef0123456789abcdef",
+        "Josh's Claude",
+    )
+
+
+def test_a_name_the_prefix_cannot_carry_is_made_safe_before_delivery_and_annotation(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000034"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-34")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "hello", "message_id": "m-3"},
+        headers=_identity_header(_BRACKETED_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "[from: Josh's [Claude] hello")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert annotation.display_name == "Josh's [Claude"
+
+
+def test_the_owners_messages_are_never_prefixed_and_only_a_pages_are_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    """A send with no identity header (a script's, the terminal's) writes no annotation, so the owner is not
+    overcounted among a chat's participants; a page's send, which a proxy stamped, is annotated under the owner's
+    key of the moment. Neither is ever prefixed."""
+    agent_id = "agent-00000000000000000000000000000033"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-33")
+    client = app.test_client()
+
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "one"})
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "two"}, headers=_identity_header(_OWNER_ACCOUNT))
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "three"},
+        headers=_identity_header(RequestIdentity(owner=True)),
+    )
+
+    assert messenger.sent == [(agent_id, "one"), (agent_id, "two"), (agent_id, "three")]
+    annotations = state_of(app).authors.annotations(ChatId(agent_id))
+    assert [(str(annotation.author), annotation.text_sha256) for annotation in annotations] == [
+        ("user:user-owner-9c21", text_sha256("two")),
+        ("owner", text_sha256("three")),
+    ]
+
+
+def test_a_visitors_send_to_a_chat_the_app_does_not_know_is_refused_with_nothing_written(app: Flask) -> None:
+    """The annotation is a file under the chat's folder, so it is written only once the chat is known to exist
+    (the multiplayer spec, section 5.1): a send to an id of the right shape that names no chat, and one to an id of
+    the wrong shape (``..``, which would name a folder beside the chats'), both answer 404 and leave nothing."""
+    client = app.test_client()
+    authors_root = state_of(app).authors.root
+    unknown_id = "agent-00000000000000000000000000000099"
+
+    unknown = client.post(
+        f"/api/chats/{unknown_id}/message", json={"message": "hello?"}, headers=_identity_header(_VISITOR)
+    )
+    dotted = client.post("/api/chats/../message", json={"message": "hello?"}, headers=_identity_header(_VISITOR))
+
+    assert (unknown.status_code, dotted.status_code) == (404, 404)
+    assert not (authors_root / unknown_id).exists()
+    assert not (authors_root.parent / "authors.jsonl").exists()
+    assert sorted(path.name for path in authors_root.glob("*")) == []
+
+
+def test_a_visitors_send_to_a_chat_being_created_is_shown_under_them_without_the_prefix() -> None:
+    """The agent the chat gets is handed the prefix; every page, the ones that reconnect included, is sent the
+    words and who sent them."""
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    client.post(
+        f"/api/chats/{chat_id}/message",
+        json={"message": "hello", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "and mine", "message_id": "m-2"})
+
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None
+    assert [held.text for held in proto.held_sends] == ["[from: bob] hello", "and mine"]
+    (shown,) = manager.get_provisional_chats_as_shown()
+    replayed = provisional_chat_created_message(shown)
+    assert [
+        {key: held[key] for key in ("message_id", "text", "author", "author_name")} for held in replayed["held_sends"]
+    ] == [
+        {"message_id": "m-1", "text": "hello", "author": _VISITOR_KEY, "author_name": "bob"},
+        {"message_id": "m-2", "text": "and mine", "author": None, "author_name": None},
+    ]
+
+
+def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
+    client = app.test_client()
+    assert client.get("/api/me").get_json() == {"participant": "owner"}
+    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {
+        "participant": "user:user-bob-4471"
+    }
+    assert client.get("/api/me", headers=_identity_header(_OWNER_ACCOUNT)).get_json() == {
+        "participant": "user:user-owner-9c21"
+    }
+
+
+_AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
+
+
+_BOB_PICTURE_PATH = "/api/roster/user:user-bob-4471/picture?v=0123456789abcdef"
+
+
+def _shell_with_bob_and_the_agent(agent_picture_url: str | None) -> FakeShell:
+    agent = roster_participant(
+        ParticipantKey("workspace-agent"),
+        kind=ParticipantKind.WORKSPACE_AGENT,
+        display_name="Atlas",
+        handle="agent",
+        profile_picture_url=agent_picture_url,
+    )
+    bob = roster_participant(
+        ParticipantKey("user:user-bob-4471"), display_name="Bob", profile_picture_url=_BOB_PICTURE_PATH
+    )
+    return FakeShell(roster_document=RosterDocument(participants=(bob, agent)))
+
+
+def test_participants_are_the_shells_roster_with_every_picture_on_this_origin(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    """Every picture the shell serves from its own origin (a person's, the agent's) is pointed at this app's picture
+    route, keeping the shell URL's query, so the page, whose policy admits no outside image, can show them all."""
+    shell = _shell_with_bob_and_the_agent(_AGENT_PICTURE_PATH)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
+
+    (bob, agent) = client.get("/api/participants").get_json()["participants"]
+
+    assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
+    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture?size=64"
+    assert bob["profile_picture_url"] == "/api/participants/user:user-bob-4471/picture?v=0123456789abcdef"
+
+
+def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_type_and_caching(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    """The shell is asked at the roster's picture path with the page's own query, so the caching it answers (which
+    is relayed) is about the address the page asked under; a key that is nobody's is a 404 here."""
+    asked: list[str] = []
+
+    def shell_answers(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.path.endswith("icon.png"):
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        if request.url.path == "/api/roster/user:user-bob-4471/picture":
+            return httpx.Response(
+                200,
+                content=b"JPEG...",
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Cache-Control": "public, max-age=1",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                },
+            )
+        return httpx.Response(503, text="starting")
+
+    def app_over(shell: FakeShell) -> FlaskClient:
+        manager = AgentManager.build(
+            WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path
+        )
+        state = build_test_state(
+            config=config,
+            agent_manager=manager,
+            shell=shell,
+            http_client=httpx.Client(transport=httpx.MockTransport(shell_answers)),
+        )
+        return create_application(state).test_client()
+
+    # The page asks under the addresses the participants listing hands out: the roster's path with its query.
+    pictured = app_over(_shell_with_bob_and_the_agent(_AGENT_PICTURE_PATH))
+    relayed = pictured.get("/api/participants/workspace-agent/picture?size=64")
+    assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
+    assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
+    # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good, and with
+    # the shell's image hardening.
+    bobs = pictured.get("/api/participants/user:user-bob-4471/picture?v=0123456789abcdef")
+    assert (bobs.status_code, bobs.mimetype, bobs.data, bobs.headers["Cache-Control"]) == (
+        200,
+        "image/jpeg",
+        b"JPEG...",
+        "public, max-age=1",
+    )
+    assert (bobs.headers["X-Content-Type-Options"], bobs.headers["Content-Security-Policy"]) == (
+        "nosniff",
+        "default-src 'none'; sandbox",
+    )
+    assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
+    # A stale page asks under an older version, or none: the shell is asked under that, not the roster's.
+    pictured.get("/api/participants/user:user-bob-4471/picture?v=old")
+    pictured.get("/api/participants/user:user-bob-4471/picture")
+    assert asked[-2:] == [
+        f"{shell_base_url()}/api/roster/user:user-bob-4471/picture?v=old",
+        f"{shell_base_url()}/api/roster/user:user-bob-4471/picture",
+    ]
+    # A key that is nobody's, or not a key at all, has no picture here, and neither has a roster that names none.
+    unpictured = app_over(_shell_with_bob_and_the_agent(None))
+    assert unpictured.get("/api/participants/user:user-nobody/picture").status_code == 404
+    assert unpictured.get("/api/participants/not%20a%20key/picture").status_code == 404
+    # A query the listing never handed out (one that is not ASCII) names no picture either, rather than failing.
+    garbled = pictured.get(
+        "/api/participants/user:user-bob-4471/picture", environ_overrides={"QUERY_STRING": "v=\xe9"}
+    )
+    assert garbled.status_code == 404
+    assert unpictured.get("/api/participants/workspace-agent/picture").status_code == 404
+
+    # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
+    refused = app_over(_shell_with_bob_and_the_agent("/api/avatars/other/missing.svg")).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert refused.status_code == 502
+
+
+# Rooms and mentions (the multiplayer spec, section 7).
+
+_JOSH = RequestIdentity(owner=True, user_id="user-josh-0001", email="josh@example.com")
+_MAIN_ID = "agent-00000000000000000000000000000041"
+_LOUNGE_ID = "agent-00000000000000000000000000000042"
+
+
+def _peopled_app(
+    tmp_path: Path,
+    messenger: RecordingMngrMessenger,
+    imbue_studio_gateway: GatewayAccess | None = None,
+    is_secondary: bool = False,
+) -> Flask:
+    """An app whose shell answers a roster of Josh (the owner), Bob, and the workspace agent Atlas, with a running
+    main chat Josh started and a room, the Lounge, whose agent's state dir is on disk; ``imbue_studio_gateway`` is
+    where the owner's notifications go, when given, and ``is_secondary`` makes it a preview's chat app."""
+    shell = FakeShell(
+        roster_document=RosterDocument(
+            participants=(
+                roster_participant(ParticipantKey("user:user-josh-0001"), display_name="Josh", is_owner=True),
+                roster_participant(ParticipantKey("user:user-bob-4471"), display_name="Bob"),
+                roster_participant(
+                    ParticipantKey("workspace-agent"),
+                    kind=ParticipantKind.WORKSPACE_AGENT,
+                    display_name="Atlas",
+                    handle="agent",
+                ),
+            )
+        )
+    )
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=messenger,
+        chat_files_root=tmp_path / "chats",
+        imbue_studio_gateway=imbue_studio_gateway,
+    )
+    state = build_test_state(agent_manager=manager, shell=shell, is_secondary=is_secondary)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _MAIN_ID, name="Main", labels={"display_name": "Main"})
+    seed_agent_state(manager, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    agent_state_dir(get_host_dir(), _LOUNGE_ID).mkdir(parents=True, exist_ok=True)
+    app = create_application(state)
+    assert manager.make_main_chat(ChatId(_MAIN_ID))
+    return app
+
+
+def test_a_chats_snapshot_names_who_has_written_in_it_once_in_order_of_first_message(tmp_path: Path) -> None:
+    """The snapshot's ``participants`` (the multiplayer spec, section 5.4): each annotated sender once, in order of
+    first message -- the owner's page sends included, scripts' and the workspace agent's never."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    listed = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed[_MAIN_ID]["participants"] == []
+
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "a script's words"})
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "hello"}, headers=_identity_header(_JOSH))
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "hi"}, headers=_identity_header(_VISITOR))
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "again"}, headers=_identity_header(_JOSH))
+
+    listed_after = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed_after[_MAIN_ID]["participants"] == ["user:user-josh-0001", "user:user-bob-4471"]
+
+
+def _room_events(client: FlaskClient) -> list[dict[str, Any]]:
+    return client.get(f"/api/chats/{_LOUNGE_ID}/events").get_json()["events"]
+
+
+def _post_into_room_as_the_agent(text: str) -> None:
+    """What ``mngr message <room>`` comes to: the room's reader appends the typed text as the workspace agent's."""
+    state_dir = agent_state_dir(get_host_dir(), _LOUNGE_ID)
+    author, name, said = room_agent.author_of_typed_text(text)
+    room_agent.ensure_header(state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH, _LOUNGE_ID)
+    room_agent.append_record(
+        state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH,
+        room_agent.step_record(said, author, name, room_agent.now_iso()),
+    )
+
+
+def test_a_room_lists_as_one_and_its_page_reads_and_posts_through_the_chat_routes(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    listed = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed[_LOUNGE_ID]["kind"] == "room" and listed[_MAIN_ID]["kind"] == "agent"
+    assert listed[_LOUNGE_ID]["active_agent"]["harness"] == "room"
+
+    bob = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "hi all", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    josh = client.post(f"/api/chats/{_LOUNGE_ID}/message", json={"message": "hey Bob", "message_id": "m-2"})
+
+    assert (bob.status_code, josh.status_code) == (200, 200)
+    # A room's message is appended to its transcript, never typed into a pane, and carries no prefix.
+    assert messenger.sent == []
+    events = _room_events(client)
+    assert [event["content"] for event in events] == ["hi all", "hey Bob"]
+    assert (events[0]["author"], events[0]["author_name"], events[0]["message_id"]) == (
+        "user:user-bob-4471",
+        "Bob",
+        "m-1",
+    )
+    assert "author" not in events[1] and events[1]["message_id"] == "m-2"
+    assert all(event["type"] == "user_message" and event["agent_id"] == _LOUNGE_ID for event in events)
+    assert client.post(f"/api/chats/{_LOUNGE_ID}/make-main").status_code == 409
+
+
+def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until_the_agent_answers(
+    tmp_path: Path,
+) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@agent what time is it?", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 10.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent what time is it?")]
+    lounge = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    # The main chat's turn will be stamped with Bob, not with the owner.
+    annotations = state_of(app).authors.annotations(ChatId(_MAIN_ID))
+    assert [str(annotation.author) for annotation in annotations] == ["user:user-bob-4471"]
+
+    _post_into_room_as_the_agent("It is noon.")
+
+    wait_until_true(
+        lambda: (snapshot := manager.get_chat_snapshot(_LOUNGE_ID)) is not None and snapshot.awaiting_chat_ids == (),
+        10.0,
+        "the room to stop waiting once its agent answered",
+    )
+    answered = _room_events(client)[-1]
+    assert (answered["content"], answered["author"], answered["author_name"]) == (
+        "It is noon.",
+        "workspace-agent",
+        "Atlas",
+    )
+
+
+def test_a_mention_of_a_person_in_a_room_is_pending_until_a_page_of_theirs_watches_it(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh are you around?", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    pending = client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"]
+    assert pending == [{"chat_id": _LOUNGE_ID, "message_id": "m-1", "sender": "user:user-bob-4471"}]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_VISITOR)).get_json()["mentions"] == []
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/presence",
+        json=_presence_body("visible", "page-josh", is_focused=True),
+        headers=_identity_header(_JOSH),
+    )
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+
+
+def test_an_owner_page_under_the_owner_key_reads_and_clears_a_mention_recorded_under_their_account(
+    tmp_path: Path,
+) -> None:
+    """A mention is recorded under the roster's key for the owner (``user:<id>`` on a shared workspace) while an
+    owner page whose header carries no user id asks under ``owner`` (the multiplayer spec, S12): both of the
+    owner's keys are read, and looking at the chat clears under both."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    state = state_of(app)
+    anonymous_owner = {IDENTITY_HEADER: '{"owner": true}'}
+    state.mentions.record(
+        ParticipantKey("user:user-josh-0001"), ChatId(_LOUNGE_ID), "m-1", ParticipantKey(_VISITOR_KEY)
+    )
+    state.mentions.record(ParticipantKey("owner"), ChatId(_LOUNGE_ID), "m-2", ParticipantKey(_VISITOR_KEY))
+
+    pending = client.get("/api/mentions/pending", headers=anonymous_owner).get_json()["mentions"]
+    assert [mention["message_id"] for mention in pending] == ["m-2", "m-1"]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_VISITOR)).get_json()["mentions"] == []
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/presence",
+        json=_presence_body("visible", "page-owner", is_focused=True),
+        headers=anonymous_owner,
+    )
+    assert client.get("/api/mentions/pending", headers=anonymous_owner).get_json()["mentions"] == []
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+
+
+def test_destroying_a_room_drops_its_mentions_from_everyones_file(tmp_path: Path) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    state = state_of(app)
+    room_id = f"agent-{uuid4().hex}"
+    other_id = f"agent-{uuid4().hex}"
+    seed_agent_state(state.agent_manager, room_id, name="Lounge", harness=HarnessType.ROOM)
+    state.mentions.record(ParticipantKey("user:user-josh-0001"), ChatId(room_id), "m-1", ParticipantKey(_VISITOR_KEY))
+    state.mentions.record(ParticipantKey(_VISITOR_KEY), ChatId(room_id), "m-2", ParticipantKey("user:user-josh-0001"))
+    state.mentions.record(ParticipantKey(_VISITOR_KEY), ChatId(other_id), "m-3", ParticipantKey("user:user-josh-0001"))
+
+    assert client.post(f"/api/chats/{room_id}/destroy").status_code == 200
+
+    assert state.mentions.pending(ParticipantKey("user:user-josh-0001")) == ()
+    assert [mention.chat_id for mention in state.mentions.pending(ParticipantKey(_VISITOR_KEY))] == [other_id]
+
+
+def test_the_agents_earlier_post_into_a_room_nobody_had_open_answers_what_the_room_asked(tmp_path: Path) -> None:
+    """A room's wait on a chat is cleared by the agent's post into it when the room's watcher is first built (the
+    backlog scan), not only by a post the live watcher sees (the multiplayer spec, section 7.4)."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    manager = state.agent_manager
+    manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
+    _post_into_room_as_the_agent("Done, see the file.")
+    waiting = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert waiting is not None and waiting.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    lounge = manager.get_active_agent_info(ChatId(_LOUNGE_ID))
+    assert lounge is not None
+
+    state.get_or_create_watcher(lounge)
+
+    answered = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert answered is not None and answered.awaiting_chat_ids == ()
+
+
+def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the_rooms_own_agent(
+    tmp_path: Path,
+) -> None:
+    gateway = RecordingGateway(status=200)
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, RecordingMngrMessenger(), imbue_studio_gateway=access)
+        client = app.test_client()
+        try:
+            client.post(
+                f"/api/chats/{_LOUNGE_ID}/message",
+                json={"message": "@Josh look at this", "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_until_true(lambda: len(gateway.received) == 1, 10.0, "the owner's notification to be posted")
+        finally:
+            state_of(app).shutdown()
+    (received,) = gateway.received
+    assert received.path == f"/minds-api-proxy/api/v1/agents/{_LOUNGE_ID}/notifications"
+    assert received.body == {
+        "title": "Bob mentioned you in Lounge",
+        "message": "@Josh look at this",
+        "destination": {"type": "minds:focus-chat", "chatId": _LOUNGE_ID},
+    }
+
+
+def test_a_mention_in_an_agent_chat_is_a_word_the_agent_reads_and_nothing_more(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{_MAIN_ID}/message",
+        json={"message": "@Josh @agent see this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob") + "@Josh @agent see this")]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+    main = state_of(app).agent_manager.get_chat_snapshot(_MAIN_ID)
+    assert main is not None and main.awaiting_chat_ids == ()
+
+
+def test_the_handle_table_lists_the_people_the_agent_and_every_chat_by_title(tmp_path: Path) -> None:
+    client = _peopled_app(tmp_path, RecordingMngrMessenger()).test_client()
+
+    handles = client.get("/api/mentions").get_json()["handles"]
+
+    assert [(entry["handle"], entry["kind"]) for entry in handles] == [
+        ("Josh", "person"),
+        ("Bob", "person"),
+        ("agent", "workspace_agent"),
+        ("Main", "chat"),
+        ("Lounge", "chat"),
+    ]
+
+
+def _fake_shell_of(app: Flask) -> FakeShell:
+    shell = state_of(app).shell
+    assert isinstance(shell, FakeShell)
+    return shell
+
+
+def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_mentions(tmp_path: Path) -> None:
+    """Every message a person sends raises a bubble for the tray (the multiplayer spec, section 6.5): in a room the
+    people it mentions ride with it, so their clients mark it; in an agent chat a handle is a word."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    assert (
+        client.post(
+            f"/api/chats/{_LOUNGE_ID}/message",
+            json={"message": "@Josh @agent look at this", "message_id": "m-1"},
+            headers=_identity_header(_VISITOR),
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/chats/{_MAIN_ID}/message",
+            json={"message": "@Bob is right", "message_id": "m-2"},
+            headers=_identity_header(_JOSH),
+        ).status_code
+        == 200
+    )
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both bubbles to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [
+        ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
+        ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
+    ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
+
+
+def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_nothing(tmp_path: Path) -> None:
+    """A send with no identity header (a script's: the background-task report, a routine's) is nobody's speech
+    (the multiplayer spec, section 6.5): no bubble rises for it, and an ``@agent`` in a room send of that kind
+    sends the main chat nothing; the same sends under a visitor's header do both."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    report = "<background-task-report>the build is green</background-task-report>"
+
+    headerless_agent = client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": report, "message_id": "m-1"})
+    headerless_room = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message", json={"message": "@agent is it green?", "message_id": "m-2"}
+    )
+    visitor_agent = client.post(
+        f"/api/chats/{_MAIN_ID}/message",
+        json={"message": "thanks", "message_id": "m-3"},
+        headers=_identity_header(_VISITOR),
+    )
+    visitor_room = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@agent is it green?", "message_id": "m-4"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert [r.status_code for r in (headerless_agent, headerless_room, visitor_agent, visitor_room)] == [200] * 4
+    wait_until_true(lambda: len(messenger.sent) == 3, 10.0, "the visitor's mention to reach the main chat")
+    assert messenger.sent == [
+        (_MAIN_ID, report),
+        (_MAIN_ID, author_prefix("Bob") + "thanks"),
+        (_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent is it green?"),
+    ]
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the visitor's bubbles to reach the shell")
+    assert [(str(bubble.speaker), bubble.message_id) for bubble in shell.bubbles] == [
+        ("user:user-bob-4471", "m-3"),
+        ("user:user-bob-4471", "m-4"),
+    ]
+    lounge = state_of(app).agent_manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+
+
+def test_only_the_agents_room_posts_reach_the_tray_naming_the_people_they_mention(tmp_path: Path) -> None:
+    """The agent's post into a room is posted to the tray with the people it mentions, whose clients raise it as a
+    bubble (the multiplayer spec, section 6.5); its turns in an agent chat and a retired agent's words post none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    turn = {"type": "assistant_message", "event_id": "e-1", "agent_id": _MAIN_ID, "text": "Looking into it."}
+    room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+    mentioning = {**room_post, "event_id": "e-3", "content": "@Josh @Bob done, and @agent is me."}
+
+    state.post_agents_room_posts(ChatId(_MAIN_ID), _MAIN_ID, [turn])
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), "agent-00000000000000000000000000000099", [room_post])
+    state.post_agents_room_posts(
+        ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post, {**room_post, "event_id": "e-4", "content": " "}]
+    )
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), _LOUNGE_ID, [mentioning])
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's room posts to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2", ()),
+        (
+            "workspace-agent",
+            _LOUNGE_ID,
+            "Lounge",
+            "@Josh @Bob done, and @agent is me.",
+            "e-3",
+            (ParticipantKey("user:user-josh-0001"), ParticipantKey("user:user-bob-4471")),
+        ),
+    ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
+
+
+def test_a_chats_notification_raises_a_notification_bubble_over_the_agents_entry(tmp_path: Path) -> None:
+    """The notify script tells the chat app about each notification it sends (the multiplayer spec, section 6.5):
+    the chat app raises it over the agent's entry, under the chat's title, the optional title as its prefix."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    plain = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "The report is ready."})
+    titled = client.post(
+        f"/api/chats/{_LOUNGE_ID}/notification", json={"message": "All 412 passed.", "title": "Test run"}
+    )
+
+    assert (plain.status_code, titled.status_code) == (200, 200)
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both notifications to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.mentions, bubble.kind)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "The report is ready.", (), BubbleKind.NOTIFICATION),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "Test run: All 412 passed.", (), BubbleKind.NOTIFICATION),
+    ]
+    assert shell.bubbles[0].message_id != shell.bubbles[1].message_id
+
+
+def test_a_notification_is_taken_only_from_loopback_for_a_chat_there_is_with_something_to_say(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    unknown_chat = "agent-00000000000000000000000000000099"
+
+    remote = client.post(
+        f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"}, environ_base={"REMOTE_ADDR": "10.0.0.7"}
+    )
+    unknown = client.post(f"/api/chats/{unknown_chat}/notification", json={"message": "hi"})
+    not_an_id = client.post("/api/chats/not-an-agent/notification", json={"message": "hi"})
+    empty = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": ""})
+
+    assert [response.status_code for response in (remote, unknown, not_an_id, empty)] == [403, 404, 404, 400]
+    assert shell.bubbles == []
+
+
+def test_a_secondary_chat_app_takes_a_notification_and_raises_no_bubble(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+
+    response = app.test_client().post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert _fake_shell_of(app).bubbles == []
+
+
+def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    shell = _fake_shell_of(app)
+
+    # A chat-list push with no mngr behind it: the room starting to wait on the main chat.
+    state_of(app).agent_manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
+
+    wait_until_true(lambda: bool(shell.chats_activity), 10.0, "the chats' activity to reach the shell")
+    latest = shell.chats_activity[-1]
+    assert sorted((chat.chat_id, chat.title, chat.kind.value) for chat in latest.chats) == sorted(
+        [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge", "room")]
+    )
+
+
+def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> None:
+    """A click on a person in the desktop's tray (the multiplayer spec, section 7.5): the chat app's ``lounge``
+    launch path drafts ``@<handle> `` into the Lounge, unsent, held for the root to put in the composer."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    assert _chat_id_of(path) == _LOUNGE_ID
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json()["composer_text"] == "@Bob "
+    assert applied.get_json()["chat_id"] == _LOUNGE_ID
+
+
+def test_a_mention_intake_makes_the_lounge_when_there_is_none(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.name == "Lounge"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    # A second click while the room is still being created lands in the same Lounge.
+    again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+
+
+_DOCS_CHAT_ID = "agent-00000000000000000000000000000077"
+
+
+def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_the_default_account(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat titled "<display name> Chat" is
+    created on the default account when there is none, never auto-named, and the intake is held as a draft that
+    prefills the composer with the lead-in naming the app, beside the hint; a second press lands in the same chat
+    while it is still being made."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert provisional.name == "Docs Chat"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    assert provisional.message == ""
+    token = _token_of(path)
+    held = client.get(f"/api/chats/intakes/{token}").get_json()
+    assert (held["chat_id"], held["message"], held["is_draft"], held["hint"]) == (
+        chat_id,
+        "Change something about the Docs app: ",
+        True,
+        "How do you want to change Docs?",
+    )
+    again = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": chat_id,
+        "composer_text": "Change something about the Docs app: ",
+        "first_message": None,
+        "hint": "How do you want to change Docs?",
+    }
+    assert provisional.labels == {"app_chat": "docs"}
+    assert _intake(client, target="app_chat", app="docs").status_code == 400
+    assert _intake(client, target="app_chat", app_display_name="Docs").status_code == 400
+
+
+def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_title_and_the_chat_app_opens_chat_chat(
+    tmp_path: Path,
+) -> None:
+    """The chat about an app is found by the ``app_chat`` label carrying the app's registered name, whatever it has
+    been retitled to, else by the title "<display name> Chat" (a chat so named by hand, or from before the label)."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="Docs Chat", labels={"display_name": "Docs Chat"})
+    client = app.test_client()
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert _chat_id_of(response.get_json()["path"]) == _DOCS_CHAT_ID
+    labelled_id = "agent-00000000000000000000000000000078"
+    seed_agent_state(
+        manager, labelled_id, name="Notes Chat", labels={"display_name": "Notes, renamed", "app_chat": "notes"}
+    )
+    by_label = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+    assert _chat_id_of(by_label.get_json()["path"]) == labelled_id
+    # The Lounge is titled "Lounge", not "Lounge Chat", so an app so named gets a chat of its own.
+    other = _intake(client, target="app_chat", app="lounge", app_display_name="Lounge")
+    assert _chat_id_of(other.get_json()["path"]) != _LOUNGE_ID
+    # The chat app's own windows ask for "Chat Chat".
+    own = _intake(client, target="app_chat", app="chat", app_display_name="Chat")
+    own_id = _chat_id_of(own.get_json()["path"])
+    minted = manager.get_provisional_chat(own_id)
+    assert minted is not None and minted.name == "Chat Chat"
+
+
+def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_path: Path) -> None:
+    """The title fallback matches by the rule the create refuses a taken name by (canonical forms compared
+    case-insensitively): a chat titled "docs chat" or "Docs-Chat" by hand is the chat about Docs, rather than a name
+    the create of "Docs Chat" is refused beside on every press."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="docs-chat", labels={"display_name": "docs chat"})
+    canonical_id = "agent-00000000000000000000000000000079"
+    seed_agent_state(manager, canonical_id, name="Notes-Chat")
+    client = app.test_client()
+
+    by_case_variant = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    by_true_name = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+
+    assert by_case_variant.status_code == 200, by_case_variant.get_json()
+    assert _chat_id_of(by_case_variant.get_json()["path"]) == _DOCS_CHAT_ID
+    assert by_true_name.status_code == 200, by_true_name.get_json()
+    assert _chat_id_of(by_true_name.get_json()["path"]) == canonical_id
+
+
+def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
+
+    response = test_client.post(
+        "/api/chats/intake", json={"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
+    )
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert (provisional.name, provisional.phase, provisional.account_id, provisional.labels) == (
+        "Docs Chat",
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        "",
+        {"app_chat": "docs"},
+    )
+    applied = test_client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.get_json()["hint"] == "How do you want to change Docs?"
+    # The prefill is a draft, never the first message: it must not launch the awaiting chat by itself.
+    assert applied.get_json()["composer_text"] == "Change something about the Docs app: "
+    assert applied.get_json()["first_message"] is None
+
+
+def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accepted(tmp_path: Path) -> None:
+    """The first send of an awaiting chat and the launcher's send into a new chat hand the message to the create
+    rather than the send path, so the create route raises the bubble itself (the multiplayer spec, section 6.5),
+    under the chat's minted title and the sender the request vouched for; an empty message raises none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    created = CreatedChat(
+        chat_id=ChatId("agent-00000000000000000000000000000044"), name="Chat-2", display_name="Chat 2"
+    )
+
+    visitor = parse_identity_header(_VISITOR.model_dump_json(exclude_none=True))
+
+    _bubble_new_chats_first_message(state, created, "", visitor, "m-none")
+    _bubble_new_chats_first_message(state, created, "a script's words", _VISITOR, "m-script")
+    _bubble_new_chats_first_message(state, created, "first words", visitor, "m-first")
+
+    wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the first message's bubble to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [("user:user-bob-4471", str(created.chat_id), "Chat 2", "first words", "m-first", ())]
+
+
+def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> None:
+    """A secondary chat's sends and chats are a preview's (the multiplayer spec, section 11): a send raises no bubble,
+    the chat list is never reported, and the ``lounge`` intake target answers 403 rather than making a room."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    sent = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh look at this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    refused = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert sent.status_code == 200
+    assert refused.status_code == 403
+    assert shell.bubbles == [] and shell.chats_activity == []
+
+
+def test_a_first_message_is_attributed_for_the_kind_of_chat_it_starts(tmp_path: Path) -> None:
+    """The create route attributes the first message the way the send route does (the multiplayer spec, section
+    5.1): a room's words ride bare, since a room records the author from the annotation alone, while an agent
+    chat's are prefixed; the owner's page send is annotated and never prefixed, and a sender no proxy vouched for
+    (an in-container caller reading as the owner) gets no annotation."""
+    state = state_of(_peopled_app(tmp_path, RecordingMngrMessenger()))
+    visitor = parse_identity_header(_VISITOR.model_dump_json(exclude_none=True))
+
+    room_words = _attributed_send(state, "first words", "m-first", visitor, is_prefixed=False)
+    agent_words = _attributed_send(state, "first words", "m-agent", visitor, is_prefixed=True)
+    script_words = _attributed_send(state, "the owner's own", "m-script", _JOSH, is_prefixed=True)
+    owner_words = _attributed_send(
+        state, "the owner's page", "m-owner", parse_identity_header(_JOSH.model_dump_json()), is_prefixed=True
+    )
+
+    assert (room_words.delivered_text, agent_words.delivered_text) == ("first words", "[from: Bob] first words")
+    assert (script_words.delivered_text, script_words.annotation) == ("the owner's own", None)
+    assert owner_words.delivered_text == "the owner's page"
+    assert room_words.annotation is not None and agent_words.annotation is not None
+    assert (str(room_words.annotation.author), room_words.annotation.display_name) == ("user:user-bob-4471", "Bob")
+    assert room_words.annotation.text_sha256 == text_sha256("first words")
+    assert agent_words.annotation.text_sha256 == text_sha256("[from: Bob] first words")
+    assert owner_words.annotation is not None and str(owner_words.annotation.author) == "user:user-josh-0001"
+
+
+def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_path: Path) -> None:
+    """A room launched from the chooser with ``@agent`` in its first message: the message lands by the create's
+    own thread, so the hook the create route hands the manager is what sends the agent the message, as the
+    visitor who typed it, and marks the room as waiting on the main chat."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    state = state_of(app)
+    with app.app_context():
+        hook = _room_first_message_hook(
+            state,
+            "@agent is the build green?",
+            parse_identity_header(_VISITOR.model_dump_json(exclude_none=True)),
+            app.app_context(),
+        )
+
+    hook(ChatId(_LOUNGE_ID), "m-first")
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 10.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent is the build green?")]
+    lounge = state.agent_manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    annotations = state.authors.annotations(ChatId(_MAIN_ID))
+    assert [(str(annotation.author), annotation.message_id) for annotation in annotations] == [
+        ("user:user-bob-4471", "m-first")
+    ]
+
+
+def _create_line_of(log_path: Path) -> str:
+    return next(line for line in log_path.read_text().splitlines() if line.startswith("create "))
+
+
+def test_a_visitors_create_with_a_message_hands_the_agent_the_prefix_and_annotates_the_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """An agent chat's first message rides ``mngr create --message`` (the multiplayer spec, section 5.1): the
+    visitor's words reach the agent prefixed, and the chat's annotations name the visitor under the message's id
+    before its turn lands."""
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/create",
+        json={"account_id": signed_in_account, "message": "please deploy"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 201, response.get_data(as_text=True)
+    chat_id = ChatId(response.get_json()["chat_id"])
+    (annotation,) = state_of(app).authors.annotations(chat_id)
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+    wait_until_true(lambda: log_path.exists() and "create " in log_path.read_text(), 10.0, "the create to run")
+    assert "--message [from: bob] please deploy" in _create_line_of(log_path)
+
+
+def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_to(tmp_path: Path) -> None:
+    """The confirming message of a switch is the next agent's first (section 5.1): a switch to a room holds the
+    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them under
+    the visitor from the first push that tells the pages of the switch."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    # Stopped, so the switch has nothing to drain off it.
+    _register_agent(app, first, "Chat-1", "STOPPED")
+    pushes = state_of(app).agent_manager.broadcaster.register()
+
+    response = client.post(
+        f"/api/chats/{first}/handoff",
+        json={"kind": "room", "message": "let's make this a room", "message_id": "m-switch"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 202, response.get_data(as_text=True)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert (record.handoff.trigger_text, record.handoff.target_harness) == ("let's make this a room", HarnessType.ROOM)
+    (annotation,) = state_of(app).authors.annotations(ChatId(first))
+    assert (annotation.message_id, str(annotation.author)) == ("m-switch", "user:user-bob-4471")
+    assert annotation.text_sha256 == text_sha256("let's make this a room")
+    listed = [chat for chat in client.get("/api/chats").get_json()["chats"] if chat["chat_id"] == first]
+    assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
+    first_switch_push = next(
+        chat
+        for push in drain_pushes(pushes)
+        if push["type"] == "chats_updated"
+        for chat in push["chats"]
+        if chat["chat_id"] == first and chat["handoff"] is not None
+    )
+    assert [(held["author"], held["author_name"]) for held in first_switch_push["handoff"]["held_sends"]] == [
+        (_VISITOR_KEY, "bob")
+    ]
+
+
+def test_a_switch_the_manager_refuses_annotates_nothing(tmp_path: Path) -> None:
+    """The annotation follows the switch's validation, as a send's follows its chat's (section 5.1): a room asked
+    to become a room again is refused, and the message that would have confirmed it is nobody's record."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(state_of(app).agent_manager, room, name="Lounge", state="STOPPED", harness=HarnessType.ROOM)
+
+    response = client.post(
+        f"/api/chats/{room}/handoff",
+        json={"kind": "room", "message": "again?", "message_id": "m-refused"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 400, response.get_data(as_text=True)
+    assert state_of(app).authors.annotations(ChatId(room)) == ()
+
+
+def test_a_visitors_send_held_into_a_chat_converging_to_a_room_lands_unprefixed(tmp_path: Path) -> None:
+    """A send held while the chat converges is attributed for the harness it will land on (section 5.1): a room
+    reads no prefix, so the held text is the words alone, which the hash join still names the visitor's."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    to_room = record.handoff.model_copy_update(
+        to_update(record.handoff.field_ref().target_harness, HarnessType.ROOM),
+        to_update(record.handoff.field_ref().target_account_id, ""),
+        to_update(record.handoff.field_ref().target_lane, ""),
+    )
+    manager._chat_record_store.write(record.with_converging(to_room))
+    manager.refresh_chat_records()
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert held.status_code == 202
+    after = manager._chat_record_store.read(ChatId(first))
+    assert after is not None and after.handoff is not None
+    assert [held_send.text for held_send in after.handoff.held_sends] == ["Carry on in Codex", "and this"]
+    (annotation,) = state_of(app).authors.annotations(ChatId(first))
+    assert annotation.text_sha256 == text_sha256("and this")
+
+
+def test_a_seeded_chat_launched_as_a_room_with_a_message_appends_the_words_alone_as_the_visitors(
+    tmp_path: Path,
+) -> None:
+    """A seeded awaiting chat launched as a room with its first words (section 7.3): the words are appended as
+    a step of their own, with no seed context around them (the page shows the seed as the chat's earlier segment
+    already), stamped with the visitor who typed them."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    seeded = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    response = client.post(
+        "/api/chats/create",
+        json={"chat_id": seeded, "kind": "room", "message": "hello everyone"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 201, response.get_data(as_text=True)
+
+    def room_turns() -> list[dict[str, Any]]:
+        events = client.get(f"/api/chats/{seeded}/events").get_json()["events"]
+        return [event for event in events if event.get("source") == "room"]
+
+    wait_until_true(lambda: len(room_turns()) == 1, 15.0, "the room's first message to land")
+    (turn,) = room_turns()
+    (annotation,) = state_of(app).authors.annotations(ChatId(seeded))
+    assert (turn["content"], turn["message_id"]) == ("hello everyone", annotation.message_id)
+    assert (turn["author"], turn["author_name"]) == ("user:user-bob-4471", "bob")

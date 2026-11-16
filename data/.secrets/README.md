@@ -10,11 +10,12 @@ live here:
   per variable as `NAME='value'`, written by the chat app with mode 0600. The
   agent never sees the value; it names the file and the variables, and the user
   types the value into the card.
-- `mcpc/`, the state of `mcpc`, the MCP client every agent, app, and scheduled
-  job shares (`~/.mcpc` links here): its sessions, the OAuth sign-ins it holds,
-  and the headers it sends. It is reached only through
-  the `mcpc` command; `mcpc` lists the connections and `mcpc @<name> close` ends
-  one.
+- `mcpc/`, in a workspace set up before MCP servers went through latchkey: the
+  state of `mcpc`, the MCP client such a workspace shared (`~/.mcpc` links
+  here), with the sessions, OAuth sign-ins, and headers it still holds. It is
+  reached only through the `mcpc` command; `mcpc` lists the connections and
+  `mcpc @<name> close` ends one. New connections go through latchkey (the
+  `connect-external-service` skill), which keeps nothing here.
 
 Gitignored and never synced to GitHub; treat everything in here as sensitive.
 
@@ -27,8 +28,8 @@ environment and nothing else:
 python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>
 ```
 
-That form is what an agent's own commands, `mcp-servers.json` server commands,
-supervisord programs, and scheduled jobs use. Nothing else may read the file:
+That form is what an agent's own commands, supervisord programs, and scheduled
+jobs use. Nothing else may read the file:
 a PreToolUse guard (`system/scripts/agent_secrets_guard.sh`) refuses `cat`,
 `source`, `sed`, `python3 -c`, a redirect, or a `Read`/`Edit` tool call that
 names the directory, because a value that lands in a tool call lands in the

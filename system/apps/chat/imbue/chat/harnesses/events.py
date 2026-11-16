@@ -86,6 +86,9 @@ class DisplayKind(StrEnum):
     HIDDEN = "hidden"
     # A collapsed chip at the point it arrived; ``display_label`` is its title.
     CHIP = "chip"
+    # A ``CHIP`` of the person's own doing rather than the agent's (a bash-mode ``!ls`` and its output): drawn on
+    # the person's side of the transcript, outside the agent's turn.
+    PERSON_CHIP = "person_chip"
     # Relocated into the preceding Skill tool-call block; ``display_label`` is the skill name.
     SKILL_EXPANSION = "skill_expansion"
     # tool_call only: render the rich permission card instead of a tool row.

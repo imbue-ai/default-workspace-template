@@ -1,12 +1,15 @@
 """Unit tests for the chat-attachment storage helpers."""
 
 import io
+import re
+import struct
 from pathlib import Path
 
 import pytest
 from werkzeug.datastructures import FileStorage
 
 from imbue.chat.attachments import _DEFAULT_UPLOAD_FILENAME
+from imbue.chat.attachments import _move_to_sized_subdirectory
 from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
@@ -49,6 +52,47 @@ def test_store_uploaded_file_writes_content_under_unique_subdir(tmp_path: Path) 
     assert stored_path.read_bytes() == b"image-bytes"
     assert stored_path.name == "photo.png"
     assert stored_path.parent.parent == uploads_directory
+
+
+_PNG_1600X900 = (
+    b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 1600, 900) + b"\x08\x06\x00\x00\x00"
+)
+
+
+def test_an_image_upload_names_its_subdirectory_after_the_size_it_is_drawn_at(tmp_path: Path) -> None:
+    uploads_directory = tmp_path / "uploads"
+    png = _PNG_1600X900
+
+    stored_path = store_uploaded_file(uploads_directory, "photo.png", _file_storage(png, "photo.png"))
+
+    assert re.fullmatch(r"[0-9a-f]{32}-1600x900", stored_path.parent.name)
+    assert stored_path.read_bytes() == png
+    assert [path.name for path in uploads_directory.iterdir()] == [stored_path.parent.name]
+    relative_path = f"{stored_path.parent.name}/{stored_path.name}"
+    assert resolve_upload_path(uploads_directory, relative_path) == stored_path.resolve()
+
+
+def test_an_image_whose_subdirectory_cannot_be_renamed_is_kept_without_its_size(tmp_path: Path) -> None:
+    unique_subdirectory = tmp_path / "uploads" / "0123456789abcdef0123456789abcdef"
+    unique_subdirectory.mkdir(parents=True)
+    (unique_subdirectory / "photo.png").write_bytes(_PNG_1600X900)
+    # A directory cannot be renamed onto one that is not empty.
+    sized_subdirectory = tmp_path / "uploads" / f"{unique_subdirectory.name}-1600x900"
+    sized_subdirectory.mkdir()
+    (sized_subdirectory / "occupant").write_bytes(b"")
+
+    stored_path = _move_to_sized_subdirectory(unique_subdirectory, sized_subdirectory, "photo.png")
+
+    assert stored_path == unique_subdirectory / "photo.png"
+    assert stored_path.read_bytes() == _PNG_1600X900
+
+
+def test_a_file_with_no_readable_size_keeps_a_plain_subdirectory(tmp_path: Path) -> None:
+    uploads_directory = tmp_path / "uploads"
+
+    stored_path = store_uploaded_file(uploads_directory, "report.pdf", _file_storage(b"%PDF-1.7", "report.pdf"))
+
+    assert re.fullmatch(r"[0-9a-f]{32}", stored_path.parent.name)
 
 
 def test_store_uploaded_file_keeps_same_named_files_separate(tmp_path: Path) -> None:

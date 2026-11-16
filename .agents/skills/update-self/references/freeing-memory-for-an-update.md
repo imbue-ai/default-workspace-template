@@ -26,7 +26,8 @@ processes, roughly what stopping it frees. Read the free memory again after each
 ## What this pass may stop
 
 **Every run** may stop what the Step 1 licence names: chats and background agents, the browser, and
-the user apps no window is showing.
+the user apps no window is showing. The main chat is not among them: the chat app starts it again as
+soon as it stops, so the candidates command leaves it out with a note saying so.
 
 **A scheduled run** may stop **any** app the candidates command's apps section lists, windows open
 or not. That section is the boundary, and it is drawn so that everything in it can be brought back:

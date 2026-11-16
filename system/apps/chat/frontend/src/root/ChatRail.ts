@@ -7,7 +7,7 @@
  * off from the rest by a rule, since it is where a text with no chat of its own goes. A row is renameable in place (double-click,
  * or the pencil under the pointer), and a right-click opens a menu: rename, stop or restart,
  * delete (which asks first). A stopped chat stays in the list faded with a pause mark; one
- * being deleted is crossed out until the list drops it.
+ * being deleted leaves the list at once and comes back if the delete is refused (``pendingDeletes``).
  *
  * The list's right edge drags to resize it (``railWidth``); a double-click there puts back the
  * default width.
@@ -25,15 +25,19 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
-import { kebabGlyph, plusGlyph } from "../glyphs";
+import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
+import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
 import { describeDeleteFailure, describeRunVerbFailure, raiseRootNotice } from "./rootNotice";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { addChatsUpdatedListener, removeChatsUpdatedListener } from "../models/Chats";
-import { isAgentStarted, startsWithMainChat } from "./rows";
+import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
+import { participantPicture } from "../views/participant-picture";
+import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
   MAX_RAIL_WIDTH_PX,
@@ -53,7 +57,10 @@ export interface ChatRailAttrs {
   isInDrawer: boolean;
   /** Whether the list takes the finger's form: the drawer on a touchscreen. */
   isTouch: boolean;
-  onPick: (chatId: string) => void;
+  /** Show a chat, or with null none: the last chat was deleted. */
+  onPick: (chatId: string | null) => void;
+  /** A delete came back refused, so the chat is listed again. */
+  onDeleteRefused: () => void;
   onNew: () => void;
   /** The scope a reference to a row carries (the root's handshake). */
   referenceScope: ReferenceScope;
@@ -87,7 +94,6 @@ interface RenameState {
 }
 
 let rename: RenameState | null = null;
-const deletingChatIds = new Set<string>();
 
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
@@ -110,11 +116,6 @@ const railMenu = createMenu({
 
 function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
-}
-
-/** Whether ``chatId`` is being deleted: its delete was asked for and has not failed. */
-export function isDeleting(chatId: string): boolean {
-  return deletingChatIds.has(chatId);
 }
 
 /** Whether ``chatId`` is being renamed. */
@@ -148,12 +149,6 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
   m.redraw();
 }
 
-function pruneDeleting(rows: readonly ChatRow[]): void {
-  for (const chatId of deletingChatIds) {
-    if (!rows.some((row) => row.chatId === chatId)) deletingChatIds.delete(chatId);
-  }
-}
-
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
   const verb = isRunning ? startChat : stopChat;
   verb(row.chatId).catch((error: unknown) => {
@@ -172,8 +167,8 @@ function makeMainFromMenu(row: ChatRow): void {
   });
 }
 
-/** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
-export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick">;
+/** What a row's menu needs of the root: the rows, the one shown, how to show another, and word of a refused delete. */
+export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick" | "onDeleteRefused">;
 
 /** What a reference to an element of the list needs of the root, as its right-click menu does. */
 export type RowReferenceContext = Pick<
@@ -187,45 +182,45 @@ export function referenceRowsFor(attrs: RowReferenceContext, element: Element, c
   return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
 }
 
-/** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
- *  the next one in the list first, so it is not left on a page whose chat is gone. */
+/** Delete from the menu, after asking: the chat leaves the list at once, and when it is the chat the root shows, the
+ *  root moves to the next one in the list (to none, for the last chat). A refusal brings the chat back and says why. */
 function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const isConfirmed = window.confirm(
-    `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
+    isRoom(row)
+      ? `Delete "${row.title}"?\n\nThis removes the room and its messages. It cannot be undone.`
+      : `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
   );
   if (!isConfirmed) return;
-  const next = attrs.rows.find(
-    (candidate) => candidate.chatId !== row.chatId && !deletingChatIds.has(candidate.chatId),
-  );
-  if (row.chatId === attrs.selectedChatId && next !== undefined) attrs.onPick(next.chatId);
-  deleteChat(row);
+  const next = attrs.rows.find((candidate) => candidate.chatId !== row.chatId);
+  if (row.chatId === attrs.selectedChatId) attrs.onPick(next?.chatId ?? null);
+  deleteChat(attrs, row);
 }
 
-function deleteChat(row: ChatRow): void {
-  deletingChatIds.add(row.chatId);
+function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
+  showPendingDelete(row.chatId);
   m.redraw();
   destroyChat(row.chatId).catch((error: unknown) => {
     const failure = describeRequestFailure(error);
     if (failure.cause === "not_answered") {
-      // The delete may have run: the row stays marked until the next list update says whether the chat is still
-      // there.
-      unmarkOnNextUpdate(row.chatId);
+      // The delete may have run: the chat stays off the list until the next list says whether it is still there.
+      dropPendingDeleteOnNextUpdate(row.chatId);
     } else {
-      deletingChatIds.delete(row.chatId);
+      dropPendingDelete(row.chatId);
+      attrs.onDeleteRefused();
     }
     m.redraw();
     raiseRootNotice({
       title: "Couldn't delete the chat",
       lines: describeDeleteFailure(error, row.title),
-      retry: failure.cause === "not_answered" || failure.cause === "user_facing" ? null : () => deleteChat(row),
+      retry: failure.cause === "not_answered" || failure.cause === "user_facing" ? null : () => deleteChat(attrs, row),
     });
   });
 }
 
-function unmarkOnNextUpdate(chatId: string): void {
+function dropPendingDeleteOnNextUpdate(chatId: string): void {
   const listener = (): void => {
     removeChatsUpdatedListener(listener);
-    deletingChatIds.delete(chatId);
+    dropPendingDelete(chatId);
     m.redraw();
   };
   addChatsUpdatedListener(listener);
@@ -237,8 +232,9 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
   const isStopped = row.status === "stopped";
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
-    // A helper another agent started cannot be the main chat, and the main chat needs no offer to become it.
-    ...(row.isMain || isAgentStarted(row)
+    // A helper another agent started cannot be the main chat, a room never is, and the main chat needs no offer to
+    // become it.
+    ...(row.isMain || isAgentStarted(row) || isRoom(row)
       ? []
       : [
           {
@@ -249,14 +245,15 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
           } as MenuRow,
         ]),
     // The main chat is kept running (the chat app wakes it whenever it is found stopped), and a chat that is not an
-    // agent yet has nothing to stop, so neither offers these.
-    ...(row.isMain || row.isProvisional
+    // agent yet has nothing to stop, so neither offers these. A room's reader is stopped and restarted like any
+    // chat's agent (the multiplayer spec, section 11).
+    ...(row.isMain || row.kind === "provisional"
       ? []
       : [
           {
             kind: "action",
             key: isStopped ? "start" : "stop",
-            label: isStopped ? "Restart chat" : "Stop chat",
+            label: `${isStopped ? "Restart" : "Stop"} ${isRoom(row) ? "room" : "chat"}`,
             onSelect: () => setRunningFromMenu(row, isStopped),
           } as MenuRow,
         ]),
@@ -264,7 +261,7 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
     {
       kind: "action",
       key: "delete",
-      label: "Delete chat",
+      label: isRoom(row) ? "Delete room" : "Delete chat",
       tone: "danger",
       onSelect: () => deleteFromMenu(attrs, row),
     },
@@ -318,7 +315,6 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
     }
   },
   view({ attrs }) {
-    pruneDeleting(attrs.rows);
     const menuRow = menuChatId === null ? undefined : attrs.rows.find((row) => row.chatId === menuChatId);
     return m(
       "nav",
@@ -476,7 +472,6 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
 
 function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
   const isSelected = row.chatId === attrs.selectedChatId;
-  const isDeleting = deletingChatIds.has(row.chatId);
   if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isTouch);
   const status = displayStatus(row);
   return m(
@@ -489,13 +484,13 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
         attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
-        isDeleting
-          ? "chat-rail-row--deleting text-danger line-through opacity-50"
-          : status === "done"
-            ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-fill-active" : "hover:bg-fill-hover"}`
-            : isSelected
-              ? "chat-rail-row--selected bg-fill-active text-primary"
-              : "text-primary hover:bg-fill-hover",
+        // The selected row wears the same grey as a not-yours bubble (one fill for "where you are" and "what
+        // someone else said", per the design), so the rows' hover has to read lighter than it.
+        status === "done"
+          ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
+          : isSelected
+            ? "chat-rail-row--selected bg-bubble-other text-primary"
+            : "text-primary hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
@@ -504,7 +499,6 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       "data-main": row.isMain ? "true" : undefined,
       "aria-current": isSelected ? "true" : undefined,
       ...LIST_ROW_PART,
-      "aria-disabled": isDeleting ? "true" : undefined,
       // In the drawer the chat on screen is picked again to close it.
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
@@ -512,17 +506,62 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       ondblclick: () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
       },
     },
     [
-      statusDot(row, "flex-none"),
+      // A room wears the people glyph where an idle chat wears its dot; while an agent it asked works, the dot.
+      isRoom(row) && status === "idle"
+        ? m(
+            "span",
+            { class: "chat-rail-room-glyph -mx-0.5 flex size-3 flex-none items-center text-faint" },
+            peopleGlyph(13),
+          )
+        : statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
+      row.hasMention ? mentionMark() : null,
+      participantPhotos(row),
+      attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
     ],
+  );
+}
+
+/** Who has written in the chat, as a stack of little pictures at the row's end (the multiplayer spec, section
+ *  5.4): drawn only when two or more have, and stepping aside under the pointer, where the pencil and the kebab
+ *  come out. Each picture tucks under the one before it with a ring of the rail's surface, like the tray's stack.
+ *  The owner's two keys fold into one owner before counting and drawing (section 11), so an owner annotated under
+ *  ``owner`` before the workspace was shared and under their account key after is one person, not two. */
+function participantPhotos(row: ChatRow): m.Vnode | null {
+  const keys = [...new Set(row.participants.map(foldOwnerKey))];
+  if (keys.length < 2) return null;
+  return m(
+    "span",
+    { class: "chat-row-people flex flex-none items-center group-hover:hidden", "data-chat-row-people": row.chatId },
+    keys.map((key, index) => {
+      const entry = getParticipant(key);
+      return participantPicture({
+        name: participantName(key, null),
+        pictureUrl: entry?.profile_picture_url ?? null,
+        color: entry?.color ?? null,
+        size: 16,
+        extra: "ring-1 ring-sidebar" + (index > 0 ? " -ml-1" : ""),
+      });
+    }),
+  );
+}
+
+/** The ``@`` a row wears while the viewer has a mention in the chat they have not looked at (section 7.4). */
+function mentionMark(): m.Vnode {
+  return m(
+    "span",
+    {
+      class: "chat-rail-mention flex-none rounded px-1 text-(length:--font-size-helper) font-semibold text-accent",
+      "data-chat-row-mention": "",
+      ...hoverTooltipAttrs("You were mentioned here", "above"),
+    },
+    "@",
   );
 }
 
@@ -559,6 +598,22 @@ function renamePencil(row: ChatRow): m.Vnode {
       ...innerButtonAttrs("Rename chat", () => beginRename(row)),
     },
     m.trust(icon("edit", { size: 13 })),
+  );
+}
+
+/** The row's menu under a pointer: shown beside the pencil while the row is under the pointer, as the pencil is. */
+function hoverKebab(row: ChatRow): m.Vnode {
+  return m(
+    "span",
+    {
+      class:
+        "chat-rail-row-menu -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
+        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
+      "data-chat-row-menu": row.chatId,
+      ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
+    },
+    kebabGlyph(13),
   );
 }
 

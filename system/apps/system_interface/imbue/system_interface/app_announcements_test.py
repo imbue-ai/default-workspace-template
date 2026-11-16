@@ -10,15 +10,16 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
+from event_streams.archive import compress_staged_streams
 
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_REL
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
+from imbue.system_interface.app_announcements import KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT
 from imbue.system_interface.app_announcements import announced_row_of
 from imbue.system_interface.app_announcements import announcements_path_from_environment
-from imbue.system_interface.app_announcements import compress_staged_announcements
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 
@@ -283,7 +284,7 @@ def test_an_interrupted_archive_is_finished_and_only_the_newest_archives_are_kep
     # Left behind by a shell stopped after staging a stream but before compressing it.
     (tmp_path / "events.jsonl.20260501000000000000.archiving").write_bytes(b"staged\n")
 
-    compress_staged_announcements(events_path)
+    compress_staged_streams(events_path, kept_archive_count=KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT)
 
     assert sorted(path.name for path in tmp_path.glob("events.jsonl.*")) == [
         "events.jsonl.20260301000000000000.gz",

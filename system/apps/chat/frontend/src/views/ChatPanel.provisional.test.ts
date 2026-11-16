@@ -17,10 +17,14 @@ const mocks = vi.hoisted(() => {
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
     noteLoadedArrivals: vi.fn(),
-    // The page's not-yet-real bubbles, as the outgoing view renders them.
+    // The page's not-yet-real bubbles, as the outgoing view renders them, and whether each render was told they
+    // carry on the viewer's run from a bubble above them.
     outgoingBubbles: [] as unknown[],
+    outgoingAfterOwnTurn: [] as (boolean | undefined)[],
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
+    isTranscriptLoaded: false,
+    reportChatOnScreenOnce: vi.fn(),
     isChatListReceived: true,
     loadState: { phase: "idle", error: null } as unknown,
     destroyChat: vi.fn(async (_chatId: string) => undefined),
@@ -53,6 +57,7 @@ vi.mock("../models/Chats", () => ({
   removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
+  isRoomChat: () => false,
 }));
 vi.mock("../models/Response", () => ({
   addMessageSentListener: () => undefined,
@@ -69,7 +74,12 @@ vi.mock("../models/Response", () => ({
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
   isConversationNotFound: () => mocks.isConversationNotFound,
+  isTranscriptLoaded: () => mocks.isTranscriptLoaded,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
+}));
+vi.mock("../shell", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shell")>()),
+  reportChatOnScreenOnce: mocks.reportChatOnScreenOnce,
 }));
 vi.mock("../models/StreamingMessage", () => ({
   connectToStream: mocks.connectToStream,
@@ -99,7 +109,10 @@ vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
 vi.mock("./OutgoingMessageView", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./OutgoingMessageView")>()),
-  renderOutgoingMessages: () => mocks.outgoingBubbles,
+  renderOutgoingMessages: (_chatId: string, ownRun?: { isOpen: boolean }) => {
+    mocks.outgoingAfterOwnTurn.push(ownRun?.isOpen);
+    return mocks.outgoingBubbles;
+  },
 }));
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
@@ -236,6 +249,7 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.openProviderChooser.mockClear();
     mocks.chat = undefined;
     mocks.outgoingBubbles = [];
+    mocks.outgoingAfterOwnTurn = [];
     mocks.fetchEvents.mockClear();
   });
 
@@ -288,6 +302,17 @@ describe("ChatPanel over a provisional chat", () => {
 
     expect(renderedText(tree)).toContain("sent from another page");
     expect(renderedText(tree)).not.toContain("Starting your chat");
+  });
+
+  it("names the viewer once over the held messages and the sends after them while the chat starts", () => {
+    creating();
+    mountPanel()();
+    expect(mocks.outgoingAfterOwnTurn.map(Boolean)).toEqual([false]);
+
+    mocks.outgoingAfterOwnTurn = [];
+    mocks.proto = { ...(mocks.proto as object), held_sends: [{ message_id: "m-1", text: "sent from another page" }] };
+    mountPanel()();
+    expect(mocks.outgoingAfterOwnTurn.map(Boolean)).toEqual([true]);
   });
 
   it("keeps a failed create's held messages in view above its reason", () => {
@@ -545,6 +570,23 @@ describe("ChatPanel over a seeded chat", () => {
     expect(mocks.loadSnapshotWithStream.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.noteLoadedArrivals.mock.invocationCallOrder[0],
     );
+  });
+
+  it("reports the chat on screen from each draw of its transcript, with whether the transcript has loaded", () => {
+    seeded("awaiting_first_send");
+    mocks.reportChatOnScreenOnce.mockClear();
+    const transcript = findByClass(mountPanel()(), "transcript-scroll");
+    const draw = { dom: document.createElement("main") };
+
+    mocks.isTranscriptLoaded = false;
+    (transcript!.attrs!.oncreate as (vnode: unknown) => void)(draw);
+    mocks.isTranscriptLoaded = true;
+    (transcript!.attrs!.onupdate as (vnode: unknown) => void)(draw);
+
+    expect(mocks.reportChatOnScreenOnce.mock.calls).toEqual([
+      [AGENT_ID, false],
+      [AGENT_ID, true],
+    ]);
   });
 
   it("shows a failed create's reason over a seeded chat like any other", () => {

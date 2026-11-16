@@ -48,8 +48,8 @@ export interface ThemeCatalog {
 }
 
 export const STANDARD_CHROME: ThemeChrome = {
-  title_align: "start",
-  leading: ["icon", "title", "refresh", "menu"],
+  title_align: "center",
+  leading: ["menu", "refresh", "icon", "title"],
   trailing: ["minimize", "maximize", "close"],
 };
 

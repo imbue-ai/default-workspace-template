@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { notAnsweredSentence, readFailure } from "./failure";
 import { HttpError } from "./http";
-import { describeRequestError, describeRequestFailure } from "./request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  describeRequestFailure,
+  isUnansweredRequest,
+} from "./request-error";
 
 const FALLBACK = "The workspace couldn't do that. Try again. If this persists, report a bug.";
 
@@ -87,5 +92,52 @@ describe("describeRequestError", () => {
     expect(describeRequestError(undefined)).toBe(FALLBACK);
     expect(describeRequestError({})).toBe(FALLBACK);
     expect(describeRequestError("   ")).toBe(FALLBACK);
+  });
+});
+
+describe("describeRequestErrorKind", () => {
+  it("reads an unconfirmed submission as its own kind", () => {
+    const error = Object.assign(new Error("{}"), {
+      code: 500,
+      response: { detail: "Timeout waiting for message submission evidence", kind: "submission_unconfirmed" },
+    });
+    expect(describeRequestErrorKind(error)).toBe("submission_unconfirmed");
+  });
+
+  it("reads a kind it does not know as unknown", () => {
+    const error = Object.assign(new Error("{}"), { code: 500, response: { detail: "x", kind: "a_kind_added_later" } });
+    expect(describeRequestErrorKind(error)).toBe("unknown");
+  });
+
+  it("reads a failure with no kind as unknown", () => {
+    expect(describeRequestErrorKind(Object.assign(new Error("null"), { code: 503, response: null }))).toBe("unknown");
+    expect(describeRequestErrorKind("a plain string")).toBe("unknown");
+    expect(describeRequestErrorKind(null)).toBe("unknown");
+  });
+});
+
+describe("isUnansweredRequest", () => {
+  it("reads a request that got no HTTP response as unanswered", () => {
+    expect(isUnansweredRequest(Object.assign(new Error(String(null)), { code: 0, response: null }))).toBe(true);
+  });
+
+  it("reads a gateway that gave up without the app's own detail as unanswered", () => {
+    for (const code of [502, 504]) {
+      expect(isUnansweredRequest(Object.assign(new Error(String(null)), { code, response: null }))).toBe(true);
+    }
+  });
+
+  it("reads a 502 or 504 carrying the app's own detail as answered", () => {
+    for (const code of [502, 504]) {
+      const error = Object.assign(new Error("{}"), { code, response: { detail: "the agent did not answer" } });
+      expect(isUnansweredRequest(error)).toBe(false);
+    }
+  });
+
+  it("reads any other status, and anything that is not a request error, as answered", () => {
+    expect(isUnansweredRequest(Object.assign(new Error("null"), { code: 503, response: null }))).toBe(false);
+    expect(isUnansweredRequest(Object.assign(new Error("{}"), { code: 500, response: { detail: "x" } }))).toBe(false);
+    expect(isUnansweredRequest(null)).toBe(false);
+    expect(isUnansweredRequest("a plain string")).toBe(false);
   });
 });

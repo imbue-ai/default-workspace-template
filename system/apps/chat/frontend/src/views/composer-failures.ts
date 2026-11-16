@@ -5,29 +5,17 @@
 
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { plainFailureLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
 export const SEND_NOT_ANSWERED =
-  "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered. Your text is back in the box.";
+  "The workspace didn't answer, so the agent may already have your message. Check its terminal before you send it again.";
 export const SEND_TO_GONE_CHAT =
   "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into a new chat.";
 const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the box, so nothing was lost.";
 
-/** What a send refused for a reason mngr classified means for the user, where the server said nothing of its own. */
-function sendFailureKindLine(kind: SendFailureKind): string | null {
-  switch (kind) {
-    case "not_ready":
-      return "The agent isn't ready for a new message yet. Wait a moment and try again.";
-    case "agent_unreachable":
-      return "Imbue Studio can't reach this agent. Restarting the agent will reset it and send your message.";
-    default:
-      return null;
-  }
-}
-
-/** A refused or unanswered send. The message is back in the composer whichever way it failed. */
+/** A refused or unanswered send. The message is back in the composer whichever way it failed. A kind mngr classified
+ *  is worded by the composer's notice itself; this is what it says for the rest. */
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
   const kind = describeRequestErrorKind(error);
@@ -40,7 +28,7 @@ export function describeSendFailure(error: unknown): FailureLines {
     return { body: [told.message], details: told.details, isReportable: told.isReportable };
   }
   return {
-    body: [told.isReportable ? told.message : SEND_REFUSED, sendFailureKindLine(kind)],
+    body: [told.isReportable ? told.message : SEND_REFUSED],
     details: told.details,
     isReportable: told.isReportable,
   };
