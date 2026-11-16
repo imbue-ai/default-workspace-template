@@ -29,12 +29,31 @@ def test_undecodable_signatures_are_not_progress_updates() -> None:
 
 
 def test_progress_update_text_is_the_trimmed_text_of_a_narration_block() -> None:
-    block = {"type": "thinking", "thinking": "The data is in; matching by topic next.\n\n", "signature": thinking_block_signature("narration")}
+    block = {
+        "type": "thinking",
+        "thinking": "The data is in; matching by topic next.\n\n",
+        "signature": thinking_block_signature("narration"),
+    }
     assert progress_update_text(block) == "The data is in; matching by topic next."
 
 
 def test_progress_update_text_is_empty_for_reasoning_empty_and_other_blocks() -> None:
-    assert progress_update_text({"type": "thinking", "thinking": "I'm weighing two options.", "signature": thinking_block_signature("thinking")}) == ""
-    assert progress_update_text({"type": "thinking", "thinking": "", "signature": thinking_block_signature("narration")}) == ""
+    assert (
+        progress_update_text(
+            {
+                "type": "thinking",
+                "thinking": "I'm weighing two options.",
+                "signature": thinking_block_signature("thinking"),
+            }
+        )
+        == ""
+    )
+    assert (
+        progress_update_text({"type": "thinking", "thinking": "", "signature": thinking_block_signature("narration")})
+        == ""
+    )
     assert progress_update_text({"type": "thinking", "thinking": "No signature here."}) == ""
-    assert progress_update_text({"type": "text", "text": "Hello", "signature": thinking_block_signature("narration")}) == ""
+    assert (
+        progress_update_text({"type": "text", "text": "Hello", "signature": thinking_block_signature("narration")})
+        == ""
+    )

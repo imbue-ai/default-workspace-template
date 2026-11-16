@@ -129,7 +129,9 @@ def _thinking_block(text: str, block_kind: str) -> dict[str, Any]:
 def test_a_progress_update_reads_as_assistant_prose_and_reasoning_stays_hidden() -> None:
     lines = [
         _make_content_block_line(
-            "uuid-reason", "2026-01-01T00:00:01Z", _thinking_block("I'm weighing which source to read first.", "thinking")
+            "uuid-reason",
+            "2026-01-01T00:00:01Z",
+            _thinking_block("I'm weighing which source to read first.", "thinking"),
         ),
         _make_content_block_line(
             "uuid-update",
@@ -151,12 +153,16 @@ def test_a_progress_update_reads_as_assistant_prose_and_reasoning_stays_hidden()
 
 
 def test_an_empty_progress_update_adds_no_text() -> None:
-    events = parse_lines([_make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", _thinking_block("", "narration"))])
+    events = parse_lines(
+        [_make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", _thinking_block("", "narration"))]
+    )
     assert events[0]["text"] == ""
 
 
 def test_a_progress_update_line_carries_no_deferred_payload() -> None:
-    line = _make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", _thinking_block("Reading the data next.", "narration"))
+    line = _make_content_block_line(
+        "uuid-1", "2026-01-01T00:00:01Z", _thinking_block("Reading the data next.", "narration")
+    )
     assert parse_line_detail(line) == {}
 
 
