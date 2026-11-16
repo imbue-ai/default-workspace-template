@@ -282,13 +282,12 @@ export function stagePastedText(chatId: string, text: string): void {
  * Take a pasted-text attachment out of the composer and answer its text, for the composer to put back inline.
  * The text comes from memory when this document staged it, else from the uploaded copy; the chip and its copy
  * are removed only once the text is in hand, so a failed read leaves the attachment as it was. Answers null when
- * the chip left the composer while its copy was read (sent, removed or cleared), so the text is not put back.
+ * the chip is not in the composer, or left it while its copy was read (sent, removed or cleared), so the text is
+ * not put back.
  */
 export async function unstagePastedText(chatId: string, localId: string): Promise<string | null> {
   const item = getComposerAttachments(chatId).find((attachment) => attachment.localId === localId);
-  if (item === undefined) {
-    throw new Error(`Attachment ${localId} is not staged on chat ${chatId}`);
-  }
+  if (item === undefined) return null;
   let text = item.pastedText;
   if (text === undefined) {
     if (item.uploaded === undefined) {

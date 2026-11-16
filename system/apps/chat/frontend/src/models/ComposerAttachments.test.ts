@@ -331,6 +331,10 @@ describe("pasted text", () => {
     expect(await putBack).toBeNull();
   });
 
+  it("answers nothing for a chip already gone from the composer", async () => {
+    expect(await unstagePastedText(chatId, "composer-att-gone")).toBeNull();
+  });
+
   it("leaves the attachment in place when its text cannot be read back", async () => {
     const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(
