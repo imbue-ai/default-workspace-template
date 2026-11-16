@@ -45,7 +45,6 @@ describe("accountRow rename during an input-method composition", () => {
     const blur = vi.fn();
 
     onkeydown({ key: "Enter", isComposing: true, target: { blur } });
-    onkeydown({ key: "Enter", keyCode: 229, target: { blur } });
     expect(blur).not.toHaveBeenCalled();
 
     onkeydown({ key: "Enter", target: { blur } });

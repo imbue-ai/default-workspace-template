@@ -90,7 +90,6 @@ describe("SendPicker", () => {
     const picker = mount({ onPick, onDismiss: vi.fn() });
     const input = picker.querySelector<HTMLInputElement>("[data-send-picker-search]")!;
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
     expect(onPick).not.toHaveBeenCalled();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onPick).toHaveBeenCalledWith("agent-1");

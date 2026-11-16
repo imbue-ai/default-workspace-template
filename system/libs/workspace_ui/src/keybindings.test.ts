@@ -47,12 +47,12 @@ describe("isImeKeydown", () => {
     expect(isImeKeydown(keydown("Enter", { isComposing: true }))).toBe(true);
   });
 
-  it("is true for the keystroke an input method consumed after its composition already ended", () => {
-    expect(isImeKeydown(keydown("Enter", { isComposing: false, keyCode: 229 }))).toBe(true);
-  });
-
-  it("is false for an ordinary keystroke, and for an event that carries neither field", () => {
+  it("is false for an ordinary keystroke, and for an event that carries no flag", () => {
     expect(isImeKeydown(keydown("Enter"))).toBe(false);
     expect(isImeKeydown({})).toBe(false);
+  });
+
+  it("does not take a bare keyCode of 229 for a composition", () => {
+    expect(isImeKeydown(keydown("Enter", { keyCode: 229 }))).toBe(false);
   });
 });

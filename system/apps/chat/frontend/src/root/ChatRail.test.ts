@@ -219,7 +219,6 @@ describe("ChatRail rename during an input-method composition", () => {
     input.value = "lv'x'ing";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
     expect(verbs.renameChat).not.toHaveBeenCalled();
     expect(rail.querySelector(".chat-rail-rename-input")).not.toBeNull();
 

@@ -588,14 +588,11 @@ describe("MessageInput Enter during an input-method composition", () => {
     return preventDefault;
   }
 
-  it.each([
-    ["isComposing is set", { isComposing: true }],
-    ["only the consumed-key code is set", { isComposing: false, keyCode: 229 }],
-  ])("neither sends nor takes the keystroke from the input method when %s", async (_label, init) => {
+  it("neither sends nor takes the keystroke from the input method", async () => {
     const component = MessageInput();
     typeDraft(component, "share the wo'r'k's'pa'ce");
 
-    const preventDefault = pressEnter(component, init);
+    const preventDefault = pressEnter(component, { isComposing: true });
     await flushAsync();
 
     expect(mocks.sendMessage).not.toHaveBeenCalled();
