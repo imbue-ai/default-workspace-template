@@ -1284,10 +1284,16 @@ _FIXTURE_SESSION_EVENTS: Final[list[dict[str, Any]]] = [
 ]
 
 
-def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapping[str, Any]]) -> Path:
-    """Write a claude session JSONL under a fixture config dir and return its path."""
+def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapping[str, Any]] | bytes) -> Path:
+    """Write a claude session JSONL under a fixture config dir and return its path.
+
+    ``events`` is either the records, written one JSON line each, or a recorded file's bytes, written as they are.
+    """
     projects_dir.mkdir(parents=True, exist_ok=True)
     session_file = projects_dir / f"{session_id}.jsonl"
+    if isinstance(events, bytes):
+        session_file.write_bytes(events)
+        return session_file
     with open(session_file, "w") as handle:
         for event in events:
             handle.write(json.dumps(event) + "\n")
@@ -1340,7 +1346,7 @@ def make_agent_fixture(
     tmp_path: Path,
     agent_id: str = FIXTURE_AGENT_ID,
     agent_name: str = FIXTURE_AGENT_NAME,
-    session_events: Sequence[Mapping[str, Any]] | None = None,
+    session_events: Sequence[Mapping[str, Any]] | bytes | None = None,
     session_id: str = FIXTURE_SESSION_ID,
 ) -> tuple[AgentInfo, Path]:
     """A fake agent state dir plus a claude config dir holding one session file; returns the agent and the file.
@@ -1373,12 +1379,12 @@ def make_agent_fixture(
 
 
 class SeededSession(FrozenModel):
-    """A chat ``running_workspace`` lists beside the fixture's: an agent whose claude session holds ``events``."""
+    """A chat ``running_workspace`` lists beside the fixture's: an agent whose claude session file is ``transcript``."""
 
     agent_id: str = Field(description="The agent's mngr id, which is also the chat's id")
     agent_name: str = Field(description="The agent's name, which the chat list shows")
     session_id: str = Field(description="The claude session id its transcript is filed under")
-    events: tuple[Mapping[str, Any], ...] = Field(description="The session file's records, in order")
+    transcript: bytes = Field(description="The session file's content, written as it is")
 
 
 class RunningWorkspace(FrozenModel):
@@ -1499,7 +1505,7 @@ def running_workspace(
     tmp_path: Path,
     shell_port: int,
     chat_port: int,
-    session_events: Sequence[Mapping[str, Any]] | None = None,
+    session_events: Sequence[Mapping[str, Any]] | bytes | None = None,
     agent_id: str = FIXTURE_AGENT_ID,
     agent_name: str = FIXTURE_AGENT_NAME,
     session_id: str = FIXTURE_SESSION_ID,
@@ -1542,7 +1548,7 @@ def running_workspace(
             tmp_path,
             agent_id=seeded.agent_id,
             agent_name=seeded.agent_name,
-            session_events=seeded.events,
+            session_events=seeded.transcript,
             session_id=seeded.session_id,
         )[0]
         for seeded in seeded_sessions

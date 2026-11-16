@@ -6,12 +6,11 @@ Run from the repo root, after building the chat frontend (``npm run build`` in `
 
 Each argument is a Claude session file (``<session id>.jsonl``, or ``session-<session id>.jsonl`` as an eval
 trial exports it) or a directory holding such files, which then name their chats. The chat app and the shell
-run over the fakes the chat's own e2e suite uses, so nothing is sent anywhere; the transcripts are read
-through the app's own parser and drawn by its own page. Ctrl-C stops the servers.
+run over the fakes the chat's own e2e suite uses, so nothing is sent anywhere; each transcript is served as
+recorded, read by the app's own watcher and drawn by its own page. Ctrl-C stops the servers.
 """
 
 import argparse
-import json
 import logging
 import re
 import signal
@@ -21,7 +20,6 @@ import threading
 import webbrowser
 from collections import Counter
 from pathlib import Path
-from typing import Any
 from typing import Final
 from uuid import UUID
 
@@ -48,26 +46,6 @@ class ReplayInputError(ChatAppError):
 def _agent_id_for_session(session_id: str) -> str:
     # mngr launches claude with the agent's uuid as its first session id, so the chat's agent wears it back.
     return str(AgentId(f"agent-{UUID(session_id).hex}"))
-
-
-def _read_session_events(path: Path) -> tuple[dict[str, Any], ...]:
-    records: list[dict[str, Any]] = []
-    # Split on newlines only, as the app does: splitlines() would also break on the U+2028 and U+0085 a record's
-    # text can hold raw, cutting that record in two.
-    for line_number, line in enumerate(path.read_bytes().split(b"\n"), start=1):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # The app skips a line it cannot decode (a claude killed mid-write leaves a truncated last record) and
-        # shows the rest, so the replay does too rather than refusing the file.
-        try:
-            record = json.loads(stripped.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            logger.warning("Skipping {}:{}, which is not valid UTF-8 JSON ({})", path, line_number, e)
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return tuple(records)
 
 
 def _session_id_of(session_file: Path) -> str:
@@ -108,7 +86,7 @@ def load_sessions(paths: list[Path]) -> list[SeededSession]:
                     agent_id=_agent_id_for_session(session_id),
                     agent_name=name,
                     session_id=session_id,
-                    events=_read_session_events(file),
+                    transcript=file.read_bytes(),
                 )
             )
     repeated = [session_id for session_id, count in Counter(s.session_id for s in sessions).items() if count > 1]
@@ -128,7 +106,7 @@ def serve(sessions: list[SeededSession], chat_port: int, is_opening_browser: boo
             Path(tmp),
             find_free_port(),
             chat_port,
-            session_events=first.events,
+            session_events=first.transcript,
             agent_id=first.agent_id,
             agent_name=first.agent_name,
             session_id=first.session_id,
