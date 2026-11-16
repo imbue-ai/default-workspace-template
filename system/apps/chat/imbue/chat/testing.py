@@ -1341,8 +1341,12 @@ def make_agent_fixture(
     agent_id: str = FIXTURE_AGENT_ID,
     agent_name: str = FIXTURE_AGENT_NAME,
     session_events: Sequence[Mapping[str, Any]] | None = None,
+    session_id: str = FIXTURE_SESSION_ID,
 ) -> tuple[AgentInfo, Path]:
-    """A fake agent state dir plus a claude config dir holding one session file; returns the agent and the file."""
+    """A fake agent state dir plus a claude config dir holding one session file; returns the agent and the file.
+
+    Agents made under the same ``tmp_path`` share the config dir, so each needs its own ``session_id``.
+    """
     agent_state_dir = tmp_path / "agents" / agent_id
     agent_state_dir.mkdir(parents=True, exist_ok=True)
     claude_config_dir = tmp_path / "claude_config"
@@ -1350,12 +1354,12 @@ def make_agent_fixture(
     # The watcher finds the transcript by the session id the agent's state dir records, under the
     # CLAUDE_CONFIG_DIR its env file names; without both it falls back to the real ~/.claude and
     # the fixture transcript never loads.
-    (agent_state_dir / "claude_session_id_history").write_text(f"{FIXTURE_SESSION_ID}\n")
+    (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
     (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
     # A running claude has finished starting: its SessionStart hook wrote this, so a send does not wait for it.
     (agent_state_dir / "session_started").touch()
     session_file = make_session_file(
-        projects_dir, FIXTURE_SESSION_ID, session_events if session_events is not None else _FIXTURE_SESSION_EVENTS
+        projects_dir, session_id, session_events if session_events is not None else _FIXTURE_SESSION_EVENTS
     )
     agent_info = AgentInfo(
         id=agent_id,
@@ -1487,7 +1491,11 @@ def running_workspace(
     shell_port: int,
     chat_port: int,
     session_events: Sequence[Mapping[str, Any]] | None = None,
+    agent_id: str = FIXTURE_AGENT_ID,
+    agent_name: str = FIXTURE_AGENT_NAME,
+    session_id: str = FIXTURE_SESSION_ID,
     additional_agents: Sequence[tuple[str, str]] = (),
+    seeded_agents: Sequence[AgentInfo] = (),
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
@@ -1498,8 +1506,11 @@ def running_workspace(
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
     The chat app lists the fixture agent (plus any ``additional_agents``, bare state dirs with
-    a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
-    runs; the shell reads a registry holding the chat row at the chat's own URL. With
+    a manager entry, and any ``seeded_agents``, agents ``make_agent_fixture`` made under
+    ``tmp_path`` with transcripts of their own) from a patched discovery and a never-started
+    manager, so no ``mngr observe`` runs; the shell reads a registry holding the chat row at the
+    chat's own URL. ``session_events``, ``agent_id``, ``agent_name`` and ``session_id`` shape the
+    fixture agent. With
     ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
     is bound to, so a create starts at once; without one a create is refused, and the chat
     root offers the provider chooser instead. ``additional_accounts`` sign further
@@ -1513,8 +1524,10 @@ def running_workspace(
     chat_url = f"http://127.0.0.1:{chat_port}"
     # The work dir every agent reports, and the one a create runs in.
     (tmp_path / "work").mkdir(exist_ok=True)
-    agent_info, session_file = make_agent_fixture(tmp_path, session_events=session_events)
-    extra_infos: list[AgentInfo] = []
+    agent_info, session_file = make_agent_fixture(
+        tmp_path, agent_id=agent_id, agent_name=agent_name, session_events=session_events, session_id=session_id
+    )
+    extra_infos: list[AgentInfo] = list(seeded_agents)
     for extra_id, extra_name in additional_agents:
         extra_state_dir = tmp_path / "agents" / extra_id
         extra_state_dir.mkdir(parents=True, exist_ok=True)

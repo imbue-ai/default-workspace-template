@@ -1047,6 +1047,21 @@ The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
 workspace every frontend belongs to.
 
+### Reading recorded transcripts in the app
+
+`scripts/replay_transcripts.py` serves recorded Claude session files (a
+`~/.claude/projects` transcript, or an eval trial's exported
+`session-<id>.jsonl`) in this app, one chat per session, to read a conversation
+the way its user saw it. It runs the app over the e2e suite's fakes, so it needs
+a built frontend and sends nothing anywhere:
+
+```bash
+uv run --no-sync python system/apps/chat/scripts/replay_transcripts.py ~/Downloads/some-pack/*/ --open
+```
+
+A directory argument serves the session files in it, named after the
+directory. Subagent transcripts are not loaded.
+
 ## Presence and watching
 
 Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`
