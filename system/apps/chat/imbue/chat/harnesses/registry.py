@@ -341,6 +341,11 @@ class HarnessSpec(FrozenModel):
     # that taps through its live connection (codex) registers none and overrides
     # ``shoulder_tap`` on its session directly.
     shoulder_tap_class: type[AtomicShoulderTap] | None = None
+    # Whether a chat that launches fast turns fast mode on with a model switch once the agent is up,
+    # rather than through the fast create template. Codex does: its agent terminal re-sends any
+    # tier configured at launch whenever it attaches, which would undo a later switch to standard
+    # speed, while a tier set by a switch is kept with the conversation across restarts.
+    is_launch_fast_switched: bool = False
     # The popups this harness declares for the chat UI, shipped on the wire with the
     # catalog. An empty tuple is the honest statement that a harness has none (pi's
     # composer sends everything as-is and it never launches fast).
@@ -445,6 +450,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # ``turn/interrupt`` + a per-id settle / the combined early resend), so the registered
         # interrupter default is inert and no shoulder_tap_class is needed.
         session_class=CodexHarnessSession,
+        is_launch_fast_switched=True,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(

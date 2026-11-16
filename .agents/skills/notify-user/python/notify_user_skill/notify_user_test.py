@@ -43,6 +43,16 @@ def _is_push(url: str) -> bool:
     return url.endswith(notify_user.WEB_PUSH_SEND_PATH)
 
 
+_DESKTOP_WARNING = (
+    "notify-user: could not show the notification on the workspace's desktop ("
+)
+
+
+def _is_to_the_app(url: str) -> bool:
+    """Whether a POST goes to the Imbue Studio app through the gateway, rather than to the chat app."""
+    return "/minds-api-proxy/" in url
+
+
 @pytest.fixture
 def environ(tmp_path: Path) -> dict[str, str]:
     """The gateway env plus an app registry naming the chat app's address."""
@@ -64,8 +74,8 @@ def _watchers_answer(*instance_ids: str) -> tuple[int | None, str]:
 
 
 class _RecordingHttp(notify_user.HttpClient):
-    """Records the POST to the app, the push to the shell, and the watcher question, and answers each with a
-    caller-supplied result."""
+    """Records the POST to the app, the push to the shell, the chat app's desktop POST, and the watcher question, and
+    answers each with a caller-supplied result."""
 
     def __init__(
         self,
@@ -73,13 +83,16 @@ class _RecordingHttp(notify_user.HttpClient):
         text: str = "",
         watchers: tuple[int | None, str] = (200, '{"watched_by": []}'),
         push: tuple[int | None, str] = _NO_DEVICES,
+        desktop: tuple[int | None, str] = (200, '{"status": "ok"}'),
     ) -> None:
         self._status = status
         self._text = text
         self._watchers = watchers
         self._push = push
+        self._desktop = desktop
         self.posts: list[tuple[str, dict, dict]] = []
         self.pushes: list[tuple[str, dict, float]] = []
+        self.desktop_posts: list[tuple[str, dict, float]] = []
         self.gets: list[tuple[str, float]] = []
 
     def post_json(
@@ -88,6 +101,9 @@ class _RecordingHttp(notify_user.HttpClient):
         if _is_push(url):
             self.pushes.append((url, payload, timeout))
             return self._push
+        if not _is_to_the_app(url):
+            self.desktop_posts.append((url, payload, timeout))
+            return self._desktop
         self.posts.append((url, payload, headers))
         return self._status, self._text
 
@@ -197,7 +213,7 @@ def silent_chat_app(
 
 
 class _RecordingPostHttp(notify_user.HttpClient):
-    """The real watcher question, and a recorded POST that the app accepts (a push finds no device)."""
+    """The real chat app calls, and a recorded POST that the app accepts (a push finds no device)."""
 
     def __init__(self) -> None:
         self.posts: list[dict] = []
@@ -207,11 +223,13 @@ class _RecordingPostHttp(notify_user.HttpClient):
     ) -> tuple[int | None, str]:
         if _is_push(url):
             return _NO_DEVICES
+        if not _is_to_the_app(url):
+            return super().post_json(url, payload, headers, timeout)
         self.posts.append(payload)
         return 200, '{"ok": true}'
 
 
-def test_a_chat_app_that_never_answers_delays_the_notification_by_the_watcher_timeout_only(
+def test_a_chat_app_that_never_answers_delays_the_notification_by_the_chat_app_timeouts_only(
     silent_chat_app: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     http = _RecordingPostHttp()
@@ -222,8 +240,10 @@ def test_a_chat_app_that_never_answers_delays_the_notification_by_the_watcher_ti
     elapsed = time.monotonic() - started
     assert is_accepted is True
     assert http.posts == [{"message": "Done."}]
-    assert 1.5 < elapsed < 6.0
-    assert _WATCH_WARNING in capsys.readouterr().err
+    assert 3.5 < elapsed < 8.0
+    stderr = capsys.readouterr().err
+    assert _WATCH_WARNING in stderr
+    assert _DESKTOP_WARNING in stderr
 
 
 @pytest.fixture
@@ -264,7 +284,71 @@ def test_a_garbled_watcher_answer_still_sends_the_notification(
 
     assert is_accepted is True
     assert http.posts == [{"message": "Done."}]
-    assert f"{_WATCH_WARNING}the chat app did not answer: " in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert f"{_DESKTOP_WARNING}the chat app did not answer: " in stderr
+    assert f"{_WATCH_WARNING}the chat app did not answer: " in stderr
+
+
+def test_shows_the_notification_on_the_workspaces_desktop_through_the_chat_app(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(200)
+
+    assert (
+        notify_user.notify(
+            "  All tests passed. ", " Test run ", http=http, environ=environ
+        )
+        is True
+    )
+
+    assert http.desktop_posts == [
+        (
+            f"{_CHAT_APP_URL}/api/chats/agent-chat/notification",
+            {"message": "All tests passed.", "title": "Test run"},
+            2.0,
+        )
+    ]
+    assert _DESKTOP_WARNING not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("desktop", "expected_reason"),
+    [
+        (
+            (None, "connection refused"),
+            "the chat app did not answer: connection refused",
+        ),
+        ((404, '{"detail": "Nothing is served"}'), "the chat app answered 404"),
+    ],
+)
+def test_a_desktop_the_chat_app_cannot_show_it_on_is_a_warning_and_the_notification_still_goes_out(
+    desktop: tuple[int | None, str],
+    expected_reason: str,
+    environ: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    http = _RecordingHttp(200, desktop=desktop)
+
+    is_accepted = notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert is_accepted is True
+    assert len(http.posts) == 1
+    assert f"{_DESKTOP_WARNING}{expected_reason})" in capsys.readouterr().err
+
+
+def test_shows_the_notification_on_the_desktop_even_when_the_app_cannot_be_reached(
+    environ: dict[str, str],
+) -> None:
+    http = _RecordingHttp(200)
+    del environ["LATCHKEY_GATEWAY"]
+
+    is_accepted = notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert is_accepted is False
+    assert http.posts == []
+    assert [url for url, _payload, _timeout in http.desktop_posts] == [
+        f"{_CHAT_APP_URL}/api/chats/agent-chat/notification"
+    ]
 
 
 def test_carries_the_optional_title_and_the_permissions_override_when_present(
@@ -317,8 +401,10 @@ def test_reports_a_missing_gateway_env_without_posting(
     is_accepted = notify_user.notify("Done.", None, http=http, environ={})
 
     assert is_accepted is False
-    assert http.posts == []
-    assert "did not go out" in capsys.readouterr().err
+    assert http.posts == [] and http.desktop_posts == []
+    stderr = capsys.readouterr().err
+    assert "did not go out" in stderr
+    assert f"{_DESKTOP_WARNING}MINDS_CHAT_ID is not set)" in stderr
 
 
 def test_requires_a_runtime_agent_id(capsys: pytest.CaptureFixture[str]) -> None:

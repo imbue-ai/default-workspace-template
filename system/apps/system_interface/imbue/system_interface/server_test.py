@@ -669,6 +669,19 @@ def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_report
     assert messages[6] == {"type": "chats_activity", **report}
 
 
+def test_websocket_connect_ends_with_the_resource_gauge(app: Flask) -> None:
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert messages[6]["type"] == "resource_gauge_changed"
+    assert messages[6]["view"]["settings"]["disk_warning_free_gb"] == 5.0
+    assert messages[6]["view"]["alerts"] == []
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
@@ -733,11 +746,19 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
 
     client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
     _heartbeat(client, _OWNER_IDENTITY)
-    owner = next(
-        entry
-        for entry in client.get("/api/roster").get_json()["participants"]
-        if entry["key"] == "user:user-owner-9c21"
+
+    def owner_entry() -> dict[str, Any]:
+        participants = client.get("/api/roster").get_json()["participants"]
+        return next(entry for entry in participants if entry["key"] == "user:user-owner-9c21")
+
+    # The roster answers without waiting on the connector; the owner's picture appears once the fetch behind it lands.
+    wait_for(
+        lambda: owner_entry()["profile_picture_url"] is not None,
+        timeout=10.0,
+        poll_interval=0.01,
+        error_message="the owner's profile never reached the roster",
     )
+    owner = owner_entry()
     assert owner["profile_picture_url"].startswith("/api/roster/user:user-owner-9c21/picture?v=")
 
     served = client.get(owner["profile_picture_url"])
@@ -910,9 +931,18 @@ def test_presence_carries_each_users_profile_from_the_connector(
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        (joined_bob, joined_owner) = _presence_messages(drain_messages(client_queue))
+        # The heartbeats answer without waiting on the connector; the fetch behind them announces the connected
+        # set again once Bob's profile lands.
+        presence_messages: list[dict[str, Any]] = []
+
+        def is_bob_named() -> bool:
+            presence_messages.extend(_presence_messages(drain_messages(client_queue)))
+            return any(user["display_name"] == "Bob" for message in presence_messages for user in message["users"])
+
+        wait_for(is_bob_named, timeout=10.0, poll_interval=0.01, error_message="Bob's profile was never announced")
         assert [
-            (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
+            (user["user_id"], user["display_name"], user["profile_picture_url"])
+            for user in presence_messages[-1]["users"]
         ] == [
             ("user-bob-4471", "Bob", "https://a/b"),
             ("user-owner-9c21", None, None),

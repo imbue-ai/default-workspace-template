@@ -7,6 +7,12 @@ this script never holds one), addressed as the current runtime agent for
 authorization. The app reads that agent's chat_id label for the stable
 conversation destination, including after a chat moves between agents.
 
+It first tells the chat app about the notification
+(``POST /api/chats/<chat id>/notification``), which shows it as a bubble over
+the agent on the workspace's desktop for everyone not looking at this chat,
+whether or not the Imbue Studio app takes it; when the chat app cannot be told
+in two seconds, a warning goes to stderr and nothing else changes.
+
 Before posting it asks the chat app which pages are watching this chat (shown
 and focused, ``GET /api/chats/<chat id>/watchers``) and sends their instance
 ids as ``watched_by``, so the app can show nothing to a user who is already
@@ -36,9 +42,9 @@ Environment:
     MNGR_AGENT_ID              Current runtime agent id, registered with the
                               gateway. MINDS_CHAT_ID identifies a conversation,
                               not the agent authorized to call this route.
-    MINDS_CHAT_ID              The chat whose watchers are asked for; an agent
-                              that is its own chat may lack it, and then
-                              MNGR_AGENT_ID stands in.
+    MINDS_CHAT_ID              The chat the notification is from, whose watchers
+                              are asked for; an agent that is its own chat may
+                              lack it, and then MNGR_AGENT_ID stands in.
     MINDS_APPS_FILE            The app registry the chat app's address is read
                               from (default data/.state/apps.toml).
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
@@ -90,9 +96,9 @@ WEB_PUSH_SEND_PATH = "/api/web-push/send"
 # turn.
 _TIMEOUT_SECONDS = 10.0
 
-# The watcher question is a courtesy: the notification goes out without its
-# answer rather than wait on a slow chat app.
-_WATCHERS_TIMEOUT_SECONDS = 2.0
+# The watcher question and the desktop bubble are courtesies: the notification
+# goes out without them rather than wait on a slow chat app.
+_CHAT_APP_TIMEOUT_SECONDS = 2.0
 
 # The shell posts to every device at once, each under its own shorter timeout,
 # so this covers a slow push service with room to spare.
@@ -119,7 +125,8 @@ class HttpClient:
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> tuple[int | None, str]:
-        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable, too slow, or garbled."""
+        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable, too slow, or
+        garbled."""
         body = json.dumps(payload).encode("utf-8")
         try:
             request = urllib.request.Request(
@@ -162,6 +169,41 @@ def _chat_id(environ: dict[str, str]) -> str:
     return environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
 
 
+def _notification_body(message: str, title: str | None) -> dict[str, str]:
+    """The notification as both the chat app and the Imbue Studio app take it."""
+    body = {"message": message.strip()}
+    if title:
+        body["title"] = title.strip()
+    return body
+
+
+def show_on_desktop(
+    message: str, title: str | None, *, http: HttpClient, environ: dict[str, str]
+) -> None:
+    """Tell the chat app about the notification, so the workspace's desktop shows it over the agent; a warning on
+    stderr when it cannot, since the notification still goes to the app."""
+    chat_id = _chat_id(environ)
+    if not chat_id:
+        reason = f"{ENV_CHAT_ID} is not set"
+    else:
+        status, text = http.post_json(
+            f"{message_chat.chat_app_url(environ, _REPO_ROOT)}/api/chats/{chat_id}/notification",
+            _notification_body(message, title),
+            {"Content-Type": "application/json"},
+            timeout=_CHAT_APP_TIMEOUT_SECONDS,
+        )
+        if status == 200:
+            return
+        reason = (
+            f"the chat app did not answer: {text}"
+            if status is None
+            else f"the chat app answered {status}"
+        )
+    sys.stderr.write(
+        f"notify-user: could not show the notification on the workspace's desktop ({reason})\n"
+    )
+
+
 def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
     """The instance ids of the pages watching this chat; raises WatchersUnknownError naming why they are unknown."""
     chat_id = _chat_id(environ)
@@ -169,7 +211,7 @@ def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
         raise WatchersUnknownError(f"{ENV_CHAT_ID} is not set")
     status, text = http.get(
         f"{message_chat.chat_app_url(environ, _REPO_ROOT)}/api/chats/{chat_id}/watchers",
-        timeout=_WATCHERS_TIMEOUT_SECONDS,
+        timeout=_CHAT_APP_TIMEOUT_SECONDS,
     )
     if status is None:
         raise WatchersUnknownError(f"the chat app did not answer: {text}")
@@ -206,6 +248,7 @@ def post_to_studio_app(
     environ: dict[str, str],
 ) -> bool:
     """Post the notification to the Imbue Studio app; return whether it accepted it, reporting any failure on stderr."""
+    show_on_desktop(message, title, http=http, environ=environ)
     gateway = environ.get(ENV_GATEWAY, "")
     password = environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:
@@ -230,9 +273,7 @@ def post_to_studio_app(
     permissions = environ.get(ENV_GATEWAY_PERMISSIONS, "")
     if permissions:
         headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
-    payload: dict[str, str | list[str]] = {"message": message}
-    if title:
-        payload["title"] = title.strip()
+    payload: dict[str, str | list[str]] = {**_notification_body(message, title)}
     if watched_by is not None:
         payload["watched_by"] = watched_by
     status, text = http.post_json(

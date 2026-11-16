@@ -9,11 +9,12 @@ metadata:
 # Notify the user
 
 This skill posts a message from this chat to the Imbue Studio app's
-notification menu; clicking it brings the user here. Unless the user is already
-looking at this chat, the same message also goes to every device the owner
-turned notifications on for (a phone with the workspace on its home screen, a
-browser), where tapping it opens this chat. It is one-way: any answer comes
-back in this chat.
+notification menu, and shows it as a bubble over the agent on the workspace's
+desktop for everyone not looking at this chat; clicking either brings them
+here. Unless the user is already looking at this chat, the same message also
+goes to every device the owner turned notifications on for (a phone with the
+workspace on its home screen, a browser), where tapping it opens this chat. It
+is one-way: any answer comes back in this chat.
 
 ## When to use it
 
@@ -62,8 +63,9 @@ accepted the notification and non-zero when neither did (the app was
 unreachable, or the gateway refused, and no device took it). **Read the exit
 code.** When it fails, say so in your reply -- "I tried to notify you but the
 notification did not go out" -- so the user knows why they heard nothing;
-never retry in a loop. A `could not check who is watching this chat` warning
-is not a failure: the notification still went out, and the exit code says so.
+never retry in a loop. A `could not check who is watching this chat` or
+`could not show the notification on the workspace's desktop` warning is not a
+failure: the notification still went out, and the exit code says so.
 
 The devices are optional: with none turned on the push is skipped silently,
 and a device that did not take it is a warning on stderr, not a failure. To

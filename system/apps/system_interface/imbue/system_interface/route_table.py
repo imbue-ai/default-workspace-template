@@ -90,6 +90,10 @@ from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogRe
 from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeView
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -273,6 +277,11 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("DELETE", f"{WEB_PUSH_DEVICES_ROUTE}/{{device_id}}"): RouteModels(success_status=HTTP_NO_CONTENT),
     ("POST", f"{WEB_PUSH_DEVICES_ROUTE}/{{device_id}}/test"): RouteModels(response_model=PushSendOutcome),
     ("POST", WEB_PUSH_SEND_ROUTE): RouteModels(request_model=PushNotificationRequest, response_model=PushSendOutcome),
+    # The tray's resource gauge
+    ("GET", RESOURCE_GAUGE_ROUTE): RouteModels(response_model=ResourceGaugeView),
+    ("POST", RESOURCE_GAUGE_SETTINGS_ROUTE): RouteModels(
+        request_model=ResourceGaugeSettings, response_model=ResourceGaugeView
+    ),
     # Keybindings (user-profile-state spec, sections 9.3 and 10.3)
     ("GET", KEYBINDINGS_ME_ROUTE): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", KEYBINDINGS_CATALOG_ROUTE): RouteModels(response_model=KeybindingsCatalogResponse),
