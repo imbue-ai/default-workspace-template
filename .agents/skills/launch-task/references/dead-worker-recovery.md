@@ -40,26 +40,25 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
 Only fall back to this path when the default doesn't apply: the reply fails to bring the agent back, the worker is wedged in a way that another claude session can't unstick, or the agent has already been destroyed and you're recovering from its leftover worktree. In normal "claude crashed once" cases, restart instead.
 
-1. Locate the worktree and inspect what's there. Do not assume a path: `mngr list --format jsonl` reports each agent's `work_dir`, and the record for `<worker>` is correct at any nesting level (a sub-worker's worktree hangs off its own lead's, not off the main checkout).
+1. Locate the worktree and inspect what's there. Do not assume a path: `mngr list --format jsonl` reports each agent's `work_dir`, and the record for `<worker>` is correct at any nesting level (a sub-worker's worktree hangs off its own lead's, not off the main checkout). Every git command below names the worktree with `-C`: your shell goes back to your own checkout after each command, so a `cd` into the worktree does not carry over to the next one.
 
    ```bash
    mngr list --format jsonl        # read work_dir from the record for <worker>
-   cd <work_dir>
-   git status
-   git diff
+   git -C <work_dir> status
+   git -C <work_dir> diff
    ```
 
 2. Discard auto-generated lockfile churn so it doesn't ship alongside the substantive fix:
 
    ```bash
-   git checkout HEAD -- uv.lock                          # or whichever lockfile was touched
+   git -C <work_dir> checkout HEAD -- uv.lock            # or whichever lockfile was touched
    ```
 
 3. Stage only the substantive files and commit with a `WIP:` message that names the worker and notes that it was killed mid-iteration:
 
    ```bash
-   git add <substantive-paths>
-   git commit -m "WIP: <substantive summary> (worker <name> killed mid-iteration)"
+   git -C <work_dir> add <substantive-paths>             # paths relative to <work_dir>
+   git -C <work_dir> commit -m "WIP: <substantive summary> (worker <name> killed mid-iteration)"
    ```
 
 4. Destroy the dead agent (and any sub-workers it launched) without dropping its branch:
