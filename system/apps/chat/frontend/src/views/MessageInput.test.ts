@@ -732,15 +732,19 @@ describe("MessageInput long paste", () => {
   });
 
   it("offers to put a pasted-text chip back as text, and only on such a chip", () => {
-    const ready = (fileName: string) => ({
-      localId: fileName,
+    const ready = (localId: string, fileName: string, summary?: string) => ({
+      localId,
       fileName,
       isImage: false,
       status: "ready",
-      summary: fileName.startsWith("pasted") ? "Pasted text, 401 lines" : undefined,
-      uploaded: { path: `/uploads/${fileName}`, name: fileName, size: 9, isImage: false, url: `/f/${fileName}` },
+      summary,
+      uploaded: { path: `/uploads/${localId}`, name: fileName, size: 9, isImage: false, url: `/f/${localId}` },
     });
-    mocks.getComposerAttachments.mockReturnValue([ready("pasted-text-1.txt"), ready("notes.txt")]);
+    mocks.getComposerAttachments.mockReturnValue([
+      ready("p1", "pasted-text-1.txt", "Pasted text, 401 lines"),
+      ready("n1", "notes.txt"),
+      ready("f1", "pasted-text-2.txt"),
+    ]);
     const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(tree)).toContain("Pasted text, 401 lines");
     const putBackButtons = flatten(tree).filter((vnode) => vnode.attrs?.["aria-label"] === "Paste as text");
@@ -801,6 +805,7 @@ describe("MessageInput long paste", () => {
         fileName: "pasted-text-1.txt",
         isImage: false,
         status: "ready",
+        summary: "Pasted text, 401 lines",
         uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
       },
     ]);

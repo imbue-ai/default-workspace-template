@@ -865,7 +865,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const size = attachment.uploaded?.size ?? attachment.localSize;
     const spinner = m.trust(spinnerIcon(16));
     const isDescribed = attachment.summary !== undefined;
-    const isPastedText = isPastedTextFileName(attachment.fileName);
+    // A picked file of the same name has no summary, so it stays an ordinary file.
+    const isPastedText = isDescribed && isPastedTextFileName(attachment.fileName);
     const remove = isUploading
       ? null
       : m(
