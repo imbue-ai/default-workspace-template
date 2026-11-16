@@ -17,6 +17,7 @@ from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
+from screen.data_types import StopCause
 from screen.interfaces import ProgramState
 from screen.neko_config import render_neko_yaml
 from screen.primitives import STACK_PROGRAMS
@@ -329,6 +330,7 @@ def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
     assert second.adopt_running_stack() is False
     assert second.lifecycle == Lifecycle.STOPPED
     assert second.stop_reason == "the Screen service is restarting"
+    assert second.stop_cause == StopCause.REQUESTED
     # The next start wipes the recorded reason, so a later life does not show a stale one.
     start_service_stack(service)
     assert service.stack.stop_reason is None

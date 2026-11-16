@@ -9,6 +9,7 @@ from mock_broker_test import FakeBroker
 from mock_chromium_test import FakeCdpConnector
 from mock_chromium_test import FakeChromiumLauncher
 from mock_display_modes_test import FakeDisplayModes
+from mock_install_test import FakeInstall
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
@@ -29,6 +30,11 @@ from workspace_layout.testing import FAKE_WINDOW_ID
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import desktop_answer
 from workspace_layout.testing import fake_desktop
+
+
+@pytest.fixture
+def fake_install() -> FakeInstall:
+    return FakeInstall()
 
 
 @pytest.fixture
@@ -128,6 +134,7 @@ def service(
     fake_chromium_launcher: FakeChromiumLauncher,
     fake_cdp_connector: FakeCdpConnector,
     proxy_server: ProxyServer,
+    fake_install: FakeInstall,
 ) -> Iterator[ScreenService]:
     """A service over fakes whose stack starts at once, with no event subscription and no clipboard monitor, on a
     clock the test moves, with a recording xclip, a desktop folder under the test's directory and a browser fleet
@@ -146,6 +153,7 @@ def service(
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,
+        was_shed=lambda pid: pid in fake_install.shed_pids,
     )
     fleet = BrowserFleet(
         launcher=fake_chromium_launcher,
@@ -154,7 +162,8 @@ def service(
         manifest_store=ManifestStore(path=tmp_path / "apps" / "browser" / "instances.json"),
         profile_root=tmp_path / "profiles",
         executable=tmp_path / "fortress" / "tilion",
-        install_check=lambda: None,
+        install_check=lambda: fake_install.missing_browser,
+        install_failure_check=lambda: fake_install.failure,
         environment=lambda: {"DISPLAY": ":4242"},
         is_sandbox_disabled=True,
         control=built.control,
@@ -174,7 +183,8 @@ def service(
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
-        install_check=lambda: None,
+        install_check=lambda: fake_install.missing_stack,
+        install_failure_check=lambda: fake_install.failure,
         neko_health_timeout_seconds=1.0,
         install_poll_seconds=0.01,
         on_lifecycle_changed=built.on_lifecycle_changed,
