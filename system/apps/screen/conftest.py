@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from playwright.sync_api import Browser
+from playwright.sync_api import sync_playwright
 
 from mock_broker_test import FakeBroker
 from mock_chromium_test import FakeCdpConnector
@@ -19,6 +21,7 @@ from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
 from screen.cdp_proxy import ProxyServer
 from screen.connect_info import ConnectInfoAggregator
+from screen.primitives import FORTRESS_EXECUTABLE
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
@@ -30,6 +33,21 @@ from workspace_layout.testing import FAKE_WINDOW_ID
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import desktop_answer
 from workspace_layout.testing import fake_desktop
+
+
+@pytest.fixture(scope="module")
+def module_browser() -> Iterator[Browser]:
+    """A Chromium for one test module: the workspace's Fortress where it is installed, else Playwright's own (CI, a
+    developer laptop), as the repo root's ``module_browser`` launches it, which this app's own pytest configuration
+    keeps out of reach."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=FORTRESS_EXECUTABLE if FORTRESS_EXECUTABLE.exists() else None
+        )
+        try:
+            yield browser
+        finally:
+            browser.close()
 
 
 @pytest.fixture
