@@ -11,7 +11,7 @@ from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import _MAX_ECHOED_REQUEST_PROBES
-from imbue.chat.testing import thinking_block_signature
+from imbue.chat.testing import anthropic_thinking_block_signature
 
 
 def _make_user_line(uuid: str, timestamp: str, content: str) -> str:
@@ -123,7 +123,7 @@ def _make_content_block_line(uuid: str, timestamp: str, block: dict[str, Any]) -
 
 
 def _thinking_block(text: str, block_kind: str) -> dict[str, Any]:
-    return {"type": "thinking", "thinking": text, "signature": thinking_block_signature(block_kind)}
+    return {"type": "thinking", "thinking": text, "signature": anthropic_thinking_block_signature(block_kind)}
 
 
 def test_a_progress_update_reads_as_assistant_prose_and_reasoning_stays_hidden() -> None:

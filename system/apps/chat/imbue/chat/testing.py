@@ -323,8 +323,8 @@ def _protobuf_bytes_field(field_number: int, value: bytes) -> bytes:
     return bytes([(field_number << 3) | 2, len(value)]) + value
 
 
-def thinking_block_signature(block_kind: str) -> str:
-    """A minimal stand-in for an API thinking-block signature carrying ``block_kind``.
+def anthropic_thinking_block_signature(block_kind: str) -> str:
+    """A minimal stand-in for an Anthropic Messages API thinking-block signature carrying ``block_kind``.
 
     Only the nesting the chat reads is real (field 2, then 1, then 8 holds the kind, beside a
     varint and opaque bytes like a real one); the rest of a real signature is encrypted.
