@@ -40,6 +40,7 @@ import {
   isConversationNotFound,
   isMessageCarriedBySwitch,
   noteLoadedArrivals,
+  hasEarlierThanCachedWindow,
   placeCachedTranscript,
   sentUserTurnIds,
   userTurnIdsLandedSince,
@@ -1056,15 +1057,28 @@ describe("the transcript cache", () => {
 
     expect(placeCachedTranscript(agent)).toBe(true);
     expect(getEventsForChat(agent).map((event) => event.event_id)).toEqual(["old-1", "old-2"]);
-    expect(getFirstOffset(agent)).toBe(8);
-    expect(hasMoreBefore(agent)).toBe(true);
+    // Placed as a transcript of its own, so nothing is drawn above it, with the earlier messages remembered.
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(hasMoreBefore(agent)).toBe(false);
+    expect(hasEarlierThanCachedWindow(agent)).toBe(true);
     expect(await whenTranscriptLoadSettles(agent)).toBe(false);
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("old-2"), makeEvent("new-1")], offset: 9, total: 11 });
     await fetchEvents(agent);
 
     expect(getEventsForChat(agent).map((event) => event.event_id)).toEqual(["old-2", "new-1"]);
+    expect(getFirstOffset(agent)).toBe(9);
+    expect(hasEarlierThanCachedWindow(agent)).toBe(false);
     expect(await whenTranscriptLoadSettles(agent)).toBe(true);
+  });
+
+  it("knows there is nothing earlier than a cached tail that starts the chat", () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("first"), makeEvent("second")], 0, 2);
+
+    placeCachedTranscript(agent);
+
+    expect(hasEarlierThanCachedWindow(agent)).toBe(false);
   });
 
   it("places nothing over a chat the page already holds or has nothing cached for", async () => {

@@ -36,13 +36,12 @@ import {
   getRenderVersion,
   getTotalEventCount,
   hasMoreAfter,
-  hasMoreBefore,
   isConversationNotFound,
   noteLoadedArrivals,
   removeMessageSentListener,
   type ToolResultEvent,
   isTranscriptLoaded,
-  isShowingCachedTranscript,
+  hasEarlierThanCachedWindow,
   placeCachedTranscript,
 } from "../models/Response";
 import { setScreenMeasurer, type ScreenMeasure } from "../models/transcriptCache";
@@ -899,7 +898,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
         // A window from the transcript cache holds only the chat's bottom; the rest arrives with the snapshot.
-        isShowingCachedTranscript(chatId) && hasMoreBefore(chatId) && load.phase === "loading"
+        hasEarlierThanCachedWindow(chatId) && load.phase === "loading"
           ? m(
               "p",
               {

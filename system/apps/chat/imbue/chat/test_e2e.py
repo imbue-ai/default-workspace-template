@@ -933,6 +933,9 @@ def test_a_reopened_long_chat_shows_its_bottom_at_once_and_says_so_while_earlier
         earlier = chat.locator(".message-list-earlier-loading")
         expect(earlier).to_be_visible(timeout=5000)
         expect(earlier).to_have_text("Loading earlier messages...")
+        # The line sits right above the snapshot's first message, not above empty space for the rest of the chat.
+        expect(chat.locator(".message-user", has_text=f"msg-{first_cached}")).to_be_in_viewport()
+        expect(chat.locator(".message-list-window-loading")).to_have_count(0)
 
         is_released = True
         for route in held:

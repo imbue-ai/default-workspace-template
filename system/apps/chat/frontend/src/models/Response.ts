@@ -656,17 +656,25 @@ function scheduleTranscriptCacheWrite(chatId: string): void {
   );
 }
 
+// Chats whose window was placed from the transcript cache while earlier messages exist before it.
+const cachedWindowHasEarlierChatIds = new Set<string>();
+
 /**
  * Place the chat's cached tail as its window, for a page that holds nothing of the chat yet, so the
  * conversation shows while its snapshot is on its way; the snapshot replaces it on landing. The chat
  * does not count as loaded until then. True when a cached tail was placed.
+ *
+ * The tail is placed as a whole transcript of its own: placed where it sits, the page would draw the
+ * rest of the chat above it as empty space to scroll through until the snapshot fills it in.
+ * ``hasEarlierThanCachedWindow`` keeps what that drops: whether there is more above.
  */
 export function placeCachedTranscript(chatId: string): boolean {
   if (loadedChatIds.has(chatId) || getEventCount(chatId) > 0) return false;
   const cached = readCachedTranscript(chatId);
   if (cached === null) return false;
   touchCachedTranscript(chatId);
-  storeFor(chatId).reset(cached.events, cached.offset, cached.total);
+  if (cached.offset > 0) cachedWindowHasEarlierChatIds.add(chatId);
+  storeFor(chatId).reset(cached.events, 0, cached.events.length);
   return true;
 }
 
@@ -705,6 +713,11 @@ export function isTranscriptLoaded(chatId: string): boolean {
 /** Whether the chat shows a window placed from the transcript cache that its snapshot has not replaced yet. */
 export function isShowingCachedTranscript(chatId: string): boolean {
   return !loadedChatIds.has(chatId) && getEventCount(chatId) > 0;
+}
+
+/** Whether the chat shows a window from the transcript cache with earlier messages before it. */
+export function hasEarlierThanCachedWindow(chatId: string): boolean {
+  return isShowingCachedTranscript(chatId) && cachedWindowHasEarlierChatIds.has(chatId);
 }
 
 /** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */
