@@ -1,0 +1,1 @@
+The Markdown Editor app is a built-in app: a root member and dependency of the workspace venv, a frontend of the `system/` npm workspace (its `package.json` copied into the image with the others, its bundle gitignored), and a `markdown-editor` program in `system/supervisord.conf.d/` that registers it on port 8070.

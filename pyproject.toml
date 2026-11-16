@@ -17,6 +17,7 @@ dependencies = [
     "chat",
     "files-app",
     "getting-started",
+    "markdown-editor-app",
     "routines-app",
     "screen",
     "style-guide-app",
@@ -159,6 +160,7 @@ members = [
     "system/apps/chat",
     "system/apps/files",
     "system/apps/getting_started",
+    "system/apps/markdown_editor",
     "system/apps/routines",
     "system/apps/screen",
     "system/apps/style_guide",
@@ -197,6 +199,7 @@ disk-headroom = { workspace = true }
 chat = { workspace = true }
 files-app = { workspace = true }
 getting-started = { workspace = true }
+markdown-editor-app = { workspace = true }
 routines-app = { workspace = true }
 screen = { workspace = true }
 style-guide-app = { workspace = true }

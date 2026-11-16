@@ -51,6 +51,14 @@ Built-in apps:
   token, type role and scale and every shared control of
   `system/libs/workspace_ui` in its variants, drawn by the library itself.
   Served on port 8060 by the `style-guide-app` package; it stores nothing.
+- `markdown_editor/` - Markdown Editor: reads and reviews the markdown files
+  agents write (plans, notes, reports), opened by `?path=`. It opens in Suggest
+  mode, where edits become tracked suggestions and any selection can be
+  commented on, both saved inside the file as CriticMarkup so the next agent
+  that reads it sees them; blocks the person did not touch are written back
+  byte for byte, and every save keeps the version it replaced under
+  `data/.apps/markdown-editor/history/`. Served on port 8070 by the
+  `markdown-editor-app` package, with a frontend from the same npm workspace.
 - `system_monitor/` - System Monitor: how much CPU, memory and disk the
   workspace is using, on an overview and a view per resource: which chats,
   code checkers, and apps use them, the busy stretches, which programs the

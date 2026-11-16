@@ -1,0 +1,25 @@
+# The Markdown Editor: one page that opens a markdown file by ``?path=`` (an agent's plan, notes, a report) formatted,
+# in Suggest mode by default, where what the person types and deletes becomes tracked suggestions and they can
+# comment on any selection. Suggestions and comments are saved inside the file as CriticMarkup, so the agent that
+# reads the file next sees them in place. Blocks the person did not touch are written back byte for byte. Without a
+# path the page offers the recently opened files and the workspace's markdown files.
+name = "markdown-editor"
+display_name = "Markdown Editor"
+description = "Read, comment on and suggest edits to markdown files (agent plans, notes); suggestions and comments are saved inside the file as CriticMarkup."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# Holds nothing between windows (every save is on disk at once): the shell stops it once none shows it.
+stop_when_no_windows = true
+priority = "markdown-editor"
+
+[[launch_paths]]
+id = "file"
+label = "Markdown Editor"
+path = "/"
+params = [{name = "path", label = "File", required = false}]
+
+# The page has a look of its own (a document, the redline colors) that no theme part describes yet: only the window
+# around it is themed.
+[theming]
+mode = "none"

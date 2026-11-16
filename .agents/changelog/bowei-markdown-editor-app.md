@@ -1,0 +1,1 @@
+`update-self` carries the Markdown Editor frontend's bundle like the Style Guide's: a change under `system/apps/markdown_editor/frontend/` rebuilds, snapshots and verifies it, and a worker hands it in with `--worker-bundle markdown_editor=<path>`.
