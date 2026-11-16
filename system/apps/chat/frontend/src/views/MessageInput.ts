@@ -1219,9 +1219,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
         } catch (err) {
-          // The backend confirms delivery before resolving, so a rejection means the message was
-          // NOT accepted. A /compact the server declined to run gets the declined-command notice
-          // rather than the failure notice, since retrying at once cannot change it.
+          // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
+          // confirm, may have reached the agent anyway (noticeKindOf). A /compact the server declined
+          // to run gets the declined-command notice rather than the failure notice, since retrying
+          // at once cannot change it.
           const failure = describeRequestFailure(err);
           const told = failureSentence(failure, "Your message wasn't delivered");
           const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
