@@ -54,16 +54,16 @@ def _read_session_events(path: Path) -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
     # Split on newlines only, as the app does: splitlines() would also break on the U+2028 and U+0085 a record's
     # text can hold raw, cutting that record in two.
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+    for line_number, line in enumerate(path.read_bytes().split(b"\n"), start=1):
         stripped = line.strip()
         if not stripped:
             continue
-        # The app's parser skips a line it cannot decode (a claude killed mid-write leaves a truncated last
-        # record) and shows the rest, so the replay does too rather than refusing the file.
+        # The app skips a line it cannot decode (a claude killed mid-write leaves a truncated last record) and
+        # shows the rest, so the replay does too rather than refusing the file.
         try:
-            record = json.loads(stripped)
-        except json.JSONDecodeError as e:
-            logger.warning("Skipping {}:{}, which is not valid JSON ({})", path, line_number, e)
+            record = json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            logger.warning("Skipping {}:{}, which is not valid UTF-8 JSON ({})", path, line_number, e)
             continue
         if isinstance(record, dict):
             records.append(record)
