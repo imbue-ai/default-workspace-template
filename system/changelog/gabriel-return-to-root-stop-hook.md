@@ -1,1 +1,0 @@
-The Claude Stop hook that sends an agent back to the repo root now names the exact command to run (`cd $MNGR_AGENT_WORK_DIR`). It also tells the agent to run it as a single call, write nothing before or after, and not mention it to the user. Previously agents usually followed the `cd` with a line like "I'm back at the repo root."
