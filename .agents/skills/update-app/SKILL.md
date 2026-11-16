@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code and before planning your changes. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it sizes each request and decides which ones you build yourself and which go to a background worker, it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
 metadata:
   author: imbue
 ---
@@ -46,41 +46,42 @@ as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
 service that is not critical.
 
-### Size each request before touching code
+### Size each change before touching code
 
-Requests can arrive several to a message, one per message over the course of the
-conversation, or mixed in with feedback on a change already in progress. Size
-each one as it comes in, by two questions: how much it changes what the user
-sees, and how long it will take to build. The answers decide what you do
-*before* touching code:
+A message can ask for several changes, a change can arrive on its own later in
+the conversation, or it can come mixed in with feedback on one already in
+progress. Split what the user asked for into separate changes and size each one
+on its own, as if it had arrived alone. A change that would not have been
+mocked on its own is not added to another change's mock or held back until that
+mock is approved.
+
+Size each change by two questions. Each answer is a point on a range, and the
+question draws one line through it:
+
+1. How much does it change what the user sees? If substantially, or you can't
+   tell, confirm its shape with the user first.
+2. How long will it take to build? If more than a couple of minutes, hand it to
+   the background worker.
 
 | | Builds in a couple of minutes or less | Takes longer |
 |---|---|---|
-| **Small / contained change** | Build it yourself through the live change loop below | Hand it to the background worker |
-| **Larger-scope change** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
+| **Shape clear enough to build** | Build it yourself through the live change loop below | Hand it to the background worker |
+| **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
 
-- **Small / contained change** -- a bug fix, a copy tweak, a new field, a
-  backend logic fix, a config or `command` change, a restart.
-- **Larger-scope change** -- a redesign, a new page or view, a meaningful
-  shift in look-and-feel, or a new user-facing capability.
+- **Small / contained changes** usually have a clear shape: a bug fix, a copy
+  tweak, a new field, a backend logic fix, a config or `command` change, a
+  restart.
+- **Larger-scope changes** usually need confirming: a redesign, a new page or
+  view, a meaningful shift in look-and-feel, or a new user-facing capability.
+- Many fall in between, for example a new control on an existing page; decide
+  by how much it changes what the user sees.
+- For build time, "Hand large work to a background worker" below lists the
+  typical cases that take longer.
 
-Many requests fall somewhere in between, for example a new control on an
-existing page. Decide by how much it changes what the user sees: treat it as
-small if that change is minor, and as larger-scope if it is substantial or you
-can't tell. Either way, the mechanics of surfacing the change to the user are
-the same live loop. For build time, "Hand large work to a background worker"
-below lists the typical cases that take longer.
-
-Before you touch code, write one line per request in your reply or your plan:
-the request, whether it needs its shape confirmed first, and whether you build
-it here or hand it to the background worker. Then act on those lines.
-
-A message often holds several requests, and each one stays its own request.
-Treat each as if it had arrived alone: decide on its own whether it needs its
-shape confirmed and how long it will take to build, then hand the long ones to
-the worker and build the short ones yourself. A request that would not have
-been mocked on its own is not added to another request's mock or held back
-until that mock is approved.
+Either way, the user sees every change through the same live loop. Before you
+touch code, write one line per change in your reply or your plan: the change,
+whether it needs its shape confirmed first, and whether you build it here or
+hand it to the background worker. Then act on those lines.
 
 ### Confirming the shape first
 
@@ -121,7 +122,7 @@ changes.
 
 ## Hand large work to a background worker
 
-Keep the main chat free for the user. A request you expect to take more than
+Keep the main chat free for the user. A change you expect to take more than
 a couple of minutes of building goes to a background worker through the
 `launch-task` skill, whatever its size on screen. Typical cases:
 
@@ -133,9 +134,9 @@ a couple of minutes of building goes to a background worker through the
 - a long command, such as a build, a test suite or a big install;
 - debugging a problem whose cause is unknown.
 
-Use one worker for all such requests: hand it the first, and send
+Use one worker for all such changes: hand it the first, and send
 each later one to the same worker with `create_worker.py reply`. The worker
-may combine its requests and build them together, in whatever order gets
+may combine its changes and build them together, in whatever order gets
 the work done fastest, without finishing one before starting the next. Build the rest yourself
 through the live loop while it runs, so they reach the user without waiting
 on the large ones. You stay available to answer the user's next messages and
@@ -147,13 +148,13 @@ couple of minutes.
 
 To hand work off:
 
-1. If a request you hand off needs its shape confirmed (a larger-scope change
+1. If a change you hand off needs its shape confirmed (a larger-scope change
    above), hand it off right away and ask the worker for an early milestone
-   that shows that request's shape. Treat that milestone as the mock: show it
-   to the user and pass their changes to the worker. The short requests you
+   that shows that change's shape. Treat that milestone as the mock: show it
+   to the user and pass their changes to the worker. The short changes you
    build yourself go live without waiting for it.
 2. Commit your pending edits and launch the worker as `launch-task` describes.
-   The brief names the app, the requests handed to the worker in the user's
+   The brief names the app, the changes handed to the worker, in the user's
    words, the ones you are building yourself so the worker leaves them alone,
    the files and
    decisions you already know about, and what done looks like. It names the
@@ -171,10 +172,10 @@ To hand work off:
    goes live.
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
-4. While the worker runs, keep handling new messages. Build a request
+4. While the worker runs, keep handling new messages. Build a change
    yourself, through the live loop below, unless it needs more than a couple
    of minutes of building; send that one to the worker with
-   `create_worker.py reply`. Also forward a request that changes or adds to
+   `create_worker.py reply`. Also forward a change that alters or adds to
    the worker's part, and leave those files to it, so two agents never edit
    the same code.
 5. When a milestone or the final report arrives, merge it as
