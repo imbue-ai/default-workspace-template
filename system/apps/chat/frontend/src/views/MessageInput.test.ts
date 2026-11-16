@@ -689,6 +689,18 @@ describe("MessageInput attachment chips", () => {
 
 describe("MessageInput long paste", () => {
   const LONG_PASTE = "a pasted line\n".repeat(400) + "the last line";
+  const PASTED_SUMMARY = "Pasted text, 401 lines";
+
+  function readyChip(localId: string, fileName: string, summary?: string) {
+    return {
+      localId,
+      fileName,
+      isImage: false,
+      status: "ready",
+      summary,
+      uploaded: { path: `/uploads/${localId}`, name: fileName, size: 9, isImage: false, url: `/f/${localId}` },
+    };
+  }
 
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
@@ -732,36 +744,19 @@ describe("MessageInput long paste", () => {
   });
 
   it("offers to put a pasted-text chip back as text, and only on such a chip", () => {
-    const ready = (localId: string, fileName: string, summary?: string) => ({
-      localId,
-      fileName,
-      isImage: false,
-      status: "ready",
-      summary,
-      uploaded: { path: `/uploads/${localId}`, name: fileName, size: 9, isImage: false, url: `/f/${localId}` },
-    });
     mocks.getComposerAttachments.mockReturnValue([
-      ready("p1", "pasted-text-1.txt", "Pasted text, 401 lines"),
-      ready("n1", "notes.txt"),
-      ready("f1", "pasted-text-2.txt"),
+      readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY),
+      readyChip("n1", "notes.txt"),
+      readyChip("f1", "pasted-text-2.txt"),
     ]);
     const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
-    expect(renderedText(tree)).toContain("Pasted text, 401 lines");
+    expect(renderedText(tree)).toContain(PASTED_SUMMARY);
     const putBackButtons = flatten(tree).filter((vnode) => vnode.attrs?.["aria-label"] === "Paste as text");
     expect(putBackButtons).toHaveLength(1);
   });
 
   it("puts the text back into the box where the caret is", async () => {
-    mocks.getComposerAttachments.mockReturnValue([
-      {
-        localId: "p1",
-        fileName: "pasted-text-1.txt",
-        isImage: false,
-        status: "ready",
-        summary: "Pasted text, 401 lines",
-        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
-      },
-    ]);
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
     mocks.unstagePastedText.mockResolvedValueOnce(LONG_PASTE);
     const component = MessageInput();
     const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
@@ -774,16 +769,7 @@ describe("MessageInput long paste", () => {
   });
 
   it("puts the text back once when the button is clicked again while it is read back", async () => {
-    mocks.getComposerAttachments.mockReturnValue([
-      {
-        localId: "p1",
-        fileName: "pasted-text-1.txt",
-        isImage: false,
-        status: "ready",
-        summary: "Pasted text, 401 lines",
-        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
-      },
-    ]);
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
     mocks.unstagePastedText.mockClear();
     mocks.unstagePastedText.mockResolvedValue(LONG_PASTE);
     const component = MessageInput();
@@ -799,16 +785,7 @@ describe("MessageInput long paste", () => {
 
   it("says so, and keeps the attachment, when the text cannot be put back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    mocks.getComposerAttachments.mockReturnValue([
-      {
-        localId: "p1",
-        fileName: "pasted-text-1.txt",
-        isImage: false,
-        status: "ready",
-        summary: "Pasted text, 401 lines",
-        uploaded: { path: "/uploads/p1", name: "pasted-text-1.txt", size: 9, isImage: false, url: "/f/p1" },
-      },
-    ]);
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
     mocks.unstagePastedText.mockRejectedValueOnce(new Error("HTTP 404"));
     const component = MessageInput();
     const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
