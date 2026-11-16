@@ -154,8 +154,12 @@ unreachable, and an agent that wants to background a command can.
 
 **The cwd Stop hook is claude-only, by construction -- do not port it.** claude's
 `.claude/settings.json` carries `[ -e .git ] || "Be sure to return to the repo root..."`. It
-exists because claude's `Bash` tool keeps one shell cwd ACROSS calls, so an agent that wanders
-breaks every later hook that uses a relative path. agy and codex cannot hit that: agy's `Cwd`
+exists because claude's `Bash` tool keeps one shell cwd ACROSS calls by default, so an agent that
+wanders breaks every later hook that uses a relative path. The same file's `env` sets
+`CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`, which makes claude put the shell back in the
+project directory after every call, so the hook should never fire; it stays as a safety net.
+Answering it costs a second reply, and claude re-prompts a reply with no visible text, so it
+cannot be asked to answer silently. agy and codex cannot hit that: agy's `Cwd`
 and codex's `workdir` are required per-call parameters. Measured across 41 live agy calls, `Cwd`
 was present every time, only ever the agent's own workspace root, with zero `cd` invocations.
 The hook has nothing to protect there, and it appears exactly once in this repo -- it was never
