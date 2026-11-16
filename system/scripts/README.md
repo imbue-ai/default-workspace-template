@@ -47,7 +47,10 @@ needs a directory put on `sys.path`, and each stub says which. See
 - Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
   message to a chat by its id through the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
-  the same way, with `mngr create` as the backoff), `rename_chat.py` (rename the
+  the same way, with `mngr create` as the backoff; `--interrupt` first restarts
+  the chat's agent through the chat app's interrupt route, keeping its
+  conversation and resending anything queued for it, with
+  `mngr start --restart` as the backoff), `rename_chat.py` (rename the
   chat under one title to another through the chat app's rename route, for an
   app whose display name changed; the `build-app` skill runs it),
   `workspace_bare_scripts/room_agent.py` (the `room` agent type's process: it

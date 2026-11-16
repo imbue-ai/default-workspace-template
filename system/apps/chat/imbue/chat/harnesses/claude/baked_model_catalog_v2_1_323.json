@@ -5,7 +5,8 @@
       "family": "haiku",
       "display_name": "Haiku 3.5",
       "capabilities": [
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -14,7 +15,8 @@
       "display_name": "Haiku 4.5",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -33,7 +35,8 @@
         "lean_prompt",
         "org_locked_thinking",
         "haiku_5_5_early_stopping_guidance",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -41,7 +44,8 @@
       "family": "sonnet",
       "display_name": "Sonnet 3.5",
       "capabilities": [
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -49,7 +53,8 @@
       "family": "sonnet",
       "display_name": "Sonnet 3.7",
       "capabilities": [
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -58,7 +63,8 @@
       "display_name": "Sonnet 4",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -67,7 +73,8 @@
       "display_name": "Sonnet 4.5",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -79,7 +86,8 @@
         "max_effort",
         "adaptive_thinking",
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -92,7 +100,8 @@
         "xhigh_effort",
         "adaptive_thinking",
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -113,7 +122,7 @@
         "refusal_fallback",
         "silent_turn_reminder",
         "org_locked_thinking",
-        "total_tokens_reminder"
+        "tool_loaded_text"
       ]
     },
     {
@@ -122,7 +131,8 @@
       "display_name": "Opus 4",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -131,7 +141,8 @@
       "display_name": "Opus 4.1",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -140,7 +151,8 @@
       "display_name": "Opus 4.5",
       "capabilities": [
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -152,7 +164,8 @@
         "max_effort",
         "adaptive_thinking",
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -165,7 +178,8 @@
         "xhigh_effort",
         "adaptive_thinking",
         "context_management",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -181,7 +195,8 @@
         "context_management",
         "fast_mode",
         "lean_prompt",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -200,7 +215,8 @@
         "lean_prompt",
         "refusal_fallback",
         "opus_5_prompt_bundle",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -221,7 +237,7 @@
         "lean_prompt",
         "refusal_fallback",
         "opus_5_5_prompt_bundle",
-        "total_tokens_reminder"
+        "tool_loaded_text"
       ]
     },
     {
@@ -239,7 +255,8 @@
         "lean_prompt",
         "fable_5_mitigations",
         "refusal_fallback",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -260,7 +277,30 @@
         "fable_5_mitigations",
         "refusal_fallback",
         "fable_5_1_prompt_bundle",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
+      ]
+    },
+    {
+      "id": "claude-fable-5-2",
+      "family": "fable",
+      "display_name": "Fable 5.2",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_tool_change",
+        "per_turn_effort",
+        "per_turn_timing",
+        "context_management",
+        "fast_mode",
+        "vertex_fast_mode",
+        "lean_prompt",
+        "refusal_fallback",
+        "org_locked_thinking",
+        "fable_5_2_prompt_bundle"
       ]
     },
     {
@@ -268,7 +308,8 @@
       "family": "mythos",
       "display_name": "Mythos 5",
       "capabilities": [
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
       ]
     },
     {
@@ -287,7 +328,29 @@
         "lean_prompt",
         "fable_5_mitigations",
         "fable_5_1_prompt_bundle",
-        "total_tokens_reminder"
+        "total_tokens_reminder",
+        "tool_loaded_text"
+      ]
+    },
+    {
+      "id": "claude-mythos-5-2",
+      "family": "mythos",
+      "display_name": "Mythos 5.2",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_tool_change",
+        "per_turn_effort",
+        "per_turn_timing",
+        "context_management",
+        "fast_mode",
+        "vertex_fast_mode",
+        "lean_prompt",
+        "org_locked_thinking",
+        "fable_5_2_prompt_bundle"
       ]
     }
   ],
@@ -295,6 +358,6 @@
     "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-5-5",
-    "fable": "claude-fable-5-1"
+    "fable": "claude-fable-5-2"
   }
 }

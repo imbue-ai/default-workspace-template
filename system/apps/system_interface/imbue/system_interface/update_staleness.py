@@ -100,12 +100,14 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_manifest/",
     "system/libs/app_schema/",
     "system/libs/chat_background_tasks/",
+    "system/libs/disk_headroom/",
     "system/libs/event_streams/",
     "system/libs/latchkey_access/",
     "system/libs/share_grants/",
     "system/libs/workspace_layout/",
     "system/libs/workspace_profile/",
     "system/libs/workspace_themes/",
+    "system/services/oom_priority/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
 # deliberately absent: a user skill's dependency change relocks it (skills share
@@ -125,12 +127,14 @@ _BACKEND_MANIFESTS = frozenset(
         "system/libs/app_manifest/pyproject.toml",
         "system/libs/app_schema/pyproject.toml",
         "system/libs/chat_background_tasks/pyproject.toml",
+        "system/libs/disk_headroom/pyproject.toml",
         "system/libs/event_streams/pyproject.toml",
         "system/libs/latchkey_access/pyproject.toml",
         "system/libs/share_grants/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
         "system/libs/workspace_profile/pyproject.toml",
         "system/libs/workspace_themes/pyproject.toml",
+        "system/services/oom_priority/pyproject.toml",
         "pyproject.toml",
     }
 )

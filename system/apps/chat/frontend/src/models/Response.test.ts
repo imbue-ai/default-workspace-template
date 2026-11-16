@@ -13,6 +13,7 @@ vi.mock("mithril", () => ({
 import {
   addMessageSentListener,
   appendEvents,
+  countSentTurnsSince,
   appendForwardEvents,
   prependEvents,
   evictEvents,
@@ -271,6 +272,24 @@ describe("hasUserTurnLandedSince", () => {
     const prior = sentUserTurnIds(chat);
     appendEvents(chat, [userTurn("first", "hello"), userTurn("other", "something else"), userTurn("second", "hello")]);
     expect(userTurnIdsLandedSince(getEventsForChat(chat), "hello", prior)).toEqual(["first", "second"]);
+  });
+});
+
+describe("countSentTurnsSince", () => {
+  function turn(id: string, timestamp: string, agentId: string, source = "test"): TranscriptEvent {
+    return { timestamp, type: "user_message", event_id: id, source, role: "user", content: id, agent_id: agentId };
+  }
+
+  it("counts the agent's turns from users' messages since the moment given, and nothing else", () => {
+    const chat = freshChat();
+    appendEvents(chat, [
+      turn("before", "2026-01-01T00:00:00Z", "agent-a"),
+      turn("other-agent", "2026-01-01T00:01:00Z", "agent-b"),
+      turn("seeded", "2026-01-01T00:01:00Z", "agent-a", "seed"),
+      turn("at", "2026-01-01T00:01:00Z", "agent-a"),
+      turn("after", "2026-01-01T00:02:00Z", "agent-a"),
+    ]);
+    expect(countSentTurnsSince(chat, "agent-a", "2026-01-01T00:01:00Z")).toBe(2);
   });
 });
 

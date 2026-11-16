@@ -28,6 +28,7 @@ from imbue.system_interface.roster import RosterSource
 from imbue.system_interface.roster import RosterWatch
 from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.resource_gauge import GatewayResourceNotifier
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
@@ -94,6 +95,7 @@ def build_production_state(
         profiles=profiles,
         on_registry_read=app_announcement_writer.announce if app_announcement_writer is not None else None,
         is_lifecycle_enabled=not is_preview,
+        resource_notifier=None if is_preview else GatewayResourceNotifier(environ=dict(os.environ)),
     )
     workspace_name = workspace_name_source(config.system_interface_workspace_name, os.environ)
     roster = RosterSource(
@@ -108,11 +110,13 @@ def build_production_state(
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, broadcaster, utc_now)
+    presence_sweep = build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce)
+    profiles.add_refresh_listener(presence_sweep.announce_connected)
     return SystemInterfaceState(
         config=config,
         shell=shell,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce),
+        presence_sweep=presence_sweep,
         profiles=profiles,
         roster=roster,
         roster_announcer=roster_announcer,

@@ -141,6 +141,22 @@ def test_the_sweep_announces_the_connected_set_only_when_it_changed(tmp_path: Pa
     assert announced == [[]]
 
 
+def test_an_announcement_of_a_refreshed_profile_that_fails_is_logged_not_raised(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    store = _store(tmp_path)
+    store.heartbeat(_BOB, _T0)
+
+    def failing_announce(users: Sequence[PresentUser]) -> None:
+        raise OSError("the presence directory went away")
+
+    sweep = PresenceSweep(store=store, announce=failing_announce, announce_roster=lambda: None)
+
+    sweep.announce_connected()
+
+    assert any(record.startswith("ERROR Failed to announce a refreshed profile") for record in loguru_records)
+
+
 def test_a_started_sweep_announces_on_its_own_interval_and_ends_when_stopped(tmp_path: Path) -> None:
     # A store from an earlier process left a fresh file, which a new store's first sweep announces
     # (its own heartbeat path would have reported the change already).
