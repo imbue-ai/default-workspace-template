@@ -850,7 +850,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    * One attachment chip, 40px tall: an image is its thumbnail alone; anything else is an icon beside
    * its name and its size, or what it points at for a file the chat made for the user (an element
    * reference). While uploading, a spinner sits over the thumbnail on a dark wash, or where the icon
-   * would be. The remove button rides the top-right corner, shown on hover.
+   * would be. The remove button rides the top-right corner, shown on hover, and a long paste's
+   * "Paste as text" button sits beside it.
    */
   function renderComposerAttachment(
     chatId: string,
