@@ -84,8 +84,12 @@ services") whose `domain` is the MCP endpoint's host and whose `login` is the
 flow. `login.url` is the OAuth authorization endpoint; `login.flow_params`
 carries the MCP endpoint, the token and registration endpoints, the `scopes`,
 and `issuesRefreshTokens: false` only when the server's docs say it issues
-access tokens alone. The URLs in the parameters have to be on `domain` or a
-subdomain of it, as for the other flows.
+access tokens alone. The mcpEndpoint must be on scheme://domain itself: same
+scheme, exactly that host, no port. The three OAuth endpoints (login.url,
+tokenEndpoint, registrationEndpoint) may be on any domain, but copy them
+exactly as the authorization server metadata gives them, all three from the
+same server. Only a server that publishes no metadata has them held to domain, a
+subdomain or a parent domain of it.
 
 Err on the side of too many scopes. A connection's scopes are fixed when
 the user signs in, and there is no request that adds one: a scope that turns

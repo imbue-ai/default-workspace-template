@@ -251,9 +251,13 @@ the next one when `latchkey curl` actually comes back refused.
 use this API rather than the `latchkey services register` CLI directly. All three
 are required inside `login`: a flow needs a login URL and its parameters (for
 `mcp`, the login URL is the OAuth authorization endpoint). The parameters are
-checked against the flow's schema, so an unknown key is refused, and every URL
-in them (`url`, `cookieUrl`, `tokenUrl`, the MCP and OAuth endpoints) must be
-on `domain` or a subdomain of it.
+checked against the flow's schema, so an unknown key is refused. For
+cookie-capture and token-capture, every URL (url, cookieUrl, tokenUrl) must be
+on domain, a subdomain of it, or a parent domain of it. A sibling
+(accounts.example.com for api.example.com) is refused. The mcp flow has its own
+rules (references/mcp.md).
+
+
 
 ## When the gateway is unreachable
 
