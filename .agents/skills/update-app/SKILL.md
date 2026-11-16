@@ -60,10 +60,10 @@ question draws one line through it:
 
 1. How much does it change what the user sees? If substantially, or you can't
    tell, confirm its shape with the user first.
-2. How long will it take to build? If more than a couple of minutes, hand it to
+2. How long will it take to build? If more than a few minutes, hand it to
    the background worker.
 
-| | Builds in a couple of minutes or less | Takes longer |
+| | Builds in a few minutes or less | Takes longer |
 |---|---|---|
 | **Shape clear enough to build** | Build it yourself through the live change loop below | Hand it to the background worker |
 | **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Hand it off right away; the worker's first milestone is the mock |
@@ -122,9 +122,14 @@ changes.
 
 ## Hand large work to a background worker
 
-Keep the main chat free for the user. A change you expect to take more than
-a couple of minutes of building goes to a background worker through the
-`launch-task` skill, whatever its size on screen. Typical cases:
+The goal is to keep you available and responsive to the user, and to deliver
+short changes fast while long ones are built at the same time. So do short work
+yourself and give long work to a background worker through the `launch-task`
+skill. While you work on something yourself, the user's new messages wait until
+you stop, so hand off any change that takes more than a few minutes, including
+long planning or thinking, whatever its size on screen. One message often asks
+for changes of different lengths; don't treat them as one large request.
+Typical long changes:
 
 - a feature or change that spans several files or many parts of the app;
 - exploration that needs web searches or reading several sources;
@@ -141,10 +146,6 @@ the work done fastest, without finishing one before starting the next. Build the
 through the live loop while it runs, so they reach the user without waiting
 on the large ones. You stay available to answer the user's next messages and
 bring the worker's result in when it lands.
-
-While you build something yourself, the user's next messages wait until you
-reach a break, so keep what you build yourself to work you can finish in a
-couple of minutes.
 
 To hand work off:
 
@@ -173,8 +174,8 @@ To hand work off:
 3. Tell the user in one line that the change is being built and that they can
    keep sending requests.
 4. While the worker runs, keep handling new messages. Build a change
-   yourself, through the live loop below, unless it needs more than a couple
-   of minutes of building; send that one to the worker with
+   yourself, through the live loop below, unless it needs more than a few
+   minutes of building; send that one to the worker with
    `create_worker.py reply`. Also forward a change that alters or adds to
    the worker's part, and leave those files to it, so two agents never edit
    the same code.
