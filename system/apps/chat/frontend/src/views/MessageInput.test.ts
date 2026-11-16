@@ -783,6 +783,27 @@ describe("MessageInput long paste", () => {
     mocks.unstagePastedText.mockReset();
   });
 
+  it("adds the text to its own chat's saved draft when the user moved to another chat meanwhile", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    localStorage.setItem("message-text:agent-1", "Summarize this:");
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(localStorage.getItem("message-text:agent-1")).toBe(`Summarize this:\n\n${LONG_PASTE}`);
+    expect(findByTag(render("agent-2"), "textarea")?.attrs?.value).toBe("");
+  });
+
   it("says so, and keeps the attachment, when the text cannot be put back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
