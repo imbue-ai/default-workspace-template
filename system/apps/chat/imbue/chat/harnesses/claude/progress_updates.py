@@ -39,16 +39,15 @@ class _MalformedProtobufError(Exception):
 
 def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
     value = 0
-    shift = 0
-    while True:
-        if offset >= len(data) or shift > 63:
-            raise _MalformedProtobufError("truncated varint")
+    for shift in range(0, 64, 7):
+        if offset >= len(data):
+            break
         byte = data[offset]
         offset += 1
         value |= (byte & 0x7F) << shift
-        shift += 7
         if byte < 0x80:
             return value, offset
+    raise _MalformedProtobufError("truncated or overlong varint")
 
 
 def _length_delimited_field(message: bytes, field_number: int) -> bytes | None:
