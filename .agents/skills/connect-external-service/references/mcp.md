@@ -22,7 +22,7 @@ calls the service's API with a key, and nothing it adds is worth running a
 stranger's code with this workspace's access: use that API through row 3 or
 row 5 instead, and read the package's source for the endpoints it calls.
 
-MCP is allowed for a service latchkey has no builtin for. The workspace disables
+MCP is allowed for a service latchkey does not support yet. The workspace disables
 claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
 `.mngr/settings.toml`) because that is an OAuth side channel around the latchkey
 gateway for services latchkey *does* support; a server for a service it does not
@@ -114,12 +114,13 @@ expires for good, and the user signs in again then.
 
 After approval the service is one `latchkey services list` names, and a later
 `No credentials found` or `Request not permitted by the user` is handled as for
-a builtin (`references/latchkey.md`, "Interpreting latchkey permission
-errors"). A `401` from the server after that means the sign-in is gone; re-send
-the request. A `403` or an `insufficient_scope` error means the connection's
-scopes do not cover the call: tell the user plainly that the connection has to
-be set up again with wider access, ask them to disconnect the service in Imbue
-Studio, and once they have, send the request again with the scopes it needs.
+any service latchkey already knows (`references/latchkey.md`, "Interpreting
+latchkey permission"). A `401` from the server after that means the sign-in is
+gone; re-send the request. A `403` or an `insufficient_scope` error means the
+connection's scopes do not cover the call: tell the user plainly that the
+connection has to be set up again with wider access, ask them to disconnect the
+service in Imbue Studio, and once they have, send the request again with the
+scopes it needs.
 
 ## A server with a key
 

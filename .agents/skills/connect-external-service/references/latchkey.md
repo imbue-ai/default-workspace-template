@@ -9,7 +9,7 @@ workspace; the gateway attaches it to the request.
 
 - **Use `latchkey curl`** instead of regular `curl` for supported services. Pass
   through all regular curl arguments; latchkey is a transparent wrapper.
-- **`latchkey services list`** names the builtin services.
+- **`latchkey services list`** names the services Latchkey already knows.
 - **`latchkey services info <service_name>`** gives a service's auth options,
   credential status, API docs links and special requirements.
 - **Submit a permission request** (below) when `latchkey curl` fails with a
@@ -149,11 +149,11 @@ tell them to do that when more than one account is configured).
 
 ## Custom services (rows 2 to 4)
 
-A **custom service** is a connection to one domain latchkey has no builtin for.
-The user approves it in the Imbue Studio app, pastes the credential into the approval
-window (or signs in through a browser latchkey drives), and the gateway injects
-it into every `latchkey curl` to that domain. The value never enters this
-workspace.
+A **custom service** is a connection to one domain latchkey does not support
+out of the box. The user approves it in the Imbue Studio app, pastes the
+credential into the approval window (or signs in through a browser latchkey
+drives), and the gateway injects it into every `latchkey curl` to that domain.
+The value never enters this workspace.
 
 Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
