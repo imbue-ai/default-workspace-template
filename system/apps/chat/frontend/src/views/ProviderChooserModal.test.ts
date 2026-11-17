@@ -754,7 +754,13 @@ describe("a failure on the chooser's screens", () => {
     );
     expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
     (root.querySelector(".report-bug") as HTMLElement).click();
-    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    expect(shell.posted("shell:report-bug")).toEqual([
+      {
+        type: "shell:report-bug",
+        message: "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+        details: "HTTP 500",
+      },
+    ]);
     shell.release();
   });
 

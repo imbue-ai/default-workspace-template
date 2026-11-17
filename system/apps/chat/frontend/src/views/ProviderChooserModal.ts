@@ -1158,6 +1158,10 @@ function failureMark(failure: ChooserFailure | null): m.Children {
 
 function reportBugButton(failure: ChooserFailure | null): m.Children {
   return failure?.isReportable === true
-    ? m(ReportBugButton, { connection: getShellConnection(), variant: "secondary" })
+    ? m(ReportBugButton, {
+        connection: getShellConnection(),
+        failure: { message: failure.message, details: failure.details },
+        variant: "secondary",
+      })
     : null;
 }

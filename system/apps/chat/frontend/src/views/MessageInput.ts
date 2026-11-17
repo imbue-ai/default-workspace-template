@@ -1981,16 +1981,28 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           recovery !== null &&
           actionFailureServerKind !== null &&
           KINDS_THE_TERMINAL_SHOWS.has(actionFailureKind);
+        // An unconfirmed send's notice is worded here, and its sentence asks for no bug report.
+        const shown: FailureLines = isUnconfirmed
+          ? {
+              body: ["The agent may already have it, so check its terminal before you send it again."],
+              details: failure.details,
+              isReportable: false,
+            }
+          : {
+              ...failure,
+              body: [
+                ...failure.body,
+                isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
+              ],
+            };
         return m(actionFailureNotice, {
           title: isUnconfirmed
             ? "Couldn't confirm your message arrived"
             : isNotAnswered
               ? "Your message may not have been sent"
               : actionFailureTitle,
-          body: isUnconfirmed
-            ? ["The agent may already have it, so check its terminal before you send it again."]
-            : [...failure.body, isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null],
-          details: failure.details,
+          body: shown.body,
+          details: shown.details,
           dismissLabel:
             isRepeatable || recovery !== null || actionFailureActions.length > 0 || externalAction !== null
               ? "Cancel"
@@ -2023,8 +2035,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            // An unconfirmed send's notice is worded here, and its sentence asks for no bug report.
-            ...reportBugActions(getShellConnection(), !isUnconfirmed && failure.isReportable),
+            ...reportBugActions(getShellConnection(), shown),
             ...(!isRestartOffered
               ? []
               : [

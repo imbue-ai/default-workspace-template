@@ -274,6 +274,12 @@ CHAT_DOCUMENT_FILENAME: Final[str] = "chat.html"
 ROOT_DOCUMENT_FILENAME: Final[str] = "root.html"
 
 
+# What the chat origin's page says when its bundle is missing.
+CHAT_NOT_BUILT_SENTENCE: Final[str] = (
+    "Chat isn't available in this workspace right now. Restart the workspace. If this persists, report a bug."
+)
+
+
 def _chat_not_built_page() -> Response:
     """What the chat origin answers when its bundle is missing. With no frontend code of its own, the page asks the
     shell for "Report a bug" through the shell's built app contract, which this origin serves; the button stays hidden
@@ -281,18 +287,18 @@ def _chat_not_built_page() -> Response:
     this same chat page."""
     root_path = (request.script_root or "").rstrip("/")
     contract_url = json.dumps(f"{root_path}{APP_CONTRACT_ROUTE}").replace("<", "\\u003c")
+    failure = json.dumps({"message": CHAT_NOT_BUILT_SENTENCE, "details": None}).replace("<", "\\u003c")
     page = (
         '<!doctype html><html><head><meta charset="utf-8"><title>Chat</title></head>'
         '<body style="font-family: system-ui, sans-serif; padding: 2rem">'
-        "<p>Chat isn't available in this workspace right now. Restart the workspace. "
-        "If this persists, report a bug.</p>"
+        f"<p>{html.escape(CHAT_NOT_BUILT_SENTENCE)}</p>"
         '<button type="button" id="report-bug" hidden>Report a bug</button>'
         # A static import, so the module runs before the frame's load event, which is when the shell greets it.
         '<script type="module">'
         f"import {{ connectToShell }} from {contract_url};"
         'const button = document.getElementById("report-bug");'
         "const connection = connectToShell({ onHandshake: () => { button.hidden = !connection.canReportBug(); } });"
-        "button.onclick = () => connection.reportBug();"
+        f"button.onclick = () => connection.reportBug({failure});"
         "</script>"
         "</body></html>"
     )

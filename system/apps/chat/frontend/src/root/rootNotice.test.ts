@@ -29,6 +29,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 }));
 
 import m from "mithril";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { rowMenuRows } from "./ChatRail";
@@ -58,7 +59,10 @@ function select(key: string): void {
 }
 
 /** A connection whose shell can open the bug report, recording each time it is asked to. */
-function reportingConnection(canReportBug: boolean): { canReportBug: () => boolean; reportBug: () => void } {
+function reportingConnection(canReportBug: boolean): {
+  canReportBug: () => boolean;
+  reportBug: (failure: ReportedFailure) => void;
+} {
   return { canReportBug: () => canReportBug, reportBug: vi.fn() };
 }
 
@@ -101,7 +105,10 @@ describe("the chat list's failed verbs", () => {
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("mngr exited with code 1");
     button(root, "Report a bug")!.click();
-    expect(connection.reportBug).toHaveBeenCalledTimes(1);
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message: `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug.`,
+      details: expect.stringContaining("mngr exited with code 1"),
+    });
     button(root, "Try again")!.click();
     expect(verbs.stopChat).toHaveBeenCalledTimes(2);
   });

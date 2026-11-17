@@ -2866,7 +2866,11 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(renderedText(after)).toContain("Your message wasn't delivered. Your text is back in the box. Try again.");
     expect(renderedText(findByClass(after, "see-details"))).toContain("HTTP 500");
     (findButton(after, "Report a bug")!.attrs!.onclick as () => void)();
-    expect(connection.reportBug).toHaveBeenCalledTimes(1);
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message:
+        "Your message wasn't delivered. Your text is back in the box. Try again. If this persists, report a bug.",
+      details: 'HTTP 500\n{"oops":true}',
+    });
   });
 
   it("offers no Report a bug where the shell said Imbue Studio cannot open one", async () => {
