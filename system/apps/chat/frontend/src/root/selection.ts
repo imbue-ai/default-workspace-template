@@ -55,17 +55,20 @@ export interface SlotState {
   /** The phone layout, where the list's drawer is open over the empty chat while nothing is selected. */
   isCompact: boolean;
   isShown: boolean;
+  /** A delete is on its way, so a chat hidden from the list may still exist or come back. */
+  isDeletePending: boolean;
 }
 
 /** The chat list is never left open empty: with nothing selected (opened bare, or the chat on screen was deleted) it
  *  shows the head of the list -- the main chat, else the most recent -- and with no chats a new one awaiting its
  *  first send. That new one is only asked for while the root is on screen, so a list open on
- *  a desktop nobody is looking at does not add one. */
+ *  a desktop nobody is looking at does not add one, and only once no delete is on its way: the chat app answers that
+ *  ask with a chat already waiting for its first send, which could be the one being deleted. */
 export function slotFill(state: SlotState): SlotFill {
   if (state.selectedChatId !== null || !state.isChatListKnown || state.isChoosing || state.isCompact) {
     return { kind: "keep" };
   }
   const head = state.chatIds[0];
   if (head !== undefined) return { kind: "select", chatId: head };
-  return state.isShown ? { kind: "open_new" } : { kind: "keep" };
+  return state.isShown && !state.isDeletePending ? { kind: "open_new" } : { kind: "keep" };
 }
