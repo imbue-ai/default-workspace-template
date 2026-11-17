@@ -531,7 +531,7 @@ Proxy a `question` gate per `.agents/shared/references/lead-proxy.md` (worker
 user's intent to the user, relay the answer with `create_worker.py reply
 --task-file data/.tasks/migrate-workspace/task.md -m "..."`, consume the
 report, re-arm. On `stuck` or a dead-worker timeout, follow
-`.agents/skills/launch-task/references/worker-failure.md` -- nothing has been
+`.agents/shared/references/lead-proxy/worker-failure.md` -- nothing has been
 applied here, and the source is untouched either way.
 
 On `done`, merge the branch, then work the checklist. Each item is a check, not

@@ -232,7 +232,7 @@ Flow-specific substitutions:
   `final-creation` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
   close the ticket, destroy the worker per `lead-proxy.md`, no merge); `stuck`
-  (failure flow per `.agents/skills/launch-task/references/worker-failure.md`,
+  (failure flow per `.agents/shared/references/lead-proxy/worker-failure.md`,
   which stops the worker).
 
 ## Step 4: Merge and go live

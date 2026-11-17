@@ -147,7 +147,7 @@ up"). Show a literal command only when the user must run it themselves.
 ## The `stuck` message
 
 Nothing is merged or applied. Surface the failure as
-`data/.tasks/update-self/skill-at-target/.agents/skills/launch-task/references/worker-failure.md`
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/worker-failure.md`
 says; if the user then overrides it, `resuming-after-stuck.md` resumes the
 pass. This is the one message where detail is preserved, because it gets
 pasted into bug reports.

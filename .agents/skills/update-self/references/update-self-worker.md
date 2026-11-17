@@ -20,17 +20,17 @@ and is read only when its step says so.
   worktree with the runtime dir. Write the path out each time (each bash call
   is a fresh shell) and run it from your worktree root.
 - **Files outside this skill are named by their staged path.** The lead
-  staged the target release's `.agents/shared/`, `harden-worker` skill and
-  `launch-task` references beside the skill. When one of them names a further
-  `.agents/...` path, read the copy under
-  `data/.tasks/update-self/skill-at-target/` if one is there, else your
-  worktree's.
+  staged the target release's `.agents/shared/` and `harden-worker` skill
+  beside the skill. When one of them names a further `.agents/...` path, read
+  the copy under `data/.tasks/update-self/skill-at-target/` if one is there,
+  else your worktree's.
 - **Scope is decided by rule, never by judgment.** Whether the impact
   analysis (4a), each validation item (4b) and the review gates (4c) run, and
-  whether the running agents restart (4d), is a rule below. Apply it, and record in your report which branch applied, with
-  its evidence. If you believe something should run, or should not, in a
-  situation a rule does not cover, that is a `question` gate (Step 6), never
-  a silent widening or narrowing.
+  whether the running agents restart (4d), is a rule below. Apply it, and
+  record in your report which branch applied, with its evidence. If you
+  believe something should run, or should not, in a situation a rule does not
+  cover, that is a `question` gate (Step 6), never a silent widening or
+  narrowing.
 - **Only the merge commit carries the `update-self:` subject.** The apply and
   `footprint-ranges` find this pass's merge by that prefix, so never reword
   it and never give it to another commit.

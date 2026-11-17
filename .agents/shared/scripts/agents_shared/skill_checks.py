@@ -611,6 +611,27 @@ def skill_dirs(repo_root: Path) -> list[Path]:
     )
 
 
+def shared_links_into_skills(
+    repo_root: Path, tree: SkillTree | None = None
+) -> list[tuple[str, str]]:
+    """Each markdown file under ``.agents/shared/`` with a file it links inside a skill.
+
+    The shared layer may name a skill, by its name or its SKILL.md. A skill's other files
+    are that skill's own: what several skills need belongs in the shared layer.
+    """
+    if tree is None:
+        tree = SkillTree(repo_root)
+    return sorted(
+        (shared, linked)
+        for shared in tree.files_under(_SHARED_DIR)
+        if shared.endswith(".md")
+        for linked in tree.links(shared, None)
+        if linked.startswith(_SKILLS_DIR + "/")
+        and linked.endswith(".md")
+        and not linked.endswith("/SKILL.md")
+    )
+
+
 def unreached_shared_files(repo_root: Path, tree: SkillTree | None = None) -> list[str]:
     """The files under ``.agents/shared/`` that nothing reaches, relative to the root.
 
