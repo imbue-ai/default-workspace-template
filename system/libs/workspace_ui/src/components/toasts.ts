@@ -107,13 +107,15 @@ function lastingToastBody(
       : m(
           "div",
           { class: "toast-actions -mx-2 flex flex-wrap gap-1" },
-          actions.map((action) =>
-            m(
+          actions.map((action) => {
+            const isPending = action.pending?.isPending() === true;
+            return m(
               Button,
               {
                 variant: "ghost-inverse",
                 sm: true,
                 extra: action === reportBug ? "toast-action report-bug" : "toast-action",
+                disabled: isPending,
                 // A retry or a resolving button has done the note's job, and a retry that fails again leaves a new
                 // one; a button that hands the failure on leaves it up for its other buttons.
                 onclick: () => {
@@ -121,9 +123,9 @@ function lastingToastBody(
                   action.run();
                 },
               },
-              action.label,
-            ),
-          ),
+              isPending ? action.pending?.label : action.label,
+            );
+          }),
         ),
   ];
 }
