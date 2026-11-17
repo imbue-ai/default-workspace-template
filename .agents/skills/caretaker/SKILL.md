@@ -1,6 +1,6 @@
 ---
 name: caretaker
-description: The weekly Caretaker, invoked via /caretaker whenever the weekly check wakes the agent. Scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding) and finished-but-uncommitted work, and proposes fixes, all with the user's permission. Its first run only looks, introduces itself and asks whether to keep checking.
+description: The weekly Caretaker. Scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding) and finished-but-uncommitted work, and proposes fixes, all with the user's permission. Its first run only looks, introduces itself and asks whether to keep checking. Only ever invoked explicitly, by /caretaker; never chosen for a request.
 metadata:
   author: imbue
   exempt-checks: size
