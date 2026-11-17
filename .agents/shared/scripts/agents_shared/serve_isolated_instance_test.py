@@ -1818,13 +1818,14 @@ def _revive(
     runner: _RecordingRunner,
     registry: _RecordingRegistry | None = None,
     spawner: _FakeSpawner | None = None,
+    http: _FakeHttp | None = None,
 ) -> int:
     return mod.revive(
         name,
         tmp_path,
         runner=runner,
         registry=registry or _RecordingRegistry(),
-        http=_FakeHttp(_all_healthy),
+        http=http or _FakeHttp(_all_healthy),
         spawner=spawner or _FakeSpawner(detached_pid=7000),
         venv_linker=_RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
@@ -1982,18 +1983,7 @@ def test_two_revives_at_once_boot_the_instance_once(tmp_path: Path) -> None:
     codes: list[int] = []
 
     def revive_with(http: _FakeHttp) -> None:
-        codes.append(
-            mod.revive(
-                _NAME,
-                tmp_path,
-                runner=runner,
-                registry=_RecordingRegistry(),
-                http=http,
-                spawner=revived,
-                venv_linker=_RecordingVenvLinker(),
-                sleeper=lambda _seconds: None,
-            )
-        )
+        codes.append(_revive(tmp_path, runner=runner, spawner=revived, http=http))
 
     first = threading.Thread(target=revive_with, args=(_FakeHttp(held_health),))
     first.start()
