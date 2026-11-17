@@ -1097,6 +1097,7 @@ describe("MessageInput send to a chat still being created", () => {
   });
 
   it("returns the message to the composer with the reason when the create has already failed", async () => {
+    stubShellConnection(true);
     mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
       throw new ChatNotStartedError("mngr create exited with code 3");
     });
@@ -1106,10 +1107,15 @@ describe("MessageInput send to a chat still being created", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
-    expect(text).toContain("mngr create exited with code 3");
+    expect(renderedText(findByClass(after, "modal-message"))).toContain(
+      "Your message wasn't delivered. Your text is back in the box, so nothing was lost.",
+    );
+    expect(renderedText(findByClass(after, "modal-message"))).not.toContain("Try again");
+    expect(renderedText(findByClass(after, "see-details"))).toContain("mngr create exited with code 3");
     // The chat has no agent to send to again or to restart.
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
+    expect(findButton(after, "Report a bug")).toBeUndefined();
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 });

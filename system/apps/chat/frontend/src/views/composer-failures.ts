@@ -48,6 +48,10 @@ export function describeSendFailure(error: unknown): FailureLines {
   if (isUnansweredSend(error, failure)) {
     return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
   }
+  // Trying again would meet the same refusal, so the sentence offers no Try again.
+  if (error instanceof ChatNotStartedError) {
+    return { body: [SEND_REFUSED], details: failure.details, isReportable: false };
+  }
   const told = failureSentence(failure, "Your message wasn't delivered. Your text is back in the box");
   if (failure.cause === "user_facing") {
     return { body: [told.message], details: told.details, isReportable: told.isReportable };
