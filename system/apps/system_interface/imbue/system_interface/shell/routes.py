@@ -7,6 +7,7 @@ from typing import assert_never
 
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from app_manifest.registry import IsolatedInstanceKind
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
@@ -295,6 +296,13 @@ def start_app(name: str) -> ResponseReturnValue:
     return _lifecycle(name, AppLifecycleAction.START)
 
 
+# What the user calls the thing an isolated instance's window shows.
+INSTANCE_NOUN_BY_KIND: Final[dict[IsolatedInstanceKind, str]] = {
+    IsolatedInstanceKind.CHANGE: "preview",
+    IsolatedInstanceKind.MOCK: "UI sketch",
+}
+
+
 def revive_app(name: str) -> ResponseReturnValue:
     """``POST /api/apps/<name>/revive``: start a stopped preview or UI sketch again, where it was, and answer
     whether it runs; refused for any other app, and in a preview."""
@@ -305,10 +313,13 @@ def revive_app(name: str) -> ResponseReturnValue:
     instance = _entry_or_raise(name).row.isolated_instance
     if instance is None:
         raise AppLifecycleRefusedError(f"App {name!r} is not a preview or a UI sketch, so it cannot be started again")
+    noun = INSTANCE_NOUN_BY_KIND[instance.kind]
     try:
         shell.instance_reviver.revive(str(instance.name))
     except InstanceReviveError as e:
-        return detail_response(str(e), HTTP_BAD_GATEWAY)
+        if e.is_final:
+            return detail_response(f"This {noun} can't be started again. Ask in chat for a new one.", HTTP_CONFLICT)
+        return detail_response(f"This {noun} didn't start. Try again in a moment.", HTTP_BAD_GATEWAY)
     shell.inventory.refresh_liveness()
     refreshed = shell.inventory.entry(name)
     return model_response(

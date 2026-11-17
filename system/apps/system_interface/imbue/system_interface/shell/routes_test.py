@@ -3532,14 +3532,26 @@ def test_reviving_a_stopped_preview_runs_its_instances_revive_from_the_workspace
     assert Path(call["cwd"]).resolve() == repo_root.resolve()
 
 
-def test_a_revive_that_fails_answers_its_reason(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+def test_a_revive_whose_boot_failed_says_to_try_again(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     write_stub_revive_script(tmp_path / "repo", exit_code=1)
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
     answer = client.post("/api/apps/inbox-sketch/revive")
 
     assert answer.status_code == 502
-    assert "now belong to another process" in answer.get_json()["detail"]
+    assert answer.get_json()["detail"] == "This UI sketch didn't start. Try again in a moment."
+
+
+def test_a_preview_that_cannot_come_back_says_to_ask_for_a_new_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    write_stub_revive_script(tmp_path / "repo", exit_code=3)
+    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
+
+    answer = client.post("/api/apps/today-preview/revive")
+
+    assert answer.status_code == 409
+    assert answer.get_json()["detail"] == "This preview can't be started again. Ask in chat for a new one."
 
 
 def test_an_app_that_is_no_preview_is_not_revived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.concurrency_group.errors import ProcessError
@@ -17,15 +18,18 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.errors import InstanceReviveError
 
-# own-process: deadline -- a revive waits on servers booting, which can hang; run apart, the request cuts it off
+# own-process: other-tree -- an import would load the copy the shell started with, not the checkout's current one
 REVIVE_SCRIPT_REL: Final[str] = ".agents/shared/scripts/agents_shared/serve_isolated_instance.py"
 
 # A revive waits up to a minute for each server it boots: a preview's own two, and two more
 # for each sibling it frames.
 _REVIVE_TIMEOUT_SECONDS: Final[float] = 300.0
 _REVIVE_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 5.0
-# How much of the script's stderr a failure carries: its last lines say why.
-_STDERR_TAIL_CHARS: Final[int] = 600
+# How much of the script's stderr the shell's log keeps of a failure: its last lines say why.
+_STDERR_TAIL_CHARS: Final[int] = 2000
+# What the script exits with when the instance cannot come back as it was
+# (``serve_isolated_instance.REVIVE_IMPOSSIBLE_EXIT_CODE``).
+_REVIVE_IMPOSSIBLE_EXIT_CODE: Final[int] = 3
 
 
 class InstanceReviver(FrozenModel):
@@ -34,7 +38,8 @@ class InstanceReviver(FrozenModel):
     repo_root: Path = Field(description="The workspace's repo root, which instances are recorded under")
 
     def revive(self, instance_name: str) -> None:
-        """Boot again whatever part of the instance has stopped; raises InstanceReviveError with the reason."""
+        """Boot again whatever part of the instance has stopped; raises InstanceReviveError, final when only a fresh
+        instance can come back. The script's own words, written for agents, go to the shell's log."""
         try:
             result = run_local_command_modern_version(
                 command=[
@@ -52,9 +57,16 @@ class InstanceReviver(FrozenModel):
                 shutdown_timeout_sec=_REVIVE_SHUTDOWN_TIMEOUT_SECONDS,
             )
         except (ProcessError, OSError) as e:
-            raise InstanceReviveError(f"It could not be started again: {e}") from e
+            logger.warning("Could not run the revive of {}: {}", instance_name, e)
+            raise InstanceReviveError(f"The revive of {instance_name} could not be run", is_final=False) from e
         if result.returncode != 0:
+            logger.warning(
+                "The revive of {} exited {}: {}",
+                instance_name,
+                result.returncode,
+                result.stderr.strip()[-_STDERR_TAIL_CHARS:],
+            )
             raise InstanceReviveError(
-                f"It could not be started again (exit {result.returncode}): "
-                f"{result.stderr.strip()[-_STDERR_TAIL_CHARS:]}"
+                f"The revive of {instance_name} exited {result.returncode}",
+                is_final=result.returncode == _REVIVE_IMPOSSIBLE_EXIT_CODE,
             )

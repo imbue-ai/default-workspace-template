@@ -202,7 +202,7 @@ describe("Window", () => {
   it("offers a stopped preview's and UI sketch's window a way to start it again or close it", () => {
     const onStart = vi.fn();
     const onClose = vi.fn();
-    const stoppedInstance = { revival: { kind: "idle" as const }, onStart, onClose };
+    const stoppedInstance = { revival: { kind: "idle" as const }, onStart, onClose, onAskInChat: vi.fn() };
     const preview = render({
       app: appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" }),
       isStopped: true,
@@ -227,7 +227,7 @@ describe("Window", () => {
     const starting = render({
       app,
       isStopped: true,
-      stoppedInstance: { revival: { kind: "starting" }, onStart, onClose: vi.fn() },
+      stoppedInstance: { revival: { kind: "starting" }, onStart, onClose: vi.fn(), onAskInChat: vi.fn() },
     });
     const button = starting.querySelector("[data-revive-start]") as HTMLElement;
     expect(button.textContent).toBe("Starting...");
@@ -238,14 +238,39 @@ describe("Window", () => {
       app,
       isStopped: true,
       stoppedInstance: {
-        revival: { kind: "failed", reason: "It could not be started again: port 41234 is taken" },
+        revival: { kind: "failed", reason: "This preview didn't start. Try again in a moment.", canRetry: true },
         onStart,
         onClose: vi.fn(),
+        onAskInChat: vi.fn(),
       },
     });
-    expect(failed.querySelector("[data-revive-failure]")?.textContent).toContain("port 41234 is taken");
+    expect(failed.querySelector("[data-revive-failure]")?.textContent).toBe(
+      "This preview didn't start. Try again in a moment.",
+    );
     (failed.querySelector("[data-revive-start]") as HTMLElement).click();
     expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers asking the chat for a new one, not a start, when no start can bring it back", () => {
+    const onAskInChat = vi.fn();
+    const element = render({
+      app: appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" }),
+      isStopped: true,
+      stoppedInstance: {
+        revival: {
+          kind: "failed",
+          reason: "This preview can't be started again. Ask in chat for a new one.",
+          canRetry: false,
+        },
+        onStart: vi.fn(),
+        onClose: vi.fn(),
+        onAskInChat,
+      },
+    });
+    expect(element.querySelector("[data-revive-start]")).toBeNull();
+    (element.querySelector("[data-revive-ask]") as HTMLElement).click();
+    expect(onAskInChat).toHaveBeenCalledTimes(1);
+    expect(element.querySelector("[data-revive-close]")).not.toBeNull();
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {

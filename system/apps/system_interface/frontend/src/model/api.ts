@@ -48,6 +48,9 @@ const HTTP_CONFLICT = 409;
 /** The shell refused a placements save because the stored layout is newer than the one it was based on. */
 export class StalePlacementsSaveError extends Error {}
 
+/** The shell's answer that a stopped preview or UI sketch cannot be started again, only made anew. */
+export class InstanceCannotReviveError extends Error {}
+
 async function getJson(url: string): Promise<unknown> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(await errorDetailFromResponse(response));
@@ -476,9 +479,15 @@ export async function quitApp(appName: string): Promise<void> {
 }
 
 /** Start a stopped preview or UI sketch again, where it was; resolves once it runs, and throws with the shell's
- *  reason when it could not be started. */
+ *  reason when it could not be started (an ``InstanceCannotReviveError`` when no start can bring it back). */
 export async function reviveApp(appName: string): Promise<void> {
-  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/revive`), {});
+  try {
+    await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/revive`), {});
+  } catch (error) {
+    if (error instanceof HttpError && error.status === HTTP_CONFLICT)
+      throw new InstanceCannotReviveError(error.message);
+    throw error;
+  }
 }
 
 /** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame

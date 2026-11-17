@@ -17,10 +17,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1896,7 +1898,7 @@ def test_revive_refuses_a_port_another_process_took(
         squatter.listen(1)
         code = _revive(tmp_path, runner=runner, spawner=revived)
 
-    assert code == 1
+    assert code == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
     assert revived.detached_spawns == []
     assert str(booted["wrapper_port"]) in capsys.readouterr().err
 
@@ -1909,8 +1911,67 @@ def test_revive_refuses_a_record_from_before_revives(tmp_path: Path) -> None:
     _restart(runner, spawner)
     revived = _FakeSpawner(detached_pid=7000)
 
-    assert _revive(tmp_path, runner=runner, spawner=revived) == 1
+    assert (
+        _revive(tmp_path, runner=runner, spawner=revived)
+        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
+    )
     assert revived.detached_spawns == []
+
+
+def test_revive_refuses_to_boot_over_a_copy_that_is_gone(tmp_path: Path) -> None:
+    runner, spawner, booted = _booted_preview(tmp_path)
+    shutil.rmtree(booted["copies"]["store"])
+    _restart(runner, spawner)
+    revived = _FakeSpawner(detached_pid=7000)
+
+    assert (
+        _revive(tmp_path, runner=runner, spawner=revived)
+        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
+    )
+    assert revived.detached_spawns == []
+
+
+def test_two_revives_at_once_boot_the_instance_once(tmp_path: Path) -> None:
+    runner, spawner, _booted = _booted_preview(tmp_path)
+    _restart(runner, spawner)
+    # The servers the first revive boots read as running once it has recorded them.
+    runner.start_times.update({7000: "revived", 7001: "revived"})
+    first_boot_started = threading.Event()
+    release_first_boot = threading.Event()
+
+    def held_health(_url: str) -> int:
+        first_boot_started.set()
+        assert release_first_boot.wait(timeout=10)
+        return 200
+
+    revived = _FakeSpawner(detached_pid=7000)
+    codes: list[int] = []
+
+    def revive_with(http: _FakeHttp) -> None:
+        codes.append(
+            mod.revive(
+                _NAME,
+                tmp_path,
+                runner=runner,
+                registry=_RecordingRegistry(),
+                http=http,
+                spawner=revived,
+                venv_linker=_RecordingVenvLinker(),
+                sleeper=lambda _seconds: None,
+            )
+        )
+
+    first = threading.Thread(target=revive_with, args=(_FakeHttp(held_health),))
+    first.start()
+    assert first_boot_started.wait(timeout=10)
+    second = threading.Thread(target=revive_with, args=(_FakeHttp(_all_healthy),))
+    second.start()
+    release_first_boot.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert codes == [0, 0]
+    assert revived.detached_pids == [7000, 7001]
 
 
 def test_revive_boots_the_siblings_a_preview_frames_first(tmp_path: Path) -> None:

@@ -165,7 +165,12 @@ def test_a_workspace_save_normalizes_the_chords_into_the_requesters_override(tmp
 
     answered = client.post(
         "/api/keybindings",
-        json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["Cmd+Enter"], "scope": "workspace"},
+        json={
+            "app": "system_interface",
+            "action": "launcher-secondary-send",
+            "chords": ["Cmd+Enter"],
+            "scope": "workspace",
+        },
     )
 
     assert answered.status_code == 200
@@ -235,7 +240,12 @@ def test_an_everywhere_save_without_a_gateway_stays_unsent(tmp_path: Path) -> No
 
     answered = client.post(
         "/api/keybindings",
-        json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+        json={
+            "app": "system_interface",
+            "action": "launcher-secondary-send",
+            "chords": ["alt+enter"],
+            "scope": "account",
+        },
     )
 
     assert answered.status_code == 200
@@ -303,7 +313,12 @@ def test_the_everywhere_save_files_one_permission_request_and_delivers_once_gran
         # The first save 403s at the gateway and files exactly one request.
         first = client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert first.get_json()["delivery"]["status"] == "PERMISSION_PENDING"
         assert len(record["requests"]) == 1
@@ -345,7 +360,12 @@ def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
 
         client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert len(record["requests"]) == 1
 
@@ -357,6 +377,11 @@ def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
         # A fresh save asks again: the denial cleared the pending marker.
         client.post(
             "/api/keybindings",
-            json={"app": "system_interface", "action": "launcher-secondary-send", "chords": ["alt+enter"], "scope": "account"},
+            json={
+                "app": "system_interface",
+                "action": "launcher-secondary-send",
+                "chords": ["alt+enter"],
+                "scope": "account",
+            },
         )
         assert len(record["requests"]) == 2

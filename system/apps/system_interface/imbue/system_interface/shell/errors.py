@@ -122,7 +122,11 @@ class UpdateNoticeCommandError(ShellError, RuntimeError):
 
 
 class InstanceReviveError(ShellError, RuntimeError):
-    """A stopped preview or UI sketch could not be started again."""
+    """A stopped preview or UI sketch could not be started again; ``is_final`` when no retry can, only a fresh one."""
+
+    def __init__(self, message: str, is_final: bool) -> None:
+        super().__init__(message)
+        self.is_final = is_final
 
 
 class PortParkingError(ShellError, OSError):

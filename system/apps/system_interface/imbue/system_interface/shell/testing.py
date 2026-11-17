@@ -623,8 +623,8 @@ else:
 with calls.open("a") as record:
     record.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "served_pid": served_pid}}) + "\\n")
 if {exit_code} != 0:
-    sys.exit("revive: port(s) 41234 of 'today-preview' now belong to another process")
-sys.exit(0)
+    print("revive: the stub was told to fail", file=sys.stderr)
+sys.exit({exit_code})
 """
 
 

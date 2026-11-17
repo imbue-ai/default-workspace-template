@@ -93,17 +93,20 @@ Exit codes:
        torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
-       rebooted server never became healthy; or, for ``revive``, no such instance,
-       a record from before revives, a recorded port now held by another process,
-       or a boot that failed; or, for ``down``, a recorded process
+       rebooted server never became healthy; or, for ``revive``, a boot that
+       failed (trying again may work); or, for ``down``, a recorded process
        survived SIGKILL (its state dir is kept so it stays findable); or, for
        ``up --service-name``, ``--repo-root`` is a git worktree (refused before
        anything boots); or a bad argument / unreadable state file.
+    3  For ``revive``: the instance cannot come back as it was -- no record, a
+       record from before revives, a recorded port another process now holds, or
+       a copy that is gone -- so only a fresh ``up`` brings it back.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -158,6 +161,13 @@ _HOST_PLACEHOLDER_KIND = "host"
 # the state dir, one per name, overwritten each time -- so the path in the message
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
+# What ``revive`` exits with when the instance cannot come back as it was (no record, a
+# record from before revives, a port another process holds, a copy gone): only a fresh
+# ``up`` brings it back, so a caller should not offer to try again.
+REVIVE_IMPOSSIBLE_EXIT_CODE = 3
+# Held by a ``revive`` from its first look at an instance until its state is written, so
+# two at once (two windows, or a window and an agent) boot it once.
+REVIVE_LOCK_SUFFIX = ".revive.lock"
 
 # How to spell this script in a message an agent will copy: repo-root-relative,
 # like every other command it prints. The follow-up commands it names
@@ -1827,20 +1837,49 @@ def revive(
     registrations and any open window point at it again, and over its copies, so it
     shows the data it had. Parts still running are left alone, the instances its
     ``revive_first`` names come back first, and a frame is booted again from its
-    record. Returns 1 when no such instance is recorded, its record predates what a
-    revive needs, a recorded port now belongs to another process, or a boot fails.
+    record. Two revives of one instance at once boot it once. Returns 1 when a boot
+    fails, and ``REVIVE_IMPOSSIBLE_EXIT_CODE`` when only a fresh ``up`` can bring it
+    back: no record, a record from before revives, a recorded port another process now
+    holds, or a copy that is gone.
     """
+    lock_path = repo_root / STATE_ROOT / f"{name}{REVIVE_LOCK_SUFFIX}"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        return _revive_locked(
+            name,
+            repo_root,
+            runner=runner,
+            registry=registry,
+            http=http,
+            spawner=spawner,
+            venv_linker=venv_linker,
+            sleeper=sleeper,
+        )
+
+
+def _revive_locked(
+    name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    registry: Registry,
+    http: HttpClient,
+    spawner: Spawner,
+    venv_linker: VenvLinker,
+    sleeper: Callable[[float], None],
+) -> int:
     state_path = _state_path(repo_root, name)
     if not state_path.exists():
         sys.stderr.write(
             f"revive: no instance named '{name}' is recorded; boot it with `up`.\n"
         )
-        return 1
+        return REVIVE_IMPOSSIBLE_EXIT_CODE
     try:
         state = json.loads(state_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
         sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
-        return 1
+        return REVIVE_IMPOSSIBLE_EXIT_CODE
     if FRAME_STATE_KEY in state:
         return _revive_frame(
             name,
@@ -1883,7 +1922,7 @@ def revive(
         sys.stderr.write(
             f"revive: '{name}' was booted before its record kept what a revive needs; boot it again with `up`.\n"
         )
-        return 1
+        return REVIVE_IMPOSSIBLE_EXIT_CODE
     is_inner_running = _is_recorded_process_running(runner, pids[0], str(starts[0]))
     is_wrapper_running = not is_wrapped or _is_recorded_process_running(
         runner, pids[1], str(starts[1])
@@ -1906,7 +1945,19 @@ def revive(
             f"revive: port(s) {', '.join(map(str, taken))} of '{name}' now belong to another process; "
             "boot it again with `up`.\n"
         )
-        return 1
+        return REVIVE_IMPOSSIBLE_EXIT_CODE
+    # A copy a restore from backup left out would boot the instance over nothing.
+    if not is_inner_running:
+        gone = [
+            str(copy)
+            for copy in (state.get("copies") or {}).values()
+            if not Path(str(copy)).is_dir()
+        ]
+        if gone:
+            sys.stderr.write(
+                f"revive: the copies of '{name}' at {', '.join(gone)} are gone; boot it again with `up`.\n"
+            )
+            return REVIVE_IMPOSSIBLE_EXIT_CODE
 
     if not is_inner_running:
         inner = state["inner"]
@@ -1981,7 +2032,7 @@ def _revive_frame(
         record = read_frame(name, repo_root)
     except InstanceError as exc:
         sys.stderr.write(f"revive: {exc}\n")
-        return 1
+        return REVIVE_IMPOSSIBLE_EXIT_CODE
     assert record is not None
     return frame(
         name,

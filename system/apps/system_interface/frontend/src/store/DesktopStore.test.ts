@@ -4233,15 +4233,26 @@ describe("a stopped preview or UI sketch", () => {
     await vi.waitFor(() => expect(store.instanceRevival("today-preview").kind).toBe("idle"));
   });
 
-  it("keeps the shell's reason when it could not be started again", async () => {
+  it("keeps the shell's reason, and whether trying again can help, when it did not start", async () => {
     const store = await storeWithStoppedPreview();
-    api.reviveRefusal = "It could not be started again: port 41234 is taken";
+    api.reviveRefusal = "This preview didn't start. Try again in a moment.";
 
     await store.reviveApp("today-preview");
 
     expect(store.instanceRevival("today-preview")).toEqual({
       kind: "failed",
-      reason: "It could not be started again: port 41234 is taken",
+      reason: "This preview didn't start. Try again in a moment.",
+      canRetry: true,
+    });
+    api.reviveRefusal = "This preview can't be started again. Ask in chat for a new one.";
+    api.isReviveRefusalFinal = true;
+
+    await store.reviveApp("today-preview");
+
+    expect(store.instanceRevival("today-preview")).toEqual({
+      kind: "failed",
+      reason: "This preview can't be started again. Ask in chat for a new one.",
+      canRetry: false,
     });
   });
 

@@ -14,7 +14,7 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
-import { StalePlacementsSaveError } from "../model/api";
+import { InstanceCannotReviveError, StalePlacementsSaveError } from "../model/api";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -596,15 +596,19 @@ export class FakeDesktopApi implements DesktopApi {
   }
 
   /** What the next revives answer: resolved once ``reviveGate`` (when set) resolves, or rejected with
-   *  ``reviveRefusal``. */
+   *  ``reviveRefusal``, as the shell's final refusal when ``isReviveRefusalFinal``. */
   reviveGate: Promise<void> | null = null;
   reviveRefusal: string | null = null;
+  isReviveRefusalFinal = false;
 
   async reviveApp(appName: string): Promise<void> {
     this.calls.push(`reviveApp:${appName}`);
     this.refuse();
     if (this.reviveGate !== null) await this.reviveGate;
-    if (this.reviveRefusal !== null) throw new Error(this.reviveRefusal);
+    if (this.reviveRefusal === null) return;
+    throw this.isReviveRefusalFinal
+      ? new InstanceCannotReviveError(this.reviveRefusal)
+      : new Error(this.reviveRefusal);
   }
 
   async setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord> {

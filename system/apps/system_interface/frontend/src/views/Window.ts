@@ -108,6 +108,8 @@ export interface StoppedInstanceActions {
   readonly revival: InstanceRevival;
   readonly onStart: () => void;
   readonly onClose: () => void;
+  /** Drafts a request for a new one into the chat, for one no start can bring back. */
+  readonly onAskInChat: () => void;
 }
 
 /** The store verbs a stopped preview's or UI sketch's placeholder drives. */
@@ -115,6 +117,12 @@ export interface StoppedInstanceVerbs {
   instanceRevival(appName: string): InstanceRevival;
   reviveApp(appName: string): Promise<void>;
   closeOrMinimizeWindow(windowId: string): Promise<void>;
+  draftText(text: string): Promise<boolean>;
+}
+
+/** What the chat is asked, in the user's words, for a stopped preview or UI sketch no start can bring back. */
+export function newInstancePrompt(displayName: string, kind: InstanceKind): string {
+  return `The ${displayName} ${instanceNoun(kind)} stopped and can't be started again. Make me a new one.`;
 }
 
 /** What the placeholder of window ``windowId`` offers when its app is a preview or UI sketch; null for any other
@@ -124,11 +132,13 @@ export function stoppedInstanceActionsOf(
   app: AppRecord | undefined,
   windowId: string,
 ): StoppedInstanceActions | null {
-  if (app === undefined || app.instance_kind === null) return null;
+  const kind = app?.instance_kind ?? null;
+  if (app === undefined || kind === null) return null;
   return {
     revival: verbs.instanceRevival(app.name),
     onStart: () => void verbs.reviveApp(app.name),
     onClose: () => void verbs.closeOrMinimizeWindow(windowId),
+    onAskInChat: () => void verbs.draftText(newInstancePrompt(app.display_name, kind)),
   };
 }
 
@@ -138,7 +148,24 @@ export function instanceNoun(kind: InstanceKind): string {
 }
 
 function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstanceActions): m.Vnode {
-  const isStarting = actions.revival.kind === "starting";
+  const revival = actions.revival;
+  const isStarting = revival.kind === "starting";
+  const canStart = !(revival.kind === "failed" && !revival.canRetry);
+  const primary = canStart
+    ? m(
+        Button,
+        {
+          variant: "primary",
+          sm: true,
+          readonly: isStarting,
+          "data-revive-start": "",
+          onclick: () => {
+            if (!isStarting) actions.onStart();
+          },
+        },
+        isStarting ? "Starting..." : "Start it again",
+      )
+    : m(Button, { variant: "primary", sm: true, "data-revive-ask": "", onclick: actions.onAskInChat }, "Ask in chat");
   return m(
     "div",
     {
@@ -148,27 +175,11 @@ function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstance
     },
     [
       m("div", { class: "type-label text-primary" }, `This ${instanceNoun(kind)} stopped.`),
-      actions.revival.kind === "failed"
-        ? m(
-            "div",
-            { "data-revive-failure": "", class: "text-(length:--font-size-row) text-faint" },
-            actions.revival.reason,
-          )
+      revival.kind === "failed"
+        ? m("div", { "data-revive-failure": "", class: "text-(length:--font-size-row) text-faint" }, revival.reason)
         : null,
       m("div", { class: "flex gap-2" }, [
-        m(
-          Button,
-          {
-            variant: "primary",
-            sm: true,
-            readonly: isStarting,
-            "data-revive-start": "",
-            onclick: () => {
-              if (!isStarting) actions.onStart();
-            },
-          },
-          isStarting ? "Starting..." : "Start it again",
-        ),
+        primary,
         m(Button, { variant: "secondary", sm: true, "data-revive-close": "", onclick: actions.onClose }, "Close"),
       ]),
     ],

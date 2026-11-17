@@ -26,7 +26,7 @@ import {
   externalLinkMessageType,
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
-import { StalePlacementsSaveError } from "../model/api";
+import { InstanceCannotReviveError, StalePlacementsSaveError } from "../model/api";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
@@ -3003,7 +3003,8 @@ export class DesktopStore {
       await this.deps.api.reviveApp(appName);
       this.revivalByApp.delete(appName);
     } catch (error) {
-      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message });
+      const canRetry = !(error instanceof InstanceCannotReviveError);
+      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message, canRetry });
     }
     this.notifyListeners();
   }
