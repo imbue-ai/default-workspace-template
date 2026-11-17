@@ -70,9 +70,12 @@ export const SHELL_INPUT = "shell:input";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
-/** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
- *  launcher's primary text action with it, so a page never names the app that takes it. */
+/** App to shell: start something with a text (``{text, requestId}``; launcher-and-getting-started plan section 3.7):
+ *  the shell runs its launcher's primary text action with it, so a page never names the app that takes it, and
+ *  answers with ``shell:start-with-text-result``. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
+/** Shell to app: how a page's ``shell:start-with-text`` went, in ``shell:start-new-with-text-result``'s shape. */
+export const SHELL_START_WITH_TEXT_RESULT = "shell:start-with-text-result";
 /** App to shell: start something new with a text (``{text, requestId}``): the shell runs its launcher's secondary text
  *  action with it (a new chat on a stock machine, where the primary one sends to the main chat), else the primary one
  *  where there is no second, and answers with ``shell:start-new-with-text-result``. */
@@ -226,8 +229,8 @@ export interface ShellConnection {
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
-   *  machine). */
-  startWithText(text: string): void;
+   *  machine). Settles as ``startNewWithText`` does. */
+  startWithText(text: string, onLateAnswer?: (outcome: StartNewOutcome) => void): Promise<StartNewOutcome>;
   /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
    *  machine). Settles on the shell's answer; as not answered at once without a shell, when a handshake from a shell
    *  that started again comes first (it forgot the request), and on ``disconnect``, after which no answer is heard,
@@ -459,7 +462,8 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     }
   }
 
-  function startNewWithText(
+  function askToStart(
+    type: string,
     text: string,
     onLateAnswer?: (outcome: StartNewOutcome) => void,
   ): Promise<StartNewOutcome> {
@@ -468,7 +472,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     const outcome = new Promise<StartNewOutcome>((settle) =>
       pendingStarts.set(requestId, { settle, onLateAnswer: onLateAnswer ?? null }),
     );
-    send(SHELL_START_NEW_WITH_TEXT, { text, requestId });
+    send(type, { text, requestId });
     return outcome;
   }
 
@@ -510,6 +514,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (typeof path === "string") handlers.onNavigate?.(path);
         return;
       }
+      case SHELL_START_WITH_TEXT_RESULT:
       case SHELL_START_NEW_WITH_TEXT_RESULT: {
         const requestId = message.requestId;
         if (typeof requestId !== "string") return;
@@ -574,8 +579,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
-    startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
-    startNewWithText,
+    startWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) =>
+      askToStart(SHELL_START_WITH_TEXT, text, onLateAnswer),
+    startNewWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) =>
+      askToStart(SHELL_START_NEW_WITH_TEXT, text, onLateAnswer),
     canReportBug: () => canReportBug,
     reportBug: (failure: ReportedFailure) =>
       send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
@@ -645,7 +652,8 @@ export interface ShownFailure {
   readonly isReportable: boolean;
 }
 
-/** How a ``startNewWithText`` went: the new window opened, or the failure to show where the press was. */
+/** How a ``startWithText`` or ``startNewWithText`` went: the window opened, or the failure to show where the press
+ *  was. */
 export type StartNewOutcome =
   { readonly isOpened: true } | { readonly isOpened: false; readonly failure: ShownFailure };
 

@@ -645,7 +645,9 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it), starts a new one through
+intents and templates use it, and "Ask an agent to free up space") and then
+telling the page how it went with `shell:start-with-text-result`, starts a
+new one through
 `shell:start-new-with-text`, which the shell answers by running the secondary
 free-text row (Chat's New Chat; a failure's "Ask an agent to fix this" uses
 it) and then telling the page how it went with
