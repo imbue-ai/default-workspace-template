@@ -106,11 +106,13 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     const found = findWindow(state, windowId);
     if (found === null) return null;
     const app = appByName(state, found.window.app);
-    return phoneWindowMenuRows(app, {
-      refresh: () => store.refreshWindow(windowId),
+    const rows = phoneWindowMenuRows(app, {
+      // A window whose app is gone shows a placeholder, not a page.
+      refresh: app === undefined && state.isAppsLoaded ? null : () => store.refreshWindow(windowId),
       share: app === undefined || app.critical || !isEmbedded() ? null : () => openShareSettings(app),
       quit: app !== undefined && store.canStopApp(app) ? () => void store.quitApp(app.name) : null,
     });
+    return rows.length === 0 ? null : rows;
   }
 
   /** An app's launch rows, each opening a new window (the focus row of a pinned app shows its window). */
